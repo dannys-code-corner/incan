@@ -6,9 +6,11 @@ Learn how to write Incan code — from basics to advanced patterns.
 
 | Guide | Description |
 |-------|-------------|
+| [Strings](strings.md) | String manipulation and comparison to Python/Rust |
 | [Error Handling](error_handling.md) | Result, Option, and the `?` operator |
 | [Error Messages](error_messages.md) | Understanding and fixing compiler errors |
 | [Imports & Modules](imports_and_modules.md) | Module system and built-in functions |
+| [File I/O](file_io.md) | Reading and writing files |
 
 ## Features
 
