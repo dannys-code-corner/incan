@@ -277,8 +277,10 @@ function_type  = "(" type_list ")" "->" type ;
 (* Expressions *)
 expr           = primary | binary_expr | unary_expr | call_expr | index_expr
                | field_expr | method_expr | await_expr | try_expr | match_expr
-               | if_expr | list_comp | dict_comp ;
-               (* Note: lambda expressions intentionally omitted - use named functions *)
+               | if_expr | list_comp | dict_comp | closure_expr ;
+               (* Note: Python-style lambda intentionally omitted in favor of arrow closures *)
+
+closure_expr   = "(" [ IDENT { "," IDENT } ] ")" "=>" expr ;
 
 primary        = IDENT | literal | "(" expr ")" | "self" ;
 literal        = INT | FLOAT | STRING | "true" | "false" | "None"

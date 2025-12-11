@@ -460,7 +460,7 @@ impl<'a> RustCodegen<'a> {
                 self.expr_uses_async(&expr.node)
                     || arms.iter().any(|arm| self.match_body_uses_async(&arm.node.body))
             }
-            Expr::Lambda(_, body) => self.expr_uses_async(&body.node),
+            Expr::Closure(_, body) => self.expr_uses_async(&body.node),
             Expr::List(items) | Expr::Tuple(items) | Expr::Set(items) => {
                 items.iter().any(|item| self.expr_uses_async(&item.node))
             }

@@ -28,7 +28,7 @@ impl RustCodegen<'_> {
         self.emitter.blank_line();
         // TODO: fix this more properly in a future release
         //   Suppress unused import warnings (codegen emits common imports proactively)
-        self.emitter.line("#![allow(unused_imports)]");
+        self.emitter.line("#![allow(unused_imports, unused_parens)]");
         self.emitter.blank_line();
         self.emitter.use_stmt("std::collections::{HashMap, HashSet}");
         if self.needs_serde {

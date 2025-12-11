@@ -73,7 +73,7 @@ impl RustCodegen<'_> {
             Expr::DictComp(comp) => {
                 Self::emit_dict_comp(emitter, comp);
             }
-            Expr::Lambda(params, body) => {
+            Expr::Closure(params, body) => {
                 emitter.write("|");
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
@@ -1730,26 +1730,26 @@ mod tests {
     }
 
     // ========================================
-    // Lambda tests
+    // Closure tests
     // ========================================
 
     #[test]
-    fn test_emit_lambda_no_params() {
+    fn test_emit_closure_no_params() {
         let mut emitter = RustEmitter::new();
-        let expr = Expr::Lambda(vec![], Box::new(make_spanned(int_lit(42))));
+        let expr = Expr::Closure(vec![], Box::new(make_spanned(int_lit(42))));
         RustCodegen::emit_expr(&mut emitter, &expr);
         assert_eq!(emitter.finish(), "|| 42");
     }
 
     #[test]
-    fn test_emit_lambda_one_param() {
+    fn test_emit_closure_one_param() {
         let mut emitter = RustEmitter::new();
         let param = Param {
             name: "x".to_string(),
             ty: make_spanned(Type::Simple("int".to_string())),
             default: None,
         };
-        let expr = Expr::Lambda(
+        let expr = Expr::Closure(
             vec![make_spanned(param)],
             Box::new(make_spanned(ident_expr("x"))),
         );
@@ -1758,7 +1758,7 @@ mod tests {
     }
 
     #[test]
-    fn test_emit_lambda_multiple_params() {
+    fn test_emit_closure_multiple_params() {
         let mut emitter = RustEmitter::new();
         let params = vec![
             make_spanned(Param { name: "x".to_string(), ty: make_spanned(Type::Simple("int".to_string())), default: None }),
@@ -1769,7 +1769,7 @@ mod tests {
             BinaryOp::Add,
             Box::new(make_spanned(ident_expr("y"))),
         );
-        let expr = Expr::Lambda(params, Box::new(make_spanned(body)));
+        let expr = Expr::Closure(params, Box::new(make_spanned(body)));
         RustCodegen::emit_expr(&mut emitter, &expr);
         // Binary adds parens
         assert_eq!(emitter.finish(), "|x, y| (x + y)");
