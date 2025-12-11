@@ -278,66 +278,145 @@ async def compute_in_background(input: Data) -> Result[Output, ComputeError]:
 
 ## Synchronization Primitives
 
+Incan provides low-level synchronization primitives inspired by Rust's tokio runtime. These give you fine-grained control over shared state and task coordination.
+
+**Coming from Python?** Python's `asyncio` has some equivalents, but Incan's primitives work differently:
+
+| Incan | Python asyncio | Key Difference |
+|-------|----------------|----------------|
+| `Mutex[T]` | `asyncio.Lock` | Incan wraps the value; Python protects external data |
+| `RwLock[T]` | *(no equivalent)* | Allows multiple readers OR single writer |
+| `Semaphore` | `asyncio.Semaphore` | Similar behavior |
+| `Barrier` | `asyncio.Barrier` (3.11+) | Similar behavior |
+
+The key difference: Incan's `Mutex[T]` and `RwLock[T]` **wrap a value** (like Rust), while Python's Lock is just a lock you use alongside your data.
+
 ### Mutex
 
-Async-aware mutual exclusion:
+Mutual exclusion — ensures only **one task** can access the wrapped value at a time.
+
+**When to use:** Multiple tasks need to both read AND write shared state.
+
+**API:**
+
+- `Mutex(value)` — Create a mutex wrapping a value
+- `await mutex.lock()` — Acquire lock, returns a guard
+- `guard.get()` — Read the value
+- `guard.set(new_value)` — Write a new value
+- Guard auto-releases when it goes out of scope
 
 ```incan
 shared_counter = Mutex(0)
 
 async def increment() -> None:
-    guard = await shared_counter.lock()
+    guard = await shared_counter.lock()  # Blocks until lock acquired
     current = guard.get()
     guard.set(current + 1)
     # Lock released when guard goes out of scope
 ```
 
+**Python comparison:**
+
+```python
+# Python - lock is separate from data
+lock = asyncio.Lock()
+counter = 0
+
+async def increment():
+    async with lock:
+        counter += 1
+```
+
+```incan
+# Incan - lock wraps the data
+counter = Mutex(0)
+
+async def increment() -> None:
+    guard = await counter.lock()
+    guard.set(guard.get() + 1)
+```
+
 ### RwLock
 
-Reader-writer lock for read-heavy workloads:
+Reader-writer lock — allows **multiple readers** OR a **single writer**, but not both simultaneously. More efficient than Mutex when reads are frequent.
+
+**When to use:** Many tasks read, few tasks write (e.g., configuration, caches).
+
+**API:**
+
+- `RwLock(value)` — Create an RwLock wrapping a value
+- `await rwlock.read()` — Acquire read lock (shared with other readers)
+- `await rwlock.write()` — Acquire write lock (exclusive)
+- `guard.get()` — Read the value
+- `guard.set(new_value)` — Write (only on write guard)
 
 ```incan
 config = RwLock(Config(debug=False))
 
 async def read_config() -> bool:
-    guard = await config.read()  # Multiple readers allowed
+    guard = await config.read()  # Multiple readers allowed simultaneously
     return guard.get().debug
 
 async def update_config(debug: bool) -> None:
-    guard = await config.write()  # Exclusive access
+    guard = await config.write()  # Waits for all readers, then exclusive
     guard.set(Config(debug=debug))
 ```
 
+> **Note:** Python's asyncio doesn't have RwLock. This is a Rust/systems programming concept. If you need read-heavy access patterns in Python, you typically just use a Lock for everything.
+
 ### Semaphore
 
-Limit concurrent access:
+Counting semaphore — limits how many tasks can access a resource concurrently by managing a pool of "permits."
+
+**When to use:** Connection pools, rate limiting, bounding concurrent operations.
+
+**API:**
+
+- `Semaphore(n)` — Create with n permits
+- `await sem.acquire()` — Wait for and acquire a permit
+- Permit auto-releases when it goes out of scope
 
 ```incan
 # Allow max 3 concurrent connections
 connection_limit = Semaphore(3)
 
 async def make_request() -> Response:
-    permit = await connection_limit.acquire()
+    permit = await connection_limit.acquire()  # Blocks if no permits
     response = await http_get(url)
-    # Permit released automatically
+    # Permit released automatically when permit goes out of scope
     return response
 ```
 
+**Python equivalent:** `asyncio.Semaphore(n)` works the same way.
+
 ### Barrier
 
-Synchronize multiple tasks at a point:
+Synchronization point — makes N tasks wait until **all of them** reach the barrier before any can proceed.
+
+**When to use:** Phased algorithms, coordinating startup, map-reduce patterns.
+
+**API:**
+
+- `Barrier(n)` — Create barrier for n tasks
+- `await barrier.wait()` — Wait until all n tasks reach this point
 
 ```incan
 barrier = Barrier(3)  # Wait for 3 tasks
 
 async def worker(id: int) -> None:
     println(f"Worker {id} starting phase 1")
-    # ... work ...
+    # ... do phase 1 work ...
     
-    await barrier.wait()  # All must reach here
+    await barrier.wait()  # All 3 must reach here before anyone continues
     
-    println(f"Worker {id} starting phase 2")
+    println(f"Worker {id} starting phase 2")  # All start phase 2 together
 ```
+
+**Python equivalent:** `asyncio.Barrier(n)` (added in Python 3.11) works the same way.
+
+### Complete Example
+
+See [examples/advanced/async_sync.incn](../examples/advanced/async_sync.incn) for a runnable demo of all four primitives.
 
 ## Select (Racing Futures)
 
