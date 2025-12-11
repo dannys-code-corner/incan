@@ -1,0 +1,13 @@
+# JSON Serialization traits - Serialize and Deserialize
+# These enable json_stringify() and json_parse() functions
+# Python equivalents: json.dumps(), json.loads()
+
+trait Serialize:
+    @compiler_expand
+    def to_json(self) -> str: ...
+
+
+trait Deserialize:
+    @compiler_expand
+    @classmethod
+    def from_json(cls, json_str: str) -> Result[Self, str]: ...

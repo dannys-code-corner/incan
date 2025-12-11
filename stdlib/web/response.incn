@@ -1,0 +1,130 @@
+"""
+HTTP Response Builders
+
+Types for building HTTP responses.
+
+Example:
+    @route("/")
+    async def index() -> Response:
+        return Response.html("<h1>Welcome!</h1>")
+    
+    @route("/api/users/{id}")
+    async def get_user(id: int) -> Json[User]:
+        user = find_user(id)?
+        return Json(user)
+"""
+
+
+model Json[T]:
+    """
+    JSON response wrapper.
+    
+    Serializes the inner value to JSON and sets Content-Type: application/json.
+    The inner type T must implement Serialize.
+    
+    Example:
+    ```incan
+    @derive(Serialize)
+    model User:
+        id: int
+        name: str
+    
+    @route("/api/user")
+    async def get_user() -> Json[User]:
+        return Json(User(id=1, name="Alice"))
+    ```
+    
+    Compiles to: axum::Json<T>
+    """
+    value: T
+
+
+model Html:
+    """
+    HTML response wrapper.
+    
+    Sets Content-Type: text/html.
+    
+    Example:
+    ```incan
+    @route("/")
+    async def index() -> Html:
+        return Html("<h1>Hello!</h1>")
+    ```
+    
+    Compiles to: axum::response::Html<String>
+    """
+    content: str
+
+
+model Response:
+    """
+    HTTP response builder.
+    
+    For common cases, use Json or Html directly.
+    Response gives full control over status codes and headers.
+    
+    Example:
+    ```incan
+    @route("/redirect")
+    async def redirect() -> Response:
+        return Response.redirect("/new-location")
+    
+    @route("/error")
+    async def error() -> Response:
+        return Response.status(500, "Something went wrong")
+    ```
+    """
+    status_code: int
+    body: str
+    
+    def html(content: str) -> Response:
+        """Create an HTML response (200 OK)."""
+        ...
+    
+    def text(content: str) -> Response:
+        """Create a plain text response (200 OK)."""
+        ...
+    
+    def ok() -> Response:
+        """Create an empty 200 OK response."""
+        ...
+    
+    def created() -> Response:
+        """Create an empty 201 Created response."""
+        ...
+    
+    def no_content() -> Response:
+        """Create a 204 No Content response."""
+        ...
+    
+    def bad_request(message: str = "Bad Request") -> Response:
+        """Create a 400 Bad Request response."""
+        ...
+    
+    def not_found(message: str = "Not Found") -> Response:
+        """Create a 404 Not Found response."""
+        ...
+    
+    def internal_error(message: str = "Internal Server Error") -> Response:
+        """Create a 500 Internal Server Error response."""
+        ...
+    
+    def status(code: int, body: str = "") -> Response:
+        """Create a response with custom status code."""
+        ...
+    
+    def redirect(location: str) -> Response:
+        """Create a 302 redirect response."""
+        ...
+
+
+# Status code constants
+HTTP_OK: int = 200
+HTTP_CREATED: int = 201
+HTTP_NO_CONTENT: int = 204
+HTTP_BAD_REQUEST: int = 400
+HTTP_UNAUTHORIZED: int = 401
+HTTP_FORBIDDEN: int = 403
+HTTP_NOT_FOUND: int = 404
+HTTP_INTERNAL_ERROR: int = 500

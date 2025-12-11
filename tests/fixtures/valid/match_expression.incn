@@ -1,0 +1,8 @@
+def handle_option(x: int) -> int:
+    match x:
+        0 => 
+            return 0
+        1 => 
+            return 1
+        _ => 
+            return -1

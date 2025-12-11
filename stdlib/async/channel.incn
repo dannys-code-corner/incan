@@ -1,0 +1,196 @@
+"""
+Async Channel Primitives
+
+This module provides MPSC (Multi-Producer, Single-Consumer) channels for async message passing between tasks.
+
+Channels are the primary way to communicate between concurrent tasks safely.
+"""
+
+# Error types for channel operations
+model SendError[T] with Error:
+    """
+    Error when sending on a closed channel.
+    
+    Contains the value that failed to send, allowing recovery:
+    
+    ```incan
+    match await tx.send(my_data):
+        Ok(_) => println("Sent!")
+        Err(e) =>
+            # Recover the unsent value via .value field
+            println(f"Channel closed, couldn't send: {e.value:?}")
+            save_for_retry(e.value)
+    ```
+    """
+    value: T
+    
+    def message(self) -> str:
+        return "channel closed: receiver dropped"
+
+
+model RecvError with Error:
+    """Error when receiving on a closed channel"""
+    
+    def message(self) -> str:
+        return "channel closed: no more messages"
+
+
+# Sender half of a channel
+model Sender[T]:
+    """
+    The sending half of an MPSC channel.
+
+    MPSC stands for Multi-Producer, Single-Consumer.
+    
+    Multiple senders can be cloned from a single sender,
+    allowing multiple producers.
+    """
+    
+    async def send(self, value: T) -> Result[None, SendError[T]]:
+        """
+        Send a value through the channel.
+        
+        Blocks if the channel buffer is full (for bounded channels).
+        Returns Err if the receiver has been dropped.
+        """
+        ...
+    
+    def try_send(self, value: T) -> Result[None, SendError[T]]:
+        """
+        Try to send without blocking.
+        
+        Returns immediately with Err if the channel is full or closed.
+        """
+        ...
+    
+    def is_closed(self) -> bool:
+        """Check if the receiver has been dropped"""
+        ...
+
+
+# Receiver half of a channel
+model Receiver[T]:
+    """
+    The receiving half of an MPSC channel.
+    
+    Only one receiver exists per channel.
+    """
+    
+    async def recv(self) -> Option[T]:
+        """
+        Receive the next value.
+        
+        Returns None if the channel is closed and empty.
+        Blocks until a value is available or channel is closed.
+        """
+        ...
+    
+    def try_recv(self) -> Option[T]:
+        """
+        Try to receive without blocking.
+        
+        Returns None immediately if no value is available.
+        """
+        ...
+    
+    def close(self) -> None:
+        """Close the channel, preventing further sends"""
+        ...
+
+
+# ============================================================================
+# Channel Creation Functions
+# ============================================================================
+
+def channel[T](buffer: int) -> Tuple[Sender[T], Receiver[T]]:
+    """
+    Create a bounded MPSC channel.
+    
+    The channel can hold up to `buffer` messages before send() will block waiting for capacity.
+    
+    Example:
+    ```incan
+    tx, rx = channel[str](32)  # Buffer of 32 messages
+    
+    # Producer task
+    async def producer() -> None:
+        await tx.send("hello")
+        await tx.send("world")
+    
+    # Consumer task
+    async def consumer() -> None:
+        while True:
+            match await rx.recv():
+                Some(msg) => println(f"Got: {msg}")
+                None => break  # Channel closed
+    ```
+    
+    Maps to: tokio::sync::mpsc::channel(buffer)
+    """
+    ...
+
+
+def unbounded_channel[T]() -> Tuple[Sender[T], Receiver[T]]:
+    """
+    Create an unbounded MPSC channel.
+    
+    The channel has no capacity limit - send() never blocks.
+    Use with caution: can cause memory issues if producers outpace consumers.
+    
+    Example:
+    ```incan
+    tx, rx = unbounded_channel[int]()
+    
+    # Sends never block
+    tx.send(1)
+    tx.send(2)
+    tx.send(3)
+    ```
+    
+    Maps to: tokio::sync::mpsc::unbounded_channel()
+    """
+    ...
+
+
+# ============================================================================
+# OneShot Channel (single value)
+# ============================================================================
+
+model OneshotSender[T]:
+    """Sender for a one-shot channel (single value)"""
+    
+    def send(self, value: T) -> Result[None, T]:
+        """Send the value, consuming the sender"""
+        ...
+
+
+model OneshotReceiver[T]:
+    """Receiver for a one-shot channel (single value)"""
+    
+    async def recv(self) -> Result[T, RecvError]:
+        """Wait for and receive the value"""
+        ...
+
+
+def oneshot[T]() -> Tuple[OneshotSender[T], OneshotReceiver[T]]:
+    """
+    Create a one-shot channel for sending a single value.
+    
+    Useful for returning a result from a spawned task.
+    
+    Example:
+    ```incan
+    tx, rx = oneshot[int]()
+    
+    spawn(async () -> None:
+        result = expensive_computation()
+        tx.send(result)
+    )
+    
+    # Wait for the result
+    value = await rx.recv()
+    ```
+    
+    Maps to: tokio::sync::oneshot::channel()
+    """
+    ...

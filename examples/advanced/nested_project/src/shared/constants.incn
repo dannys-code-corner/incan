@@ -1,0 +1,12 @@
+"""
+Shared constants - as functions until module-level const is supported
+"""
+
+def api_version() -> str:
+    return "v1"
+
+def max_page_size() -> int:
+    return 100
+
+def default_timeout() -> int:
+    return 30

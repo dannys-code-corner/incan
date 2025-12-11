@@ -1,0 +1,18 @@
+"""Test fixture: valid async function declarations"""
+
+async def fetch(url: str) -> str:
+    await sleep(0.1)
+    return f"response from {url}"
+
+
+async def process() -> int:
+    await sleep(0.05)
+    return 42
+
+
+async def main() -> None:
+    let response = await fetch("https://example.com")
+    println(f"Got: {response}")
+    
+    let value = await process()
+    println(f"Processed: {value}")

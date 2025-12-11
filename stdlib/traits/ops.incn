@@ -1,0 +1,140 @@
+"""
+Arithmetic operator traits for custom types
+Python equivalents: __add__, __sub__, __mul__, __truediv__, __neg__
+Rust equivalents: std::ops::{Add, Sub, Mul, Div, Neg}
+"""
+
+
+trait Add[Rhs, Output]:
+    """
+    Add trait - Enables `a + b` for custom types
+    Python equivalent: __add__
+    
+    Example:
+
+    ```incan
+    model Money with Add[Money, Money]:
+        cents: int
+        
+        def __add__(self, other: Money) -> Money:
+            return Money(cents=self.cents + other.cents)
+
+    price = Money(cents=1000)
+    tax = Money(cents=80)
+    total = price + tax  # Money(cents=1080)
+    ```
+    """
+    def __add__(self, other: Rhs) -> Output: ...
+
+
+trait Sub[Rhs, Output]:
+    """
+    Sub trait - Enables `a - b` for custom types
+    Python equivalent: __sub__
+    
+    Example:
+
+    ```incan
+    model Point with Sub[Point, Point]:
+        x: int
+        y: int
+        
+        def __sub__(self, other: Point) -> Point:
+            return Point(x=self.x - other.x, y=self.y - other.y)
+
+    a = Point(x=10, y=20)
+    b = Point(x=3, y=5)
+    diff = a - b  # Point(x=7, y=15)
+    ```
+    """
+    def __sub__(self, other: Rhs) -> Output: ...
+
+
+trait Mul[Rhs, Output]:
+    """
+    Mul trait - Enables `a * b` for custom types
+    Python equivalent: __mul__
+    
+    Example:
+
+    ```incan
+    model Vector with Mul[float, Vector]:
+        x: float
+        y: float
+        
+        def __mul__(self, scalar: float) -> Vector:
+            return Vector(x=self.x * scalar, y=self.y * scalar)
+
+    v = Vector(x=3.0, y=4.0)
+    scaled = v * 2.0  # Vector(x=6.0, y=8.0)
+    ```
+    """
+    def __mul__(self, other: Rhs) -> Output: ...
+
+
+trait Div[Rhs, Output]:
+    """
+    Div trait - Enables `a / b` for custom types
+    Python equivalent: __truediv__
+    
+    Example:
+
+    ```incan
+    model Fraction with Div[Fraction, Fraction]:
+        num: int
+        denom: int
+        
+        def __div__(self, other: Fraction) -> Fraction:
+            return Fraction(
+                num = self.num * other.denom,
+                denom = self.denom * other.num
+            )
+
+    half = Fraction(num=1, denom=2)
+    quarter = Fraction(num=1, denom=4)
+    result = half / quarter  # Fraction(num=4, denom=2) = 2
+    ```
+    """
+    def __div__(self, other: Rhs) -> Output: ...
+
+
+trait Neg[Output]:
+    """
+    Neg trait - Enables `-a` (unary negation) for custom types
+    Python equivalent: __neg__
+    
+    Example:
+
+    ```incan
+    model Temperature with Neg[Temperature]:
+        celsius: float
+        
+        def __neg__(self) -> Temperature:
+            return Temperature(celsius=-self.celsius)
+
+    hot = Temperature(celsius=30.0)
+    cold = -hot  # Temperature(celsius=-30.0)
+    ```
+    """
+    def __neg__(self) -> Output: ...
+
+
+trait Mod[Rhs, Output]:
+    """
+    Mod trait - Enables `a % b` (modulo) for custom types
+    Python equivalent: __mod__
+    
+    Example:
+
+    ```incan
+    model Clock with Mod[int, Clock]:
+        hours: int
+        
+        def __mod__(self, divisor: int) -> Clock:
+            return Clock(hours=self.hours % divisor)
+
+    time = Clock(hours=25)
+    normalized = time % 24  # Clock(hours=1)
+    ```
+    """
+    def __mod__(self, other: Rhs) -> Output: ...
