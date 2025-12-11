@@ -1,0 +1,12 @@
+"""
+Database models
+"""
+
+model User:
+    name: str
+    email: str
+
+
+model Product:
+    name: str
+    price: float

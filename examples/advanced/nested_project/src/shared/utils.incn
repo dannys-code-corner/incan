@@ -1,0 +1,6 @@
+"""
+Shared utilities
+"""
+
+def format_date(year: int, month: int, day: int) -> str:
+    return f"{year}-{month}-{day}"
