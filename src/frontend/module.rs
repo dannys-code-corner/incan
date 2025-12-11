@@ -1,0 +1,567 @@
+//! Module resolution for multi-file Incan projects
+//!
+//! Resolves import paths like `import models::User` to actual file paths
+//! and manages loading/parsing of dependent modules.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::fs;
+
+use super::ast::{Declaration, ImportDecl, ImportKind, Program, Span};
+use super::lexer;
+use super::parser;
+use super::diagnostics::CompileError;
+
+/// Represents a resolved module with its AST and metadata
+#[derive(Debug)]
+pub struct ResolvedModule {
+    pub path: PathBuf,
+    pub source: String,
+    pub ast: Program,
+}
+
+/// Collects all modules needed for compilation
+pub struct ModuleCollector {
+    /// Base directory for resolving relative imports
+    base_dir: PathBuf,
+    /// Already loaded modules (path -> module)
+    loaded: HashMap<PathBuf, ResolvedModule>,
+    /// Modules currently being loaded (for cycle detection)
+    loading: HashSet<PathBuf>,
+}
+
+impl ModuleCollector {
+    pub fn new(entry_file: &Path) -> Self {
+        let base_dir = entry_file
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        
+        Self {
+            base_dir,
+            loaded: HashMap::new(),
+            loading: HashSet::new(),
+        }
+    }
+    
+    /// Load the entry file and all its dependencies
+    pub fn collect(&mut self, entry_file: &Path) -> Result<Vec<ResolvedModule>, Vec<CompileError>> {
+        let canonical = entry_file.canonicalize()
+            .unwrap_or_else(|_| entry_file.to_path_buf());
+        
+        self.load_module(&canonical)?;
+        
+        // Return modules in dependency order (dependencies first)
+        let mut result = Vec::new();
+        let entry_key = canonical.clone();
+        
+        // First add all non-entry modules
+        for (path, module) in self.loaded.drain() {
+            if path != entry_key {
+                result.push(module);
+            }
+        }
+        
+        // Entry module is handled separately
+        Ok(result)
+    }
+    
+    /// Load a single module and its dependencies
+    fn load_module(&mut self, path: &Path) -> Result<(), Vec<CompileError>> {
+        // Already loaded?
+        if self.loaded.contains_key(path) {
+            return Ok(());
+        }
+        
+        // Cycle detection
+        if self.loading.contains(path) {
+            return Err(vec![CompileError::new(
+                format!("Circular import detected: {}", path.display()),
+                Span::default(),
+            )]);
+        }
+        
+        self.loading.insert(path.to_path_buf());
+        
+        // Read and parse
+        let source = fs::read_to_string(path)
+            .map_err(|e| vec![CompileError::new(
+                format!("Cannot read '{}': {}", path.display(), e),
+                Span::default(),
+            )])?;
+        
+        let tokens = lexer::lex(&source)?;
+        let ast = parser::parse(&tokens)?;
+        
+        // Find and load dependencies
+        for decl in &ast.declarations {
+            if let Declaration::Import(import) = &decl.node {
+                if let Some(dep_path) = self.resolve_import(import) {
+                    self.load_module(&dep_path)?;
+                }
+            }
+        }
+        
+        self.loading.remove(path);
+        self.loaded.insert(path.to_path_buf(), ResolvedModule {
+            path: path.to_path_buf(),
+            source,
+            ast,
+        });
+        
+        Ok(())
+    }
+    
+    /// Resolve an import to a file path
+    fn resolve_import(&self, import: &ImportDecl) -> Option<PathBuf> {
+        let (path, is_absolute, parent_levels) = match &import.kind {
+            ImportKind::Module(p) if !p.segments.is_empty() => {
+                (p.segments.clone(), p.is_absolute, p.parent_levels)
+            }
+            ImportKind::From { module, .. } if !module.segments.is_empty() => {
+                (module.segments.clone(), module.is_absolute, module.parent_levels)
+            }
+            // Rust crate imports don't resolve to Incan files
+            ImportKind::RustCrate { .. } | ImportKind::RustFrom { .. } => return None,
+            ImportKind::Python(_) | ImportKind::Module(_) | ImportKind::From { .. } => return None,
+        };
+        
+        // Skip standard library imports (std::*)
+        if let Some(first) = path.first() {
+            if first == "std" {
+                return None;
+            }
+        }
+        
+        // Calculate base directory based on relative path
+        let mut base = self.base_dir.clone();
+        
+        // Handle absolute paths (crate::...)
+        if is_absolute {
+            // Find project root (look for Cargo.toml or src/ directory)
+            let mut project_root = base.clone();
+            while !project_root.join("Cargo.toml").exists() && !project_root.join("src").exists() {
+                if !project_root.pop() {
+                    break;
+                }
+            }
+            // If we found a src directory, use it as base
+            if project_root.join("src").exists() {
+                base = project_root.join("src");
+            } else {
+                base = project_root;
+            }
+        } else {
+            // Handle parent navigation (super:: or ..)
+            for _ in 0..parent_levels {
+                base = base.parent().map(|p| p.to_path_buf()).unwrap_or(base);
+            }
+        }
+        
+        // Build file path from segments
+        // First segment is the module name, rest are nested paths
+        if path.is_empty() {
+            return None;
+        }
+        
+        let mut file_path = base.clone();
+        
+        // Handle nested paths: db.models -> db/models.incn or db/models/mod.incn
+        for (i, segment) in path.iter().enumerate() {
+            if i == path.len() - 1 {
+                // Last segment - this is the file
+                file_path = file_path.join(segment);
+            } else {
+                // Directory
+                file_path = file_path.join(segment);
+            }
+        }
+        
+        // Try .incn extension first (preferred)
+        let mut with_ext = file_path.clone();
+        with_ext.set_extension("incn");
+        
+        if with_ext.exists() {
+            return Some(with_ext.canonicalize().unwrap_or(with_ext));
+        }
+        
+        // Try .incan extension (legacy/alternate)
+        with_ext.set_extension("incan");
+        if with_ext.exists() {
+            return Some(with_ext.canonicalize().unwrap_or(with_ext));
+        }
+        
+        // Try as directory with mod.incn
+        let mod_file = file_path.join("mod.incn");
+        if mod_file.exists() {
+            return Some(mod_file.canonicalize().unwrap_or(mod_file));
+        }
+        
+        // Try as directory with mod.incan (legacy/alternate)
+        let mod_file_legacy = file_path.join("mod.incan");
+        if mod_file_legacy.exists() {
+            return Some(mod_file_legacy.canonicalize().unwrap_or(mod_file_legacy));
+        }
+        
+        None
+    }
+    
+    /// Get all loaded modules
+    pub fn modules(&self) -> impl Iterator<Item = &ResolvedModule> {
+        self.loaded.values()
+    }
+    
+    /// Take ownership of loaded modules
+    pub fn into_modules(self) -> HashMap<PathBuf, ResolvedModule> {
+        self.loaded
+    }
+}
+
+/// Extract what symbols a module exports
+pub fn exported_symbols(ast: &Program) -> Vec<ExportedSymbol> {
+    let mut exports = Vec::new();
+    
+    for decl in &ast.declarations {
+        match &decl.node {
+            Declaration::Model(m) => {
+                exports.push(ExportedSymbol::Type(m.name.clone()));
+            }
+            Declaration::Class(c) => {
+                exports.push(ExportedSymbol::Type(c.name.clone()));
+            }
+            Declaration::Enum(e) => {
+                exports.push(ExportedSymbol::Type(e.name.clone()));
+                // Also export variants
+                for variant in &e.variants {
+                    exports.push(ExportedSymbol::Variant {
+                        enum_name: e.name.clone(),
+                        variant_name: variant.node.name.clone(),
+                    });
+                }
+            }
+            Declaration::Newtype(n) => {
+                exports.push(ExportedSymbol::Type(n.name.clone()));
+            }
+            Declaration::Trait(t) => {
+                exports.push(ExportedSymbol::Trait(t.name.clone()));
+            }
+            Declaration::Function(f) => {
+                exports.push(ExportedSymbol::Function(f.name.clone()));
+            }
+            Declaration::Import(_) | Declaration::Docstring(_) => {}
+        }
+    }
+    
+    exports
+}
+
+#[derive(Debug, Clone)]
+pub enum ExportedSymbol {
+    Type(String),
+    Trait(String),
+    Function(String),
+    Variant { enum_name: String, variant_name: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::ast::{
+        ClassDecl, Declaration, EnumDecl, FunctionDecl, ImportDecl, ImportKind, ImportPath,
+        ModelDecl, NewtypeDecl, Program, Span, Spanned, TraitDecl, Type, VariantDecl,
+    };
+
+    fn make_spanned<T>(node: T) -> Spanned<T> {
+        Spanned { node, span: Span::default() }
+    }
+
+    // ========================================
+    // ModuleCollector tests
+    // ========================================
+
+    #[test]
+    fn test_module_collector_new() {
+        let path = std::path::Path::new("/test/project/main.incn");
+        let collector = ModuleCollector::new(path);
+        assert!(collector.loaded.is_empty());
+        assert!(collector.loading.is_empty());
+    }
+
+    #[test]
+    fn test_module_collector_new_with_relative_path() {
+        let path = std::path::Path::new("main.incn");
+        let collector = ModuleCollector::new(path);
+        // Should default to "." as base_dir when parent is none
+        assert!(collector.loaded.is_empty());
+    }
+
+    // ========================================
+    // exported_symbols tests
+    // ========================================
+
+    #[test]
+    fn test_exported_symbols_empty_program() {
+        let program = Program { declarations: vec![] };
+        let exports = exported_symbols(&program);
+        assert!(exports.is_empty());
+    }
+
+    #[test]
+    fn test_exported_symbols_model() {
+        let model = ModelDecl {
+            decorators: vec![],
+            name: "User".to_string(),
+            type_params: vec![],
+            fields: vec![],
+            methods: vec![],
+        };
+        let program = Program {
+            declarations: vec![make_spanned(Declaration::Model(model))],
+        };
+        let exports = exported_symbols(&program);
+        assert_eq!(exports.len(), 1);
+        match &exports[0] {
+            ExportedSymbol::Type(name) => assert_eq!(name, "User"),
+            _ => panic!("Expected Type export"),
+        }
+    }
+
+    #[test]
+    fn test_exported_symbols_class() {
+        let class = ClassDecl {
+            decorators: vec![],
+            name: "MyClass".to_string(),
+            type_params: vec![],
+            extends: None,
+            traits: vec![],
+            fields: vec![],
+            methods: vec![],
+        };
+        let program = Program {
+            declarations: vec![make_spanned(Declaration::Class(class))],
+        };
+        let exports = exported_symbols(&program);
+        assert_eq!(exports.len(), 1);
+        match &exports[0] {
+            ExportedSymbol::Type(name) => assert_eq!(name, "MyClass"),
+            _ => panic!("Expected Type export"),
+        }
+    }
+
+    #[test]
+    fn test_exported_symbols_enum_with_variants() {
+        let enum_decl = EnumDecl {
+            name: "Color".to_string(),
+            type_params: vec![],
+            variants: vec![
+                make_spanned(VariantDecl {
+                    name: "Red".to_string(),
+                    fields: vec![],
+                }),
+                make_spanned(VariantDecl {
+                    name: "Green".to_string(),
+                    fields: vec![],
+                }),
+                make_spanned(VariantDecl {
+                    name: "Blue".to_string(),
+                    fields: vec![],
+                }),
+            ],
+        };
+        let program = Program {
+            declarations: vec![make_spanned(Declaration::Enum(enum_decl))],
+        };
+        let exports = exported_symbols(&program);
+        // 1 type + 3 variants = 4 exports
+        assert_eq!(exports.len(), 4);
+        
+        // First should be the type
+        match &exports[0] {
+            ExportedSymbol::Type(name) => assert_eq!(name, "Color"),
+            _ => panic!("Expected Type export"),
+        }
+        
+        // Rest are variants
+        match &exports[1] {
+            ExportedSymbol::Variant { enum_name, variant_name } => {
+                assert_eq!(enum_name, "Color");
+                assert_eq!(variant_name, "Red");
+            }
+            _ => panic!("Expected Variant export"),
+        }
+    }
+
+    #[test]
+    fn test_exported_symbols_newtype() {
+        let newtype = NewtypeDecl {
+            name: "UserId".to_string(),
+            underlying: make_spanned(Type::Simple("i64".to_string())),
+            methods: vec![],
+        };
+        let program = Program {
+            declarations: vec![make_spanned(Declaration::Newtype(newtype))],
+        };
+        let exports = exported_symbols(&program);
+        assert_eq!(exports.len(), 1);
+        match &exports[0] {
+            ExportedSymbol::Type(name) => assert_eq!(name, "UserId"),
+            _ => panic!("Expected Type export"),
+        }
+    }
+
+    #[test]
+    fn test_exported_symbols_trait() {
+        let trait_decl = TraitDecl {
+            decorators: vec![],
+            name: "Printable".to_string(),
+            type_params: vec![],
+            methods: vec![],
+        };
+        let program = Program {
+            declarations: vec![make_spanned(Declaration::Trait(trait_decl))],
+        };
+        let exports = exported_symbols(&program);
+        assert_eq!(exports.len(), 1);
+        match &exports[0] {
+            ExportedSymbol::Trait(name) => assert_eq!(name, "Printable"),
+            _ => panic!("Expected Trait export"),
+        }
+    }
+
+    #[test]
+    fn test_exported_symbols_function() {
+        let func = FunctionDecl {
+            decorators: vec![],
+            is_async: false,
+            name: "calculate".to_string(),
+            type_params: vec![],
+            params: vec![],
+            return_type: make_spanned(Type::Unit),
+            body: vec![],
+        };
+        let program = Program {
+            declarations: vec![make_spanned(Declaration::Function(func))],
+        };
+        let exports = exported_symbols(&program);
+        assert_eq!(exports.len(), 1);
+        match &exports[0] {
+            ExportedSymbol::Function(name) => assert_eq!(name, "calculate"),
+            _ => panic!("Expected Function export"),
+        }
+    }
+
+    #[test]
+    fn test_exported_symbols_ignores_imports() {
+        let import = ImportDecl {
+            kind: ImportKind::Module(ImportPath {
+                segments: vec!["std".to_string()],
+                is_absolute: false,
+                parent_levels: 0,
+            }),
+            alias: None,
+        };
+        let program = Program {
+            declarations: vec![make_spanned(Declaration::Import(import))],
+        };
+        let exports = exported_symbols(&program);
+        assert!(exports.is_empty());
+    }
+
+    #[test]
+    fn test_exported_symbols_ignores_docstrings() {
+        let program = Program {
+            declarations: vec![make_spanned(Declaration::Docstring("Module documentation".to_string()))],
+        };
+        let exports = exported_symbols(&program);
+        assert!(exports.is_empty());
+    }
+
+    #[test]
+    fn test_exported_symbols_multiple_declarations() {
+        let model = ModelDecl {
+            decorators: vec![],
+            name: "User".to_string(),
+            type_params: vec![],
+            fields: vec![],
+            methods: vec![],
+        };
+        let func = FunctionDecl {
+            decorators: vec![],
+            is_async: false,
+            name: "create_user".to_string(),
+            type_params: vec![],
+            params: vec![],
+            return_type: make_spanned(Type::Unit),
+            body: vec![],
+        };
+        let trait_decl = TraitDecl {
+            decorators: vec![],
+            name: "Serializable".to_string(),
+            type_params: vec![],
+            methods: vec![],
+        };
+        let program = Program {
+            declarations: vec![
+                make_spanned(Declaration::Model(model)),
+                make_spanned(Declaration::Function(func)),
+                make_spanned(Declaration::Trait(trait_decl)),
+            ],
+        };
+        let exports = exported_symbols(&program);
+        assert_eq!(exports.len(), 3);
+    }
+
+    // ========================================
+    // ExportedSymbol tests
+    // ========================================
+
+    #[test]
+    fn test_exported_symbol_type_clone() {
+        let sym = ExportedSymbol::Type("MyType".to_string());
+        let cloned = sym.clone();
+        match cloned {
+            ExportedSymbol::Type(name) => assert_eq!(name, "MyType"),
+            _ => panic!("Clone changed variant"),
+        }
+    }
+
+    #[test]
+    fn test_exported_symbol_variant_clone() {
+        let sym = ExportedSymbol::Variant {
+            enum_name: "Status".to_string(),
+            variant_name: "Active".to_string(),
+        };
+        let cloned = sym.clone();
+        match cloned {
+            ExportedSymbol::Variant { enum_name, variant_name } => {
+                assert_eq!(enum_name, "Status");
+                assert_eq!(variant_name, "Active");
+            }
+            _ => panic!("Clone changed variant"),
+        }
+    }
+
+    #[test]
+    fn test_exported_symbol_debug() {
+        let sym = ExportedSymbol::Function("test".to_string());
+        let debug_str = format!("{:?}", sym);
+        assert!(debug_str.contains("Function"));
+        assert!(debug_str.contains("test"));
+    }
+
+    // ========================================
+    // ResolvedModule tests
+    // ========================================
+
+    #[test]
+    fn test_resolved_module_debug() {
+        let module = ResolvedModule {
+            path: std::path::PathBuf::from("/test/module.incn"),
+            source: "fn main(): ()".to_string(),
+            ast: Program { declarations: vec![] },
+        };
+        let debug_str = format!("{:?}", module);
+        assert!(debug_str.contains("ResolvedModule"));
+        assert!(debug_str.contains("module.incn"));
+    }
+}
