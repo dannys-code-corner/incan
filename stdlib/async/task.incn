@@ -1,0 +1,100 @@
+"""
+Async Task Primitives
+
+This module provides task management utilities:
+- spawn: Run a task concurrently
+- spawn_blocking: Run blocking code on a dedicated thread
+- JoinHandle: Handle to wait for task completion
+"""
+
+# JoinHandle represents a running async task
+# Can be awaited to get the result
+model JoinHandle[T]:
+    """
+    Handle to a spawned async task.
+    
+    Awaiting the handle returns the task's result.
+    If the task panics, awaiting returns an error.
+    """
+    
+    async def await_result(self) -> Result[T, str]:
+        """Wait for the task to complete and get its result"""
+        ...
+
+
+# ============================================================================
+# Task Spawning Functions
+# ============================================================================
+
+def spawn[T](task: async () -> T) -> JoinHandle[T]:
+    """
+    Spawn an async task to run concurrently.
+    
+    The task begins executing immediately and runs concurrently
+    with the calling code. Use await on the returned handle to
+    wait for completion.
+    
+    Example:
+        async def background_work() -> int:
+            await sleep(1.0)
+            return 42
+        
+        # Spawn task - runs in background
+        handle = spawn(background_work)
+        
+        # Do other work while task runs...
+        println("Doing other work...")
+        
+        # Wait for result
+        result = await handle
+        println(f"Task returned: {result}")
+    
+    Maps to: tokio::spawn(task())
+    """
+    ...
+
+
+async def spawn_blocking[T](f: () -> T) -> T:
+    """
+    Run a blocking/CPU-intensive function on a dedicated thread.
+    
+    Use this for operations that would block the async runtime,
+    such as CPU-heavy computations or synchronous I/O.
+    
+    Example:
+        def heavy_computation() -> int:
+            # CPU-intensive work
+            result = 0
+            for i in range(1_000_000):
+                result = result + i
+            return result
+        
+        # Run on blocking thread pool
+        result = await spawn_blocking(heavy_computation)
+    
+    Maps to: tokio::task::spawn_blocking(f).await
+    """
+    ...
+
+
+# ============================================================================
+# Task Utilities
+# ============================================================================
+
+async def yield_now() -> None:
+    """
+    Yield execution back to the runtime.
+    
+    Allows other tasks to run. Use sparingly in tight loops
+    to prevent starvation of other tasks.
+    
+    Example:
+        async def cooperative_loop() -> None:
+            for i in range(1000):
+                # Do some work
+                if i % 100 == 0:
+                    await yield_now()  # Let others run
+    
+    Maps to: tokio::task::yield_now().await
+    """
+    ...

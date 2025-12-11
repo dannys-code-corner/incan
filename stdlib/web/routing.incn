@@ -1,0 +1,54 @@
+"""
+HTTP Routing
+
+Decorators and constants for defining web routes.
+
+Example:
+    @route("/users/{id}", methods=[GET])
+    async def get_user(id: int) -> Json[User]:
+        user = find_user(id)?
+        return Json(user)
+    
+    @route("/users", methods=[POST])
+    async def create_user(body: Json[CreateUser]) -> Json[User]:
+        user = User(id=1, name=body.value.name)
+        return Json(user)
+"""
+
+
+# HTTP method constants
+GET: str = "GET"
+POST: str = "POST"
+PUT: str = "PUT"
+DELETE: str = "DELETE"
+PATCH: str = "PATCH"
+HEAD: str = "HEAD"
+OPTIONS: str = "OPTIONS"
+
+
+def route(path: str, methods: list[str] = [GET]) -> Callable:
+    """
+    Decorator to register a function as an HTTP route handler.
+    
+    Args:
+        path: URL path pattern (e.g., "/users/{id}")
+              Path parameters use {name} syntax
+        methods: List of HTTP methods this route handles (default: [GET])
+    
+    Path parameters are extracted and passed to the handler function.
+    The parameter name in the path must match the function argument name.
+    
+    Example:
+    ```incan
+    @route("/api/items/{id}", methods=[GET, DELETE])
+    async def item_handler(id: int) -> Response:
+        match request_method():
+            "GET" => return Json(get_item(id))
+            "DELETE" => 
+                delete_item(id)
+                return Response.no_content()
+    ```
+    
+    Compiles to: router.route("/api/items/:id", get(item_handler))
+    """
+    ...

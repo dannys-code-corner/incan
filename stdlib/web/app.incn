@@ -1,0 +1,51 @@
+"""
+Web Application Framework
+
+Provides a Flask/FastAPI-like API that compiles to Axum (Rust).
+
+Example:
+    from web import App, route, Response
+    
+    app = App()
+    
+    @route("/")
+    async def index() -> Response:
+        return Response.html("<h1>Hello!</h1>")
+    
+    def main():
+        app.run(port=8080)
+"""
+
+
+model App:
+    """
+    Web application container.
+    
+    Routes are registered via the @route decorator on handler functions.
+    The app collects all routes and builds an Axum Router at compile time.
+    
+    Example:
+    ```incan
+    app = App()
+    
+    @route("/health")
+    async def health() -> Response:
+        return Response.ok()
+    
+    def main():
+        app.run(host="0.0.0.0", port=3000)
+    ```
+    """
+    
+    def run(self, host: str = "127.0.0.1", port: int = 8080) -> None:
+        """
+        Start the web server.
+        
+        Args:
+            host: Bind address (default: "127.0.0.1")
+            port: Port number (default: 8080)
+        
+        This method blocks until the server is shut down.
+        Compiles to axum::serve() with Tokio runtime.
+        """
+        ...

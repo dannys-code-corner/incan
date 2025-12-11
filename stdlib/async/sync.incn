@@ -1,0 +1,222 @@
+"""
+Async Synchronization Primitives
+
+This module provides async-aware synchronization primitives:
+- Mutex: Mutual exclusion lock
+- RwLock: Reader-writer lock
+- Semaphore: Counting semaphore
+- Barrier: Synchronization barrier
+"""
+
+# ============================================================================
+# Mutex - Mutual Exclusion Lock
+# ============================================================================
+
+model Mutex[T]:
+    """
+    An async-aware mutex.
+    
+    Unlike std::sync::Mutex, this mutex can be held across await points.
+    The lock is automatically released when the guard is dropped.
+    
+    Example:
+        shared_counter = Mutex.new(0)
+        
+        async def increment() -> None:
+            guard = await shared_counter.lock()
+            guard.set(guard.get() + 1)
+            # Lock released when guard goes out of scope
+    """
+    
+    @staticmethod
+    def new(value: T) -> Mutex[T]:
+        """Create a new mutex wrapping the given value"""
+        ...
+    
+    async def lock(self) -> MutexGuard[T]:
+        """
+        Acquire the lock, blocking until available.
+        
+        Returns a guard that provides access to the inner value.
+        The lock is released when the guard is dropped.
+        """
+        ...
+    
+    def try_lock(self) -> Option[MutexGuard[T]]:
+        """
+        Try to acquire the lock without blocking.
+        
+        Returns None immediately if the lock is held.
+        """
+        ...
+
+
+model MutexGuard[T]:
+    """Guard providing access to mutex-protected data"""
+    
+    def get(self) -> T:
+        """Get the current value (by reference)"""
+        ...
+    
+    def set(self, value: T) -> None:
+        """Set a new value"""
+        ...
+
+
+# ============================================================================
+# RwLock - Reader-Writer Lock
+# ============================================================================
+
+model RwLock[T]:
+    """
+    An async-aware reader-writer lock.
+    
+    Allows multiple concurrent readers OR a single exclusive writer.
+    Useful when reads are much more frequent than writes.
+    
+    Example:
+        shared_config = RwLock.new(Config(debug=False))
+        
+        async def read_config() -> bool:
+            guard = await shared_config.read()
+            return guard.get().debug
+        
+        async def update_config(debug: bool) -> None:
+            guard = await shared_config.write()
+            guard.set(Config(debug=debug))
+    """
+    
+    @staticmethod
+    def new(value: T) -> RwLock[T]:
+        """Create a new RwLock wrapping the given value"""
+        ...
+    
+    async def read(self) -> RwLockReadGuard[T]:
+        """
+        Acquire a read lock.
+        
+        Multiple readers can hold the lock simultaneously.
+        Blocks if a writer holds the lock.
+        """
+        ...
+    
+    async def write(self) -> RwLockWriteGuard[T]:
+        """
+        Acquire a write lock.
+        
+        Exclusive access - blocks all readers and other writers.
+        """
+        ...
+    
+    def try_read(self) -> Option[RwLockReadGuard[T]]:
+        """Try to acquire a read lock without blocking"""
+        ...
+    
+    def try_write(self) -> Option[RwLockWriteGuard[T]]:
+        """Try to acquire a write lock without blocking"""
+        ...
+
+
+model RwLockReadGuard[T]:
+    """Guard for read access to RwLock-protected data"""
+    
+    def get(self) -> T:
+        """Get the current value (read-only)"""
+        ...
+
+
+model RwLockWriteGuard[T]:
+    """Guard for write access to RwLock-protected data"""
+    
+    def get(self) -> T:
+        """Get the current value"""
+        ...
+    
+    def set(self, value: T) -> None:
+        """Set a new value"""
+        ...
+
+
+# ============================================================================
+# Semaphore - Counting Semaphore
+# ============================================================================
+
+model Semaphore:
+    """
+    A counting semaphore.
+    
+    Limits concurrent access to a resource to N tasks.
+    
+    Example:
+        # Allow max 3 concurrent connections
+        connection_limit = Semaphore.new(3)
+        
+        async def make_request() -> Response:
+            permit = await connection_limit.acquire()
+            response = await http_get(url)
+            # Permit released automatically
+            return response
+    """
+    
+    @staticmethod
+    def new(permits: int) -> Semaphore:
+        """Create a semaphore with the given number of permits"""
+        ...
+    
+    async def acquire(self) -> SemaphorePermit:
+        """
+        Acquire a permit, blocking until one is available.
+        
+        The permit is released when dropped.
+        """
+        ...
+    
+    def try_acquire(self) -> Option[SemaphorePermit]:
+        """Try to acquire a permit without blocking"""
+        ...
+    
+    def available_permits(self) -> int:
+        """Get the number of available permits"""
+        ...
+
+
+model SemaphorePermit:
+    """A permit from a semaphore"""
+    pass
+
+
+# ============================================================================
+# Barrier - Synchronization Point
+# ============================================================================
+
+model Barrier:
+    """
+    A synchronization barrier.
+    
+    All tasks must reach the barrier before any can proceed.
+    Useful for coordinating phases of computation.
+    
+    Example:
+        barrier = Barrier.new(3)  # Wait for 3 tasks
+        
+        async def worker(id: int) -> None:
+            println(f"Worker {id} starting phase 1")
+            # ... do work ...
+            
+            await barrier.wait()  # All must reach here
+            
+            println(f"Worker {id} starting phase 2")
+    """
+    
+    @staticmethod
+    def new(count: int) -> Barrier:
+        """Create a barrier that waits for `count` tasks"""
+        ...
+    
+    async def wait(self) -> int:
+        """
+        Wait at the barrier until all tasks arrive.
+        
+        Returns the arrival index (0 to count-1).
+        """
+        ...

@@ -1,0 +1,97 @@
+"""
+HTTP Request Extractors
+
+Types for extracting data from HTTP requests.
+
+Example:
+    @route("/search")
+    async def search(params: Query[SearchParams]) -> Json[list[Result]]:
+        results = do_search(params.q, params.limit)
+        return Json(results)
+    
+    @route("/users/{id}")
+    async def get_user(id: int) -> Json[User]:
+        # Path parameters extracted automatically
+        return Json(find_user(id))
+"""
+
+
+model Query[T]:
+    """
+    Query string extractor.
+    
+    Parses URL query parameters into a typed model.
+    The inner type T must implement Deserialize.
+    
+    Example:
+    ```incan
+    @derive(Deserialize)
+    model SearchParams:
+        q: str
+        limit: int = 10
+    
+    @route("/search")
+    async def search(params: Query[SearchParams]) -> Json[list[Item]]:
+        # Access: params.q, params.limit
+        return Json(search_items(params.q, params.limit))
+    ```
+    
+    Compiles to: axum::extract::Query<T>
+    """
+
+
+model Path[T]:
+    """
+    Path parameter extractor for multiple params.
+    
+    For single path parameters, use the type directly in function signature.
+    For multiple parameters, use Path with a tuple.
+    
+    Example:
+    ```incan
+    # Single param - just use the type
+    @route("/users/{id}")
+    async def get_user(id: int) -> Json[User]:
+        ...
+    
+    # Multiple params - use Path with tuple
+    @route("/users/{user_id}/posts/{post_id}")
+    async def get_post(ids: Path[tuple[int, int]]) -> Json[Post]:
+        user_id, post_id = ids
+        ...
+    ```
+    
+    Compiles to: axum::extract::Path<T>
+    """
+
+
+model Body[T]:
+    """
+    Request body extractor (raw bytes or text).
+    
+    For JSON bodies, use Json[T] instead.
+    The inner type T must implement Deserialize.
+    
+    Compiles to: axum::body::Body or String
+    """
+
+
+model Request:
+    """
+    Full HTTP request access.
+    
+    Usually you'll use specific extractors (Query, Path, Json) instead,
+    but Request gives full access when needed.
+    
+    Compiles to: axum::extract::Request
+    """
+    method: str
+    path: str
+    
+    def header(self, name: str) -> Option[str]:
+        """Get a request header by name."""
+        ...
+    
+    def headers(self) -> dict[str, str]:
+        """Get all request headers."""
+        ...

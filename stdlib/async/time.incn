@@ -1,0 +1,103 @@
+"""
+Async Time Primitives
+
+This module provides async timing utilities:
+- sleep: Pause execution for a duration
+- timeout: Run a task with a time limit
+- Duration: Time duration type
+"""
+
+# Duration type for time measurements
+# Internally maps to tokio::time::Duration
+model Duration:
+    """Represents a span of time"""
+    secs: int
+    nanos: int
+    
+    @staticmethod
+    def from_secs(secs: int) -> Duration:
+        """Create a Duration from whole seconds"""
+        return Duration(secs=secs, nanos=0)
+    
+    @staticmethod
+    def from_millis(millis: int) -> Duration:
+        """Create a Duration from milliseconds"""
+        secs = millis / 1000
+        nanos = (millis % 1000) * 1_000_000
+        return Duration(secs=secs, nanos=nanos)
+    
+    @staticmethod
+    def from_secs_f64(secs: float) -> Duration:
+        """Create a Duration from fractional seconds"""
+        ...
+
+
+# Error type for timeout operations
+model TimeoutError with Error:
+    """Error returned when an operation times out"""
+    
+    def message(self) -> str:
+        return "operation timed out"
+
+
+# ============================================================================
+# Async Functions
+# ============================================================================
+
+async def sleep(seconds: float) -> None:
+    """
+    Pause execution for the specified duration.
+    
+    Example:
+        async def delayed_hello() -> None:
+            println("Starting...")
+            await sleep(1.0)  # Wait 1 second
+            println("Hello after delay!")
+    
+    Maps to: tokio::time::sleep(Duration::from_secs_f64(seconds)).await
+    """
+    ...
+
+
+async def sleep_ms(milliseconds: int) -> None:
+    """
+    Pause execution for the specified milliseconds.
+    
+    Example:
+        await sleep_ms(500)  # Wait 500 milliseconds
+    
+    Maps to: tokio::time::sleep(Duration::from_millis(ms)).await
+    """
+    ...
+
+
+async def timeout[T](seconds: float, task: async () -> T) -> Result[T, TimeoutError]:
+    """
+    Run an async task with a time limit.
+    
+    Returns Ok(result) if the task completes within the timeout,
+    or Err(TimeoutError) if the timeout expires.
+    
+    Example:
+        async def slow_operation() -> str:
+            await sleep(10.0)
+            return "done"
+        
+        result = await timeout(2.0, slow_operation)
+        match result:
+            Ok(value) => println(f"Got: {value}")
+            Err(e) => println(f"Timed out: {e}")
+    
+    Maps to: tokio::time::timeout(duration, task()).await
+    """
+    ...
+
+
+async def timeout_ms[T](milliseconds: int, task: async () -> T) -> Result[T, TimeoutError]:
+    """
+    Run an async task with a time limit in milliseconds.
+    
+    Example:
+        result = await timeout_ms(500, fetch_data)
+    """
+    ...
