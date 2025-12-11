@@ -6,6 +6,7 @@ Learn how to write Incan code — from basics to advanced patterns.
 
 | Guide | Description |
 |-------|-------------|
+| [Models & Classes](models_and_classes.md) | When to use `model` vs `class` |
 | [Strings](strings.md) | String manipulation and comparison to Python/Rust |
 | [Error Handling](error_handling.md) | Result, Option, and the `?` operator |
 | [Error Messages](error_messages.md) | Understanding and fixing compiler errors |
