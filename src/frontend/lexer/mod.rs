@@ -246,13 +246,15 @@ impl<'a> Lexer<'a> {
 
             // f-strings
             'f' if self.peek() == Some('"') || self.peek() == Some('\'') => {
-                let quote = self.advance().unwrap();
+                // Safe: we just checked peek() is Some quote char
+                let quote = self.advance().expect("f-string quote after peek check");
                 self.scan_fstring(start, quote);
             }
             
             // b-strings (byte strings)
             'b' if self.peek() == Some('"') || self.peek() == Some('\'') => {
-                let quote = self.advance().unwrap();
+                // Safe: we just checked peek() is Some quote char
+                let quote = self.advance().expect("b-string quote after peek check");
                 self.scan_byte_string(start, quote);
             }
 
@@ -307,8 +309,16 @@ impl<'a> Lexer<'a> {
     }
 
     /// Emit a closing bracket token and decrement bracket depth.
+    /// Produces an error if there's no matching opening bracket.
     fn close_bracket(&mut self, kind: TokenKind, start: usize) {
-        self.bracket_depth = self.bracket_depth.saturating_sub(1);
+        if self.bracket_depth == 0 {
+            self.errors.push(CompileError::new(
+                "Unmatched closing bracket".to_string(),
+                Span::new(start, self.current_pos),
+            ));
+        } else {
+            self.bracket_depth -= 1;
+        }
         self.add_token(kind, start);
     }
 
@@ -342,14 +352,14 @@ impl<'a> Lexer<'a> {
 // Helper functions
 // ============================================================================
 
-/// Check if a character can start an identifier.
+/// Check if a character can start an identifier (ASCII-only).
 fn is_ident_start(c: char) -> bool {
-    c.is_alphabetic() || c == '_'
+    c.is_ascii_alphabetic() || c == '_'
 }
 
-/// Check if a character can continue an identifier.
+/// Check if a character can continue an identifier (ASCII-only).
 fn is_ident_continue(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
 /// Convenience function to lex a source string.
@@ -446,5 +456,94 @@ mod tests {
             }
             _ => panic!("Expected FString token"),
         }
+    }
+
+    #[test]
+    fn test_unicode_identifier_rejected() {
+        // Unicode characters should not be valid identifiers (ASCII-only)
+        let result = lex("π = 1");
+        assert!(result.is_err(), "Unicode identifier should produce an error");
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("Unexpected character"));
+    }
+
+    #[test]
+    fn test_unmatched_closing_bracket() {
+        // Closing bracket without matching open should produce an error
+        let result = lex(")");
+        assert!(result.is_err(), "Unmatched ) should produce an error");
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("Unmatched closing bracket"));
+
+        // Same for ] and }
+        let result = lex("]");
+        assert!(result.is_err());
+        assert!(result.unwrap_err()[0].message.contains("Unmatched closing bracket"));
+
+        let result = lex("}");
+        assert!(result.is_err());
+        assert!(result.unwrap_err()[0].message.contains("Unmatched closing bracket"));
+    }
+
+    #[test]
+    fn test_matched_brackets_ok() {
+        // Properly matched brackets should work fine
+        let tokens = lex("(x)").unwrap();
+        assert!(matches!(tokens[0].kind, TokenKind::LParen));
+        assert!(matches!(&tokens[1].kind, TokenKind::Ident(s) if s == "x"));
+        assert!(matches!(tokens[2].kind, TokenKind::RParen));
+    }
+
+    #[test]
+    fn test_multiple_dedents() {
+        // Multiple dedent levels in one line
+        let source = "def foo():\n  if True:\n    x = 1\ny = 2";
+        let tokens = lex(source).unwrap();
+        
+        let indent_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Indent)).count();
+        let dedent_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Dedent)).count();
+        
+        assert_eq!(indent_count, 2, "Should have 2 INDENT tokens");
+        assert_eq!(dedent_count, 2, "Should have 2 DEDENT tokens");
+    }
+
+    #[test]
+    fn test_tabs_as_spaces() {
+        // Tabs count as 2 spaces
+        let source = "def foo():\n\tx = 1";  // Tab indentation
+        let tokens = lex(source).unwrap();
+        
+        let indent_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Indent)).count();
+        assert_eq!(indent_count, 1, "Tab should produce INDENT");
+    }
+
+    #[test]
+    fn test_newlines_inside_brackets() {
+        // Newlines inside brackets should NOT emit Newline tokens (implicit continuation)
+        let source = "foo(\n  x,\n  y\n)";
+        let tokens = lex(source).unwrap();
+        
+        let newline_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Newline)).count();
+        assert_eq!(newline_count, 0, "No Newline tokens inside brackets");
+    }
+
+    #[test]
+    fn test_range_not_float() {
+        // 1..2 should be Int, DotDot, Int - not a float
+        let tokens = lex("1..2").unwrap();
+        assert!(matches!(tokens[0].kind, TokenKind::Int(1)));
+        assert!(matches!(tokens[1].kind, TokenKind::DotDot));
+        assert!(matches!(tokens[2].kind, TokenKind::Int(2)));
+    }
+
+    #[test]
+    fn test_inclusive_range() {
+        // 1..=5 should work
+        let tokens = lex("1..=5").unwrap();
+        assert!(matches!(tokens[0].kind, TokenKind::Int(1)));
+        assert!(matches!(tokens[1].kind, TokenKind::DotDotEq));
+        assert!(matches!(tokens[2].kind, TokenKind::Int(5)));
     }
 }

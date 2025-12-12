@@ -20,8 +20,8 @@ impl<'a> Lexer<'a> {
                     self.advance();
                 }
                 '\t' => {
-                    // Treat tab as 2 spaces (Incan uses 2-space indentation)
-                    indent += 2;
+                    // Treat tab as 4 spaces (Incan uses 4-space indentation)
+                    indent += 4;
                     self.advance();
                 }
                 '#' => {
@@ -105,4 +105,3 @@ impl<'a> Lexer<'a> {
         self.at_line_start = false;
     }
 }
-

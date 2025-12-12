@@ -34,6 +34,9 @@ impl<'a> Parser<'a> {
 
         // Skip leading newlines
         self.skip_newlines();
+        // Stray top-level DEDENT can appear after error recovery (e.g. unexpected indentation).
+        // Ignore it at the module level to avoid cascaded errors.
+        self.skip_dedents();
 
         while !self.is_at_end() {
             match self.declaration() {
@@ -44,6 +47,9 @@ impl<'a> Parser<'a> {
                 }
             }
             self.skip_newlines();
+            // Same rationale as above: at the module level we should not see DEDENT tokens,
+            // but the lexer may emit them and recovery may leave us positioned on them.
+            self.skip_dedents();
         }
 
         if self.errors.is_empty() {
@@ -110,6 +116,13 @@ impl<'a> Parser<'a> {
 
     fn skip_newlines(&mut self) {
         while self.match_token(&TokenKind::Newline) {}
+    }
+
+    /// Skip stray DEDENT tokens at the current position.
+    ///
+    /// These should not normally appear at module level, but can show up after error recovery.
+    fn skip_dedents(&mut self) {
+        while self.match_token(&TokenKind::Dedent) {}
     }
 
     fn synchronize(&mut self) {
@@ -2131,6 +2144,20 @@ mod tests {
     fn parse_str(source: &str) -> Result<Program, Vec<CompileError>> {
         let tokens = lexer::lex(source).map_err(|_| vec![])?;
         parse(&tokens)
+    }
+
+    #[test]
+    fn test_unexpected_indent_at_toplevel_is_single_clear_error() {
+        // We intentionally allow the lexer to emit INDENT/DEDENT tokens at the top-level.
+        // The parser should produce a single clear error and avoid cascading failures.
+        let source = "  x = 1\n";
+        let err = parse_str(source).expect_err("Top-level indentation should be rejected by the parser");
+        assert_eq!(err.len(), 1, "Parser should return exactly one error (no cascade)");
+        assert!(
+            err[0].message.contains("Expected declaration") && err[0].message.contains("Indent"),
+            "Error message should clearly indicate the unexpected INDENT token; got: {}",
+            err[0].message
+        );
     }
 
     #[test]
