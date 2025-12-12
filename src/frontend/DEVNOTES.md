@@ -30,7 +30,12 @@ The Incan compiler frontend consists of several components that transform source
 
 ## Module Structure
 
-- `lexer.rs` - Tokenization with indentation handling (INDENT/DEDENT tokens)
+- `lexer/` - Tokenization module
+  - `mod.rs` - Lexer struct, tokenize(), re-exports
+  - `tokens.rs` - TokenKind, Token, FStringPart, KEYWORDS map
+  - `strings.rs` - String/f-string/byte-string scanning
+  - `numbers.rs` - Numeric literal scanning
+  - `indent.rs` - INDENT/DEDENT handling
 - `parser.rs` - Recursive descent parser producing an AST
 - `ast.rs` - Abstract Syntax Tree node definitions
 - `symbols.rs` - Symbol table and scope management
