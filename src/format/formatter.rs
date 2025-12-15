@@ -120,7 +120,7 @@ impl Formatter {
                 self.writer.newline();
             }
             ImportKind::Python(name) => {
-                self.writer.write("import py \"");
+                self.writer.write("import python \"");
                 self.writer.write(name);
                 self.writer.write("\"");
                 if let Some(alias) = &import.alias {

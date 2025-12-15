@@ -79,7 +79,7 @@ pub enum ImportKind {
         module: ImportPath,
         items: Vec<ImportItem>,
     },
-    /// `import py "requests"` - Python interop
+    /// `import python "module"` - Python interop  FIXME: this doesn't actually work yet
     Python(String),
     /// `import rust::serde_json` - Rust crate import (direct crate usage)
     RustCrate {

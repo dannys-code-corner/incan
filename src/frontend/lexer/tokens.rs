@@ -24,7 +24,7 @@ pub enum TokenKind {
     Import,     // python-like import declaration
     RustKw,     // rust keyword (for rust:: imports)
     As,         // import alias keyword
-    Py,         // python-like import keyword  TODO: determine if we really need this - it's a placeholder for now
+    Python,     // python import keyword (import python "package")  - TODO: figure out if we really need this at all
     From,       // from import declaration
     With,       // with statement
     Return,     // return statement
@@ -143,7 +143,7 @@ pub static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "newtype" => TokenKind::Newtype,
     "import" => TokenKind::Import,
     "as" => TokenKind::As,
-    "py" => TokenKind::Py,
+    "python" => TokenKind::Python,
     "from" => TokenKind::From,
     "with" => TokenKind::With,
     "extends" => TokenKind::Extends,
