@@ -11,6 +11,27 @@ use crate::backend::rust_emitter::{RustEmitter, to_rust_ident};
 use super::RustCodegen;
 
 impl RustCodegen<'_> {
+    /// Emit an expression for use as an lvalue (assignment target)
+    /// This avoids adding .clone() which would create a copy instead of a reference
+    pub(crate) fn emit_lvalue(emitter: &mut RustEmitter, expr: &Expr) {
+        match expr {
+            Expr::Index(base, index) => {
+                // For lvalue, emit without .clone() so we can mutate in place
+                Self::emit_lvalue(emitter, &base.node);
+                emitter.write("[");
+                Self::emit_expr(emitter, &index.node);
+                emitter.write("]");
+            }
+            Expr::Field(base, field) => {
+                Self::emit_lvalue(emitter, &base.node);
+                emitter.write(".");
+                emitter.write(&to_rust_ident(field));
+            }
+            // For other expressions, just emit normally
+            _ => Self::emit_expr(emitter, expr),
+        }
+    }
+    
     /// Emit an expression
     pub(crate) fn emit_expr(emitter: &mut RustEmitter, expr: &Expr) {
         match expr {
@@ -339,8 +360,9 @@ impl RustCodegen<'_> {
                 let formatted = format!("{}", f);
                 if formatted.contains('.') || formatted.contains('e') || formatted.contains('E') {
                     emitter.write(&formatted);
+                    emitter.write("_f64");
                 } else {
-                    emitter.writef(format_args!("{}.0", f));
+                    emitter.writef(format_args!("{}.0_f64", f));
                 }
             }
             Literal::String(s) => emitter.writef(format_args!("{:?}", s)),
@@ -520,6 +542,7 @@ impl RustCodegen<'_> {
 
     /// Emit a function call
     fn emit_call(emitter: &mut RustEmitter, callee: &Spanned<Expr>, args: &[CallArg]) {
+        // Handle direct builtin calls like sqrt(), len(), etc.
         if let Expr::Ident(name) = &callee.node {
             if Self::emit_builtin_call(emitter, name, args) {
                 return;
@@ -1085,6 +1108,57 @@ impl RustCodegen<'_> {
                 if let Some(CallArg::Positional(e)) = args.first() {
                     Self::emit_expr(emitter, &e.node);
                 }
+                return;
+            }
+            _ => {}
+        }
+
+        // Handle list methods that differ between Python/Incan and Rust
+        match method {
+            "append" => {
+                // Python/Incan: list.append(item) -> Rust: vec.push(item)
+                Self::emit_expr(emitter, &base.node);
+                emitter.write(".push(");
+                Self::emit_method_args(emitter, args);
+                emitter.write(")");
+                return;
+            }
+            "remove" if args.len() == 1 => {
+                // Python/Incan: list.remove(value) removes first occurrence by value
+                // Rust: vec.remove(index) removes by index
+                // Use helper: if let Some(pos) = __incan_list_find_index(&vec, &value) { vec.remove(pos); }
+                emitter.write("if let Some(__pos) = __incan_list_find_index(&");
+                Self::emit_expr(emitter, &base.node);
+                emitter.write(", &(");
+                if let Some(CallArg::Positional(e)) = args.first() {
+                    Self::emit_expr(emitter, &e.node);
+                }
+                emitter.write(")) { ");
+                Self::emit_expr(emitter, &base.node);
+                emitter.write(".remove(__pos); }");
+                return;
+            }
+            "count" if args.len() == 1 => {
+                // Python/Incan: list.count(value) counts occurrences
+                // Rust: vec.iter().filter(|x| **x == value).count()
+                Self::emit_expr(emitter, &base.node);
+                emitter.write(".iter().filter(|__x| **__x == ");
+                if let Some(CallArg::Positional(e)) = args.first() {
+                    Self::emit_expr(emitter, &e.node);
+                }
+                emitter.write(").count()");
+                return;
+            }
+            "index" if args.len() == 1 => {
+                // Python/Incan: list.index(value) finds first index
+                // Use helper: __incan_list_find_index(&vec, &value).unwrap()
+                emitter.write("__incan_list_find_index(&");
+                Self::emit_expr(emitter, &base.node);
+                emitter.write(", &(");
+                if let Some(CallArg::Positional(e)) = args.first() {
+                    Self::emit_expr(emitter, &e.node);
+                }
+                emitter.write(")).unwrap()");
                 return;
             }
             _ => {}
@@ -2091,8 +2165,8 @@ mod tests {
         );
         RustCodegen::emit_expr(&mut emitter, &expr);
         let output = emitter.finish();
-        // append may be translated or kept as-is depending on context
-        assert!(output.contains("append") || output.contains("push"));
+        // append should be translated to push
+        assert!(output.contains("push"));
     }
 
     #[test]
@@ -2135,6 +2209,52 @@ mod tests {
         RustCodegen::emit_expr(&mut emitter, &expr);
         let output = emitter.finish();
         assert!(output.contains("replace"));
+    }
+
+    #[test]
+    fn test_emit_method_call_remove() {
+        let mut emitter = RustEmitter::new();
+        let expr = Expr::MethodCall(
+            Box::new(make_spanned(ident_expr("list"))),
+            "remove".to_string(),
+            vec![CallArg::Positional(make_spanned(int_lit(42)))],
+        );
+        RustCodegen::emit_expr(&mut emitter, &expr);
+        let output = emitter.finish();
+        // Should use helper function
+        assert!(output.contains("__incan_list_find_index"));
+        assert!(output.contains("if let Some(__pos)"));
+        assert!(output.contains(".remove(__pos)"));
+    }
+
+    #[test]
+    fn test_emit_method_call_count() {
+        let mut emitter = RustEmitter::new();
+        let expr = Expr::MethodCall(
+            Box::new(make_spanned(ident_expr("list"))),
+            "count".to_string(),
+            vec![CallArg::Positional(make_spanned(int_lit(42)))],
+        );
+        RustCodegen::emit_expr(&mut emitter, &expr);
+        let output = emitter.finish();
+        // Should use iterator filter
+        assert!(output.contains(".iter().filter"));
+        assert!(output.contains(".count()"));
+    }
+
+    #[test]
+    fn test_emit_method_call_index() {
+        let mut emitter = RustEmitter::new();
+        let expr = Expr::MethodCall(
+            Box::new(make_spanned(ident_expr("list"))),
+            "index".to_string(),
+            vec![CallArg::Positional(make_spanned(int_lit(42)))],
+        );
+        RustCodegen::emit_expr(&mut emitter, &expr);
+        let output = emitter.finish();
+        // Should use helper function
+        assert!(output.contains("__incan_list_find_index"));
+        assert!(output.contains(".unwrap()"));
     }
 
     // ========================================

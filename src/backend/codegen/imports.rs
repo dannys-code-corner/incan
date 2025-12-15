@@ -44,6 +44,25 @@ impl RustCodegen<'_> {
             self.emitter.use_stmt("std::net::SocketAddr");
         }
         self.emitter.blank_line();
+
+        // Emit list helper functions if needed
+        if self.needs_list_helpers {
+            self.emit_list_helpers();
+        }
+    }
+
+    /// Emit helper functions for list operations
+    fn emit_list_helpers(&mut self) {
+        self.emitter.comment("Helper functions for Python-style list operations");
+        self.emitter.blank_line();
+        
+        // Helper to find index of value in a vector
+        self.emitter.line("fn __incan_list_find_index<T: PartialEq>(vec: &[T], value: &T) -> Option<usize> {");
+        self.emitter.indent();
+        self.emitter.line("vec.iter().position(|x| x == value)");
+        self.emitter.dedent();
+        self.emitter.line("}");
+        self.emitter.blank_line();
     }
 
     /// Emit an import declaration
