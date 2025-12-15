@@ -135,5 +135,3 @@ fn main() {
     
     println!("Final energy: {:.9}", energy(&bodies));
 }
-
-
