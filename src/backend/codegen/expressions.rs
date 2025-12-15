@@ -19,7 +19,10 @@ impl RustCodegen<'_> {
                 // For lvalue, emit without .clone() so we can mutate in place
                 Self::emit_lvalue(emitter, &base.node);
                 emitter.write("[");
+                // Cast to usize for Rust compatibility (issue #9)
+                emitter.write("(");
                 Self::emit_expr(emitter, &index.node);
+                emitter.write(" as usize)");
                 emitter.write("]");
             }
             Expr::Field(base, field) => {
@@ -56,7 +59,10 @@ impl RustCodegen<'_> {
             Expr::Index(base, index) => {
                 Self::emit_expr(emitter, &base.node);
                 emitter.write("[");
+                // Cast to usize for Rust compatibility (issue #9)
+                emitter.write("(");
                 Self::emit_expr(emitter, &index.node);
+                emitter.write(" as usize)");
                 emitter.write("].clone()");
             }
             Expr::Slice(base, slice) => {
@@ -1123,6 +1129,25 @@ impl RustCodegen<'_> {
                 emitter.write(")");
                 return;
             }
+            "insert" if args.len() == 2 => {
+                // Python/Incan: list.insert(index, item)
+                // Rust: vec.insert(index as usize, item)
+                Self::emit_expr(emitter, &base.node);
+                emitter.write(".insert(");
+                // First arg: index (cast to usize)
+                if let Some(CallArg::Positional(idx)) = args.first() {
+                    emitter.write("(");
+                    Self::emit_expr(emitter, &idx.node);
+                    emitter.write(" as usize)");
+                }
+                // Second arg: item to insert
+                if let Some(CallArg::Positional(val)) = args.get(1) {
+                    emitter.write(", ");
+                    Self::emit_expr(emitter, &val.node);
+                }
+                emitter.write(")");
+                return;
+            }
             "remove" if args.len() == 1 => {
                 // Python/Incan: list.remove(value) removes first occurrence by value
                 // Rust: vec.remove(index) removes by index
@@ -1718,7 +1743,8 @@ mod tests {
             Box::new(make_spanned(int_lit(0))),
         );
         RustCodegen::emit_expr(&mut emitter, &expr);
-        assert_eq!(emitter.finish(), "arr[0].clone()");
+        // After issue #9 fix, indices are cast to usize
+        assert_eq!(emitter.finish(), "arr[(0 as usize)].clone()");
     }
 
     #[test]
@@ -2378,5 +2404,52 @@ mod tests {
         let output = emitter.finish();
         assert!(output.contains("yield"));
         assert!(output.contains("42"));
+    }
+
+    // ========================================
+    // Index casting tests (issue #9)
+    // ========================================
+
+    #[test]
+    fn test_emit_index_rvalue_with_usize_cast() {
+        let mut emitter = RustEmitter::new();
+        let expr = Expr::Index(
+            Box::new(make_spanned(ident_expr("arr"))),
+            Box::new(make_spanned(ident_expr("i"))),
+        );
+        RustCodegen::emit_expr(&mut emitter, &expr);
+        let output = emitter.finish();
+        // Should generate: arr[(i as usize)].clone()
+        assert!(output.contains("arr[(i as usize)].clone()"));
+    }
+
+    #[test]
+    fn test_emit_index_lvalue_with_usize_cast() {
+        let mut emitter = RustEmitter::new();
+        let expr = Expr::Index(
+            Box::new(make_spanned(ident_expr("arr"))),
+            Box::new(make_spanned(int_lit(0))),
+        );
+        RustCodegen::emit_lvalue(&mut emitter, &expr);
+        let output = emitter.finish();
+        // Should generate: arr[(0 as usize)]
+        assert!(output.contains("arr[(0 as usize)]"));
+    }
+
+    #[test]
+    fn test_emit_method_call_insert() {
+        let mut emitter = RustEmitter::new();
+        let expr = Expr::MethodCall(
+            Box::new(make_spanned(ident_expr("numbers"))),
+            "insert".to_string(),
+            vec![
+                CallArg::Positional(make_spanned(int_lit(0))),
+                CallArg::Positional(make_spanned(int_lit(42))),
+            ],
+        );
+        RustCodegen::emit_expr(&mut emitter, &expr);
+        let output = emitter.finish();
+        // Should generate: numbers.insert((0 as usize), 42)
+        assert!(output.contains("numbers.insert((0 as usize), 42)"));
     }
 }
