@@ -1,0 +1,65 @@
+# Math module - Standard mathematical functions and constants
+# 
+# This module provides mathematical functions and constants.
+# It is a builtin module - the functions are implemented directly
+# in the compiler's codegen, mapping to Rust's f64 methods.
+#
+# Usage:
+#   x = math.sqrt(16.0)  # 4.0
+#   y = math.pi          # 3.14159...
+#
+# Note: No explicit import is needed. The `math` module is always available.
+
+# ============================================================================
+# Constants (accessed as math.pi, math.e, etc.)
+# ============================================================================
+#
+# math.pi   - The ratio of a circle's circumference to its diameter (π)
+# math.e    - Euler's number, the base of natural logarithms
+# math.tau  - Tau = 2π, the ratio of circumference to radius
+# math.inf  - Positive infinity
+# math.nan  - Not a Number
+
+# ============================================================================
+# Functions
+# ============================================================================
+#
+# Basic:
+#   math.sqrt(x)    - Square root
+#   math.abs(x)     - Absolute value
+#   math.floor(x)   - Largest integer ≤ x
+#   math.ceil(x)    - Smallest integer ≥ x
+#
+# Power/Log:
+#   math.pow(x, y)  - x raised to power y
+#   math.exp(x)     - e raised to power x
+#   math.log(x)     - Natural logarithm (base e)
+#   math.log10(x)   - Base-10 logarithm
+#
+# Trigonometric:
+#   math.sin(x)     - Sine (radians)
+#   math.cos(x)     - Cosine (radians)
+#   math.tan(x)     - Tangent (radians)
+#   math.asin(x)    - Arc sine
+#   math.acos(x)    - Arc cosine
+#   math.atan(x)    - Arc tangent
+#
+# Hyperbolic:
+#   math.sinh(x)    - Hyperbolic sine
+#   math.cosh(x)    - Hyperbolic cosine
+#   math.tanh(x)    - Hyperbolic tangent
+
+# ============================================================================
+# Implementation Note
+# ============================================================================
+#
+# The math module is implemented as a compiler builtin. When you write:
+#
+#   dist = math.sqrt(x * x + y * y)
+#
+# The compiler generates:
+#
+#   let dist = ((x * x) + (y * y) as f64).sqrt();
+#
+# This approach was chosen because Rust's f64 methods are not standalone
+# functions that can be imported, but methods on the primitive type.

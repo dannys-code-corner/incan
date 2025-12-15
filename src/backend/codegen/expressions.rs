@@ -303,13 +303,40 @@ impl RustCodegen<'_> {
     /// Emit a list comprehension
     fn emit_list_comp(emitter: &mut RustEmitter, comp: &ListComp) {
         Self::emit_expr(emitter, &comp.iter.node);
-        emitter.write(".iter().cloned()");
+        
+        // Check if the iterator is a range or call to range() - these are already iterators
+        let is_already_iterator = match &comp.iter.node {
+            Expr::Range { .. } => true,
+            Expr::Call(callee, _) => matches!(&callee.node, Expr::Ident(name) if name == "range"),
+            _ => false,
+        };
+        
+        if !is_already_iterator {
+            emitter.write(".iter().cloned()");  // TODO: we should address the .cloned() here in a better way
+        }
+        
         if let Some(filter) = &comp.filter {
-            emitter.write(&format!(".filter(|&{}| ", comp.var));
+            // Check if variable is used in filter expression
+            let var_used = super::helpers::is_var_used_in_expr(&comp.var, &filter.node);
+            let var_name = if var_used {
+                format!("&{}", comp.var)
+            } else {
+                format!("&_{}", comp.var)
+            };
+            emitter.write(&format!(".filter(|{}| ", var_name));
             Self::emit_expr(emitter, &filter.node);
             emitter.write(")");
         }
-        emitter.write(&format!(".map(|{}| ", comp.var));
+        
+        // Check if variable is used in the map expression
+        let var_used_in_expr = super::helpers::is_var_used_in_expr(&comp.var, &comp.expr.node);
+        let map_var = if var_used_in_expr {
+            comp.var.clone()
+        } else {
+            format!("_{}", comp.var)
+        };
+        
+        emitter.write(&format!(".map(|{}| ", map_var));
         Self::emit_expr(emitter, &comp.expr.node);
         emitter.write(").collect::<Vec<_>>()");
     }
@@ -639,6 +666,18 @@ impl RustCodegen<'_> {
                 if let Some(CallArg::Positional(arg)) = args.first() {
                     Self::emit_expr(emitter, &arg.node);
                     emitter.write(".len()");
+                    return true;
+                }
+                false
+            }
+            "sum" => {
+                if let Some(CallArg::Positional(arg)) = args.first() {
+                    // For boolean lists: count True values
+                    // For numeric lists: sum the values
+                    // Generate: list.iter().map(|&x| if x { 1 } else { 0 }).sum::<i64>()
+                    // This works for both bools (counting Trues) and numbers (summing values)
+                    Self::emit_expr(emitter, &arg.node);
+                    emitter.write(".iter().filter(|&&x| x).count() as i64");
                     return true;
                 }
                 false
@@ -2050,6 +2089,18 @@ mod tests {
     }
 
     #[test]
+    fn test_emit_call_sum() {
+        let mut emitter = RustEmitter::new();
+        let expr = Expr::Call(
+            Box::new(make_spanned(ident_expr("sum"))),
+            vec![CallArg::Positional(make_spanned(ident_expr("values")))],
+        );
+        RustCodegen::emit_expr(&mut emitter, &expr);
+        let output = emitter.finish();
+        assert!(output.contains("values.iter().filter(|&&x| x).count() as i64"));
+    }
+
+    #[test]
     fn test_emit_call_assert() {
         let mut emitter = RustEmitter::new();
         let expr = Expr::Call(
@@ -2360,6 +2411,28 @@ mod tests {
         RustCodegen::emit_expr(&mut emitter, &expr);
         let output = emitter.finish();
         assert!(output.contains("filter"));
+    }
+
+    #[test]
+    fn test_emit_list_comp_with_range() {
+        let mut emitter = RustEmitter::new();
+        // [True for x in range(10)]
+        let comp = ListComp {
+            expr: make_spanned(bool_lit(true)),
+            var: "x".to_string(),
+            iter: make_spanned(Expr::Call(
+                Box::new(make_spanned(ident_expr("range"))),
+                vec![CallArg::Positional(make_spanned(int_lit(10)))],
+            )),
+            filter: None,
+        };
+        let expr = Expr::ListComp(Box::new(comp));
+        RustCodegen::emit_expr(&mut emitter, &expr);
+        let output = emitter.finish();
+        // Should not have .iter() since range() is already an iterator
+        assert!(!output.contains(".iter()"));
+        assert!(output.contains("map"));
+        assert!(output.contains("collect"));
     }
 
     // ========================================

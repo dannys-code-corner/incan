@@ -149,7 +149,8 @@ impl RustCodegen<'_> {
     /// Emit a field assignment statement
     pub(crate) fn emit_field_assignment(emitter: &mut RustEmitter, field_assign: &FieldAssignmentStmt) {
         emitter.write_indent();
-        Self::emit_expr(emitter, &field_assign.object.node);
+        // Use emit_lvalue for the object to avoid .clone() on indexed access
+        Self::emit_lvalue(emitter, &field_assign.object.node);
         emitter.write(".");
         emitter.write(&to_rust_ident(&field_assign.field));
         emitter.write(" = ");
@@ -160,16 +161,28 @@ impl RustCodegen<'_> {
     /// Emit an index assignment statement
     pub(crate) fn emit_index_assignment(emitter: &mut RustEmitter, index_assign: &IndexAssignmentStmt) {
         emitter.write_indent();
-        Self::emit_expr(emitter, &index_assign.object.node);
-        emitter.write(".insert(");
-        Self::emit_expr(emitter, &index_assign.index.node);
-        // Add .to_string() for string literal keys
-        if matches!(&index_assign.index.node, Expr::Literal(Literal::String(_))) {
+        // For vectors/lists, use bracket notation: vec[index] = value
+        // For HashMaps with string keys, use .insert()
+        let is_string_key = matches!(&index_assign.index.node, Expr::Literal(Literal::String(_)));
+        
+        if is_string_key {
+            // HashMap string key: dict.insert("key", value)
+            Self::emit_expr(emitter, &index_assign.object.node);
+            emitter.write(".insert(");
+            Self::emit_expr(emitter, &index_assign.index.node);
             emitter.write(".to_string()");
+            emitter.write(", ");
+            Self::emit_expr(emitter, &index_assign.value.node);
+            emitter.write(");\n");
+        } else {
+            // Vector/list integer index: vec[index as usize] = value
+            Self::emit_expr(emitter, &index_assign.object.node);
+            emitter.write("[(");
+            Self::emit_expr(emitter, &index_assign.index.node);
+            emitter.write(" as usize)] = ");
+            Self::emit_expr(emitter, &index_assign.value.node);
+            emitter.write(";\n");
         }
-        emitter.write(", ");
-        Self::emit_expr(emitter, &index_assign.value.node);
-        emitter.write(");\n");
     }
 
     /// Emit a return statement
@@ -251,16 +264,71 @@ impl RustCodegen<'_> {
     }
 
     /// Emit a for statement
+    /// Check if a variable is used in the loop body
+    fn is_var_used_in_body(var_name: &str, body: &[Spanned<Statement>]) -> bool {
+        for stmt in body {
+            if Self::is_var_used_in_stmt(var_name, &stmt.node) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if a variable is used in a statement
+    fn is_var_used_in_stmt(var_name: &str, stmt: &Statement) -> bool {
+        match stmt {
+            Statement::Assignment(a) => super::helpers::is_var_used_in_expr(var_name, &a.value.node),
+            Statement::FieldAssignment(fa) => {
+                super::helpers::is_var_used_in_expr(var_name, &fa.object.node) ||
+                super::helpers::is_var_used_in_expr(var_name, &fa.value.node)
+            }
+            Statement::IndexAssignment(ia) => {
+                super::helpers::is_var_used_in_expr(var_name, &ia.object.node) ||
+                super::helpers::is_var_used_in_expr(var_name, &ia.index.node) ||
+                super::helpers::is_var_used_in_expr(var_name, &ia.value.node)
+            }
+            Statement::Return(e) => e.as_ref().map_or(false, |e| super::helpers::is_var_used_in_expr(var_name, &e.node)),
+            Statement::If(if_stmt) => {
+                super::helpers::is_var_used_in_expr(var_name, &if_stmt.condition.node) ||
+                Self::is_var_used_in_body(var_name, &if_stmt.then_body) ||
+                if_stmt.else_body.as_ref().map_or(false, |body| Self::is_var_used_in_body(var_name, body))
+            }
+            Statement::While(w) => {
+                super::helpers::is_var_used_in_expr(var_name, &w.condition.node) ||
+                Self::is_var_used_in_body(var_name, &w.body)
+            }
+            Statement::For(f) => {
+                super::helpers::is_var_used_in_expr(var_name, &f.iter.node) ||
+                Self::is_var_used_in_body(var_name, &f.body)
+            }
+            Statement::Expr(e) => super::helpers::is_var_used_in_expr(var_name, &e.node),
+            Statement::CompoundAssignment(ca) => {
+                ca.name == var_name || super::helpers::is_var_used_in_expr(var_name, &ca.value.node)
+            }
+            Statement::TupleUnpack(tu) => super::helpers::is_var_used_in_expr(var_name, &tu.value.node),
+            Statement::Pass | Statement::Break | Statement::Continue => false,
+        }
+    }
+
     pub(crate) fn emit_for(emitter: &mut RustEmitter, for_stmt: &ForStmt) {
         emitter.write_indent();
         emitter.write("for ");
-        emitter.write(&to_rust_ident(&for_stmt.var));
-        emitter.write(" in ");
-
+        
+        // Check if the loop variable is actually used in the body
+        let var_is_used = Self::is_var_used_in_body(&for_stmt.var, &for_stmt.body);
+        let loop_var = if var_is_used {
+            to_rust_ident(&for_stmt.var)
+        } else {
+            format!("_{}", to_rust_ident(&for_stmt.var))
+        };
+        
         // Check if the iterator is a call to range() and emit Rust range syntax
         if let Expr::Call(callee, args) = &for_stmt.iter.node {
             if let Expr::Ident(name) = &callee.node {
                 if name == "range" {
+                    // Range loops: loop variable is typically immutable (just a counter)
+                    emitter.write(&loop_var);
+                    emitter.write(" in ");
                     Self::emit_range_call(emitter, args);
                     emitter.write(" {\n");
                     emitter.indent();
@@ -272,22 +340,31 @@ impl RustCodegen<'_> {
             }
         }
 
+        // For-each loops: loop variable gets mutable reference
+        emitter.write(&loop_var);
+        emitter.write(" in ");
+
         // Determine how to iterate based on the expression type
         Self::emit_expr(emitter, &for_stmt.iter.node);
 
         // Method calls (like str.split_whitespace()) return iterators directly
-        // Lists/identifiers need .iter() or .into_iter()
+        // Range expressions are already iterators
+        // Lists/identifiers need .iter_mut() for mutable access
         match &for_stmt.iter.node {
             Expr::MethodCall(_, _, _) => {
                 // Method calls typically return iterators, no suffix needed
+            }
+            Expr::Range { .. } => {
+                // Range expressions (0..n, start..end) are already iterators
             }
             Expr::List(_) => {
                 // List literals - use .into_iter() for owned values
                 emitter.write(".into_iter()");
             }
             _ => {
-                // Variables holding collections - use .iter().cloned() for owned copies
-                emitter.write(".iter().cloned()");
+                // Variables holding collections - use .iter_mut() for mutable access
+                // This allows modifications to persist back to the collection
+                emitter.write(".iter_mut()");
             }
         }
 
@@ -579,13 +656,14 @@ mod tests {
     fn test_emit_index_assignment_int_key() {
         let mut emitter = RustEmitter::new();
         let index_assign = IndexAssignmentStmt {
-            object: make_spanned(ident("map")),
+            object: make_spanned(ident("arr")),
             index: make_spanned(int_lit(0)),
             value: make_spanned(str_lit("value")),
         };
         RustCodegen::emit_index_assignment(&mut emitter, &index_assign);
         let output = emitter.finish();
-        assert!(output.contains("map.insert(0"));
+        // Integer indices use bracket notation with usize cast
+        assert!(output.contains("arr[(0 as usize)] = "));
     }
 
     // ========================================
@@ -741,7 +819,8 @@ mod tests {
         };
         RustCodegen::emit_for(&mut emitter, &for_stmt);
         let output = emitter.finish();
-        assert!(output.contains("for x in"));
+        // Empty body means unused variable gets _ prefix
+        assert!(output.contains("for _x in"));
         assert!(output.contains("items"));
     }
 
@@ -759,7 +838,8 @@ mod tests {
         };
         RustCodegen::emit_for(&mut emitter, &for_stmt);
         let output = emitter.finish();
-        assert!(output.contains("for i in"));
+        // Empty body means unused variable gets _ prefix
+        assert!(output.contains("for _i in"));
         assert!(output.contains("vec![1, 2, 3]"));
         assert!(output.contains(".into_iter()"));
     }
@@ -777,7 +857,8 @@ mod tests {
         };
         RustCodegen::emit_for(&mut emitter, &for_stmt);
         let output = emitter.finish();
-        assert!(output.contains("for i in 0..10"));
+        // Empty body means unused variable gets _ prefix
+        assert!(output.contains("for _i in 0..10"));
     }
 
     #[test]
@@ -796,7 +877,8 @@ mod tests {
         };
         RustCodegen::emit_for(&mut emitter, &for_stmt);
         let output = emitter.finish();
-        assert!(output.contains("for i in 5..15"));
+        // Empty body means unused variable gets _ prefix
+        assert!(output.contains("for _i in 5..15"));
     }
 
     #[test]
@@ -817,6 +899,25 @@ mod tests {
         RustCodegen::emit_for(&mut emitter, &for_stmt);
         let output = emitter.finish();
         assert!(output.contains("step_by"));
+    }
+
+    #[test]
+    fn test_emit_for_with_used_variable() {
+        let mut emitter = RustEmitter::new();
+        // Create a for loop where the variable is actually used
+        let for_stmt = ForStmt {
+            var: "x".to_string(),
+            iter: make_spanned(Expr::Call(
+                Box::new(make_spanned(ident("range"))),
+                vec![CallArg::Positional(make_spanned(int_lit(5)))],
+            )),
+            body: vec![make_spanned(Statement::Expr(make_spanned(ident("x"))))],
+        };
+        RustCodegen::emit_for(&mut emitter, &for_stmt);
+        let output = emitter.finish();
+        // Used variable should NOT have _ prefix
+        assert!(output.contains("for x in 0..5"));
+        assert!(!output.contains("for _x in"));
     }
 
     // ========================================

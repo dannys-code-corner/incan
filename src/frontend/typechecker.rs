@@ -1360,6 +1360,11 @@ impl TypeChecker {
     }
 
     fn check_ident(&mut self, name: &str, span: Span) -> ResolvedType {
+        // Handle builtin modules
+        if name == "math" {
+            return ResolvedType::Named("math".to_string());
+        }
+        
         if let Some(id) = self.symbols.lookup(name) {
             if let Some(sym) = self.symbols.get(id) {
                 match &sym.kind {
@@ -1486,6 +1491,27 @@ impl TypeChecker {
         args: &[CallArg],
         _span: Span,
     ) -> ResolvedType {
+        // Handle math module function calls (math.sqrt, math.sin, etc.)
+        if let Expr::Field(base, method) = &callee.node {
+            if let Expr::Ident(module) = &base.node {
+                if module == "math" {
+                    // Check arguments
+                    for arg in args {
+                        match arg {
+                            CallArg::Positional(e) | CallArg::Named(_, e) => { self.check_expr(e); }
+                        }
+                    }
+                    // All math functions return float
+                    match method.as_str() {
+                        "sqrt" | "sin" | "cos" | "tan" | "abs" | "floor" | "ceil" | 
+                        "pow" | "log" | "log10" | "exp" | "asin" | "acos" | "atan" |
+                        "sinh" | "cosh" | "tanh" => return ResolvedType::Float,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
         // Handle built-in Result/Option constructors specially
         if let Expr::Ident(name) = &callee.node {
             match name.as_str() {
@@ -1533,6 +1559,17 @@ impl TypeChecker {
                 }
                 "len" => {
                     // len(collection) -> int
+                    for arg in args {
+                        match arg {
+                            CallArg::Positional(e) | CallArg::Named(_, e) => { self.check_expr(e); }
+                        }
+                    }
+                    return ResolvedType::Int;
+                }
+                "sum" => {
+                    // sum(collection) -> int
+                    // For boolean lists, counts True values
+                    // For numeric lists, sums the values
                     for arg in args {
                         match arg {
                             CallArg::Positional(e) | CallArg::Named(_, e) => { self.check_expr(e); }
@@ -2001,6 +2038,17 @@ impl TypeChecker {
     }
 
     fn check_field(&mut self, base: &Spanned<Expr>, field: &str, span: Span) -> ResolvedType {
+        // Handle builtin math module
+        if let Expr::Ident(name) = &base.node {
+            if name == "math" {
+                // math.pi, math.e, math.tau, math.inf, math.nan are all float
+                match field {
+                    "pi" | "e" | "tau" | "inf" | "nan" => return ResolvedType::Float,
+                    _ => {}
+                }
+            }
+        }
+        
         let base_ty = self.check_expr(base);
 
         match &base_ty {
@@ -3034,6 +3082,16 @@ def foo() -> int:
 def foo() -> int:
   x = [1, 2, 3]
   return len(x)
+"#;
+        assert!(check_str(source).is_ok());
+    }
+
+    #[test]
+    fn test_builtin_sum() {
+        let source = r#"
+def foo() -> int:
+  x = [True, False, True]
+  return sum(x)
 "#;
         assert!(check_str(source).is_ok());
     }

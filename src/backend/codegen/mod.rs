@@ -20,6 +20,7 @@ mod statements;
 mod expressions;
 mod functions;
 mod declarations;
+mod helpers;
 
 use std::collections::{HashMap, HashSet};
 
