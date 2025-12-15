@@ -277,6 +277,13 @@ let y: unsigned int = 20  # u32
 4. **SIMD types**: Should we include `i8x16`, `f32x4` etc?
    - Proposal: Defer to separate RFC for SIMD
 
+5. **List/array indexing**: How should `int` work with indexing?
+   - Problem: `arr[i]` where `i: int` fails in Rust (needs `usize`)
+   - Option A: Auto-coerce `int` → `usize` in indexing context (ergonomic, implicit)
+   - Option B: Require explicit cast `arr[i as usize]` (explicit, verbose)
+   - Option C: Make `range()` return `usize` (natural for loops, but breaks if used elsewhere)
+   - Proposal: Option A — compiler inserts `as usize` for indexing; matches Python's ergonomics
+
 ## Checklist
 
 - [ ] Lexer: recognize sized type names
@@ -287,6 +294,7 @@ let y: unsigned int = 20  # u32
 - [ ] Type checker: literal range checking
 - [ ] Codegen: emit proper Rust types
 - [ ] Codegen: emit literal suffixes
+- [ ] Codegen: auto-coerce `int` → `usize` for list indexing
 - [ ] Stdlib: conversion methods
 - [ ] Stdlib: byte conversion methods
 - [ ] Stdlib: overflow-handling methods
