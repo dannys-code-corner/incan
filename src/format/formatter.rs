@@ -120,7 +120,7 @@ impl Formatter {
                 self.writer.newline();
             }
             ImportKind::Python(name) => {
-                self.writer.write("import py \"");
+                self.writer.write("import python \"");
                 self.writer.write(name);
                 self.writer.write("\"");
                 if let Some(alias) = &import.alias {
@@ -628,6 +628,17 @@ impl Formatter {
                 }
                 self.writer.write(" = ");
                 self.format_expr(&unpack.value.node);
+                self.writer.newline();
+            }
+            Statement::TupleAssign(assign) => {
+                for (i, target) in assign.targets.iter().enumerate() {
+                    if i > 0 {
+                        self.writer.write(", ");
+                    }
+                    self.format_expr(&target.node);
+                }
+                self.writer.write(" = ");
+                self.format_expr(&assign.value.node);
                 self.writer.newline();
             }
         }

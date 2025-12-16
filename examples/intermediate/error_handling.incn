@@ -38,12 +38,12 @@ def calculate(a: int, b: int) -> Result[int, MathError]:
 def main() -> None:
     match divide(100, 5):
         Ok(value) => println(f"100 / 5 = {value}")
-        Err(e) => println("Division failed")
+        Err(e) => println(f"Division failed: {e.message()}")
 
     match divide(100, 0):
         Ok(value) => println(f"Result: {value}")
-        Err(e) => println("Error: division by zero!")
+        Err(e) => println(f"Error: division by zero! {e.message()}")
 
     match calculate(50, 2):
         Ok(value) => println(f"calculate(50, 2) = {value}")
-        Err(e) => println("Calculation failed")
+        Err(e) => println(f"Calculation failed: {e.message()}")

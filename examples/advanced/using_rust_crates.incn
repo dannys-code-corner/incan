@@ -77,9 +77,9 @@ def measure_operation() -> float:
     start = Instant.now()
     
     # Simulate some work (using Python-style numeric separators!)
-    mut total = 0
+    mut _total = 0
     for i in range(100_000):
-        total += i
+        _total += i
     
     # elapsed() returns a Duration, as_secs_f64() converts to seconds
     return start.elapsed().as_secs_f64()

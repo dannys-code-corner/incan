@@ -1,6 +1,6 @@
 import polars::prelude as pl
 import incan::http as http
-import py "requests" as pyreq
+import python "requests" as pyreq
 
 
 def use_imports() -> Unit:

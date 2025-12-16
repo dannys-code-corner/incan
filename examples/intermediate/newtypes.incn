@@ -25,11 +25,11 @@ type Email = newtype str
 
 
 def get_user_name(user_id: UserId) -> str:
-    return "Alice"
+    return f"Name of user {user_id.0}"
 
 
 def get_product_name(product_id: ProductId) -> str:
-    return "Widget"
+    return f"Widget {product_id.0}"
 
 
 def make_positive_id(n: int) -> Result[UserId, str]:
@@ -53,5 +53,5 @@ def main() -> None:
     result = make_positive_id(5)
 
     match result:
-        Ok(valid_id) => println("Created valid ID")
+        Ok(valid_id) => println(f"Created valid ID: {valid_id.0}")
         Err(msg) => println(f"Error: {msg}")

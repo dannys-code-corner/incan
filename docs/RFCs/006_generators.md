@@ -76,20 +76,20 @@ def primes() -> Iterator[int]:
 
 ```incan
 # Existing comprehension (eager, collects to List)
-let squares = [x * x for x in range(10)]
+squares = [x * x for x in range(10)]
 
 # Generator expression (lazy, returns Iterator)
-let squares_lazy = (x * x for x in range(10))
+squares_lazy = (x * x for x in range(10))
 ```
 
 ## Distinction from Fixtures
 
 The `yield` keyword is already used for test fixtures (RFC 001). The distinction:
 
-| Context | Return Type | Behavior |
-|---------|-------------|----------|
-| `@fixture` function | Any `T` | Setup → yield value → teardown |
-| Generator function | `Iterator[T]` | Lazy iteration, multiple yields |
+| Context             | Return Type   | Behavior                        |
+|---------------------|---------------|---------------------------------|
+| `@fixture` function | Any `T`       | Setup → yield value → teardown  |
+| Generator function  | `Iterator[T]` | Lazy iteration, multiple yields |
 
 ```incan
 # FIXTURE: yield once for setup/teardown
@@ -158,11 +158,13 @@ def naturals() -> Iterator[int]:
         n += 1
 
 # Chaining works naturally
-let result = naturals()
-    .filter(|n| n % 2 == 0)
-    .map(|n| n * n)
+result = (
+    naturals()
+    .filter((n) => (n % 2) == 0)  # filter even numbers
+    .map((n) => n * n)            # square the numbers
     .take(5)
-    .collect()  # [0, 4, 16, 36, 64]
+    .collect()
+) # result = [0, 4, 16, 36, 64]
 ```
 
 ## Implementation Plan
@@ -198,13 +200,13 @@ pub struct FunctionDecl {
 Lower `(expr for x in iter)` to anonymous generator:
 
 ```incan
-let squares = (x * x for x in range(10))
+squares = (x * x for x in range(10))
 ```
 
 Becomes:
 
 ```rust
-let squares = gen {
+squares = gen {
     for x in (0..10) {
         yield x * x;
     }
@@ -218,7 +220,7 @@ let squares = gen {
 ```incan
 def read_csv_rows(path: str) -> Iterator[List[str]]:
     """Lazily read CSV rows without loading entire file."""
-    let file = File.open(path)?
+    file = File.open(path)?
     for line in file.lines():
         yield line.split(",")
 

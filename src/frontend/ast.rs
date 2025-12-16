@@ -79,7 +79,7 @@ pub enum ImportKind {
         module: ImportPath,
         items: Vec<ImportItem>,
     },
-    /// `import py "requests"` - Python interop
+    /// `import python "module"` - Python interop  FIXME: this doesn't actually work yet
     Python(String),
     /// `import rust::serde_json` - Rust crate import (direct crate usage)
     RustCrate {
@@ -276,6 +276,7 @@ pub enum Receiver {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
+    pub is_mut: bool,
     pub name: Ident,
     pub ty: Spanned<Type>,
     pub default: Option<Spanned<Expr>>,
@@ -397,6 +398,8 @@ pub enum Statement {
     CompoundAssignment(CompoundAssignmentStmt),
     /// Tuple unpacking: `a, b = expr` or `let a, b = expr`
     TupleUnpack(TupleUnpackStmt),
+    /// Tuple assignment to lvalues: `arr[i], arr[j] = arr[j], arr[i]`
+    TupleAssign(TupleAssignStmt),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -444,6 +447,16 @@ pub struct CompoundAssignmentStmt {
 pub struct TupleUnpackStmt {
     pub binding: BindingKind,
     pub names: Vec<Ident>,
+    pub value: Spanned<Expr>,
+}
+
+/// Tuple assignment to lvalue expressions: `arr[i], arr[j] = arr[j], arr[i]`
+/// Used for swaps and multi-target assignments where targets are not new bindings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TupleAssignStmt {
+    /// Left-hand side lvalue expressions (index, field, or identifier references)
+    pub targets: Vec<Spanned<Expr>>,
+    /// Right-hand side expression (typically a tuple)
     pub value: Spanned<Expr>,
 }
 
@@ -523,7 +536,7 @@ pub enum Expr {
     ListComp(Box<ListComp>),
     /// Dict comprehension: `{k: v for x in iter if cond}`
     DictComp(Box<DictComp>),
-    /// Closure: `(x, y) => expr`
+    /// Closure: `(x, y) => expr` (a lot like python's lambda)
     Closure(Vec<Spanned<Param>>, Box<Spanned<Expr>>),
     /// Tuple: `(a, b)`
     Tuple(Vec<Spanned<Expr>>),

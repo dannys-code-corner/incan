@@ -334,8 +334,8 @@ impl<'a> Parser<'a> {
         // Regular import syntax (Rust-style)
         self.expect(&TokenKind::Import, "Expected 'import'")?;
 
-        let kind = if self.match_token(&TokenKind::Py) {
-            // Python import: import py "package" as alias
+        let kind = if self.match_token(&TokenKind::Python) {
+            // Python import: import python "package" as alias
             let pkg = self.string_literal()?;
             ImportKind::Python(pkg)
         } else if self.match_token(&TokenKind::RustKw) {
@@ -725,6 +725,8 @@ impl<'a> Parser<'a> {
 
     fn param(&mut self) -> Result<Spanned<Param>, CompileError> {
         let start = self.current_span().start;
+        // Check for optional 'mut' keyword
+        let is_mut = self.match_token(&TokenKind::Mut);
         let name = self.identifier()?;
         self.expect(&TokenKind::Colon, "Expected ':' after parameter name")?;
         let ty = self.type_expr()?;
@@ -734,7 +736,7 @@ impl<'a> Parser<'a> {
             None
         };
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(Param { name, ty, default }, Span::new(start, end)))
+        Ok(Spanned::new(Param { is_mut, name, ty, default }, Span::new(start, end)))
     }
 
     fn fields_and_methods(&mut self) -> Result<(Vec<Spanned<FieldDecl>>, Vec<Spanned<MethodDecl>>), CompileError> {
@@ -1113,6 +1115,25 @@ impl<'a> Parser<'a> {
         // Parse the expression (could be field access like self.field or index like arr[i])
         let expr = self.expression()?;
         
+        // Check for tuple assignment: expr, expr, ... = value
+        // This handles patterns like: arr[i], arr[j] = arr[j], arr[i]
+        if self.match_token(&TokenKind::Comma) {
+            let mut targets = vec![expr];
+            loop {
+                let target = self.expression()?;
+                targets.push(target);
+                if !self.match_token(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::Eq, "Expected '=' in tuple assignment")?;
+            let value = self.expression()?;
+            return Ok(Statement::TupleAssign(TupleAssignStmt {
+                targets,
+                value,
+            }));
+        }
+        
         // Check for assignment: expr.field = value or expr[index] = value
         if self.match_token(&TokenKind::Eq) {
             match expr.node {
@@ -1135,6 +1156,82 @@ impl<'a> Parser<'a> {
                 _ => {
                     return Err(CompileError::syntax(
                         "Invalid assignment target".to_string(),
+                        expr.span,
+                    ));
+                }
+            }
+        }
+        
+        // Check for compound assignment on field/index: expr.field += value, expr[i] -= value
+        let compound_op = match &self.peek().kind {
+            TokenKind::PlusEq => Some(CompoundOp::Add),
+            TokenKind::MinusEq => Some(CompoundOp::Sub),
+            TokenKind::StarEq => Some(CompoundOp::Mul),
+            TokenKind::SlashEq => Some(CompoundOp::Div),
+            TokenKind::PercentEq => Some(CompoundOp::Mod),
+            _ => None,
+        };
+        if let Some(op) = compound_op {
+            self.advance(); // consume the compound operator
+            let rhs = self.expression()?;
+            match expr.node {
+                Expr::Field(object, field) => {
+                    // Convert field += rhs to field = field + rhs
+                    let field_expr = Spanned::new(
+                        Expr::Field(object.clone(), field.clone()),
+                        expr.span,
+                    );
+                    let bin_op = match op {
+                        CompoundOp::Add => BinaryOp::Add,
+                        CompoundOp::Sub => BinaryOp::Sub,
+                        CompoundOp::Mul => BinaryOp::Mul,
+                        CompoundOp::Div => BinaryOp::Div,
+                        CompoundOp::Mod => BinaryOp::Mod,
+                    };
+                    let new_value = Spanned::new(
+                        Expr::Binary(Box::new(field_expr), bin_op, Box::new(rhs)),
+                        expr.span,
+                    );
+                    return Ok(Statement::FieldAssignment(FieldAssignmentStmt {
+                        object: *object,
+                        field,
+                        value: new_value,
+                    }));
+                }
+                Expr::Index(object, index) => {
+                    // Convert arr[i] += rhs to arr[i] = arr[i] + rhs
+                    let index_expr = Spanned::new(
+                        Expr::Index(object.clone(), index.clone()),
+                        expr.span,
+                    );
+                    let bin_op = match op {
+                        CompoundOp::Add => BinaryOp::Add,
+                        CompoundOp::Sub => BinaryOp::Sub,
+                        CompoundOp::Mul => BinaryOp::Mul,
+                        CompoundOp::Div => BinaryOp::Div,
+                        CompoundOp::Mod => BinaryOp::Mod,
+                    };
+                    let new_value = Spanned::new(
+                        Expr::Binary(Box::new(index_expr), bin_op, Box::new(rhs)),
+                        expr.span,
+                    );
+                    return Ok(Statement::IndexAssignment(IndexAssignmentStmt {
+                        object: *object,
+                        index: *index,
+                        value: new_value,
+                    }));
+                }
+                Expr::Ident(name) => {
+                    // Fallback: simple ident compound assignment
+                    return Ok(Statement::CompoundAssignment(CompoundAssignmentStmt {
+                        name,
+                        op,
+                        value: rhs,
+                    }));
+                }
+                _ => {
+                    return Err(CompileError::syntax(
+                        "Invalid compound assignment target".to_string(),
                         expr.span,
                     ));
                 }
@@ -2035,7 +2132,8 @@ impl<'a> Parser<'a> {
                     // Closure params have inferred types (represented as "_")
                     let inferred_ty = Spanned::new(Type::Simple("_".to_string()), expr.span);
                     params.push(Spanned::new(
-                        Param {
+                        Param { 
+                            is_mut: false,
                             name: name.clone(),
                             ty: inferred_ty,
                             default: None,
@@ -2061,6 +2159,12 @@ impl<'a> Parser<'a> {
         let mut args = Vec::new();
         if !self.check(&TokenKind::RParen) {
             loop {
+                // Allow trailing comma: check for ) at start of loop iteration
+                self.skip_newlines();
+                if self.check(&TokenKind::RParen) {
+                    break;
+                }
+                
                 // Check for named argument
                 if let TokenKind::Ident(name) = &self.peek().kind {
                     let name = name.clone();
@@ -2074,7 +2178,6 @@ impl<'a> Parser<'a> {
                         if !self.match_token(&TokenKind::Comma) {
                             break;
                         }
-                        self.skip_newlines();
                         continue;
                     }
                 }
@@ -2084,7 +2187,6 @@ impl<'a> Parser<'a> {
                 if !self.match_token(&TokenKind::Comma) {
                     break;
                 }
-                self.skip_newlines();
             }
         }
         Ok(args)

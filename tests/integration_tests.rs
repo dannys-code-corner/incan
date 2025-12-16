@@ -148,6 +148,35 @@ mod codegen_tests {
     use std::process::Command;
     use incan::frontend::{lexer, parser, typechecker};
     use incan::backend::codegen::RustCodegen;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn rustc_compile_ok(source: &str) -> Result<(), String> {
+        let mut dir = std::env::temp_dir();
+        let uniq = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        dir.push(format!("incan_bench_smoke_{}", uniq));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+        let rs_path = dir.join("main.rs");
+        let bin_path = dir.join("bin");
+        std::fs::write(&rs_path, source).map_err(|e| e.to_string())?;
+
+        let out = Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(&rs_path)
+            .arg("-o")
+            .arg(&bin_path)
+            .output()
+            .map_err(|e| e.to_string())?;
+
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).to_string())
+        }
+    }
 
     #[test]
     fn test_hello_world_codegen() {
@@ -186,6 +215,38 @@ mod codegen_tests {
             "stdout missing zen line; got:\n{}",
             stdout
         );
+    }
+
+    #[test]
+    fn test_benchmark_quicksort_codegen_compiles() {
+        let path = Path::new("benchmarks/sorting/quicksort/quicksort.incn");
+        if !path.exists() {
+            return;
+        }
+
+        let source = fs::read_to_string(path).unwrap();
+        let tokens = lexer::lex(&source).unwrap();
+        let ast = parser::parse(&tokens).unwrap();
+        typechecker::check(&ast).unwrap();
+
+        let rust_code = RustCodegen::new().generate(&ast);
+
+        // Regression: Vec::swap indices must be cast to usize.
+        let mut ok = true;
+        let mut search_from = 0usize;
+        while let Some(pos) = rust_code[search_from..].find(".swap(") {
+            let abs = search_from + pos;
+            let window_end = (abs + 120).min(rust_code.len());
+            let window = &rust_code[abs..window_end];
+            if !window.contains("as usize") {
+                ok = false;
+                break;
+            }
+            search_from = abs + 5;
+        }
+        assert!(ok, "expected quicksort to cast swap indices to usize; generated:\n{}", rust_code);
+
+        rustc_compile_ok(&rust_code).expect("generated quicksort Rust failed to compile");
     }
 }
 

@@ -1,6 +1,8 @@
 //! LSP (Language Server Protocol) backend implementation for Incan
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -10,6 +12,7 @@ use tower_lsp::{Client, LanguageServer};
 
 use crate::frontend::{lexer, parser, typechecker};
 use crate::frontend::ast::{Program, Declaration, Span, Type};
+use crate::frontend::module::resolve_import_path;
 use crate::lsp::diagnostics::{compile_error_to_diagnostic, span_to_range};
 
 /// Document state stored by the LSP
@@ -68,9 +71,15 @@ impl IncanLanguageServer {
             }
         };
 
-        // Step 3: Type check
+        // Step 3: Type check (with multi-file import resolution)
         let mut checker = typechecker::TypeChecker::new();
-        if let Err(errors) = checker.check_program(&ast) {
+        let deps = self.collect_dependency_modules(uri, &ast).await;
+        let dep_refs: Vec<(&str, &Program)> = deps
+            .iter()
+            .map(|(name, program)| (name.as_str(), program))
+            .collect();
+
+        if let Err(errors) = checker.check_with_imports(&ast, &dep_refs) {
             for error in &errors {
                 diagnostics.push(compile_error_to_diagnostic(error, source, uri));
             }
@@ -93,6 +102,81 @@ impl IncanLanguageServer {
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, Some(version))
             .await;
+    }
+
+    /// Collect and parse dependency modules referenced by imports in `ast`.
+    ///
+    /// - Uses the on-disk file system for dependency sources
+    /// - If a dependency is currently open in the editor, uses its in-memory contents
+    async fn collect_dependency_modules(&self, uri: &Url, ast: &Program) -> Vec<(String, Program)> {
+        let Ok(entry_path) = uri.to_file_path() else {
+            return Vec::new();
+        };
+        let entry_base = entry_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+        let docs = self.documents.read().await;
+
+        let mut result: Vec<(String, Program)> = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        let mut stack: Vec<(PathBuf, PathBuf)> = Vec::new(); // (module_path, base_dir_for_that_module)
+
+        // Seed stack with direct imports from the entry AST
+        for decl in &ast.declarations {
+            if let Declaration::Import(import) = &decl.node {
+                if let Some(dep_path) = resolve_import_path(&entry_base, import) {
+                    let base = dep_path.parent().unwrap_or(&entry_base).to_path_buf();
+                    stack.push((dep_path, base));
+                }
+            }
+        }
+
+        while let Some((path, base_dir)) = stack.pop() {
+            let canonical = path.canonicalize().unwrap_or(path.clone());
+            if !seen.insert(canonical.clone()) {
+                continue;
+            }
+
+            // Prefer in-memory source if this file is open.
+            let dep_uri = Url::from_file_path(&canonical).ok();
+            let dep_source = dep_uri
+                .as_ref()
+                .and_then(|u| docs.get(u))
+                .map(|d| d.source.clone())
+                .or_else(|| fs::read_to_string(&canonical).ok());
+
+            let Some(dep_source) = dep_source else {
+                // If we can't read it, we can't typecheck it; skip.
+                continue;
+            };
+
+            let dep_tokens = match lexer::lex(&dep_source) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let dep_ast = match parser::parse(&dep_tokens) {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
+
+            // Queue nested dependencies
+            for decl in &dep_ast.declarations {
+                if let Declaration::Import(import) = &decl.node {
+                    if let Some(nested_path) = resolve_import_path(&base_dir, import) {
+                        let nested_base = nested_path.parent().unwrap_or(&base_dir).to_path_buf();
+                        stack.push((nested_path, nested_base));
+                    }
+                }
+            }
+
+            let module_name = canonical
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("module")
+                .to_string();
+            result.push((module_name, dep_ast));
+        }
+
+        result
     }
 
     /// Find the symbol at a position in the AST

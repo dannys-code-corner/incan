@@ -20,6 +20,7 @@ mod statements;
 mod expressions;
 mod functions;
 mod declarations;
+mod helpers;
 
 use std::collections::{HashMap, HashSet};
 
@@ -52,6 +53,8 @@ pub struct RustCodegen<'a> {
     pub(crate) rust_crates: HashSet<String>,
     /// Whether to emit the Zen of Incan at the start of main (set by `import this`)
     pub(crate) emit_zen_in_main: bool,
+    /// Whether list helper functions are needed (for remove, count, index)
+    pub(crate) needs_list_helpers: bool,
 }
 
 impl<'a> RustCodegen<'a> {
@@ -69,6 +72,7 @@ impl<'a> RustCodegen<'a> {
             fixtures: HashMap::new(),
             rust_crates: HashSet::new(),
             emit_zen_in_main: false,
+            needs_list_helpers: false,
         }
     }
 
@@ -409,6 +413,7 @@ impl<'a> RustCodegen<'a> {
             Statement::FieldAssignment(assign) => self.expr_uses_async(&assign.value.node),
             Statement::IndexAssignment(assign) => self.expr_uses_async(&assign.value.node),
             Statement::TupleUnpack(unpack) => self.expr_uses_async(&unpack.value.node),
+            Statement::TupleAssign(assign) => self.expr_uses_async(&assign.value.node),
             Statement::Return(Some(expr)) => self.expr_uses_async(&expr.node),
             Statement::If(if_stmt) => {
                 self.expr_uses_async(&if_stmt.condition.node)
@@ -599,6 +604,94 @@ impl<'a> RustCodegen<'a> {
                     }
                 }
             }
+        }
+    }
+
+    /// Scan a program for list helper usage (remove, count, index)
+    pub fn scan_for_list_helpers(&mut self, program: &Program) {
+        for decl in &program.declarations {
+            match &decl.node {
+                Declaration::Function(func) => {
+                    if self.body_uses_list_helpers(&func.body) {
+                        self.needs_list_helpers = true;
+                        return;
+                    }
+                }
+                Declaration::Model(model) => {
+                    for method in &model.methods {
+                        if let Some(body) = &method.node.body {
+                            if self.body_uses_list_helpers(body) {
+                                self.needs_list_helpers = true;
+                                return;
+                            }
+                        }
+                    }
+                }
+                Declaration::Class(class) => {
+                    for method in &class.methods {
+                        if let Some(body) = &method.node.body {
+                            if self.body_uses_list_helpers(body) {
+                                self.needs_list_helpers = true;
+                                return;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Check if a function body uses list helpers
+    fn body_uses_list_helpers(&self, body: &[Spanned<Statement>]) -> bool {
+        body.iter().any(|stmt| self.stmt_uses_list_helpers(&stmt.node))
+    }
+
+    /// Check if a statement uses list helpers
+    fn stmt_uses_list_helpers(&self, stmt: &Statement) -> bool {
+        match stmt {
+            Statement::Expr(expr) => self.expr_uses_list_helpers(&expr.node),
+            Statement::Assignment(assign) => self.expr_uses_list_helpers(&assign.value.node),
+            Statement::CompoundAssignment(assign) => self.expr_uses_list_helpers(&assign.value.node),
+            Statement::FieldAssignment(assign) => self.expr_uses_list_helpers(&assign.value.node),
+            Statement::IndexAssignment(assign) => self.expr_uses_list_helpers(&assign.value.node),
+            Statement::TupleUnpack(unpack) => self.expr_uses_list_helpers(&unpack.value.node),
+            Statement::TupleAssign(assign) => self.expr_uses_list_helpers(&assign.value.node),
+            Statement::Return(Some(expr)) => self.expr_uses_list_helpers(&expr.node),
+            Statement::If(if_stmt) => {
+                self.body_uses_list_helpers(&if_stmt.then_body)
+                    || if_stmt.else_body.as_ref().map_or(false, |b| self.body_uses_list_helpers(b))
+            }
+            Statement::While(while_stmt) => self.body_uses_list_helpers(&while_stmt.body),
+            Statement::For(for_stmt) => self.body_uses_list_helpers(&for_stmt.body),
+            _ => false,
+        }
+    }
+
+    /// Check if an expression uses list helpers (remove, count, index)
+    fn expr_uses_list_helpers(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::MethodCall(_base, method, _args) => {
+                matches!(method.as_str(), "remove" | "count" | "index")
+            }
+            Expr::Call(function, args) => {
+                self.expr_uses_list_helpers(&function.node)
+                    || args.iter().any(|arg| match arg {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => self.expr_uses_list_helpers(&e.node),
+                    })
+            }
+            Expr::Binary(left, _, right) => {
+                self.expr_uses_list_helpers(&left.node) || self.expr_uses_list_helpers(&right.node)
+            }
+            Expr::Unary(_, expr) => self.expr_uses_list_helpers(&expr.node),
+            Expr::List(items) | Expr::Tuple(items) | Expr::Set(items) => {
+                items.iter().any(|item| self.expr_uses_list_helpers(&item.node))
+            }
+            Expr::If(if_expr) => {
+                self.body_uses_list_helpers(&if_expr.then_body)
+                    || if_expr.else_body.as_ref().map_or(false, |b| self.body_uses_list_helpers(b))
+            }
+            _ => false,
         }
     }
 }

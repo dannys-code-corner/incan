@@ -296,6 +296,7 @@ pub fn build_file(file_path: &str, output_dir: Option<&String>) {
     codegen.scan_for_serde(&main_module.ast);
     codegen.scan_for_async(&main_module.ast);
     codegen.scan_for_web(&main_module.ast);
+    codegen.scan_for_list_helpers(&main_module.ast);
     let needs_serde = codegen.needs_serde();
     let needs_tokio = codegen.needs_tokio();
     let needs_axum = codegen.needs_axum();
@@ -389,6 +390,7 @@ pub fn run_file(file_path: &str) {
     codegen.scan_for_serde(&main_module.ast);
     codegen.scan_for_async(&main_module.ast);
     codegen.scan_for_web(&main_module.ast);
+    codegen.scan_for_list_helpers(&main_module.ast);
     let needs_serde = codegen.needs_serde();
     let needs_tokio = codegen.needs_tokio();
     let needs_axum = codegen.needs_axum();

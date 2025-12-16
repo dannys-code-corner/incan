@@ -989,6 +989,72 @@ impl TypeChecker {
                     }
                 }
             }
+            Statement::TupleAssign(assign) => {
+                // Check the value expression (should be a tuple)
+                let value_ty = self.check_expr(&assign.value);
+                
+                // Extract element types if it's a tuple
+                let element_types: Vec<ResolvedType> = match &value_ty {
+                    ResolvedType::Tuple(types) => types.clone(),
+                    _ => {
+                        // Not a tuple, create Unknown types for each target
+                        vec![ResolvedType::Unknown; assign.targets.len()]
+                    }
+                };
+                
+                // Check that tuple has enough elements
+                if element_types.len() < assign.targets.len() {
+                    self.errors.push(CompileError::type_error(
+                        format!(
+                            "Cannot unpack {} values from tuple with {} elements",
+                            assign.targets.len(),
+                            element_types.len()
+                        ),
+                        stmt.span,
+                    ));
+                }
+                
+                // Check each target expression - must be a valid lvalue
+                for (i, target) in assign.targets.iter().enumerate() {
+                    let target_ty = self.check_expr(target);
+                    let expected_ty = element_types.get(i).cloned().unwrap_or(ResolvedType::Unknown);
+                    
+                    // Check that target is a valid lvalue
+                    match &target.node {
+                        Expr::Ident(name) => {
+                            // Check that the variable is mutable
+                            if let Some(id) = self.symbols.lookup_local(name) {
+                                if let Some(sym) = self.symbols.get(id) {
+                                    if let SymbolKind::Variable(var_info) = &sym.kind {
+                                        if !var_info.is_mutable {
+                                            self.errors.push(errors::mutation_without_mut(name, target.span));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Expr::Index(_, _) | Expr::Field(_, _) => {
+                            // Index and field expressions are valid lvalues
+                            // Type compatibility is checked below
+                        }
+                        _ => {
+                            self.errors.push(CompileError::syntax(
+                                "Invalid assignment target in tuple assignment".to_string(),
+                                target.span,
+                            ));
+                        }
+                    }
+                    
+                    // Check type compatibility
+                    if !self.types_compatible(&expected_ty, &target_ty) {
+                        self.errors.push(errors::type_mismatch(
+                            &target_ty.to_string(),
+                            &expected_ty.to_string(),
+                            target.span,
+                        ));
+                    }
+                }
+            }
         }
     }
 
@@ -1360,6 +1426,9 @@ impl TypeChecker {
     }
 
     fn check_ident(&mut self, name: &str, span: Span) -> ResolvedType {
+        // Note: `math` module requires `import math` (like Python).
+        // When imported, it's registered as a Module symbol and found via normal lookup.
+        
         if let Some(id) = self.symbols.lookup(name) {
             if let Some(sym) = self.symbols.get(id) {
                 match &sym.kind {
@@ -1486,6 +1555,27 @@ impl TypeChecker {
         args: &[CallArg],
         _span: Span,
     ) -> ResolvedType {
+        // Handle math module function calls (math.sqrt, math.sin, etc.)
+        if let Expr::Field(base, method) = &callee.node {
+            if let Expr::Ident(module) = &base.node {
+                if module == "math" {
+                    // Check arguments
+                    for arg in args {
+                        match arg {
+                            CallArg::Positional(e) | CallArg::Named(_, e) => { self.check_expr(e); }
+                        }
+                    }
+                    // All math functions return float
+                    match method.as_str() {
+                        "sqrt" | "sin" | "cos" | "tan" | "abs" | "floor" | "ceil" | 
+                        "pow" | "log" | "log10" | "exp" | "asin" | "acos" | "atan" |
+                        "sinh" | "cosh" | "tanh" => return ResolvedType::Float,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
         // Handle built-in Result/Option constructors specially
         if let Expr::Ident(name) = &callee.node {
             match name.as_str() {
@@ -1533,6 +1623,17 @@ impl TypeChecker {
                 }
                 "len" => {
                     // len(collection) -> int
+                    for arg in args {
+                        match arg {
+                            CallArg::Positional(e) | CallArg::Named(_, e) => { self.check_expr(e); }
+                        }
+                    }
+                    return ResolvedType::Int;
+                }
+                "sum" => {
+                    // sum(collection) -> int
+                    // For boolean lists, counts True values
+                    // For numeric lists, sums the values
                     for arg in args {
                         match arg {
                             CallArg::Positional(e) | CallArg::Named(_, e) => { self.check_expr(e); }
@@ -2001,6 +2102,17 @@ impl TypeChecker {
     }
 
     fn check_field(&mut self, base: &Spanned<Expr>, field: &str, span: Span) -> ResolvedType {
+        // Handle builtin math module
+        if let Expr::Ident(name) = &base.node {
+            if name == "math" {
+                // math.pi, math.e, math.tau, math.inf, math.nan are all float
+                match field {
+                    "pi" | "e" | "tau" | "inf" | "nan" => return ResolvedType::Float,
+                    _ => {}
+                }
+            }
+        }
+        
         let base_ty = self.check_expr(base);
 
         match &base_ty {
@@ -3034,6 +3146,16 @@ def foo() -> int:
 def foo() -> int:
   x = [1, 2, 3]
   return len(x)
+"#;
+        assert!(check_str(source).is_ok());
+    }
+
+    #[test]
+    fn test_builtin_sum() {
+        let source = r#"
+def foo() -> int:
+  x = [True, False, True]
+  return sum(x)
 "#;
         assert!(check_str(source).is_ok());
     }

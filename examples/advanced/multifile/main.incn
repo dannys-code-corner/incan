@@ -22,18 +22,24 @@ def main() -> None:
     user = User(name="Alice", email="alice@example.com", age=30)
     greeting = format_greeting(user.name)
     println(greeting)
+    
     if is_valid_email(user.email):
         println(f"Email '{user.email}' is valid")
     else:
         println(f"Email '{user.email}' is invalid")
+
+    current_age = user.age
+    println(f"Current age: {current_age}")
     println("")
+
     laptop = Product(name="Laptop", price=999.99, quantity=1)
     mouse = Product(name="Mouse", price=29.99, quantity=3)
     laptop_total = product_total(laptop)
     mouse_total = product_total(mouse)
+    
     println("Shopping Cart:")
     println(f"  {laptop.name}: {format_currency(laptop_total)}")
     println(f"  {mouse.name} x{mouse.quantity}: {format_currency(mouse_total)}")
+
     grand_total = laptop_total + mouse_total
     println(f"  Total: {format_currency(grand_total)}")
-

@@ -46,8 +46,8 @@ The Incan compiler frontend consists of several components that transform source
 
 ### Indentation-Based Syntax
 
-Like Python, Incan uses indentation for blocks. The lexer tracks indent levels and emits `INDENT` and `DEDENT` tokens. 
-Incan uses 2-space indentation by default (tabs are treated as 2 spaces).
+Like Python, Incan uses indentation for blocks. The lexer tracks indent levels and emits `INDENT` and `DEDENT` tokens.
+Incan uses 2-space or 4-space indentation by default (tabs are treated as 4 spaces).
 
 ### Rust-Style Imports
 
@@ -56,7 +56,7 @@ Imports use `::` as path separator:
 ```incan
 import polars::prelude as pl
 import incan::http as http
-import py "requests" as pyreq   # Python interop
+import python "requests" as pyreq   # Python interop
 ```
 
 ### Pattern Matching

@@ -152,12 +152,14 @@ Rust doesn't have `Any` like Python. Would require boxing and type erasure.
 ### 2. Generic parsing only
 
 Keep `json_parse[T]()` and require models for everything. Rejected because:
+
 - Too restrictive for dynamic use cases
 - Poor developer experience for exploration
 
 ### 3. Automatic Dict conversion
 
 Auto-convert JSON objects to `Dict[str, ???]`. Rejected because:
+
 - Loses type information
 - Can't handle nested structures uniformly
 
@@ -185,4 +187,3 @@ Auto-convert JSON objects to `Dict[str, ???]`. Rejected because:
 - Python: `dict` from `json.loads()`
 - TypeScript: `any` or `unknown`
 - Go: `interface{}` / `any`
-
