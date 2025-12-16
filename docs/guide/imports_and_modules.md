@@ -167,11 +167,62 @@ Choose whichever style you prefer; both are equivalent in Incan and compile to R
 
 ## Special import: `import this`
 
-`import this` is always available and prints the Incan “Zen” design principles when imported. It works in regular modules and inline snippets, e.g.:
+`import this` is always available and prints the Incan "Zen" design principles when imported. It works in regular modules and inline snippets, e.g.:
 
 ```bash
 incan run -c "import this"
 ```
+
+## Standard Library: `math` Module
+
+Like Python, Incan provides a `math` module with common mathematical functions and constants. You must import it before use:
+
+```incan
+import math
+
+def main() -> None:
+    # Constants
+    pi = math.pi          # 3.14159...
+    e = math.e            # 2.71828...
+    tau = math.tau        # 6.28318... (2π)
+    
+    # Functions
+    x = math.sqrt(16.0)   # 4.0
+    y = math.sin(0.0)     # 0.0
+    z = math.pow(2.0, 10.0)  # 1024.0
+    
+    println(f"pi={pi}, sqrt(16)={x}")
+```
+
+### Available Constants
+
+| Constant | Description |
+|----------|-------------|
+| `math.pi` | π (3.14159...) |
+| `math.e` | Euler's number (2.71828...) |
+| `math.tau` | τ = 2π (6.28318...) |
+| `math.inf` | Positive infinity |
+| `math.nan` | Not a Number |
+
+### Available Functions
+
+| Function | Description |
+|----------|-------------|
+| `math.sqrt(x)` | Square root |
+| `math.abs(x)` | Absolute value |
+| `math.floor(x)` | Largest integer ≤ x |
+| `math.ceil(x)` | Smallest integer ≥ x |
+| `math.round(x)` | Round to nearest integer |
+| `math.pow(x, y)` | x raised to power y |
+| `math.exp(x)` | e^x |
+| `math.log(x)` | Natural logarithm (ln) |
+| `math.log10(x)` | Base-10 logarithm |
+| `math.log2(x)` | Base-2 logarithm |
+| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | Trigonometric (radians) |
+| `math.asin(x)`, `math.acos(x)`, `math.atan(x)` | Inverse trigonometric |
+| `math.sinh(x)`, `math.cosh(x)`, `math.tanh(x)` | Hyperbolic |
+| `math.atan2(y, x)` | Two-argument arctangent |
+| `math.hypot(x, y)` | Euclidean distance √(x² + y²) |
 
 ### Why a Prelude?
 

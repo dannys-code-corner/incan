@@ -1426,10 +1426,8 @@ impl TypeChecker {
     }
 
     fn check_ident(&mut self, name: &str, span: Span) -> ResolvedType {
-        // Handle builtin modules
-        if name == "math" {
-            return ResolvedType::Named("math".to_string());
-        }
+        // Note: `math` module requires `import math` (like Python).
+        // When imported, it's registered as a Module symbol and found via normal lookup.
         
         if let Some(id) = self.symbols.lookup(name) {
             if let Some(sym) = self.symbols.get(id) {

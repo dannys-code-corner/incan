@@ -289,7 +289,18 @@ impl RustCodegen<'_> {
 
     /// Emit a field access expression
     fn emit_field(emitter: &mut RustEmitter, base: &Spanned<Expr>, field: &str) {
+        // Handle builtin math module constants: math.pi, math.e, math.tau, math.inf, math.nan
         if let Expr::Ident(name) = &base.node {
+            if name == "math" {
+                match field {
+                    "pi" => { emitter.write("std::f64::consts::PI"); return; }
+                    "e" => { emitter.write("std::f64::consts::E"); return; }
+                    "tau" => { emitter.write("std::f64::consts::TAU"); return; }
+                    "inf" => { emitter.write("f64::INFINITY"); return; }
+                    "nan" => { emitter.write("f64::NAN"); return; }
+                    _ => {}
+                }
+            }
             if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                 emitter.write(name);
                 emitter.write("::");
@@ -643,6 +654,17 @@ impl RustCodegen<'_> {
 
     /// Emit a function call
     fn emit_call(emitter: &mut RustEmitter, callee: &Spanned<Expr>, args: &[CallArg]) {
+        // Handle builtin math module function calls: math.sqrt(x), math.sin(x), etc.
+        if let Expr::Field(base, method) = &callee.node {
+            if let Expr::Ident(module) = &base.node {
+                if module == "math" {
+                    if Self::emit_math_call(emitter, method, args) {
+                        return;
+                    }
+                }
+            }
+        }
+
         // Handle direct builtin calls like sqrt(), len(), etc.
         if let Expr::Ident(name) = &callee.node {
             if Self::emit_builtin_call(emitter, name, args) {
@@ -1200,9 +1222,114 @@ impl RustCodegen<'_> {
         }
     }
 
+    /// Emit a builtin math module function call, returns true if handled
+    /// Lowers math.sqrt(x) to (x).sqrt(), math.pow(x, y) to (x).powf(y), etc.
+    fn emit_math_call(emitter: &mut RustEmitter, func: &str, args: &[CallArg]) -> bool {
+        // Single-argument functions that map to f64 methods
+        let single_arg_method = match func {
+            "sqrt" => Some("sqrt"),
+            "sin" => Some("sin"),
+            "cos" => Some("cos"),
+            "tan" => Some("tan"),
+            "asin" => Some("asin"),
+            "acos" => Some("acos"),
+            "atan" => Some("atan"),
+            "sinh" => Some("sinh"),
+            "cosh" => Some("cosh"),
+            "tanh" => Some("tanh"),
+            "exp" => Some("exp"),
+            "log" => Some("ln"),      // Python's math.log is natural log
+            "log10" => Some("log10"),
+            "log2" => Some("log2"),
+            "abs" => Some("abs"),
+            "floor" => Some("floor"),
+            "ceil" => Some("ceil"),
+            "round" => Some("round"),
+            "trunc" => Some("trunc"),
+            _ => None,
+        };
+
+        if let Some(method) = single_arg_method {
+            if let Some(CallArg::Positional(arg)) = args.first() {
+                emitter.write("(");
+                Self::emit_expr(emitter, &arg.node);
+                emitter.write(" as f64).");
+                emitter.write(method);
+                emitter.write("()");
+                return true;
+            }
+        }
+
+        // Two-argument functions
+        match func {
+            "pow" => {
+                // math.pow(x, y) -> (x as f64).powf(y as f64)
+                if args.len() >= 2 {
+                    if let (CallArg::Positional(base), CallArg::Positional(exp)) = (&args[0], &args[1]) {
+                        emitter.write("(");
+                        Self::emit_expr(emitter, &base.node);
+                        emitter.write(" as f64).powf(");
+                        Self::emit_expr(emitter, &exp.node);
+                        emitter.write(" as f64)");
+                        return true;
+                    }
+                }
+            }
+            "atan2" => {
+                // math.atan2(y, x) -> (y as f64).atan2(x as f64)
+                if args.len() >= 2 {
+                    if let (CallArg::Positional(y), CallArg::Positional(x)) = (&args[0], &args[1]) {
+                        emitter.write("(");
+                        Self::emit_expr(emitter, &y.node);
+                        emitter.write(" as f64).atan2(");
+                        Self::emit_expr(emitter, &x.node);
+                        emitter.write(" as f64)");
+                        return true;
+                    }
+                }
+            }
+            "hypot" => {
+                // math.hypot(x, y) -> (x as f64).hypot(y as f64)
+                if args.len() >= 2 {
+                    if let (CallArg::Positional(x), CallArg::Positional(y)) = (&args[0], &args[1]) {
+                        emitter.write("(");
+                        Self::emit_expr(emitter, &x.node);
+                        emitter.write(" as f64).hypot(");
+                        Self::emit_expr(emitter, &y.node);
+                        emitter.write(" as f64)");
+                        return true;
+                    }
+                }
+            }
+            "copysign" => {
+                // math.copysign(x, y) -> (x as f64).copysign(y as f64)
+                if args.len() >= 2 {
+                    if let (CallArg::Positional(x), CallArg::Positional(y)) = (&args[0], &args[1]) {
+                        emitter.write("(");
+                        Self::emit_expr(emitter, &x.node);
+                        emitter.write(" as f64).copysign(");
+                        Self::emit_expr(emitter, &y.node);
+                        emitter.write(" as f64)");
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        false
+    }
+
     /// Emit a method call
     fn emit_method_call(emitter: &mut RustEmitter, base: &Spanned<Expr>, method: &str, args: &[CallArg]) {
         if let Expr::Ident(name) = &base.node {
+            // Handle builtin math module calls: math.sqrt(x), math.sin(x), etc.
+            if name == "math" {
+                if Self::emit_math_call(emitter, method, args) {
+                    return;
+                }
+            }
+
             // Handle Response builder methods
             if name == "Response" {
                 if Self::emit_response_method(emitter, method, args) {

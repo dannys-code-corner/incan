@@ -7,7 +7,8 @@ use crate::frontend::ast::*;
 use super::RustCodegen;
 
 // Standard Incan prelude imports that should not be emitted as Rust import
-const PRELUDE_IMPORT_PREFIXES: &[&str] = &["derives", "serde", "prelude", "web", "async", "testing", "this"];
+// "math" is a builtin module - its functions/constants are lowered directly in codegen
+const PRELUDE_IMPORT_PREFIXES: &[&str] = &["derives", "serde", "prelude", "web", "async", "testing", "this", "math"];
 const INCAN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 impl RustCodegen<'_> {
