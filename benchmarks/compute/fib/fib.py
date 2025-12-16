@@ -5,15 +5,15 @@
 def fib_mod(n: int, modulo: int) -> int:
     if n <= 1:
         return n
-    
+
     prev = 0
     curr = 1
-    
+
     for _ in range(2, n + 1):
         next_val = (prev + curr) % modulo
         prev = curr
         curr = next_val
-    
+
     return curr
 
 def main():

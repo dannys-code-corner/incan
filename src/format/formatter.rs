@@ -630,6 +630,17 @@ impl Formatter {
                 self.format_expr(&unpack.value.node);
                 self.writer.newline();
             }
+            Statement::TupleAssign(assign) => {
+                for (i, target) in assign.targets.iter().enumerate() {
+                    if i > 0 {
+                        self.writer.write(", ");
+                    }
+                    self.format_expr(&target.node);
+                }
+                self.writer.write(" = ");
+                self.format_expr(&assign.value.node);
+                self.writer.newline();
+            }
         }
     }
     

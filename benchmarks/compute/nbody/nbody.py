@@ -21,14 +21,14 @@ def advance(bodies, dt, steps):
                 dist_sq = dx * dx + dy * dy + dz * dz
                 dist = math.sqrt(dist_sq)
                 mag = dt / (dist_sq * dist)
-                
+
                 bodies[i][3] -= dx * bodies[j][6] * mag
                 bodies[i][4] -= dy * bodies[j][6] * mag
                 bodies[i][5] -= dz * bodies[j][6] * mag
                 bodies[j][3] += dx * bodies[i][6] * mag
                 bodies[j][4] += dy * bodies[i][6] * mag
                 bodies[j][5] += dz * bodies[i][6] * mag
-        
+
         # Update positions
         for body in bodies:
             body[0] += dt * body[3]
@@ -37,7 +37,7 @@ def advance(bodies, dt, steps):
 
 def energy(bodies):
     e = 0.0
-    
+
     for i in range(len(bodies)):
         # Kinetic energy
         e += 0.5 * bodies[i][6] * (
@@ -45,7 +45,7 @@ def energy(bodies):
             bodies[i][4] * bodies[i][4] +
             bodies[i][5] * bodies[i][5]
         )
-        
+
         # Potential energy
         for j in range(i + 1, len(bodies)):
             dx = bodies[i][0] - bodies[j][0]
@@ -53,17 +53,17 @@ def energy(bodies):
             dz = bodies[i][2] - bodies[j][2]
             dist = math.sqrt(dx * dx + dy * dy + dz * dz)
             e -= (bodies[i][6] * bodies[j][6]) / dist
-    
+
     return e
 
 def offset_momentum(bodies):
     px = py = pz = 0.0
-    
+
     for body in bodies:
         px += body[3] * body[6]
         py += body[4] * body[6]
         pz += body[5] * body[6]
-    
+
     bodies[0][3] = -px / SOLAR_MASS
     bodies[0][4] = -py / SOLAR_MASS
     bodies[0][5] = -pz / SOLAR_MASS
@@ -113,12 +113,12 @@ def main():
             0.0000515138902046611451 * SOLAR_MASS,
         ),
     ]
-    
+
     offset_momentum(bodies)
-    
+
     n = 500_000
     advance(bodies, 0.01, n)
-    
+
     print(f"Final energy: {energy(bodies):.9f}")
 
 if __name__ == "__main__":

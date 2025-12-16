@@ -23,7 +23,7 @@ fn advance(bodies: &mut [Body], dt: f64, steps: i32) {
                 let dist_sq = dx * dx + dy * dy + dz * dz;
                 let dist = dist_sq.sqrt();
                 let mag = dt / (dist_sq * dist);
-                
+
                 bodies[i].vx -= dx * bodies[j].mass * mag;
                 bodies[i].vy -= dy * bodies[j].mass * mag;
                 bodies[i].vz -= dz * bodies[j].mass * mag;
@@ -32,7 +32,7 @@ fn advance(bodies: &mut [Body], dt: f64, steps: i32) {
                 bodies[j].vz += dz * bodies[i].mass * mag;
             }
         }
-        
+
         // Update positions
         for body in bodies.iter_mut() {
             body.x += dt * body.vx;
@@ -44,7 +44,7 @@ fn advance(bodies: &mut [Body], dt: f64, steps: i32) {
 
 fn energy(bodies: &[Body]) -> f64 {
     let mut e = 0.0;
-    
+
     for i in 0..bodies.len() {
         // Kinetic energy
         e += 0.5 * bodies[i].mass * (
@@ -52,7 +52,7 @@ fn energy(bodies: &[Body]) -> f64 {
             bodies[i].vy * bodies[i].vy +
             bodies[i].vz * bodies[i].vz
         );
-        
+
         // Potential energy
         for j in (i + 1)..bodies.len() {
             let dx = bodies[i].x - bodies[j].x;
@@ -62,7 +62,7 @@ fn energy(bodies: &[Body]) -> f64 {
             e -= (bodies[i].mass * bodies[j].mass) / dist;
         }
     }
-    
+
     e
 }
 
@@ -70,13 +70,13 @@ fn offset_momentum(bodies: &mut [Body]) {
     let mut px = 0.0;
     let mut py = 0.0;
     let mut pz = 0.0;
-    
+
     for body in bodies.iter() {
         px += body.vx * body.mass;
         py += body.vy * body.mass;
         pz += body.vz * body.mass;
     }
-    
+
     bodies[0].vx = -px / SOLAR_MASS;
     bodies[0].vy = -py / SOLAR_MASS;
     bodies[0].vz = -pz / SOLAR_MASS;
@@ -127,11 +127,11 @@ fn main() {
             mass: 0.0000515138902046611451 * SOLAR_MASS,
         },
     ];
-    
+
     offset_momentum(&mut bodies);
-    
+
     let n = 500_000;
     advance(&mut bodies, 0.01, n);
-    
+
     println!("Final energy: {:.9}", energy(&bodies));
 }

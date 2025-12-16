@@ -3,9 +3,10 @@
 //! Handles emitting functions, methods, and web handlers.
 
 use crate::frontend::ast::*;
-use crate::backend::rust_emitter::RustEmitter;
+use crate::backend::rust_emitter::{RustEmitter, FunctionParamInfo, CollectionKind};
 
 use super::RustCodegen;
+use std::collections::HashSet;
 
 /// The Zen of Incan - embedded at compile time from stdlib/zen.txt
 const ZEN_OF_INCAN: &str = include_str!("../../../stdlib/zen.txt");
@@ -13,6 +14,15 @@ const ZEN_OF_INCAN: &str = include_str!("../../../stdlib/zen.txt");
 impl RustCodegen<'_> {
     /// Emit a function declaration
     pub(crate) fn emit_function(&mut self, func: &FunctionDecl) {
+        // Register function parameter info for call site analysis
+        let mut mut_params = HashSet::new();
+        for (i, param) in func.params.iter().enumerate() {
+            if param.node.is_mut && Self::is_collection_type(&param.node.ty.node) {
+                mut_params.insert(i);
+            }
+        }
+        self.emitter.register_function_params(&func.name, FunctionParamInfo { mut_params });
+        
         // Check if this function has @route decorator
         let route_info = func.decorators.iter().find(|d| d.node.name == "route");
 
@@ -76,10 +86,33 @@ impl RustCodegen<'_> {
         // Format type parameters for generic functions
         let type_params: Vec<String> = func.type_params.iter().cloned().collect();
 
+        // Track which parameters are mutable collection refs for call site codegen
+        let mut_ref_param_names: Vec<String> = func.params.iter()
+            .filter(|p| p.node.is_mut && Self::is_collection_type(&p.node.ty.node))
+            .map(|p| p.node.name.clone())
+            .collect();
+
         self.emitter.function_generic(vis, is_async, &name, &type_params, &params, &ret, |e| {
             e.push_scope();
             for param_name in &param_names {
                 e.declare_var(param_name);
+            }
+            // Register mutable collection params for &mut passing at call sites
+            for param_name in &mut_ref_param_names {
+                e.register_mut_ref_param(param_name);
+            }
+
+            // Register collection kinds for parameters too (not just locals).
+            // This enables list/dict/set method lowering on parameters (e.g. `arr.swap(i, j)`).
+            for param in &func.params {
+                if let Type::Generic(name, _args) = &param.node.ty.node {
+                    match name.as_str() {
+                        "List" => e.register_collection_kind(&param.node.name, CollectionKind::List),
+                        "Dict" => e.register_collection_kind(&param.node.name, CollectionKind::Dict),
+                        "Set" => e.register_collection_kind(&param.node.name, CollectionKind::Set),
+                        _ => {}
+                    }
+                }
             }
 
             // Emit the Zen of Incan if `import this` was used
@@ -115,6 +148,7 @@ impl RustCodegen<'_> {
             }
 
             e.pop_scope();
+            e.clear_mut_ref_params();
         });
     }
 

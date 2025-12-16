@@ -15,10 +15,10 @@ def collatz_steps(n: int) -> int:
 def main():
     limit = 1_000_000
     total_steps = 0
-    
+
     for n in range(1, limit + 1):
         total_steps += collatz_steps(n)
-    
+
     print(f"Total Collatz steps for 1..{limit}: {total_steps}")
 
 if __name__ == "__main__":

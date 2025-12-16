@@ -112,98 +112,9 @@ impl ModuleCollector {
         Ok(())
     }
     
-    /// Resolve an import to a file path
+    /// Resolve an import to a file path (relative to this collector's base directory).
     fn resolve_import(&self, import: &ImportDecl) -> Option<PathBuf> {
-        let (path, is_absolute, parent_levels) = match &import.kind {
-            ImportKind::Module(p) if !p.segments.is_empty() => {
-                (p.segments.clone(), p.is_absolute, p.parent_levels)
-            }
-            ImportKind::From { module, .. } if !module.segments.is_empty() => {
-                (module.segments.clone(), module.is_absolute, module.parent_levels)
-            }
-            // Rust crate imports don't resolve to Incan files
-            ImportKind::RustCrate { .. } | ImportKind::RustFrom { .. } => return None,
-            ImportKind::Python(_) | ImportKind::Module(_) | ImportKind::From { .. } => return None,
-        };
-        
-        // Skip standard library imports (std::*)
-        if let Some(first) = path.first() {
-            if first == "std" {
-                return None;
-            }
-        }
-        
-        // Calculate base directory based on relative path
-        let mut base = self.base_dir.clone();
-        
-        // Handle absolute paths (crate::...)
-        if is_absolute {
-            // Find project root (look for Cargo.toml or src/ directory)
-            let mut project_root = base.clone();
-            while !project_root.join("Cargo.toml").exists() && !project_root.join("src").exists() {
-                if !project_root.pop() {
-                    break;
-                }
-            }
-            // If we found a src directory, use it as base
-            if project_root.join("src").exists() {
-                base = project_root.join("src");
-            } else {
-                base = project_root;
-            }
-        } else {
-            // Handle parent navigation (super:: or ..)
-            for _ in 0..parent_levels {
-                base = base.parent().map(|p| p.to_path_buf()).unwrap_or(base);
-            }
-        }
-        
-        // Build file path from segments
-        // First segment is the module name, rest are nested paths
-        if path.is_empty() {
-            return None;
-        }
-        
-        let mut file_path = base.clone();
-        
-        // Handle nested paths: db.models -> db/models.incn or db/models/mod.incn
-        for (i, segment) in path.iter().enumerate() {
-            if i == path.len() - 1 {
-                // Last segment - this is the file
-                file_path = file_path.join(segment);
-            } else {
-                // Directory
-                file_path = file_path.join(segment);
-            }
-        }
-        
-        // Try .incn extension first (preferred)
-        let mut with_ext = file_path.clone();
-        with_ext.set_extension("incn");
-        
-        if with_ext.exists() {
-            return Some(with_ext.canonicalize().unwrap_or(with_ext));
-        }
-        
-        // Try .incan extension (legacy/alternate)
-        with_ext.set_extension("incan");
-        if with_ext.exists() {
-            return Some(with_ext.canonicalize().unwrap_or(with_ext));
-        }
-        
-        // Try as directory with mod.incn
-        let mod_file = file_path.join("mod.incn");
-        if mod_file.exists() {
-            return Some(mod_file.canonicalize().unwrap_or(mod_file));
-        }
-        
-        // Try as directory with mod.incan (legacy/alternate)
-        let mod_file_legacy = file_path.join("mod.incan");
-        if mod_file_legacy.exists() {
-            return Some(mod_file_legacy.canonicalize().unwrap_or(mod_file_legacy));
-        }
-        
-        None
+        resolve_import_path(&self.base_dir, import)
     }
     
     /// Get all loaded modules
@@ -215,6 +126,92 @@ impl ModuleCollector {
     pub fn into_modules(self) -> HashMap<PathBuf, ResolvedModule> {
         self.loaded
     }
+}
+
+/// Resolve an `import` / `from ... import ...` into an on-disk Incan module file path.
+///
+/// This is used by both the CLI and the LSP to typecheck multi-file projects.
+pub fn resolve_import_path(base_dir: &Path, import: &ImportDecl) -> Option<PathBuf> {
+    let (path, is_absolute, parent_levels) = match &import.kind {
+        ImportKind::Module(p) if !p.segments.is_empty() => {
+            (p.segments.clone(), p.is_absolute, p.parent_levels)
+        }
+        ImportKind::From { module, .. } if !module.segments.is_empty() => {
+            (module.segments.clone(), module.is_absolute, module.parent_levels)
+        }
+        // Rust crate imports don't resolve to Incan files
+        ImportKind::RustCrate { .. } | ImportKind::RustFrom { .. } => return None,
+        ImportKind::Python(_) | ImportKind::Module(_) | ImportKind::From { .. } => return None,
+    };
+
+    // Skip standard library imports (std::*)
+    if let Some(first) = path.first() {
+        if first == "std" {
+            return None;
+        }
+    }
+
+    // Calculate base directory based on relative path
+    let mut base = base_dir.to_path_buf();
+
+    // Handle absolute paths (crate::...)
+    if is_absolute {
+        // Find project root (look for Cargo.toml or src/ directory)
+        let mut project_root = base.clone();
+        while !project_root.join("Cargo.toml").exists() && !project_root.join("src").exists() {
+            if !project_root.pop() {
+                break;
+            }
+        }
+        // If we found a src directory, use it as base
+        if project_root.join("src").exists() {
+            base = project_root.join("src");
+        } else {
+            base = project_root;
+        }
+    } else {
+        // Handle parent navigation (super:: or ..)
+        for _ in 0..parent_levels {
+            base = base.parent().map(|p| p.to_path_buf()).unwrap_or(base);
+        }
+    }
+
+    if path.is_empty() {
+        return None;
+    }
+
+    // Build file path from segments
+    let mut file_path = base.clone();
+    for segment in &path {
+        file_path = file_path.join(segment);
+    }
+
+    // Try .incn extension first (preferred)
+    let mut with_ext = file_path.clone();
+    with_ext.set_extension("incn");
+    if with_ext.exists() {
+        return Some(with_ext.canonicalize().unwrap_or(with_ext));
+    }
+
+    // Try .incan extension (legacy/alternate)
+    with_ext.set_extension("incan");
+    if with_ext.exists() {
+        return Some(with_ext.canonicalize().unwrap_or(with_ext));
+    }
+
+    // Try as directory with mod.incn
+    let mod_file = file_path.join("mod.incn");
+    if mod_file.exists() {
+        return Some(mod_file.canonicalize().unwrap_or(mod_file));
+    }
+
+    // Try as directory with mod.incan (legacy/alternate)
+    let mod_file_legacy = file_path.join("mod.incan");
+    if mod_file_legacy.exists() {
+        return Some(mod_file_legacy.canonicalize().unwrap_or(mod_file_legacy));
+    }
+
+    None
 }
 
 /// Extract what symbols a module exports

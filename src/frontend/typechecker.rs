@@ -989,6 +989,72 @@ impl TypeChecker {
                     }
                 }
             }
+            Statement::TupleAssign(assign) => {
+                // Check the value expression (should be a tuple)
+                let value_ty = self.check_expr(&assign.value);
+                
+                // Extract element types if it's a tuple
+                let element_types: Vec<ResolvedType> = match &value_ty {
+                    ResolvedType::Tuple(types) => types.clone(),
+                    _ => {
+                        // Not a tuple, create Unknown types for each target
+                        vec![ResolvedType::Unknown; assign.targets.len()]
+                    }
+                };
+                
+                // Check that tuple has enough elements
+                if element_types.len() < assign.targets.len() {
+                    self.errors.push(CompileError::type_error(
+                        format!(
+                            "Cannot unpack {} values from tuple with {} elements",
+                            assign.targets.len(),
+                            element_types.len()
+                        ),
+                        stmt.span,
+                    ));
+                }
+                
+                // Check each target expression - must be a valid lvalue
+                for (i, target) in assign.targets.iter().enumerate() {
+                    let target_ty = self.check_expr(target);
+                    let expected_ty = element_types.get(i).cloned().unwrap_or(ResolvedType::Unknown);
+                    
+                    // Check that target is a valid lvalue
+                    match &target.node {
+                        Expr::Ident(name) => {
+                            // Check that the variable is mutable
+                            if let Some(id) = self.symbols.lookup_local(name) {
+                                if let Some(sym) = self.symbols.get(id) {
+                                    if let SymbolKind::Variable(var_info) = &sym.kind {
+                                        if !var_info.is_mutable {
+                                            self.errors.push(errors::mutation_without_mut(name, target.span));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Expr::Index(_, _) | Expr::Field(_, _) => {
+                            // Index and field expressions are valid lvalues
+                            // Type compatibility is checked below
+                        }
+                        _ => {
+                            self.errors.push(CompileError::syntax(
+                                "Invalid assignment target in tuple assignment".to_string(),
+                                target.span,
+                            ));
+                        }
+                    }
+                    
+                    // Check type compatibility
+                    if !self.types_compatible(&expected_ty, &target_ty) {
+                        self.errors.push(errors::type_mismatch(
+                            &target_ty.to_string(),
+                            &expected_ty.to_string(),
+                            target.span,
+                        ));
+                    }
+                }
+            }
         }
     }
 

@@ -78,6 +78,30 @@ test:
 	@echo "\033[1mRunning tests...\033[0m"
 	@cargo test
 
+.PHONY: examples  ## test - Smoke test examples (check all, run entrypoints with timeout)
+examples: release
+	@echo "\033[1mRunning examples...\033[0m"
+	@INCAN_EXAMPLES_TIMEOUT=$${INCAN_EXAMPLES_TIMEOUT:-5} bash scripts/run_examples.sh
+
+.PHONY: benchmarks  ## test - Run benchmark suite (requires hyperfine)
+benchmarks: release
+	@echo "\033[1mRunning benchmarks...\033[0m"
+	@bash benchmarks/run_all.sh
+
+.PHONY: benchmarks-incan  ## test - Smoke-check benchmark .incn files (build only; no Python/Rust runs)
+benchmarks-incan: release
+	@echo "\033[1mChecking benchmarks (Incan build only)...\033[0m"
+	@bash benchmarks/check_incan.sh
+
+.PHONY: smoke-test  ## test - Smoke test: build + test + examples + benchmarks-incan
+smoke-test:
+	@echo "\033[1mRunning smoke-test...\033[0m"
+	@$(MAKE) build
+	@$(MAKE) test
+	@$(MAKE) examples
+	@$(MAKE) benchmarks-incan
+	@echo "\033[32m✓ Smoke-test passed\033[0m"
+
 .PHONY: test-verbose  ## test - Run tests with output
 test-verbose:
 	@echo "\033[1mRunning tests (verbose)...\033[0m"

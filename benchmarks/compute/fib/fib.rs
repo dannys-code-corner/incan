@@ -6,16 +6,16 @@ fn fib_mod(n: i64, modulo: i64) -> i64 {
     if n <= 1 {
         return n;
     }
-    
+
     let mut prev: i64 = 0;
     let mut curr: i64 = 1;
-    
+
     for _ in 2..=n {
         let next = (prev + curr) % modulo;
         prev = curr;
         curr = next;
     }
-    
+
     curr
 }
 

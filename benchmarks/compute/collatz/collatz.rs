@@ -18,10 +18,10 @@ fn collatz_steps(n: i64) -> i64 {
 fn main() {
     let limit = 1_000_000;
     let mut total_steps: i64 = 0;
-    
+
     for n in 1..=limit {
         total_steps += collatz_steps(n);
     }
-    
+
     println!("Total Collatz steps for 1..{}: {}", limit, total_steps);
 }

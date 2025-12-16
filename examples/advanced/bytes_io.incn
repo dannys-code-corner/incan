@@ -8,8 +8,8 @@ This example demonstrates:
 """
 
 def main() -> None:
-    data = b"Hello, bytes!"
+    _data = b"Hello, bytes!"
     println("Created byte string")
-    binary_data = b"\x00\x01\x02\xff"
+    _binary_data = b"\x00\x01\x02\xff"
     println("Created binary data with hex escapes")
     println("Bytes working!")

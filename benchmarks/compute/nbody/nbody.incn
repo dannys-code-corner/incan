@@ -12,7 +12,7 @@ model Body:
     vz: float
     mass: float
 
-def advance(bodies: List[Body], dt: float, steps: int) -> List[Body]:
+def advance(mut bodies: List[Body], dt: float, steps: int) -> None:
     for _ in range(steps):
         # Update velocities
         for i in range(len(bodies)):
@@ -23,25 +23,23 @@ def advance(bodies: List[Body], dt: float, steps: int) -> List[Body]:
                 dist_sq = dx * dx + dy * dy + dz * dz
                 dist = dist_sq.sqrt()
                 mag = dt / (dist_sq * dist)
-                
+
                 bodies[i].vx -= dx * bodies[j].mass * mag
                 bodies[i].vy -= dy * bodies[j].mass * mag
                 bodies[i].vz -= dz * bodies[j].mass * mag
                 bodies[j].vx += dx * bodies[i].mass * mag
                 bodies[j].vy += dy * bodies[i].mass * mag
                 bodies[j].vz += dz * bodies[i].mass * mag
-        
+
         # Update positions
         for body in bodies:
             body.x += dt * body.vx
             body.y += dt * body.vy
             body.z += dt * body.vz
-    
-    return bodies
 
 def energy(bodies: List[Body]) -> float:
     mut e = 0.0
-    
+
     for i in range(len(bodies)):
         # Kinetic energy
         e += 0.5 * bodies[i].mass * (
@@ -49,7 +47,7 @@ def energy(bodies: List[Body]) -> float:
             bodies[i].vy * bodies[i].vy +
             bodies[i].vz * bodies[i].vz
         )
-        
+
         # Potential energy
         for j in range(i + 1, len(bodies)):
             dx = bodies[i].x - bodies[j].x
@@ -60,29 +58,27 @@ def energy(bodies: List[Body]) -> float:
     
     return e
 
-def offset_momentum(bodies: List[Body]) -> List[Body]:
+def offset_momentum(mut bodies: List[Body]) -> None:
     PI = 3.141592653589793
     SOLAR_MASS = 4.0 * PI * PI
     mut px = 0.0
     mut py = 0.0
     mut pz = 0.0
-    
+
     for body in bodies:
         px += body.vx * body.mass
         py += body.vy * body.mass
         pz += body.vz * body.mass
-    
+
     bodies[0].vx = -px / SOLAR_MASS
     bodies[0].vy = -py / SOLAR_MASS
     bodies[0].vz = -pz / SOLAR_MASS
-    
-    return bodies
 
 def main() -> None:
     PI = constPi
     SOLAR_MASS = 4.0 * PI * PI
     DAYS_PER_YEAR = 365.24
-    
+
     mut bodies = [
         # Sun
         Body(x=0.0, y=0.0, z=0.0, vx=0.0, vy=0.0, vz=0.0, mass=SOLAR_MASS),
@@ -127,10 +123,10 @@ def main() -> None:
             mass=0.0000515138902046611451 * SOLAR_MASS,
         ),
     ]
-    
-    bodies = offset_momentum(bodies)
-    
+
+    offset_momentum(bodies)
+
     n = 500_000
-    bodies = advance(bodies, 0.01, n)
-    
+    advance(bodies, 0.01, n)
+
     println(f"Final energy: {energy(bodies)}")

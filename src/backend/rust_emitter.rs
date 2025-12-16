@@ -3,7 +3,22 @@
 //! This module provides utilities for building well-formatted Rust code.
 
 use std::fmt::Write;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
+
+/// Known collection kinds for local variables (used for better codegen decisions)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionKind {
+    List,
+    Dict,
+    Set,
+}
+
+/// Information about a function's parameters
+#[derive(Debug, Clone, Default)]
+pub struct FunctionParamInfo {
+    /// Which parameter indices are mutable collection parameters (expect &mut)
+    pub mut_params: HashSet<usize>,
+}
 
 /// A buffer for building Rust source code with proper indentation
 #[derive(Debug, Default)]
@@ -13,6 +28,16 @@ pub struct RustEmitter {
     indent_str: &'static str,
     /// Stack of scopes, each containing declared variable names
     scope_stack: Vec<HashSet<String>>,
+    /// Variables that are mutable collection parameters (should be passed directly, already &mut)
+    mut_ref_params: HashSet<String>,
+    /// Local mutable collection variables (should be passed as &mut at call sites)
+    mut_collection_vars: HashSet<String>,
+    /// Function signature info for call site analysis
+    function_params: HashMap<String, FunctionParamInfo>,
+    /// Known collection kinds for variables in the current module/function
+    collection_kinds: HashMap<String, CollectionKind>,
+    /// Variables known to be String (helps choose between cast vs parse for int()/float() builtins)
+    string_vars: HashSet<String>,
 }
 
 impl RustEmitter {
@@ -22,7 +47,71 @@ impl RustEmitter {
             indent_level: 0,
             indent_str: "    ", // 4 spaces for Rust
             scope_stack: Vec::new(),
+            mut_ref_params: HashSet::new(),
+            mut_collection_vars: HashSet::new(),
+            function_params: HashMap::new(),
+            collection_kinds: HashMap::new(),
+            string_vars: HashSet::new(),
         }
+    }
+    
+    /// Register a function's parameter info (which params are mut)
+    pub fn register_function_params(&mut self, name: &str, info: FunctionParamInfo) {
+        self.function_params.insert(name.to_string(), info);
+    }
+    
+    /// Check if a function parameter at a given index expects &mut
+    pub fn function_param_is_mut(&self, func_name: &str, param_idx: usize) -> bool {
+        self.function_params
+            .get(func_name)
+            .map(|info| info.mut_params.contains(&param_idx))
+            .unwrap_or(false)
+    }
+    
+    /// Register a parameter as a mutable reference (already &mut, pass directly)
+    pub fn register_mut_ref_param(&mut self, name: &str) {
+        self.mut_ref_params.insert(name.to_string());
+    }
+    
+    /// Check if a variable is a mutable reference parameter
+    pub fn is_mut_ref_param(&self, name: &str) -> bool {
+        self.mut_ref_params.contains(name)
+    }
+    
+    /// Register a local variable as a mutable collection (should be passed as &mut)
+    pub fn register_mut_collection_var(&mut self, name: &str) {
+        self.mut_collection_vars.insert(name.to_string());
+    }
+    
+    /// Check if a variable is a mutable collection variable
+    pub fn is_mut_collection_var(&self, name: &str) -> bool {
+        self.mut_collection_vars.contains(name)
+    }
+    
+    /// Clear mutable reference params and collection vars (call when exiting a function)
+    pub fn clear_mut_ref_params(&mut self) {
+        self.mut_ref_params.clear();
+        self.mut_collection_vars.clear();
+    }
+
+    /// Register the collection kind of a variable (e.g. from `List[...]`, `Dict[...]`, `Set[...]`)
+    pub fn register_collection_kind(&mut self, name: &str, kind: CollectionKind) {
+        self.collection_kinds.insert(name.to_string(), kind);
+    }
+
+    /// Get the registered collection kind for a variable, if known
+    pub fn collection_kind(&self, name: &str) -> Option<CollectionKind> {
+        self.collection_kinds.get(name).copied()
+    }
+
+    /// Mark a variable as a String
+    pub fn register_string_var(&mut self, name: &str) {
+        self.string_vars.insert(name.to_string());
+    }
+
+    /// Check whether a variable is known to be a String
+    pub fn is_string_var(&self, name: &str) -> bool {
+        self.string_vars.contains(name)
     }
     
     /// Enter a new variable scope (e.g., function body)

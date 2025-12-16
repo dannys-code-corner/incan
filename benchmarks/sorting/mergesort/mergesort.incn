@@ -1,0 +1,54 @@
+# Mergesort Benchmark
+# Sort 1,000,000 random integers (with allocation)
+
+def mergesort(arr: List[int]) -> List[int]:
+    n = len(arr)
+    if n <= 1:
+        return arr
+
+    mid = n / 2
+    left = mergesort(arr[0:mid])
+    right = mergesort(arr[mid:n])
+
+    return merge(left, right)
+
+def merge(left: List[int], right: List[int]) -> List[int]:
+    mut result: List[int] = []
+    # This is an incanism: pre-allocate once to avoid repeated reallocations during many appends
+    result.reserve(len(left) + len(right))
+
+    mut i = 0
+    mut j = 0
+
+    while i < len(left) and j < len(right):
+        if left[i] <= right[j]:
+            result.append(left[i])
+            i += 1
+        else:
+            result.append(right[j])
+            j += 1
+
+    # Append remaining elements
+    while i < len(left):
+        result.append(left[i])
+        i += 1
+    while j < len(right):
+        result.append(right[j])
+        j += 1
+
+    return result
+
+def generate_random_array(size: int, seed: int) -> List[int]:
+    mut arr: List[int] = []
+    mut state = seed
+    for _ in range(size):
+        state = (state * 1103515245 + 12345) % 2147483648
+        arr.append(state % 1000000)
+    return arr
+
+def main() -> None:
+    size = 1_000_000
+    arr = generate_random_array(size, 42)
+    sorted_arr = mergesort(arr)
+    println(f"Sorted {size} elements")
+    println(f"First 5: {sorted_arr[0]}, {sorted_arr[1]}, {sorted_arr[2]}, {sorted_arr[3]}, {sorted_arr[4]}")

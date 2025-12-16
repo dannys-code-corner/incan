@@ -725,6 +725,8 @@ impl<'a> Parser<'a> {
 
     fn param(&mut self) -> Result<Spanned<Param>, CompileError> {
         let start = self.current_span().start;
+        // Check for optional 'mut' keyword
+        let is_mut = self.match_token(&TokenKind::Mut);
         let name = self.identifier()?;
         self.expect(&TokenKind::Colon, "Expected ':' after parameter name")?;
         let ty = self.type_expr()?;
@@ -734,7 +736,7 @@ impl<'a> Parser<'a> {
             None
         };
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(Param { name, ty, default }, Span::new(start, end)))
+        Ok(Spanned::new(Param { is_mut, name, ty, default }, Span::new(start, end)))
     }
 
     fn fields_and_methods(&mut self) -> Result<(Vec<Spanned<FieldDecl>>, Vec<Spanned<MethodDecl>>), CompileError> {
@@ -1112,6 +1114,25 @@ impl<'a> Parser<'a> {
 
         // Parse the expression (could be field access like self.field or index like arr[i])
         let expr = self.expression()?;
+        
+        // Check for tuple assignment: expr, expr, ... = value
+        // This handles patterns like: arr[i], arr[j] = arr[j], arr[i]
+        if self.match_token(&TokenKind::Comma) {
+            let mut targets = vec![expr];
+            loop {
+                let target = self.expression()?;
+                targets.push(target);
+                if !self.match_token(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::Eq, "Expected '=' in tuple assignment")?;
+            let value = self.expression()?;
+            return Ok(Statement::TupleAssign(TupleAssignStmt {
+                targets,
+                value,
+            }));
+        }
         
         // Check for assignment: expr.field = value or expr[index] = value
         if self.match_token(&TokenKind::Eq) {
@@ -2111,7 +2132,8 @@ impl<'a> Parser<'a> {
                     // Closure params have inferred types (represented as "_")
                     let inferred_ty = Spanned::new(Type::Simple("_".to_string()), expr.span);
                     params.push(Spanned::new(
-                        Param {
+                        Param { 
+                            is_mut: false,
                             name: name.clone(),
                             ty: inferred_ty,
                             default: None,

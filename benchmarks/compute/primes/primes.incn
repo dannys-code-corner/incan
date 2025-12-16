@@ -6,7 +6,7 @@ def sieve(limit: int) -> int:
     mut is_prime = [True for x in range(limit + 1)]
     is_prime[0] = False
     is_prime[1] = False
-    
+
     mut p = 2
     while p * p <= limit:
         if is_prime[p]:
@@ -16,7 +16,7 @@ def sieve(limit: int) -> int:
                 is_prime[multiple] = False
                 multiple += p
         p += 1
-    
+
     # Count primes
     return sum(is_prime)
 

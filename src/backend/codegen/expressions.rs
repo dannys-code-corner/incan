@@ -57,6 +57,28 @@ impl RustCodegen<'_> {
                 Self::emit_call(emitter, callee, args);
             }
             Expr::Index(base, index) => {
+                // Dict indexing: map[key] -> map.get(&key).unwrap().clone()
+                if let Expr::Ident(name) = &base.node {
+                    if emitter.collection_kind(name.as_str()) == Some(crate::backend::rust_emitter::CollectionKind::Dict) {
+                        Self::emit_expr(emitter, &base.node);
+                        emitter.write(".get(");
+                        match &index.node {
+                            // HashMap<String, V> supports `.get("literal")` via Borrow<str>
+                            Expr::Literal(Literal::String(_)) => {
+                                Self::emit_expr(emitter, &index.node);
+                            }
+                            _ => {
+                                emitter.write("&(");
+                                Self::emit_expr(emitter, &index.node);
+                                emitter.write(")");
+                            }
+                        }
+                        emitter.write(").unwrap().clone()");
+                        return;
+                    }
+                }
+
+                // Default: list/vector indexing
                 Self::emit_expr(emitter, &base.node);
                 emitter.write("[");
                 // Cast to usize for Rust compatibility (issue #9)
@@ -228,28 +250,36 @@ impl RustCodegen<'_> {
 
         match (&slice.start, &slice.end, &slice.step) {
             (Some(start), Some(end), None) => {
+                emitter.write("(");
                 Self::emit_expr(emitter, &start.node);
-                emitter.write("..");
+                emitter.write(" as usize)..(");
                 Self::emit_expr(emitter, &end.node);
+                emitter.write(" as usize)");
             }
             (Some(start), None, None) => {
+                emitter.write("(");
                 Self::emit_expr(emitter, &start.node);
-                emitter.write("..");
+                emitter.write(" as usize)..");
             }
             (None, Some(end), None) => {
-                emitter.write("..");
+                emitter.write("..(");
                 Self::emit_expr(emitter, &end.node);
+                emitter.write(" as usize)");
             }
             (None, None, None) => {
                 emitter.write("..");
             }
             (start, end, Some(_step)) => {
                 if let Some(s) = start {
+                    emitter.write("(");
                     Self::emit_expr(emitter, &s.node);
+                    emitter.write(" as usize)");
                 }
                 emitter.write("..");
                 if let Some(e) = end {
+                    emitter.write("(");
                     Self::emit_expr(emitter, &e.node);
+                    emitter.write(" as usize)");
                 }
             }
         }
@@ -517,12 +547,44 @@ impl RustCodegen<'_> {
 
     /// Emit call arguments (with auto string conversion and cloning for ownership)
     pub(crate) fn emit_call_args(emitter: &mut RustEmitter, args: &[CallArg]) {
-        Self::emit_call_args_inner(emitter, args, true, true);
+        Self::emit_call_args_for_function(emitter, args, None);
+    }
+
+    /// Emit call arguments for a specific function (checks param mutability)
+    pub(crate) fn emit_call_args_for_function(emitter: &mut RustEmitter, args: &[CallArg], func_name: Option<&str>) {
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                emitter.write(", ");
+            }
+            let param_is_mut = func_name
+                .map(|name| emitter.function_param_is_mut(name, i))
+                .unwrap_or(false);
+            match arg {
+                CallArg::Positional(e) => {
+                    Self::emit_single_call_arg(emitter, e, true, true, param_is_mut);
+                }
+                CallArg::Named(_name, e) => {
+                    Self::emit_single_call_arg(emitter, e, true, true, param_is_mut);
+                }
+            }
+        }
     }
 
     /// Emit method arguments (no auto string conversion, no auto cloning)
     pub(crate) fn emit_method_args(emitter: &mut RustEmitter, args: &[CallArg]) {
-        Self::emit_call_args_inner(emitter, args, false, false);
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                emitter.write(", ");
+            }
+            match arg {
+                CallArg::Positional(e) => {
+                    Self::emit_single_call_arg(emitter, e, false, false, false);
+                }
+                CallArg::Named(_name, e) => {
+                    Self::emit_single_call_arg(emitter, e, false, false, false);
+                }
+            }
+        }
     }
 
     /// Check if an expression needs cloning when passed to a function
@@ -545,31 +607,37 @@ impl RustCodegen<'_> {
             _ => false,
         }
     }
-
-    /// Emit call arguments with optional auto string conversion and cloning
-    fn emit_call_args_inner(emitter: &mut RustEmitter, args: &[CallArg], auto_string: bool, auto_clone: bool) {
-        for (i, arg) in args.iter().enumerate() {
-            if i > 0 {
-                emitter.write(", ");
+    
+    /// Emit a single call argument with proper handling for mutable collections
+    /// param_is_mut: whether the target function's parameter at this position is mut
+    fn emit_single_call_arg(emitter: &mut RustEmitter, e: &Spanned<Expr>, auto_string: bool, auto_clone: bool, param_is_mut: bool) {
+        // Check if this is an identifier that needs special handling
+        if let Expr::Ident(name) = &e.node {
+            // If it's a mutable ref parameter (already &mut), pass it directly
+            if emitter.is_mut_ref_param(name) {
+                Self::emit_expr(emitter, &e.node);
+                return;
             }
-            match arg {
-                CallArg::Positional(e) => {
+            // If it's a mutable collection variable:
+            // - If target param is mut, pass as &mut
+            // - If target param is not mut, pass .clone() since it expects owned
+            if emitter.is_mut_collection_var(name) {
+                if param_is_mut {
+                    emitter.write("&mut ");
                     Self::emit_expr(emitter, &e.node);
-                    if auto_string && matches!(&e.node, Expr::Literal(Literal::String(_))) {
-                        emitter.write(".to_string()");
-                    } else if auto_clone && Self::needs_clone_for_call(&e.node) {
-                        emitter.write(".clone()");
-                    }
-                }
-                CallArg::Named(_name, e) => {
+                } else {
+                    // Target expects owned value, clone to preserve original
                     Self::emit_expr(emitter, &e.node);
-                    if auto_string && matches!(&e.node, Expr::Literal(Literal::String(_))) {
-                        emitter.write(".to_string()");
-                    } else if auto_clone && Self::needs_clone_for_call(&e.node) {
-                        emitter.write(".clone()");
-                    }
+                    emitter.write(".clone()");
                 }
+                return;
             }
+        }
+        Self::emit_expr(emitter, &e.node);
+        if auto_string && matches!(&e.node, Expr::Literal(Literal::String(_))) {
+            emitter.write(".to_string()");
+        } else if auto_clone && Self::needs_clone_for_call(&e.node) {
+            emitter.write(".clone()");
         }
     }
 
@@ -580,7 +648,14 @@ impl RustCodegen<'_> {
             if Self::emit_builtin_call(emitter, name, args) {
                 return;
             }
+            // For user-defined function calls, use function-aware arg emission
+            Self::emit_expr(emitter, &callee.node);
+            emitter.write("(");
+            Self::emit_call_args_for_function(emitter, args, Some(name));
+            emitter.write(")");
+            return;
         }
+        // Fallback for other callee expressions (method calls, etc.)
         Self::emit_expr(emitter, &callee.node);
         emitter.write("(");
         Self::emit_call_args(emitter, args);
@@ -664,8 +739,10 @@ impl RustCodegen<'_> {
             }
             "len" => {
                 if let Some(CallArg::Positional(arg)) = args.first() {
+                    // len() returns usize in Rust, but int (i64) in Incan
+                    emitter.write("(");
                     Self::emit_expr(emitter, &arg.node);
-                    emitter.write(".len()");
+                    emitter.write(".len() as i64)");
                     return true;
                 }
                 false
@@ -805,8 +882,26 @@ impl RustCodegen<'_> {
             }
             "int" => {
                 if let Some(CallArg::Positional(arg)) = args.first() {
-                    Self::emit_expr(emitter, &arg.node);
-                    emitter.write(".to_string().parse::<i64>().unwrap()");
+                    match &arg.node {
+                        // Parse from string when the source is a string literal.
+                        // This keeps `int("123")` working while avoiding very slow parse paths
+                        // for numeric inputs (see mandelbrot benchmark for example).
+                        Expr::Literal(Literal::String(_)) => {
+                            Self::emit_expr(emitter, &arg.node);
+                            emitter.write(".parse::<i64>().unwrap()");
+                        }
+                        // If the source is a known String variable, parse.
+                        Expr::Ident(name) if emitter.is_string_var(name) => {
+                            Self::emit_expr(emitter, &arg.node);
+                            emitter.write(".parse::<i64>().unwrap()");
+                        }
+                        // For non-string inputs, prefer a numeric cast.
+                        _ => {
+                            emitter.write("(");
+                            Self::emit_expr(emitter, &arg.node);
+                            emitter.write(" as i64)");
+                        }
+                    }
                     return true;
                 }
                 false
@@ -822,8 +917,24 @@ impl RustCodegen<'_> {
             }
             "float" => {
                 if let Some(CallArg::Positional(arg)) = args.first() {
-                    Self::emit_expr(emitter, &arg.node);
-                    emitter.write(".to_string().parse::<f64>().unwrap()");
+                    match &arg.node {
+                        // Parse from string when the source is a string literal.
+                        Expr::Literal(Literal::String(_)) => {
+                            Self::emit_expr(emitter, &arg.node);
+                            emitter.write(".parse::<f64>().unwrap()");
+                        }
+                        // If the source is a known String variable, parse.
+                        Expr::Ident(name) if emitter.is_string_var(name) => {
+                            Self::emit_expr(emitter, &arg.node);
+                            emitter.write(".parse::<f64>().unwrap()");
+                        }
+                        // For non-string inputs, prefer a numeric cast.
+                        _ => {
+                            emitter.write("(");
+                            Self::emit_expr(emitter, &arg.node);
+                            emitter.write(" as f64)");
+                        }
+                    }
                     return true;
                 }
                 false
@@ -1158,13 +1269,44 @@ impl RustCodegen<'_> {
             _ => {}
         }
 
-        // Handle list methods that differ between Python/Incan and Rust
-        match method {
+        // Error-like helper: e.message() -> format!("{:?}", e)
+        //
+        // In Incan examples we use `.message()` to get a human-readable error string.
+        // Rust enums/newtypes don't have this method by default, so we lower it to a
+        // Debug-format string (all generated enums derive Debug).
+        if method == "message" && args.is_empty() {
+            emitter.write("format!(\"{:?}\", ");
+            Self::emit_expr(emitter, &base.node);
+            emitter.write(")");
+            return;
+        }
+
+        // Handle list methods that differ between Python/Incan and Rust.
+        // Only apply these mappings when the receiver is a known List/Vec variable.
+        let base_is_list = match &base.node {
+            Expr::Ident(name) => emitter.collection_kind(name.as_str()) == Some(crate::backend::rust_emitter::CollectionKind::List),
+            _ => false,
+        };
+        if base_is_list {
+            match method {
             "append" => {
                 // Python/Incan: list.append(item) -> Rust: vec.push(item)
                 Self::emit_expr(emitter, &base.node);
                 emitter.write(".push(");
                 Self::emit_method_args(emitter, args);
+                emitter.write(")");
+                return;
+            }
+            "reserve" if args.len() == 1 => {
+                // Incan: list.reserve(n) -> Rust: vec.reserve(n as usize)
+                // This is a pure allocation hint; it does not change semantics.
+                Self::emit_expr(emitter, &base.node);
+                emitter.write(".reserve(");
+                if let Some(CallArg::Positional(n)) = args.first() {
+                    emitter.write("(");
+                    Self::emit_expr(emitter, &n.node);
+                    emitter.write(" as usize)");
+                }
                 emitter.write(")");
                 return;
             }
@@ -1183,6 +1325,26 @@ impl RustCodegen<'_> {
                 if let Some(CallArg::Positional(val)) = args.get(1) {
                     emitter.write(", ");
                     Self::emit_expr(emitter, &val.node);
+                }
+                emitter.write(")");
+                return;
+            }
+            "swap" if args.len() == 2 => {
+                // Python/Incan: list.swap(i, j)
+                // Rust: vec.swap(i as usize, j as usize)
+                Self::emit_expr(emitter, &base.node);
+                emitter.write(".swap(");
+                // First arg: index i (cast to usize)
+                if let Some(CallArg::Positional(idx1)) = args.first() {
+                    emitter.write("(");
+                    Self::emit_expr(emitter, &idx1.node);
+                    emitter.write(" as usize)");
+                }
+                // Second arg: index j (cast to usize)
+                if let Some(CallArg::Positional(idx2)) = args.get(1) {
+                    emitter.write(", (");
+                    Self::emit_expr(emitter, &idx2.node);
+                    emitter.write(" as usize)");
                 }
                 emitter.write(")");
                 return;
@@ -1226,6 +1388,7 @@ impl RustCodegen<'_> {
                 return;
             }
             _ => {}
+            }
         }
 
         // Default method call
@@ -1883,7 +2046,7 @@ mod tests {
     #[test]
     fn test_emit_closure_one_param() {
         let mut emitter = RustEmitter::new();
-        let param = Param {
+        let param = Param { is_mut: false,
             name: "x".to_string(),
             ty: make_spanned(Type::Simple("int".to_string())),
             default: None,
@@ -1900,8 +2063,8 @@ mod tests {
     fn test_emit_closure_multiple_params() {
         let mut emitter = RustEmitter::new();
         let params = vec![
-            make_spanned(Param { name: "x".to_string(), ty: make_spanned(Type::Simple("int".to_string())), default: None }),
-            make_spanned(Param { name: "y".to_string(), ty: make_spanned(Type::Simple("int".to_string())), default: None }),
+            make_spanned(Param { is_mut: false, name: "x".to_string(), ty: make_spanned(Type::Simple("int".to_string())), default: None }),
+            make_spanned(Param { is_mut: false, name: "y".to_string(), ty: make_spanned(Type::Simple("int".to_string())), default: None }),
         ];
         let body = Expr::Binary(
             Box::new(make_spanned(ident_expr("x"))),
@@ -2235,6 +2398,7 @@ mod tests {
     #[test]
     fn test_emit_method_call_append() {
         let mut emitter = RustEmitter::new();
+        emitter.register_collection_kind("list", crate::backend::rust_emitter::CollectionKind::List);
         let expr = Expr::MethodCall(
             Box::new(make_spanned(ident_expr("list"))),
             "append".to_string(),
@@ -2244,6 +2408,21 @@ mod tests {
         let output = emitter.finish();
         // append should be translated to push
         assert!(output.contains("push"));
+    }
+
+    #[test]
+    fn test_emit_method_call_reserve() {
+        let mut emitter = RustEmitter::new();
+        emitter.register_collection_kind("list", crate::backend::rust_emitter::CollectionKind::List);
+        let expr = Expr::MethodCall(
+            Box::new(make_spanned(ident_expr("list"))),
+            "reserve".to_string(),
+            vec![CallArg::Positional(make_spanned(int_lit(123)))],
+        );
+        RustCodegen::emit_expr(&mut emitter, &expr);
+        let output = emitter.finish();
+        // reserve should be translated to Vec::reserve with usize cast
+        assert!(output.contains(".reserve((123 as usize))"));
     }
 
     #[test]
@@ -2291,6 +2470,7 @@ mod tests {
     #[test]
     fn test_emit_method_call_remove() {
         let mut emitter = RustEmitter::new();
+        emitter.register_collection_kind("list", crate::backend::rust_emitter::CollectionKind::List);
         let expr = Expr::MethodCall(
             Box::new(make_spanned(ident_expr("list"))),
             "remove".to_string(),
@@ -2307,6 +2487,7 @@ mod tests {
     #[test]
     fn test_emit_method_call_count() {
         let mut emitter = RustEmitter::new();
+        emitter.register_collection_kind("list", crate::backend::rust_emitter::CollectionKind::List);
         let expr = Expr::MethodCall(
             Box::new(make_spanned(ident_expr("list"))),
             "count".to_string(),
@@ -2322,6 +2503,7 @@ mod tests {
     #[test]
     fn test_emit_method_call_index() {
         let mut emitter = RustEmitter::new();
+        emitter.register_collection_kind("list", crate::backend::rust_emitter::CollectionKind::List);
         let expr = Expr::MethodCall(
             Box::new(make_spanned(ident_expr("list"))),
             "index".to_string(),
@@ -2512,6 +2694,7 @@ mod tests {
     #[test]
     fn test_emit_method_call_insert() {
         let mut emitter = RustEmitter::new();
+        emitter.register_collection_kind("numbers", crate::backend::rust_emitter::CollectionKind::List);
         let expr = Expr::MethodCall(
             Box::new(make_spanned(ident_expr("numbers"))),
             "insert".to_string(),
@@ -2524,5 +2707,18 @@ mod tests {
         let output = emitter.finish();
         // Should generate: numbers.insert((0 as usize), 42)
         assert!(output.contains("numbers.insert((0 as usize), 42)"));
+    }
+
+    #[test]
+    fn test_emit_method_call_message() {
+        let mut emitter = RustEmitter::new();
+        let expr = Expr::MethodCall(
+            Box::new(make_spanned(ident_expr("e"))),
+            "message".to_string(),
+            vec![],
+        );
+        RustCodegen::emit_expr(&mut emitter, &expr);
+        let output = emitter.finish();
+        assert_eq!(output, "format!(\"{:?}\", e)");
     }
 }

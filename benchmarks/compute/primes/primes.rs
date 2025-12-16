@@ -6,7 +6,7 @@ fn sieve(limit: usize) -> usize {
     let mut is_prime = vec![true; limit + 1];
     is_prime[0] = false;
     is_prime[1] = false;
-    
+
     let mut p = 2;
     while p * p <= limit {
         if is_prime[p] {
@@ -19,7 +19,7 @@ fn sieve(limit: usize) -> usize {
         }
         p += 1;
     }
-    
+
     // Count primes
     is_prime.iter().filter(|&&x| x).count()
 }

@@ -96,15 +96,63 @@ impl RustCodegen<'_> {
     }
 
     /// Format function parameters (no receiver)
+    /// For mutable collection parameters, use &mut to allow caller to see mutations
     pub(crate) fn format_function_params(params: &[Spanned<Param>]) -> String {
         params
             .iter()
             .map(|p| {
                 let ty = Self::type_to_rust_static(&p.node.ty.node);
-                format!("{}: {}", to_rust_ident(&p.node.name), ty)
+                let name = to_rust_ident(&p.node.name);
+                // For mutable collection parameters, use &mut reference
+                // This allows mutations to persist in the caller
+                if p.node.is_mut && Self::is_collection_type(&p.node.ty.node) {
+                    format!("{}: &mut {}", name, ty)
+                } else if p.node.is_mut {
+                    format!("mut {}: {}", name, ty)
+                } else {
+                    format!("{}: {}", name, ty)
+                }
             })
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    /// Check if a type is a collection that should be passed by &mut when mutable
+    pub(crate) fn is_collection_type(ty: &Type) -> bool {
+        match ty {
+            Type::Generic(name, _) => {
+                matches!(name.as_str(), "List" | "Dict" | "Set" | "Vec" | "HashMap" | "HashSet")
+            }
+            Type::Simple(name) => {
+                // Bare list/dict without type params
+                matches!(name.as_str(), "list" | "dict" | "set")
+            }
+            _ => false,
+        }
+    }
+    
+    /// Check if an expression evaluates to a collection type
+    /// Used for inferring whether mutable variables are collections
+    pub(crate) fn expr_is_collection(expr: &Expr) -> bool {
+        match expr {
+            // List literals are collections
+            Expr::List(_) => true,
+            // Dict literals are collections
+            Expr::Dict(_) => true,
+            // Set literals are collections
+            Expr::Set(_) => true,
+            // Function calls - assume they might return collections
+            // This is a heuristic: we err on the side of treating function return values
+            // as potential collections so they get proper &mut handling
+            Expr::Call(_, _) => true,
+            // Method calls that return collections (e.g., .split(), .keys(), .values())
+            Expr::MethodCall(_, method, _) => {
+                matches!(method.as_str(), "split" | "keys" | "values" | "items" | "copy" | "clone")
+            }
+            // List/dict comprehensions are collections
+            Expr::ListComp(_) | Expr::DictComp(_) => true,
+            _ => false,
+        }
     }
 
     /// Convert Incan derive name to Rust derives, returning all required derives
@@ -402,12 +450,12 @@ mod tests {
     #[test]
     fn test_format_params_with_params() {
         let params = vec![
-            make_spanned(Param {
+            make_spanned(Param { is_mut: false,
                 name: "x".to_string(),
                 ty: make_spanned(Type::Simple("int".to_string())),
                 default: None,
             }),
-            make_spanned(Param {
+            make_spanned(Param { is_mut: false,
                 name: "y".to_string(),
                 ty: make_spanned(Type::Simple("str".to_string())),
                 default: None,
@@ -420,7 +468,7 @@ mod tests {
     #[test]
     fn test_format_params_receiver_with_params() {
         let params = vec![
-            make_spanned(Param {
+            make_spanned(Param { is_mut: false,
                 name: "value".to_string(),
                 ty: make_spanned(Type::Simple("int".to_string())),
                 default: None,
@@ -444,7 +492,7 @@ mod tests {
     #[test]
     fn test_format_function_params_single() {
         let params = vec![
-            make_spanned(Param {
+            make_spanned(Param { is_mut: false,
                 name: "n".to_string(),
                 ty: make_spanned(Type::Simple("int".to_string())),
                 default: None,
@@ -457,17 +505,17 @@ mod tests {
     #[test]
     fn test_format_function_params_multiple() {
         let params = vec![
-            make_spanned(Param {
+            make_spanned(Param { is_mut: false,
                 name: "a".to_string(),
                 ty: make_spanned(Type::Simple("int".to_string())),
                 default: None,
             }),
-            make_spanned(Param {
+            make_spanned(Param { is_mut: false,
                 name: "b".to_string(),
                 ty: make_spanned(Type::Simple("float".to_string())),
                 default: None,
             }),
-            make_spanned(Param {
+            make_spanned(Param { is_mut: false,
                 name: "c".to_string(),
                 ty: make_spanned(Type::Simple("bool".to_string())),
                 default: None,
@@ -480,7 +528,7 @@ mod tests {
     #[test]
     fn test_format_function_params_reserved_name() {
         let params = vec![
-            make_spanned(Param {
+            make_spanned(Param { is_mut: false,
                 name: "type".to_string(),
                 ty: make_spanned(Type::Simple("str".to_string())),
                 default: None,

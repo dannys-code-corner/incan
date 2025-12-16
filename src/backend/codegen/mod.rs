@@ -413,6 +413,7 @@ impl<'a> RustCodegen<'a> {
             Statement::FieldAssignment(assign) => self.expr_uses_async(&assign.value.node),
             Statement::IndexAssignment(assign) => self.expr_uses_async(&assign.value.node),
             Statement::TupleUnpack(unpack) => self.expr_uses_async(&unpack.value.node),
+            Statement::TupleAssign(assign) => self.expr_uses_async(&assign.value.node),
             Statement::Return(Some(expr)) => self.expr_uses_async(&expr.node),
             Statement::If(if_stmt) => {
                 self.expr_uses_async(&if_stmt.condition.node)
@@ -655,6 +656,7 @@ impl<'a> RustCodegen<'a> {
             Statement::FieldAssignment(assign) => self.expr_uses_list_helpers(&assign.value.node),
             Statement::IndexAssignment(assign) => self.expr_uses_list_helpers(&assign.value.node),
             Statement::TupleUnpack(unpack) => self.expr_uses_list_helpers(&unpack.value.node),
+            Statement::TupleAssign(assign) => self.expr_uses_list_helpers(&assign.value.node),
             Statement::Return(Some(expr)) => self.expr_uses_list_helpers(&expr.node),
             Statement::If(if_stmt) => {
                 self.body_uses_list_helpers(&if_stmt.then_body)

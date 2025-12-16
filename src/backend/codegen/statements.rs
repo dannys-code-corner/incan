@@ -3,7 +3,7 @@
 //! Handles emitting all statement types to Rust.
 
 use crate::frontend::ast::*;
-use crate::backend::rust_emitter::{RustEmitter, to_rust_ident};
+use crate::backend::rust_emitter::{RustEmitter, to_rust_ident, CollectionKind};
 
 use super::RustCodegen;
 
@@ -86,6 +86,53 @@ impl RustCodegen<'_> {
                     emitter.declare_var(name);
                 }
             }
+            Statement::TupleAssign(assign) => {
+                // Tuple assignment to lvalue expressions: arr[i], arr[j] = arr[j], arr[i]
+                // Strategy: evaluate RHS into temps first, then assign to targets
+                // This ensures correct swap semantics
+                
+                // If value is a tuple, unpack it into temp variables
+                if let Expr::Tuple(rhs_elems) = &assign.value.node {
+                    // Generate unique temp names
+                    let temp_names: Vec<String> = (0..rhs_elems.len())
+                        .map(|i| format!("_swap_tmp_{}", i))
+                        .collect();
+                    
+                    // Step 1: Evaluate each RHS element into temps
+                    for (i, (temp_name, rhs_elem)) in temp_names.iter().zip(rhs_elems.iter()).enumerate() {
+                        emitter.write_indent();
+                        // Use .clone() for the temp if we need the value again
+                        emitter.write(&format!("let {} = ", temp_name));
+                        Self::emit_expr(emitter, &rhs_elem.node);
+                        // Clone if it's an index expression to avoid borrow conflicts
+                        if matches!(rhs_elem.node, Expr::Index(_, _)) {
+                            emitter.write(".clone()");
+                        }
+                        emitter.write(";\n");
+                        let _ = i; // suppress unused warning
+                    }
+                    
+                    // Step 2: Assign temps to LHS targets
+                    for (target, temp_name) in assign.targets.iter().zip(temp_names.iter()) {
+                        emitter.write_indent();
+                        Self::emit_lvalue(emitter, &target.node);
+                        emitter.write(&format!(" = {};\n", temp_name));
+                    }
+                } else {
+                    // RHS is not a tuple literal - evaluate the whole thing first
+                    emitter.write_indent();
+                    emitter.write("let _swap_rhs = ");
+                    Self::emit_expr(emitter, &assign.value.node);
+                    emitter.write(";\n");
+                    
+                    // Assign each target from the tuple
+                    for (i, target) in assign.targets.iter().enumerate() {
+                        emitter.write_indent();
+                        Self::emit_lvalue(emitter, &target.node);
+                        emitter.write(&format!(" = _swap_rhs.{};\n", i));
+                    }
+                }
+            }
         }
     }
 
@@ -123,6 +170,16 @@ impl RustCodegen<'_> {
             // Declaration - emit let or let mut
             if needs_mut {
                 emitter.write("let mut ");
+                // If this is a mutable collection, register it for &mut passing at call sites
+                let is_collection = if let Some(ty) = &assign.ty {
+                    Self::is_collection_type(&ty.node)
+                } else {
+                    // Infer from value expression
+                    Self::expr_is_collection(&assign.value.node)
+                };
+                if is_collection {
+                    emitter.register_mut_collection_var(&assign.name);
+                }
             } else {
                 emitter.write("let ");
             }
@@ -135,6 +192,19 @@ impl RustCodegen<'_> {
         if let Some(ty) = &assign.ty {
             emitter.write(": ");
             emitter.write(&Self::type_to_rust_static(&ty.node));
+            // Track known collection kind from explicit type annotation
+            if let Type::Generic(name, _args) = &ty.node {
+                match name.as_str() {
+                    "List" => emitter.register_collection_kind(&assign.name, CollectionKind::List),
+                    "Dict" => emitter.register_collection_kind(&assign.name, CollectionKind::Dict),
+                    "Set" => emitter.register_collection_kind(&assign.name, CollectionKind::Set),
+                    _ => {}
+                }
+            } else if let Type::Simple(name) = &ty.node {
+                if name == "str" || name == "String" {
+                    emitter.register_string_var(&assign.name);
+                }
+            }
         }
 
         emitter.write(" = ");
@@ -142,6 +212,24 @@ impl RustCodegen<'_> {
         // Auto-convert string literals to owned String
         if matches!(&assign.value.node, Expr::Literal(Literal::String(_))) {
             emitter.write(".to_string()");
+            emitter.register_string_var(&assign.name);
+        } else {
+            // Infer collection kind (and basic string-ness) from the assigned expression for unannotated vars
+            match &assign.value.node {
+                Expr::List(_) | Expr::ListComp(_) => {
+                    emitter.register_collection_kind(&assign.name, CollectionKind::List);
+                }
+                Expr::Dict(_) | Expr::DictComp(_) => {
+                    emitter.register_collection_kind(&assign.name, CollectionKind::Dict);
+                }
+                Expr::Set(_) => {
+                    emitter.register_collection_kind(&assign.name, CollectionKind::Set);
+                }
+                Expr::FString(_) => {
+                    emitter.register_string_var(&assign.name);
+                }
+                _ => {}
+            }
         }
         emitter.write(";\n");
     }
@@ -189,6 +277,99 @@ impl RustCodegen<'_> {
     pub(crate) fn emit_return(emitter: &mut RustEmitter, expr: Option<&Spanned<Expr>>, is_implicit: bool) {
         emitter.write_indent();
         if let Some(e) = expr {
+            // Optimization: in a return position, we can safely move distinct identifier arguments
+            // into a call (no need to clone) as long as the callee does not expect &mut params.
+            //
+            // This avoids pathological deep clones like `merge(left.clone(), right.clone())`
+            // in recursive algorithms (e.g. mergesort benchmark).
+            if let Expr::Call(callee, args) = &e.node {
+                if let Expr::Ident(func_name) = &callee.node {
+                    // IMPORTANT: don't apply this optimization to builtins.
+                    // Builtins like `sum(x)` lower to Rust expressions and are not real Rust functions.
+                    // If we bypass normal expression emission here, we end up emitting `sum(x)` literally,
+                    // which fails to compile (e.g. primes benchmark).
+                    if matches!(
+                        func_name.as_str(),
+                        "len"
+                            | "sum"
+                            | "range"
+                            | "print"
+                            | "println"
+                            | "assert"
+                            | "assert_eq"
+                            | "assert_ne"
+                            | "assert_true"
+                            | "assert_false"
+                            | "fail"
+                            | "int"
+                            | "float"
+                            | "str"
+                            | "json_stringify"
+                            | "json_parse"
+                            | "read_file"
+                            | "write_file"
+                            | "sleep"
+                            | "sleep_ms"
+                            | "timeout"
+                    ) {
+                        // Fall back to the regular path so the builtin lowering runs.
+                    } else {
+                    let mut seen = std::collections::HashSet::new();
+                    let mut all_distinct_idents = true;
+                    let mut any_mut_param = false;
+
+                    for (idx, arg) in args.iter().enumerate() {
+                        if emitter.function_param_is_mut(func_name, idx) {
+                            any_mut_param = true;
+                            break;
+                        }
+                        match arg {
+                            CallArg::Positional(a) => {
+                                if let Expr::Ident(name) = &a.node {
+                                    if !seen.insert(name.clone()) {
+                                        all_distinct_idents = false;
+                                        break;
+                                    }
+                                } else {
+                                    all_distinct_idents = false;
+                                    break;
+                                }
+                            }
+                            // Named args are more complex; fall back to the regular path.
+                            CallArg::Named(_, _) => {
+                                all_distinct_idents = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if all_distinct_idents && !any_mut_param {
+                        if !is_implicit {
+                            emitter.write("return ");
+                        }
+                        Self::emit_expr(emitter, &callee.node);
+                        emitter.write("(");
+                        for (i, arg) in args.iter().enumerate() {
+                            if i > 0 {
+                                emitter.write(", ");
+                            }
+                            if let CallArg::Positional(a) = arg {
+                                // Safe: distinct identifier args in return position; move into the call.
+                                Self::emit_expr(emitter, &a.node);
+                            }
+                        }
+                        emitter.write(")");
+                        if !is_implicit {
+                            emitter.write(";\n");
+                        } else {
+                            emitter.write("\n");
+                        }
+                        return;
+                    }
+                    }
+                }
+            }
+
             // For non-implicit returns (inside if/while/etc), use explicit return
             if !is_implicit {
                 emitter.write("return ");
@@ -263,64 +444,89 @@ impl RustCodegen<'_> {
         emitter.line("}");
     }
 
-    /// Emit a for statement
-    /// Check if a variable is used in the loop body
-    fn is_var_used_in_body(var_name: &str, body: &[Spanned<Statement>]) -> bool {
-        for stmt in body {
-            if Self::is_var_used_in_stmt(var_name, &stmt.node) {
-                return true;
+    /// Whether the loop variable is mutated inside the loop body.
+    ///
+    /// Used to decide between `.iter().cloned()` (read-only iteration) and `.iter_mut()` (mutating elements through the loop variable).
+    fn loop_var_mutated_in_body(loop_var: &str, body: &[Spanned<Statement>]) -> bool {
+        fn expr_is_or_starts_with_var(loop_var: &str, e: &Expr) -> bool {
+            match e {
+                Expr::Ident(name) => name == loop_var,
+                Expr::Field(base, _) => expr_is_or_starts_with_var(loop_var, &base.node),
+                Expr::Index(base, _) => expr_is_or_starts_with_var(loop_var, &base.node),
+                Expr::Slice(base, _) => expr_is_or_starts_with_var(loop_var, &base.node),
+                _ => false,
             }
         }
+
+        for stmt in body {
+            match &stmt.node {
+                // Mutating through loop var: x.field = ..., x[i] = ...
+                Statement::FieldAssignment(s) => {
+                    if expr_is_or_starts_with_var(loop_var, &s.object.node) {
+                        return true;
+                    }
+                }
+                Statement::IndexAssignment(s) => {
+                    if expr_is_or_starts_with_var(loop_var, &s.object.node) {
+                        return true;
+                    }
+                }
+                Statement::TupleAssign(s) => {
+                    // (x.field, ...) = ... or (x[i], ...) = ...
+                    if s.targets
+                        .iter()
+                        .any(|t| expr_is_or_starts_with_var(loop_var, &t.node))
+                    {
+                        return true;
+                    }
+                }
+
+                // Reassigning / compound-assigning the loop var itself
+                Statement::Assignment(s) => {
+                    if s.name == loop_var && matches!(s.binding, BindingKind::Reassign) {
+                        return true;
+                    }
+                }
+                Statement::CompoundAssignment(s) => {
+                    if s.name == loop_var {
+                        return true;
+                    }
+                }
+
+                // Recurse into nested control flow
+                Statement::If(s) => {
+                    if Self::loop_var_mutated_in_body(loop_var, &s.then_body) {
+                        return true;
+                    }
+                    if let Some(else_body) = &s.else_body {
+                        if Self::loop_var_mutated_in_body(loop_var, else_body) {
+                            return true;
+                        }
+                    }
+                }
+                Statement::While(s) => {
+                    if Self::loop_var_mutated_in_body(loop_var, &s.body) {
+                        return true;
+                    }
+                }
+                Statement::For(s) => {
+                    if Self::loop_var_mutated_in_body(loop_var, &s.body) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         false
     }
 
-    /// Check if a variable is used in a statement
-    fn is_var_used_in_stmt(var_name: &str, stmt: &Statement) -> bool {
-        match stmt {
-            Statement::Assignment(a) => super::helpers::is_var_used_in_expr(var_name, &a.value.node),
-            Statement::FieldAssignment(fa) => {
-                super::helpers::is_var_used_in_expr(var_name, &fa.object.node) ||
-                super::helpers::is_var_used_in_expr(var_name, &fa.value.node)
-            }
-            Statement::IndexAssignment(ia) => {
-                super::helpers::is_var_used_in_expr(var_name, &ia.object.node) ||
-                super::helpers::is_var_used_in_expr(var_name, &ia.index.node) ||
-                super::helpers::is_var_used_in_expr(var_name, &ia.value.node)
-            }
-            Statement::Return(e) => e.as_ref().map_or(false, |e| super::helpers::is_var_used_in_expr(var_name, &e.node)),
-            Statement::If(if_stmt) => {
-                super::helpers::is_var_used_in_expr(var_name, &if_stmt.condition.node) ||
-                Self::is_var_used_in_body(var_name, &if_stmt.then_body) ||
-                if_stmt.else_body.as_ref().map_or(false, |body| Self::is_var_used_in_body(var_name, body))
-            }
-            Statement::While(w) => {
-                super::helpers::is_var_used_in_expr(var_name, &w.condition.node) ||
-                Self::is_var_used_in_body(var_name, &w.body)
-            }
-            Statement::For(f) => {
-                super::helpers::is_var_used_in_expr(var_name, &f.iter.node) ||
-                Self::is_var_used_in_body(var_name, &f.body)
-            }
-            Statement::Expr(e) => super::helpers::is_var_used_in_expr(var_name, &e.node),
-            Statement::CompoundAssignment(ca) => {
-                ca.name == var_name || super::helpers::is_var_used_in_expr(var_name, &ca.value.node)
-            }
-            Statement::TupleUnpack(tu) => super::helpers::is_var_used_in_expr(var_name, &tu.value.node),
-            Statement::Pass | Statement::Break | Statement::Continue => false,
-        }
-    }
-
+    /// Emit a for statement
     pub(crate) fn emit_for(emitter: &mut RustEmitter, for_stmt: &ForStmt) {
         emitter.write_indent();
         emitter.write("for ");
         
-        // Check if the loop variable is actually used in the body
-        let var_is_used = Self::is_var_used_in_body(&for_stmt.var, &for_stmt.body);
-        let loop_var = if var_is_used {
-            to_rust_ident(&for_stmt.var)
-        } else {
-            format!("_{}", to_rust_ident(&for_stmt.var))
-        };
+        let loop_var = to_rust_ident(&for_stmt.var);
         
         // Check if the iterator is a call to range() and emit Rust range syntax
         if let Expr::Call(callee, args) = &for_stmt.iter.node {
@@ -340,7 +546,7 @@ impl RustCodegen<'_> {
             }
         }
 
-        // For-each loops: loop variable gets mutable reference
+        // For-each loops
         emitter.write(&loop_var);
         emitter.write(" in ");
 
@@ -349,7 +555,9 @@ impl RustCodegen<'_> {
 
         // Method calls (like str.split_whitespace()) return iterators directly
         // Range expressions are already iterators
-        // Lists/identifiers need .iter_mut() for mutable access
+        // Lists/temporary collections can use .into_iter() for owned values.
+        // Identifiers holding collections should only use `.iter_mut()` if the loop body actually mutates elements through the loop variable. Otherwise prefer
+        // `.iter().cloned()` so read-only loops work even when the collection binding is immutable.
         match &for_stmt.iter.node {
             Expr::MethodCall(_, _, _) => {
                 // Method calls typically return iterators, no suffix needed
@@ -361,10 +569,21 @@ impl RustCodegen<'_> {
                 // List literals - use .into_iter() for owned values
                 emitter.write(".into_iter()");
             }
+            Expr::Call(_, _) => {
+                // Calls like enumerate(...) / zip(...) often lower to temporary Vecs.
+                // Use .into_iter() so the loop variable owns the element (avoids borrow/move issues).
+                emitter.write(".into_iter()");
+            }
+            Expr::Ident(_name) => {
+                let needs_mut = Self::loop_var_mutated_in_body(&for_stmt.var, &for_stmt.body);
+                if needs_mut {
+                    emitter.write(".iter_mut()");
+                } else {
+                    emitter.write(".iter().cloned()");
+                }
+            }
             _ => {
-                // Variables holding collections - use .iter_mut() for mutable access
-                // This allows modifications to persist back to the collection
-                emitter.write(".iter_mut()");
+                emitter.write(".iter().cloned()");
             }
         }
 
@@ -716,6 +935,20 @@ mod tests {
         assert!(output.contains(".to_string()"));
     }
 
+    #[test]
+    fn test_emit_return_builtin_sum_is_lowered() {
+        let mut emitter = RustEmitter::new();
+        let expr = make_spanned(Expr::Call(
+            Box::new(make_spanned(ident("sum"))),
+            vec![CallArg::Positional(make_spanned(ident("values")))],
+        ));
+        RustCodegen::emit_return(&mut emitter, Some(&expr), false);
+        let output = emitter.finish();
+        // Should lower `sum(values)` instead of emitting a raw `sum(...)` Rust call.
+        assert!(!output.contains("sum("));
+        assert!(output.contains("values.iter()"));
+    }
+
     // ========================================
     // If statement tests
     // ========================================
@@ -819,9 +1052,26 @@ mod tests {
         };
         RustCodegen::emit_for(&mut emitter, &for_stmt);
         let output = emitter.finish();
-        // Empty body means unused variable gets _ prefix
-        assert!(output.contains("for _x in"));
-        assert!(output.contains("items"));
+        assert!(output.contains("for x in"));
+        assert!(output.contains("items.iter().cloned()"));
+    }
+
+    #[test]
+    fn test_emit_for_uses_iter_mut_when_loop_var_mutated() {
+        let mut emitter = RustEmitter::new();
+        let for_stmt = ForStmt {
+            var: "item".to_string(),
+            iter: make_spanned(ident("items")),
+            body: vec![make_spanned(Statement::FieldAssignment(FieldAssignmentStmt {
+                object: make_spanned(ident("item")),
+                field: "x".to_string(),
+                value: make_spanned(int_lit(1)),
+            }))],
+        };
+        RustCodegen::emit_for(&mut emitter, &for_stmt);
+        let output = emitter.finish();
+        assert!(output.contains("for item in"));
+        assert!(output.contains("items.iter_mut()"));
     }
 
     #[test]
@@ -838,8 +1088,7 @@ mod tests {
         };
         RustCodegen::emit_for(&mut emitter, &for_stmt);
         let output = emitter.finish();
-        // Empty body means unused variable gets _ prefix
-        assert!(output.contains("for _i in"));
+        assert!(output.contains("for i in"));
         assert!(output.contains("vec![1, 2, 3]"));
         assert!(output.contains(".into_iter()"));
     }
@@ -857,8 +1106,7 @@ mod tests {
         };
         RustCodegen::emit_for(&mut emitter, &for_stmt);
         let output = emitter.finish();
-        // Empty body means unused variable gets _ prefix
-        assert!(output.contains("for _i in 0..10"));
+        assert!(output.contains("for i in 0..10"));
     }
 
     #[test]
@@ -877,8 +1125,7 @@ mod tests {
         };
         RustCodegen::emit_for(&mut emitter, &for_stmt);
         let output = emitter.finish();
-        // Empty body means unused variable gets _ prefix
-        assert!(output.contains("for _i in 5..15"));
+        assert!(output.contains("for i in 5..15"));
     }
 
     #[test]
