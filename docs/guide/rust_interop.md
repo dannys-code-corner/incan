@@ -20,24 +20,95 @@ import rust::serde_json::Value
 
 ## Automatic Dependency Management
 
-When you use `import rust::crate_name`, Incan automatically adds the dependency to your generated `Cargo.toml`. Common crates have pre-configured versions with appropriate features:
+When you use `import rust::crate_name`, Incan automatically adds the dependency to your generated `Cargo.toml`.
 
-| Crate | Version | Features |
-|-------|---------|----------|
-| serde | 1.0 | derive |
-| serde_json | 1.0 | - |
-| tokio | 1 | rt-multi-thread, macros, time, sync |
-| time | 0.3 | formatting, macros |
-| chrono | 0.4 | serde |
-| reqwest | 0.11 | json |
-| uuid | 1.0 | v4, serde |
-| rand | 0.8 | - |
-| regex | 1.0 | - |
-| anyhow | 1.0 | - |
-| thiserror | 1.0 | - |
-| clap | 4.0 | derive |
+### Strict Dependency Policy
 
-For unknown crates, Incan uses the latest compatible version.
+Incan uses a **strict dependency policy** to ensure reproducible builds:
+
+- **Known-good crates**: Curated crates have tested version/feature combinations (see table below)
+- **Unknown crates**: Will produce a compiler error asking you to provide an explicit version
+
+This policy prevents "works on my machine" issues caused by wildcard (`*`) dependencies that resolve to different versions at different times.
+
+### Known-Good Crates
+
+The following crates have pre-configured versions with appropriate features:
+
+| Crate      | Version | Features |
+|------------|---------|----------|
+| serde      | 1.0     | derive   |
+| serde_json | 1.0     | -        |
+| tokio      | 1       | rt-multi-thread, macros, time, sync |
+| time       | 0.3     | formatting, macros |
+| chrono     | 0.4     | serde    |
+| reqwest    | 0.11    | json     |
+| uuid       | 1.0     | v4, serde |
+| rand       | 0.8     | -        |
+| regex      | 1.0     | -        |
+| anyhow     | 1.0     | -        |
+| thiserror  | 1.0     | -        |
+| tracing    | 0.1     | -        |
+| clap       | 4.0     | derive   |
+| log        | 0.4     | -        |
+| env_logger | 0.10    | -        |
+| sqlx       | 0.7     | runtime-tokio-native-tls, postgres |
+| futures    | 0.3     | -        |
+| bytes      | 1.0     | -        |
+| itertools  | 0.12    | -        |
+
+### Using Unknown Crates
+
+**Current behavior**: If you try to import a crate not in the known-good list, you'll see an error:
+
+```bash
+Error: unknown Rust crate `my_crate`: no known-good version mapping exists.
+
+To use this crate, you must specify an explicit version. Options:
+
+1. Add a version annotation in your Incan code (if supported), or
+2. Request that `my_crate` be added to the known-good list by opening an issue/PR.
+```
+
+> **Why so strict?** We've chosen this approach *for now* to ensure reproducible builds. Implicit wildcard (`*`) dependencies can cause "works on my machine" failures when crate versions change unexpectedly. This policy will evolve—[RFC 013](../RFCs/013_rust_crate_dependencies.md) defines inline version annotations (`@ "1.0"`), `incan.toml` project configuration, and lock files for full flexibility.
+
+**Current workarounds**:
+
+1. Manually edit the generated `Cargo.toml` to add your dependency
+2. Open an issue/PR to add the crate to the known-good list
+
+### Adding to the Known-Good List
+
+If you'd like a crate added to the known-good list:
+
+1. Open an issue or PR on the Incan repository
+2. Include the crate name, recommended version, and any required features
+3. Explain why this crate is commonly useful
+
+The maintainers will test the crate and add it to `src/backend/project.rs`.
+
+### Coming Soon: Version Annotations and `incan.toml`
+
+[RFC 013](../RFCs/013_rust_crate_dependencies.md) defines a comprehensive dependency system that will allow:
+
+```incan
+# Inline version annotation (planned)
+import rust::my_crate @ "1.0"
+import rust::tokio @ "1.35" with ["full"]
+```
+
+```toml
+# incan.toml project configuration (planned)
+[project]
+name = "my_app"
+version = "0.1.0"
+
+[rust.dependencies]
+my_crate = "1.0"
+tokio = { version = "1.35", features = ["full"] }
+```
+
+This will enable any Rust crate while maintaining reproducibility.
 
 ## Examples
 

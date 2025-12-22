@@ -39,7 +39,7 @@ The Incan compiler frontend consists of several components that transform source
 - `parser.rs` - Recursive descent parser producing an AST
 - `ast.rs` - Abstract Syntax Tree node definitions
 - `symbols.rs` - Symbol table and scope management
-- `typechecker.rs` - Type checking and validation
+- `typechecker/` - Type checking and validation (two-pass, split by responsibility)
 - `diagnostics.rs` - Error reporting with Python-friendly messages
 
 ## Key Design Decisions

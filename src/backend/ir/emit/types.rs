@@ -1,0 +1,212 @@
+//! Type emission for IR to Rust code generation
+//!
+//! This module handles emitting Rust type tokens from IR types,
+//! as well as visibility, operators, and pattern matching.
+
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+
+use super::super::decl::Visibility;
+use super::super::expr::{BinOp, IrExprKind, Pattern};
+use super::super::types::IrType;
+use super::IrEmitter;
+
+impl<'a> IrEmitter<'a> {
+    /// Emit a type as Rust tokens.
+    #[allow(clippy::only_used_in_recursion)]
+    pub(super) fn emit_type(&self, ty: &IrType) -> TokenStream {
+        match ty {
+            IrType::Unit => quote! { () },
+            IrType::Bool => quote! { bool },
+            IrType::Int => quote! { i64 },
+            IrType::Float => quote! { f64 },
+            IrType::String => quote! { String },
+            IrType::StaticStr => quote! { &'static str },
+            IrType::StrRef => quote! { &str },
+            IrType::List(elem) => {
+                let e = self.emit_type(elem);
+                quote! { Vec<#e> }
+            }
+            IrType::Dict(k, v) => {
+                let kk = self.emit_type(k);
+                let vv = self.emit_type(v);
+                quote! { std::collections::HashMap<#kk, #vv> }
+            }
+            IrType::Set(elem) => {
+                let e = self.emit_type(elem);
+                quote! { HashSet<#e> }
+            }
+            IrType::Tuple(types) => {
+                let ts: Vec<_> = types.iter().map(|t| self.emit_type(t)).collect();
+                quote! { (#(#ts),*) }
+            }
+            IrType::Option(inner) => {
+                let i = self.emit_type(inner);
+                quote! { Option<#i> }
+            }
+            IrType::Result(ok, err) => {
+                let o = self.emit_type(ok);
+                let e = self.emit_type(err);
+                quote! { Result<#o, #e> }
+            }
+            IrType::Struct(name) | IrType::Enum(name) | IrType::Trait(name) => {
+                let n = format_ident!("{}", Self::escape_keyword(name));
+                quote! { #n }
+            }
+            IrType::SelfType => {
+                quote! { Self }
+            }
+            IrType::Function { params, ret } => {
+                let ps: Vec<_> = params.iter().map(|p| self.emit_type(p)).collect();
+                let r = self.emit_type(ret);
+                quote! { fn(#(#ps),*) -> #r }
+            }
+            IrType::Generic(name) => {
+                let n = format_ident!("{}", name);
+                quote! { #n }
+            }
+            IrType::Ref(inner) => {
+                let i = self.emit_type(inner);
+                quote! { &#i }
+            }
+            IrType::RefMut(inner) => {
+                let i = self.emit_type(inner);
+                quote! { &mut #i }
+            }
+            IrType::Unknown => quote! { _ },
+        }
+    }
+
+    /// Emit visibility modifier.
+    pub(super) fn emit_visibility(&self, vis: &Visibility) -> TokenStream {
+        match vis {
+            Visibility::Private => quote! {},
+            Visibility::Public => quote! { pub },
+            Visibility::Crate => quote! { pub(crate) },
+        }
+    }
+
+    /// Emit a binary operator.
+    pub(super) fn emit_binop(&self, op: &BinOp) -> TokenStream {
+        match op {
+            BinOp::Add => quote! { + },
+            BinOp::Sub => quote! { - },
+            BinOp::Mul => quote! { * },
+            BinOp::Div => quote! { / },
+            BinOp::Mod => quote! { % },
+            BinOp::Pow => quote! { .pow },
+            BinOp::Eq => quote! { == },
+            BinOp::Ne => quote! { != },
+            BinOp::Lt => quote! { < },
+            BinOp::Le => quote! { <= },
+            BinOp::Gt => quote! { > },
+            BinOp::Ge => quote! { >= },
+            BinOp::And => quote! { && },
+            BinOp::Or => quote! { || },
+            BinOp::BitAnd => quote! { & },
+            BinOp::BitOr => quote! { | },
+            BinOp::BitXor => quote! { ^ },
+            BinOp::Shl => quote! { << },
+            BinOp::Shr => quote! { >> },
+        }
+    }
+
+    /// Emit a compound assignment operator.
+    pub(super) fn emit_compound_op(&self, op: &BinOp) -> TokenStream {
+        match op {
+            BinOp::Add => quote! { += },
+            BinOp::Sub => quote! { -= },
+            BinOp::Mul => quote! { *= },
+            BinOp::Div => quote! { /= },
+            BinOp::Mod => quote! { %= },
+            BinOp::BitAnd => quote! { &= },
+            BinOp::BitOr => quote! { |= },
+            BinOp::BitXor => quote! { ^= },
+            BinOp::Shl => quote! { <<= },
+            BinOp::Shr => quote! { >>= },
+            _ => quote! { = },
+        }
+    }
+
+    /// Emit a pattern for match expressions.
+    pub(super) fn emit_pattern(&self, pattern: &Pattern) -> TokenStream {
+        match pattern {
+            Pattern::Wildcard => quote! { _ },
+            Pattern::Var(name) => {
+                let n = format_ident!("{}", Self::escape_keyword(name));
+                quote! { #n }
+            }
+            Pattern::Literal(lit) => {
+                // Pattern literals must be emitted without .to_string() or other conversions
+                match &lit.kind {
+                    IrExprKind::Bool(b) => {
+                        if *b {
+                            quote! { true }
+                        } else {
+                            quote! { false }
+                        }
+                    }
+                    IrExprKind::Int(n) => {
+                        let lit_tok = if *n >= 0 {
+                            proc_macro2::Literal::u64_unsuffixed(*n as u64)
+                        } else {
+                            proc_macro2::Literal::i64_unsuffixed(*n)
+                        };
+                        quote! { #lit_tok }
+                    }
+                    IrExprKind::Float(f) => {
+                        let lit_tok = proc_macro2::Literal::f64_unsuffixed(*f);
+                        quote! { #lit_tok }
+                    }
+                    IrExprKind::String(s) => {
+                        // String patterns must be &str literals, not String values
+                        quote! { #s }
+                    }
+                    _ => self.emit_expr(lit).unwrap_or(quote! { _ }),
+                }
+            }
+            Pattern::Tuple(pats) => {
+                let ps: Vec<_> = pats.iter().map(|p| self.emit_pattern(p)).collect();
+                quote! { (#(#ps),*) }
+            }
+            Pattern::Struct { name, fields } => {
+                let n = format_ident!("{}", name);
+                let fs: Vec<_> = fields
+                    .iter()
+                    .map(|(fname, fpat)| {
+                        let fn_ident = format_ident!("{}", fname);
+                        let fp = self.emit_pattern(fpat);
+                        quote! { #fn_ident: #fp }
+                    })
+                    .collect();
+                quote! { #n { #(#fs),* } }
+            }
+            Pattern::Enum {
+                name: _,
+                variant,
+                fields,
+            } => {
+                // Handle qualified enum variants like "Shape::Circle"
+                let v: TokenStream = if variant.contains("::") {
+                    // Parse as a path
+                    let segments: Vec<_> = variant.split("::").collect();
+                    let idents: Vec<_> = segments.iter().map(|s| format_ident!("{}", s)).collect();
+                    quote! { #(#idents)::* }
+                } else {
+                    let v_ident = format_ident!("{}", variant);
+                    quote! { #v_ident }
+                };
+                if fields.is_empty() {
+                    quote! { #v }
+                } else {
+                    let fs: Vec<_> = fields.iter().map(|p| self.emit_pattern(p)).collect();
+                    quote! { #v(#(#fs),*) }
+                }
+            }
+            Pattern::Or(pats) => {
+                let ps: Vec<_> = pats.iter().map(|p| self.emit_pattern(p)).collect();
+                quote! { #(#ps)|* }
+            }
+        }
+    }
+}

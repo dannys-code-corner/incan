@@ -1,0 +1,223 @@
+//! Golden snapshot tests for codegen
+//!
+//! These tests generate Rust code from `.incn` input files and compare
+//! the output against stored snapshots. This ensures codegen changes are
+//! reviewed and intentional.
+//!
+//! Run with: `cargo test --test codegen_snapshot_tests`
+//! Review changes: `cargo insta review`
+
+use incan::backend::IrCodegen;
+use incan::frontend::{lexer, parser};
+use std::fs;
+
+/// Generate Rust code from Incan source
+fn generate_rust(source: &str) -> String {
+    let tokens = lexer::lex(source).expect("lexer failed");
+    let ast = parser::parse(&tokens).expect("parser failed");
+    IrCodegen::new().generate(&ast)
+}
+
+/// Load a test file from the codegen_snapshots directory
+fn load_test_file(name: &str) -> String {
+    let path = format!("tests/codegen_snapshots/{}.incn", name);
+    fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read test file: {}", path))
+}
+
+#[test]
+fn test_basic_function_codegen() {
+    let source = load_test_file("basic_function");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("basic_function", rust_code);
+}
+
+#[test]
+fn test_dict_operations_codegen() {
+    let source = load_test_file("dict_operations");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("dict_operations", rust_code);
+}
+
+#[test]
+fn test_model_struct_codegen() {
+    let source = load_test_file("model_struct");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("model_struct", rust_code);
+}
+
+// ============================================================================
+// Tests migrated from legacy codegen/expressions/mod.rs tests
+// ============================================================================
+
+#[test]
+fn test_literals_codegen() {
+    let source = load_test_file("literals");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("literals", rust_code);
+}
+
+#[test]
+fn test_operators_codegen() {
+    let source = load_test_file("operators");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("operators", rust_code);
+}
+
+#[test]
+fn test_function_calls_codegen() {
+    let source = load_test_file("function_calls");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("function_calls", rust_code);
+}
+
+#[test]
+fn test_collections_codegen() {
+    let source = load_test_file("collections");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("collections", rust_code);
+}
+
+#[test]
+fn test_lowercase_types_codegen() {
+    let source = load_test_file("lowercase_types");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("lowercase_types", rust_code);
+}
+
+// ============================================================================
+// Tests migrated from legacy codegen/statements/mod.rs tests
+// ============================================================================
+
+#[test]
+fn test_assignments_codegen() {
+    let source = load_test_file("assignments");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("assignments", rust_code);
+}
+
+#[test]
+fn test_control_flow_codegen() {
+    let source = load_test_file("control_flow");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("control_flow", rust_code);
+}
+
+#[test]
+fn test_returns_codegen() {
+    let source = load_test_file("returns");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("returns", rust_code);
+}
+
+#[test]
+fn test_loops_codegen() {
+    let source = load_test_file("loops");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("loops", rust_code);
+}
+
+#[test]
+fn test_match_statements_codegen() {
+    let source = load_test_file("match_statements");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("match_statements", rust_code);
+}
+
+#[test]
+fn test_type_annotations_codegen() {
+    let source = load_test_file("type_annotations");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("type_annotations", rust_code);
+}
+
+#[test]
+fn test_string_operations_codegen() {
+    let source = load_test_file("string_operations");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("string_operations", rust_code);
+}
+
+// ============================================================================
+// Tests for declarations (functions, classes, models, traits, enums)
+// ============================================================================
+
+#[test]
+fn test_functions_codegen() {
+    let source = load_test_file("functions");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("functions", rust_code);
+}
+
+#[test]
+fn test_classes_codegen() {
+    let source = load_test_file("classes");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("classes", rust_code);
+}
+
+#[test]
+fn test_models_codegen() {
+    let source = load_test_file("models");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("models", rust_code);
+}
+
+#[test]
+fn test_traits_codegen() {
+    let source = load_test_file("traits");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("traits", rust_code);
+}
+
+#[test]
+fn test_enums_codegen() {
+    let source = load_test_file("enums");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("enums", rust_code);
+}
+
+// ============================================================================
+// Additional migration tests
+// ============================================================================
+
+#[test]
+fn test_patterns_codegen() {
+    let source = load_test_file("patterns");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("patterns", rust_code);
+}
+
+#[test]
+fn test_imports_codegen() {
+    let source = load_test_file("imports");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("imports", rust_code);
+}
+
+#[test]
+fn test_builtins_codegen() {
+    let source = load_test_file("builtins");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("builtins", rust_code);
+}
+
+#[test]
+fn test_inferred_reassign_codegen() {
+    // Snapshot test to keep style consistent with this file.
+    let source = load_test_file("inferred_reassign");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("inferred_reassign", rust_code);
+}
+
+// Glob-based test that auto-discovers all .incn files
+// To enable: uncomment the test below and run `cargo test --test codegen_snapshot_tests`
+//
+// #[test]
+// fn test_all_codegen_snapshots() {
+//     insta::glob!("codegen_snapshots/*.incn", |path| {
+//         let source = fs::read_to_string(path).expect("failed to read file");
+//         let rust_code = generate_rust(&source);
+//         let name = path.file_stem().unwrap().to_string_lossy();
+//         insta::assert_snapshot!(name.to_string(), rust_code);
+//     });
+// }

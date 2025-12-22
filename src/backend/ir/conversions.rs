@@ -1,0 +1,595 @@
+//! Centralized type conversion and borrow checking for code generation
+//!
+//! Incan doesn't have manual borrowing like Rust, but when generating Rust code, we need to ensure that
+//! values are correctly converted between owned and borrowed forms as needed.
+//!
+//! This module provides a **single source of truth** for determining when and how to convert values between different
+//! ownership/borrowing states during code generation.
+//!
+//! ## Why Focus on Strings?
+//!
+//! This module **primarily handles string conversions** because strings are the main source of borrow/ownership
+//! mismatches when compiling to Rust:
+//!
+//! - **Primitives** (`int`, `float`, `bool`) implement `Copy` in Rust, so they pass by value automatically—no conversion needed
+//! - **Strings** have a fundamental split in Rust: `&str` (borrowed, stack) vs `String` (owned, heap)
+//! - Incan's `str` type abstracts this away (like Python), but codegen must handle it
+//! - String literals like `"hello"` are `&'static str` in Rust, requiring `.to_string()` for owned contexts
+//!
+//! **Other types currently supported:**
+//! - `Vec<&str>` → `Vec<String>` conversion for collections
+//!
+//! **Future extensions may include:**
+//! - Collections with non-Copy elements (may need `.clone()`)
+//! - Custom types passed to external functions (may need `&` or `&mut`)
+//! - `Option<T>` / `Result<T, E>` with mismatched inner types
+//!
+//! ## Architecture
+//!
+//! The main function is [`determine_conversion`], which takes:
+//!
+//! - An IR expression (the value being passed/assigned)
+//! - An optional target type (what type is expected)
+//! - A [`ConversionContext`] (how the value will be used)
+//!
+//! Based on this context and the types involved, it returns a [`Conversion`] strategy.
+//!
+//! ## Conversion Rules by Context
+//!
+//! ### IncanFunctionArg
+//!
+//! Incan functions expect **owned values**:
+//!
+//! ```text
+//! Incan:  def greet(name: str) -> str: return "Hello, " + name
+//! Rust:   fn greet(name: String) -> String { ... }
+//!                        ^^^^^^ owned String, not &str
+//! ```
+//! - String literals → `.to_string()` (e.g., `greet("Alice")` → `greet("Alice".to_string())`)
+//! - String variables → `.to_string()` (may be &str at runtime)
+//! - Vec<&str> → `.into_iter().map(|s| s.to_string()).collect()`
+//!
+//! ### ExternalFunctionArg
+//!
+//! External Rust functions may expect **borrows**:
+//!
+//! ```text
+//! Incan:  result = rust::json_parse(data)
+//! Rust:   let result = json_parse(&data);
+//!                                  ^ borrow for external call
+//! ```
+//! - String literals → `.to_string()` (for enum variants like `Some("x")`)
+//! - String variables → `&` (borrow for &str parameters)
+//!
+//! ### StructField
+//!
+//! Struct fields are always **owned**:
+//!
+//! ```text
+//! Incan:  user = User(name="Alice", age=30)
+//! Rust:   let user = User { name: "Alice".to_string(), age: 30 };
+//!                                  ^^^^^^^^^^^^^^^^^^ owned String field
+//! ```
+//! - String literals → `.to_string()`
+//!
+//! ### Assignment
+//!
+//! Let bindings must match the variable's type:
+//!
+//! ```text
+//! Incan:  name: str = "Alice"
+//! Rust:   let name: String = "Alice".to_string();
+//!                             ^^^^^^^^^^^^^^^^^^ convert to owned
+//! ```
+//! - String literals to String variables → `.to_string()`
+//!
+//! ### ReturnValue
+//!
+//! Return values must match the function signature:
+//!
+//! ```text
+//!
+//! Incan:  def get_name() -> str: return "Alice"
+//! Rust:   fn get_name() -> String { return "Alice".to_string(); }
+//!                                           ^^^^^^^^^^^^^^^^^^ convert to owned
+//! ```
+//! - String literals when returning String → `.to_string()`
+//!
+//! ### MethodArg
+//!
+//! Method arguments usually don't need conversion (Rust's `Borrow` trait handles it):
+//!
+//! ```text
+//! Incan:  text.contains("hello")
+//! Rust:   text.contains("hello")  // &str works directly
+//! ```
+//!
+//! ## Examples
+//!
+//! ### Example 1: Function Call
+//!
+//! ```incan
+//! def greet(name: str) -> str:
+//!     return f"Hello, {name}"
+//!
+//! result = greet("Alice")
+//! ```
+//!
+//! Generated Rust:
+//!
+//! ```rust,ignore
+//! fn greet(name: String) -> String {
+//!     return format!("Hello, {}", name);
+//! }
+//! let result = greet("Alice".to_string());  // ← conversion applied
+//! ```
+//!
+//! ### Example 2: Struct Construction
+//!
+//! ```incan
+//! model User:
+//!     name: str
+//!     email: str
+//!
+//! user = User(name="Alice", email="alice@example.com")
+//! ```
+//!
+//! Generated Rust:
+//!
+//! ```rust,ignore
+//! pub struct User {
+//!     pub name: String,
+//!     pub email: String,
+//! }
+//! let user = User {
+//!     name: "Alice".to_string(),              // ← conversion applied
+//!     email: "alice@example.com".to_string()  // ← conversion applied
+//! };
+//! ```
+//!
+//! ### Example 3: External Function with Borrow
+//!
+//! ```incan
+//! import rust::std::fs::read_to_string
+//!
+//! content: str = "data.txt"
+//! data = read_to_string(content)
+//! ```
+//!
+//! Generated Rust:
+//!
+//! ```rust,ignore
+//!
+//! let content: String = "data.txt".to_string();
+//! let data = std::fs::read_to_string(&content);  // ← borrow applied
+//! ```
+
+use super::{IrExpr, IrExprKind, IrType};
+use proc_macro2::TokenStream;
+use quote::quote;
+
+/// Context in which a value is being used - determines conversion rules
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionContext {
+    /// Argument to an Incan-defined function (expects owned values)
+    IncanFunctionArg,
+    /// Argument to an Incan function inside a return statement.
+    /// Values can be moved since there's no code after the return.
+    IncanFunctionArgInReturn,
+    /// Argument to an external Rust function (may expect borrows)
+    ExternalFunctionArg,
+    /// Field in struct construction (always owned)
+    StructField,
+    /// Argument to a method call (context-dependent)
+    MethodArg,
+    /// Assignment or let binding
+    Assignment,
+    /// Return value from a function
+    ReturnValue,
+}
+
+/// Result of conversion analysis
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Conversion {
+    /// Pass value as-is
+    None,
+    /// Convert &str to String with .to_string()
+    ToString,
+    /// Borrow with &
+    Borrow,
+    /// Mutable borrow with &mut
+    MutBorrow,
+    /// Clone with .clone()
+    Clone,
+    /// Convert Vec<&str> to Vec<String>
+    VecStringConversion,
+}
+
+impl Conversion {
+    /// Apply this conversion to an already-emitted token stream
+    pub fn apply(&self, tokens: TokenStream) -> TokenStream {
+        match self {
+            Conversion::None => tokens,
+            Conversion::ToString => quote! { #tokens.to_string() },
+            Conversion::Borrow => quote! { &#tokens },
+            Conversion::MutBorrow => quote! { &mut #tokens },
+            Conversion::Clone => quote! { #tokens.clone() },
+            Conversion::VecStringConversion => {
+                quote! { #tokens.into_iter().map(|s| s.to_string()).collect() }
+            }
+        }
+    }
+}
+
+/// Determines what conversion (if any) is needed for a value
+///
+/// ## Type-Specific Behavior
+///
+/// - **Strings** (`&str` → `String`): Primary focus, requires `.to_string()` in owned contexts
+/// - **Primitives** (int, float, bool): Implement `Copy`, no conversion needed
+/// - **Collections** (`Vec<&str>` → `Vec<String>`): Element-wise conversion
+/// - **Other types**: Currently pass as-is (may be extended in the future)
+///
+/// ## Parameters
+///
+/// - `expr`: The IR expression being passed/assigned
+/// - `target_ty`: Optional target type (what's expected at the destination)
+/// - `context`: How the value will be used (function arg, struct field, return, etc.)
+///
+/// ## Returns
+///
+/// A [`Conversion`] strategy indicating what transformation (if any) to apply
+pub fn determine_conversion(
+    expr: &IrExpr,
+    target_ty: Option<&IrType>,
+    context: ConversionContext,
+) -> Conversion {
+    match context {
+        ConversionContext::IncanFunctionArg => {
+            // Incan functions expect owned values
+            // Check specific conversions first, then fall back to generic .clone()
+            match (&expr.kind, target_ty) {
+                // String literal to String param → .to_string()
+                (IrExprKind::String(_), Some(IrType::String)) => Conversion::ToString,
+                // String literal with unknown target (enum variants, etc.) → .to_string()
+                (IrExprKind::String(_), None) => Conversion::ToString,
+
+                // Vec<&str> to Vec<String> - check before generic variable handling
+                (_, Some(IrType::List(elem))) if matches!(elem.as_ref(), IrType::String) => {
+                    if matches!(expr.ty, IrType::List(_)) {
+                        Conversion::VecStringConversion
+                    } else {
+                        Conversion::None
+                    }
+                }
+
+                // String variable to String param → .to_string() (might be &str)
+                (IrExprKind::Var { .. }, Some(IrType::String))
+                    if matches!(expr.ty, IrType::String) =>
+                {
+                    Conversion::ToString
+                }
+                // Variable with non-Copy type (List, Dict, custom structs) → .clone()
+                // This prevents move-after-use errors when the variable is needed later
+                (IrExprKind::Var { .. }, _) if !expr.ty.is_copy() => Conversion::Clone,
+                // Field access with String type → .clone() to avoid moving from struct
+                (IrExprKind::Field { .. }, _) if matches!(expr.ty, IrType::String) => {
+                    Conversion::Clone
+                }
+                // Field access with non-Copy type (List, Dict, structs) → .clone()
+                (IrExprKind::Field { .. }, _) if !expr.ty.is_copy() => Conversion::Clone,
+                // Everything else passes as-is
+                _ => Conversion::None,
+            }
+        }
+
+        ConversionContext::IncanFunctionArgInReturn => {
+            // Inside a return statement, variables can be moved since there's no code after.
+            // This avoids unnecessary clones like `return merge(left.clone(), right.clone())`
+            match (&expr.kind, target_ty) {
+                // String literal → .to_string()
+                (IrExprKind::String(_), _) => Conversion::ToString,
+
+                // String variable to String param → .to_string() (might be &str)
+                (IrExprKind::Var { .. }, Some(IrType::String))
+                    if matches!(expr.ty, IrType::String) =>
+                {
+                    Conversion::ToString
+                }
+
+                // Variables can be moved - no clone needed!
+                (IrExprKind::Var { .. }, _) => Conversion::None,
+
+                // Field access still needs clone (we're borrowing from a struct)
+                (IrExprKind::Field { .. }, _) if !expr.ty.is_copy() => Conversion::Clone,
+
+                // Everything else passes as-is
+                _ => Conversion::None,
+            }
+        }
+
+        ConversionContext::ExternalFunctionArg => {
+            // External Rust functions/enum variants
+            match &expr.kind {
+                // String literals always need .to_string() (for Option::Some, Result::Ok, etc.)
+                IrExprKind::String(_) => Conversion::ToString,
+                // String variables → borrow for external calls (&str param)
+                IrExprKind::Var { .. } if matches!(expr.ty, IrType::String) => Conversion::Borrow,
+                // Everything else as-is (Rust's type system handles it)
+                _ => Conversion::None,
+            }
+        }
+
+        ConversionContext::StructField => {
+            // Struct fields are always owned
+            match &expr.kind {
+                IrExprKind::String(_) => Conversion::ToString,
+                _ => Conversion::None,
+            }
+        }
+
+        ConversionContext::MethodArg => {
+            // Method arguments usually don't need conversion (Rust's Borrow trait)
+            Conversion::None
+        }
+
+        ConversionContext::Assignment => {
+            // Assignments and let bindings need conversion for string literals
+            match (&expr.kind, target_ty) {
+                // String literal assigned to String variable → .to_string()
+                (IrExprKind::String(_), Some(IrType::String)) => Conversion::ToString,
+                _ => Conversion::None,
+            }
+        }
+
+        ConversionContext::ReturnValue => {
+            // Return values must match function signature (owned)
+            match (&expr.kind, target_ty) {
+                // String literal returned when function returns String → .to_string()
+                (IrExprKind::String(_), Some(IrType::String)) => Conversion::ToString,
+                // Other cases: as-is
+                _ => Conversion::None,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::ir::expr::VarAccess;
+
+    // === IncanFunctionArg Tests ===
+
+    #[test]
+    fn test_incan_function_string_literal_to_string() {
+        let expr = IrExpr::new(IrExprKind::String("test".to_string()), IrType::String);
+        let target = IrType::String;
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::IncanFunctionArg);
+        assert_eq!(conv, Conversion::ToString);
+    }
+
+    #[test]
+    fn test_incan_function_string_var_to_string() {
+        let expr = IrExpr::new(
+            IrExprKind::Var {
+                name: "s".to_string(),
+                access: VarAccess::Move,
+            },
+            IrType::String,
+        );
+        let target = IrType::String;
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::IncanFunctionArg);
+        assert_eq!(conv, Conversion::ToString);
+    }
+
+    #[test]
+    fn test_incan_function_vec_string_conversion() {
+        let expr = IrExpr::new(
+            IrExprKind::Var {
+                name: "items".to_string(),
+                access: VarAccess::Move,
+            },
+            IrType::List(Box::new(IrType::String)),
+        );
+        let target = IrType::List(Box::new(IrType::String));
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::IncanFunctionArg);
+        assert_eq!(conv, Conversion::VecStringConversion);
+    }
+
+    #[test]
+    fn test_incan_function_int_no_conversion() {
+        // Primitives implement Copy - no conversion needed
+        let expr = IrExpr::new(IrExprKind::Int(42), IrType::Int);
+        let target = IrType::Int;
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::IncanFunctionArg);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    #[test]
+    fn test_incan_function_float_no_conversion() {
+        // Primitives implement Copy - no conversion needed
+        let expr = IrExpr::new(IrExprKind::Float(std::f64::consts::PI), IrType::Float);
+        let target = IrType::Float;
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::IncanFunctionArg);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    #[test]
+    fn test_incan_function_bool_no_conversion() {
+        // Primitives implement Copy - no conversion needed
+        let expr = IrExpr::new(IrExprKind::Bool(true), IrType::Bool);
+        let target = IrType::Bool;
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::IncanFunctionArg);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    // === ExternalFunctionArg Tests ===
+
+    #[test]
+    fn test_external_function_string_literal() {
+        let expr = IrExpr::new(IrExprKind::String("test".to_string()), IrType::String);
+
+        let conv = determine_conversion(&expr, None, ConversionContext::ExternalFunctionArg);
+        assert_eq!(conv, Conversion::ToString);
+    }
+
+    #[test]
+    fn test_external_function_string_var_borrow() {
+        let expr = IrExpr::new(
+            IrExprKind::Var {
+                name: "s".to_string(),
+                access: VarAccess::Move,
+            },
+            IrType::String,
+        );
+
+        let conv = determine_conversion(&expr, None, ConversionContext::ExternalFunctionArg);
+        assert_eq!(conv, Conversion::Borrow);
+    }
+
+    #[test]
+    fn test_external_function_int_no_conversion() {
+        let expr = IrExpr::new(IrExprKind::Int(42), IrType::Int);
+
+        let conv = determine_conversion(&expr, None, ConversionContext::ExternalFunctionArg);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    // === StructField Tests ===
+
+    #[test]
+    fn test_struct_field_string_literal() {
+        let expr = IrExpr::new(IrExprKind::String("Alice".to_string()), IrType::String);
+
+        let conv = determine_conversion(&expr, None, ConversionContext::StructField);
+        assert_eq!(conv, Conversion::ToString);
+    }
+
+    #[test]
+    fn test_struct_field_int_no_conversion() {
+        let expr = IrExpr::new(IrExprKind::Int(30), IrType::Int);
+
+        let conv = determine_conversion(&expr, None, ConversionContext::StructField);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    #[test]
+    fn test_struct_field_string_var_no_conversion() {
+        // String variables in struct fields are passed as-is (already owned)
+        let expr = IrExpr::new(
+            IrExprKind::Var {
+                name: "name".to_string(),
+                access: VarAccess::Move,
+            },
+            IrType::String,
+        );
+
+        let conv = determine_conversion(&expr, None, ConversionContext::StructField);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    // === Assignment Tests ===
+
+    #[test]
+    fn test_assignment_string_literal_to_string() {
+        let expr = IrExpr::new(IrExprKind::String("test".to_string()), IrType::String);
+        let target = IrType::String;
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::Assignment);
+        assert_eq!(conv, Conversion::ToString);
+    }
+
+    #[test]
+    fn test_assignment_int_no_conversion() {
+        let expr = IrExpr::new(IrExprKind::Int(42), IrType::Int);
+        let target = IrType::Int;
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::Assignment);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    // === ReturnValue Tests ===
+
+    #[test]
+    fn test_return_string_literal_to_string() {
+        let expr = IrExpr::new(IrExprKind::String("result".to_string()), IrType::String);
+        let target = IrType::String;
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::ReturnValue);
+        assert_eq!(conv, Conversion::ToString);
+    }
+
+    #[test]
+    fn test_return_int_no_conversion() {
+        let expr = IrExpr::new(IrExprKind::Int(42), IrType::Int);
+        let target = IrType::Int;
+
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::ReturnValue);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    // === MethodArg Tests ===
+
+    #[test]
+    fn test_method_arg_no_conversion() {
+        // Method args rely on Rust's Borrow trait - no conversion needed
+        let expr = IrExpr::new(IrExprKind::String("test".to_string()), IrType::String);
+
+        let conv = determine_conversion(&expr, None, ConversionContext::MethodArg);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    // === Conversion Application Tests ===
+
+    #[test]
+    fn test_apply_none() {
+        let tokens = quote::quote! { value };
+        let result = Conversion::None.apply(tokens.clone());
+        assert_eq!(result.to_string(), tokens.to_string());
+    }
+
+    #[test]
+    fn test_apply_to_string() {
+        let tokens = quote::quote! { "test" };
+        let result = Conversion::ToString.apply(tokens);
+        assert_eq!(result.to_string(), "\"test\" . to_string ()");
+    }
+
+    #[test]
+    fn test_apply_borrow() {
+        let tokens = quote::quote! { value };
+        let result = Conversion::Borrow.apply(tokens);
+        assert_eq!(result.to_string(), "& value");
+    }
+
+    #[test]
+    fn test_apply_mut_borrow() {
+        let tokens = quote::quote! { value };
+        let result = Conversion::MutBorrow.apply(tokens);
+        assert_eq!(result.to_string(), "& mut value");
+    }
+
+    #[test]
+    fn test_apply_clone() {
+        let tokens = quote::quote! { value };
+        let result = Conversion::Clone.apply(tokens);
+        assert_eq!(result.to_string(), "value . clone ()");
+    }
+
+    #[test]
+    fn test_apply_vec_string_conversion() {
+        let tokens = quote::quote! { items };
+        let result = Conversion::VecStringConversion.apply(tokens);
+        assert_eq!(
+            result.to_string(),
+            "items . into_iter () . map (| s | s . to_string ()) . collect ()"
+        );
+    }
+}

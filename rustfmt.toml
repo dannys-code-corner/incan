@@ -1,0 +1,14 @@
+# Incan Rustfmt Configuration
+# Using stable-only features for compatibility
+edition = "2024"
+
+# Note: The following features require nightly and are commented out:
+# group_imports = "StdExternalCrate"
+# imports_granularity = "Crate"
+# wrap_comments = true
+# format_code_in_doc_comments = true
+#
+# To use these features, add to rust-toolchain.toml:
+# [toolchain]
+# channel = "nightly"
+# components = ["rustfmt"]

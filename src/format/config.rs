@@ -46,19 +46,19 @@ impl FormatConfig {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Set the indentation width
     pub fn with_indent_width(mut self, width: usize) -> Self {
         self.indent_width = width;
         self
     }
-    
+
     /// Set the maximum line length
     pub fn with_line_length(mut self, length: usize) -> Self {
         self.line_length = length;
         self
     }
-    
+
     /// Set the quote style
     pub fn with_quote_style(mut self, style: QuoteStyle) -> Self {
         self.quote_style = style;
@@ -122,8 +122,14 @@ mod tests {
         assert_eq!(new_config.line_length, default_config.line_length);
         assert_eq!(new_config.quote_style, default_config.quote_style);
         assert_eq!(new_config.trailing_commas, default_config.trailing_commas);
-        assert_eq!(new_config.blank_lines_top_level, default_config.blank_lines_top_level);
-        assert_eq!(new_config.blank_lines_methods, default_config.blank_lines_methods);
+        assert_eq!(
+            new_config.blank_lines_top_level,
+            default_config.blank_lines_top_level
+        );
+        assert_eq!(
+            new_config.blank_lines_methods,
+            default_config.blank_lines_methods
+        );
     }
 
     // ========================================
@@ -198,7 +204,7 @@ mod tests {
             .with_indent_width(2)
             .with_line_length(80)
             .with_quote_style(QuoteStyle::Single);
-        
+
         assert_eq!(config.indent_width, 2);
         assert_eq!(config.line_length, 80);
         assert_eq!(config.quote_style, QuoteStyle::Single);
@@ -209,11 +215,11 @@ mod tests {
         let config1 = FormatConfig::new()
             .with_indent_width(2)
             .with_line_length(80);
-        
+
         let config2 = FormatConfig::new()
             .with_line_length(80)
             .with_indent_width(2);
-        
+
         assert_eq!(config1.indent_width, config2.indent_width);
         assert_eq!(config1.line_length, config2.line_length);
     }
@@ -223,7 +229,7 @@ mod tests {
         let config = FormatConfig::new()
             .with_indent_width(2)
             .with_indent_width(8);
-        
+
         assert_eq!(config.indent_width, 8); // Last value wins
     }
 
@@ -248,7 +254,7 @@ mod tests {
     #[test]
     fn test_quote_style_clone() {
         let style = QuoteStyle::Double;
-        let cloned = style.clone();
+        let cloned = style;
         assert_eq!(style, cloned);
     }
 
@@ -287,7 +293,7 @@ mod tests {
         let config = FormatConfig::new()
             .with_indent_width(2)
             .with_line_length(80);
-        
+
         let cloned = config.clone();
         assert_eq!(config.indent_width, cloned.indent_width);
         assert_eq!(config.line_length, cloned.line_length);

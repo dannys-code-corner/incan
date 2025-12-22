@@ -34,8 +34,9 @@ def calculate(x: int) -> int:
 
 ### Line Length
 
-- **120 characters** maximum
-- Long lines are wrapped after opening parentheses/brackets
+- **120 characters** target (best-effort, not strictly enforced)
+- Long lines are wrapped after opening parentheses/brackets where possible
+- Manual wrapping may be needed for very long expressions
 
 ### Blank Lines
 
@@ -130,13 +131,21 @@ Default settings:
 
 ## Limitations
 
-The formatter can only process files that parse successfully. Files with syntax errors will be reported but not modified:
+### Parse-required
+
+**The formatter requires valid syntax.** Unlike some formatters that can handle partial/broken code, `incan fmt` operates on the parsed AST and cannot format files with syntax errors.
+
+If a file has errors, you'll see:
 
 ```bash
 Error formatting myfile.incn: Parser error: [...]
 ```
 
 Fix syntax errors before formatting.
+
+### Line length is best-effort
+
+The 120-character line length is a **target**, not a strict limit. The formatter doesn't automatically wrap all long lines. Some constructs (very long strings, complex expressions) may exceed the target and require manual formatting.
 
 ## Next Steps
 

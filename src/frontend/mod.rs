@@ -7,11 +7,13 @@
 //! - `symbols`: symbol table and scope management
 //! - `typechecker`: type checking and validation
 //! - `diagnostics`: error reporting and lints
+//! - `resolver`: module resolution for multi-file projects
 
-pub mod lexer;
-pub mod parser;
 pub mod ast;
+pub mod diagnostics;
+pub mod lexer;
+pub mod module;
+pub mod parser;
+pub mod resolver;
 pub mod symbols;
 pub mod typechecker;
-pub mod diagnostics;
-pub mod module;

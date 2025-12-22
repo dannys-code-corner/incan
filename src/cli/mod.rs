@@ -14,147 +14,316 @@
 //! - `commands` - Command implementations
 //! - `prelude` - Stdlib/prelude loading
 //! - `test_runner` - Test discovery and execution
+//!
+//! ## Design
+//!
+//! The CLI uses clap for argument parsing with derive macros.
+//! Command functions return `CliResult<T>` instead of calling `process::exit`.
+//! Only the top-level `run()` function handles errors and exits.
+
+// Enforce explicit error handling - no panicking in production code
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
 
 pub mod commands;
 pub mod prelude;
+pub mod test_interfaces;
 pub mod test_runner;
 
 use std::env;
+use std::fmt;
 use std::fs;
+use std::path::PathBuf;
 use std::process;
+
+use clap::{Parser, Subcommand};
+
+// ============================================================================
+// CLI Error handling
+// ============================================================================
+
+/// Exit code for CLI operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExitCode(pub i32);
+
+impl ExitCode {
+    pub const SUCCESS: ExitCode = ExitCode(0);
+    pub const FAILURE: ExitCode = ExitCode(1);
+}
+
+/// Error type for CLI operations.
+///
+/// Contains a user-facing message and an exit code. The CLI entry point
+/// catches these errors, prints the message, and exits with the code.
+#[derive(Debug)]
+pub struct CliError {
+    /// User-facing error message (already formatted for display)
+    pub message: String,
+    /// Exit code to return to the shell
+    pub exit_code: ExitCode,
+}
+
+impl CliError {
+    /// Create a new CLI error with a message and exit code.
+    pub fn new(message: impl Into<String>, exit_code: ExitCode) -> Self {
+        Self {
+            message: message.into(),
+            exit_code,
+        }
+    }
+
+    /// Create a failure error (exit code 1).
+    pub fn failure(message: impl Into<String>) -> Self {
+        Self::new(message, ExitCode::FAILURE)
+    }
+
+    /// Create an error with a custom exit code.
+    pub fn with_code(message: impl Into<String>, code: i32) -> Self {
+        Self::new(message, ExitCode(code))
+    }
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CliError {}
+
+/// Result type for CLI operations.
+pub type CliResult<T> = Result<T, CliError>;
 
 /// ASCII art logo - embedded at compile time from assets/logo.txt
 const LOGO: &str = include_str!("../../assets/logo.txt");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Main CLI entry point
-pub fn run() {
-    let args: Vec<String> = env::args().collect();
+// ============================================================================
+// Clap CLI definition
+// ============================================================================
 
-    if args.len() < 2 {
-        print_usage();
-        process::exit(1);
+/// The Incan programming language compiler
+#[derive(Parser, Debug)]
+#[command(name = "incan")]
+#[command(version = VERSION)]
+#[command(about = "The Incan programming language compiler", long_about = None)]
+#[command(before_help = get_logo())]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
+    /// File to type check (default action when no subcommand given)
+    #[arg(value_name = "FILE")]
+    pub file: Option<PathBuf>,
+
+    // Debug/development flags
+    /// Tokenize only (debug)
+    #[arg(long = "lex", value_name = "FILE", conflicts_with = "file")]
+    pub lex_file: Option<PathBuf>,
+
+    /// Parse only (debug)
+    #[arg(long = "parse", value_name = "FILE", conflicts_with = "file")]
+    pub parse_file: Option<PathBuf>,
+
+    /// Type check only (debug)
+    #[arg(long = "check", value_name = "FILE", conflicts_with = "file")]
+    pub check_file: Option<PathBuf>,
+
+    /// Emit generated Rust code (debug)
+    #[arg(long = "emit-rust", value_name = "FILE", conflicts_with = "file")]
+    pub emit_rust_file: Option<PathBuf>,
+
+    /// Enable strict mode for --emit-rust (warning-clean output)
+    #[arg(long = "strict", requires = "emit_rust_file")]
+    pub strict: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Compile to Rust and build executable
+    Build {
+        /// Source file to compile
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        /// Output directory (default: incan_output)
+        #[arg(value_name = "OUTPUT_DIR")]
+        output_dir: Option<PathBuf>,
+    },
+
+    /// Compile and run the program
+    Run {
+        /// Source file to run
+        #[arg(value_name = "FILE", conflicts_with = "command")]
+        file: Option<PathBuf>,
+        /// Run inline source code
+        #[arg(short = 'c', long = "command", value_name = "CODE")]
+        command: Option<String>,
+    },
+
+    /// Format Incan source files
+    Fmt {
+        /// File or directory to format
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Check formatting without modifying files
+        #[arg(long)]
+        check: bool,
+        /// Show diff of formatting changes
+        #[arg(long)]
+        diff: bool,
+    },
+
+    /// Run tests (pytest-style)
+    Test {
+        /// Path to test file or directory
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+        /// Stop on first failure
+        #[arg(short = 'x', long = "exitfirst")]
+        stop_on_fail: bool,
+        /// Include slow tests
+        #[arg(long)]
+        slow: bool,
+        /// Filter tests by keyword expression
+        #[arg(short = 'k', value_name = "EXPR")]
+        filter: Option<String>,
+    },
+}
+
+/// Generate the logo string for clap
+fn get_logo() -> &'static str {
+    // Return just the raw logo - colors will be handled in print_logo()
+    LOGO
+}
+
+// ============================================================================
+// CLI entry point
+// ============================================================================
+
+/// Main CLI entry point.
+///
+/// This is the only place where `process::exit` is called. All command
+/// implementations return `CliResult` and errors are handled here.
+pub fn run() {
+    // Print colored logo before clap runs
+    if env::args().len() == 1
+        || env::args().any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V")
+    {
+        print_logo();
     }
 
-    match args[1].as_str() {
-        "--help" | "-h" => print_usage(),
-        "--version" | "-V" => print_version(),
-        "--lex" => {
-            if args.len() < 3 {
-                eprintln!("Error: --lex requires a file path");
-                process::exit(1);
-            }
-            commands::lex_file(&args[2]);
-        }
-        "--parse" => {
-            if args.len() < 3 {
-                eprintln!("Error: --parse requires a file path");
-                process::exit(1);
-            }
-            commands::parse_file(&args[2]);
-        }
-        "--check" => {
-            if args.len() < 3 {
-                eprintln!("Error: --check requires a file path");
-                process::exit(1);
-            }
-            commands::check_file(&args[2]);
-        }
-        "--emit-rust" => {
-            if args.len() < 3 {
-                eprintln!("Error: --emit-rust requires a file path");
-                process::exit(1);
-            }
-            commands::emit_rust(&args[2]);
-        }
-        "build" => {
-            if args.len() < 3 {
-                eprintln!("Error: build requires a file path");
-                process::exit(1);
-            }
-            let output_dir = if args.len() >= 4 { Some(&args[3]) } else { None };
-            commands::build_file(&args[2], output_dir);
-        }
-        "run" => {
-            // Support: incan run <file> | incan run -c "<code>" | incan run --command "<code>"
-            if args.len() >= 3 && (args[2] == "-c" || args[2] == "--command") {
-                // Capture the entire remaining argument tail as the inline program
-                let code = if args.len() > 3 {
-                    args[3..].join(" ")
-                } else {
-                    String::new()
-                };
-                if code.is_empty() {
-                    eprintln!("Error: -c/--command requires source code string");
-                    process::exit(1);
-                }
-                // If the snippet already declares a main, leave as-is; otherwise, append a stub main that calls any top-level code.
-                // We keep the user code at module scope so imports/expressions (e.g., `import this`) run as written.
-                let wrapped = if code.contains("def main") {
-                    code
-                } else {
-                    format!("{code}\n\ndef main() -> Unit:\n  pass\n")
-                };
-                // Write code to a temporary file and run it.
-                let tmp_path = env::temp_dir().join(format!(
-                    "incan_cmd_{}_{}.incn",
-                    process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis())
-                        .unwrap_or(0)
-                ));
-                if let Err(e) = fs::write(&tmp_path, wrapped) {
-                    eprintln!("Error writing temporary command file: {}", e);
-                    process::exit(1);
-                }
-                commands::run_file(tmp_path.to_string_lossy().as_ref());
-                let _ = fs::remove_file(&tmp_path);
-            } else {
-                if args.len() < 3 {
-                    eprintln!("Error: run requires a file path or -c \"code\"");
-                    process::exit(1);
-                }
-                commands::run_file(&args[2]);
+    let cli = Cli::parse();
+
+    match execute(cli) {
+        Ok(exit_code) => {
+            if exit_code.0 != 0 {
+                process::exit(exit_code.0);
             }
         }
-        "fmt" => {
-            if args.len() < 3 {
-                eprintln!("Error: fmt requires a file or directory path");
-                process::exit(1);
+        Err(e) => {
+            if !e.message.is_empty() {
+                eprintln!("{}", e.message);
             }
-            let check_mode = args.iter().any(|a| a == "--check");
-            let diff_mode = args.iter().any(|a| a == "--diff");
-            let path = args.iter()
-                .skip(2)
-                .find(|a| !a.starts_with("--"))
-                .map(|s| s.as_str())
-                .unwrap_or(".");
-            commands::format_files(path, check_mode, diff_mode);
-        }
-        "test" => {
-            let verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
-            let stop_on_fail = args.iter().any(|a| a == "-x" || a == "--exitfirst");
-            let include_slow = args.iter().any(|a| a == "--slow");
-            let filter = args.iter()
-                .position(|a| a == "-k")
-                .and_then(|i| args.get(i + 1))
-                .map(|s| s.as_str());
-            let path = args.iter()
-                .skip(2)
-                .find(|a| !a.starts_with("-"))
-                .map(|s| s.as_str())
-                .unwrap_or(".");
-            test_runner::run_tests(path, verbose, stop_on_fail, include_slow, filter);
-        }
-        file_path => {
-            // Default: type check the file
-            commands::check_file(file_path);
+            process::exit(e.exit_code.0);
         }
     }
 }
 
-/// Print usage information
+/// Execute the CLI command and return result.
+fn execute(cli: Cli) -> CliResult<ExitCode> {
+    // Handle debug flags first
+    if let Some(file) = cli.lex_file {
+        return commands::lex_file(&file.to_string_lossy());
+    }
+    if let Some(file) = cli.parse_file {
+        return commands::parse_file(&file.to_string_lossy());
+    }
+    if let Some(file) = cli.check_file {
+        return commands::check_file(&file.to_string_lossy());
+    }
+    if let Some(file) = cli.emit_rust_file {
+        return commands::emit_rust(&file.to_string_lossy(), cli.strict);
+    }
+
+    // Handle subcommands
+    match cli.command {
+        Some(Command::Build { file, output_dir }) => {
+            let out = output_dir.map(|p| p.to_string_lossy().to_string());
+            commands::build_file(&file.to_string_lossy(), out.as_ref())
+        }
+        Some(Command::Run { file, command }) => execute_run(file, command),
+        Some(Command::Fmt { path, check, diff }) => {
+            commands::format_files(&path.to_string_lossy(), check, diff)
+        }
+        Some(Command::Test {
+            path,
+            verbose,
+            stop_on_fail,
+            slow,
+            filter,
+        }) => test_runner::run_tests(
+            &path.to_string_lossy(),
+            verbose,
+            stop_on_fail,
+            slow,
+            filter.as_deref(),
+        ),
+        None => {
+            // Default: type check the file if provided
+            if let Some(file) = cli.file {
+                commands::check_file(&file.to_string_lossy())
+            } else {
+                // No command and no file - show help
+                Err(CliError::new("", ExitCode::FAILURE))
+            }
+        }
+    }
+}
+
+/// Handle the `run` subcommand with its various forms.
+fn execute_run(file: Option<PathBuf>, code: Option<String>) -> CliResult<ExitCode> {
+    if let Some(code) = code {
+        // Run inline code
+        if code.is_empty() {
+            return Err(CliError::failure(
+                "Error: -c/--command requires source code string",
+            ));
+        }
+        // If the snippet already declares a main, leave as-is; otherwise, append a stub main.
+        let wrapped = if code.contains("def main") {
+            code
+        } else {
+            format!("{code}\n\ndef main() -> Unit:\n  pass\n")
+        };
+        // Write code to a temporary file and run it.
+        let tmp_path = env::temp_dir().join(format!(
+            "incan_cmd_{}_{}.incn",
+            process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ));
+        fs::write(&tmp_path, wrapped).map_err(|e| {
+            CliError::failure(format!("Error writing temporary command file: {}", e))
+        })?;
+
+        let result = commands::run_file(&tmp_path.to_string_lossy());
+        let _ = fs::remove_file(&tmp_path);
+        result
+    } else if let Some(file) = file {
+        commands::run_file(&file.to_string_lossy())
+    } else {
+        Err(CliError::failure(
+            "Error: run requires a file path or -c \"code\"",
+        ))
+    }
+}
+
+/// Print colored logo to stderr
 fn print_logo() {
     // Color scheme inspired by the wordmark:
     // - Solid blocks (█) = Gold
@@ -163,20 +332,19 @@ fn print_logo() {
     let cyan = "\x1b[1;36m";
     let magenta = "\x1b[1;35m";
     let reset = "\x1b[0m";
-    
+
     for line in LOGO.lines() {
         let mut colored_line = String::new();
         let chars: Vec<char> = line.chars().collect();
         let len = chars.len();
-        
+
         for (i, ch) in chars.iter().enumerate() {
             let color = if *ch == '░' {
                 // Shadow chars: cyan on left half, magenta on right half (diagonal effect)
                 if i < len / 2 { cyan } else { magenta }
-            } else if *ch == '█' || *ch == '█' {
-                gold
             } else {
-                gold // Default to gold for spaces and other chars
+                // Solid blocks and all other characters get gold
+                gold
             };
             colored_line.push_str(color);
             colored_line.push(*ch);
@@ -185,32 +353,77 @@ fn print_logo() {
     }
 }
 
-fn print_version() {
-    print_logo();
-    eprintln!("Incan v{}", VERSION);
-}
+// ============================================================================
+// Tests
+// ============================================================================
 
-fn print_usage() {
-    print_logo();
-    eprintln!("Usage: incan <command> [options] <file>");
-    eprintln!();
-    eprintln!("Commands:");
-    eprintln!("  build <file> [output_dir]  Compile to Rust and build executable");
-    eprintln!("  run <file>                 Compile and run the program");
-    eprintln!("  run -c \"code\"            Run inline source string (use shell escaping for quotes)");
-    eprintln!("  fmt <file|dir> [--check] [--diff]");
-    eprintln!("                             Format Incan source files");
-    eprintln!("  test [path] [options]      Run tests (pytest-style)");
-    eprintln!("                             -v, --verbose: verbose output");
-    eprintln!("                             -x, --exitfirst: stop on first failure");
-    eprintln!("                             -k <expr>: filter tests by keyword");
-    eprintln!("                             --slow: include slow tests");
-    eprintln!();
-    eprintln!("Options:");
-    eprintln!("  --lex <file>       Tokenize only");
-    eprintln!("  --parse <file>     Parse only");
-    eprintln!("  --check <file>     Type check only");
-    eprintln!("  --emit-rust <file> Emit generated Rust code");
-    eprintln!("  --help, -h         Show this help");
-    eprintln!("  --version, -V      Show version");
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_parse_build() {
+        let cli = Cli::try_parse_from(["incan", "build", "test.incn"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Build { .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_run() {
+        let cli = Cli::try_parse_from(["incan", "run", "test.incn"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Run { .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_run_with_code() {
+        let cli = Cli::try_parse_from(["incan", "run", "-c", "print(1)"]).unwrap();
+        if let Some(Command::Run { command, .. }) = cli.command {
+            assert_eq!(command.as_deref(), Some("print(1)"));
+        } else {
+            panic!("Expected Run command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_fmt() {
+        let cli = Cli::try_parse_from(["incan", "fmt", "src/", "--check"]).unwrap();
+        if let Some(Command::Fmt { check, .. }) = cli.command {
+            assert!(check);
+        } else {
+            panic!("Expected Fmt command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_test() {
+        let cli = Cli::try_parse_from(["incan", "test", "-v", "-x", "-k", "unit"]).unwrap();
+        if let Some(Command::Test {
+            verbose,
+            stop_on_fail,
+            filter,
+            ..
+        }) = cli.command
+        {
+            assert!(verbose);
+            assert!(stop_on_fail);
+            assert_eq!(filter.as_deref(), Some("unit"));
+        } else {
+            panic!("Expected Test command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_debug_flags() {
+        let cli = Cli::try_parse_from(["incan", "--lex", "test.incn"]).unwrap();
+        assert!(cli.lex_file.is_some());
+
+        let cli = Cli::try_parse_from(["incan", "--parse", "test.incn"]).unwrap();
+        assert!(cli.parse_file.is_some());
+
+        let cli = Cli::try_parse_from(["incan", "--check", "test.incn"]).unwrap();
+        assert!(cli.check_file.is_some());
+
+        let cli = Cli::try_parse_from(["incan", "--emit-rust", "test.incn"]).unwrap();
+        assert!(cli.emit_rust_file.is_some());
+    }
 }

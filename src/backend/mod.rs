@@ -2,29 +2,57 @@
 //!
 //! This module handles code generation from the typed AST to Rust source code.
 //!
-//! The pipeline is:
-//! 1. Typed AST from frontend → RustCodegen → Rust source files
-//! 2. Generate Cargo.toml for the output project
-//! 3. Invoke `cargo build` to produce the final binary
+//! ## Architecture
+//!
+//! The backend uses a single unified pipeline:
+//!
+//! ```text
+//! AST → AstLowering → IR → IrEmitter (syn/quote) → prettyplease → RustSource
+//! ```
+//!
+//! ## Usage
+//!
+//! ```rust,ignore
+//! use incan::backend::IrCodegen;
+//!
+//! let mut codegen = IrCodegen::new();
+//! codegen.scan_for_serde(&ast);
+//! codegen.scan_for_async(&ast);
+//! let rust_code = codegen.generate(&ast);
+//! ```
 //!
 //! ## Module Organization
 //!
-//! - `codegen/` - Code generation from AST to Rust
-//!   - `mod.rs` - Main RustCodegen struct and entry point
-//!   - `types.rs` - Helper type definitions
-//!   - `type_conv.rs` - Type conversion utilities
-//!   - `imports.rs` - Import statement handling
-//!   - `declarations.rs` - Model, class, trait, enum emission
-//!   - `functions.rs` - Function and method emission
-//!   - `statements.rs` - Statement emission
-//!   - `expressions.rs` - Expression emission
-//!   - `patterns.rs` - Pattern matching emission
-//! - `rust_emitter.rs` - Low-level Rust code string builder
+//! - `ir/` - Code generation and Intermediate Representation
+//!   - `codegen.rs` - **Primary entrypoint** (`IrCodegen`)
+//!   - `types.rs` - IR types with ownership info
+//!   - `expr.rs` - Typed expressions
+//!   - `stmt.rs` - Statements
+//!   - `decl.rs` - Declarations
+//!   - `lower.rs` - AST to IR lowering
+//!   - `emit.rs` - IR to Rust via syn/quote/prettyplease
 //! - `project.rs` - Cargo project generation
 
-pub mod codegen;
-pub mod rust_emitter;
+// Enforce explicit error handling in project generation code.
+// XXX: codegen modules emit `.unwrap()` as string literals in generated Rust code.
+// This is a KNOWN LIMITATION — generated code can panic at runtime on invalid data (e.g., missing dict keys, failed
+// string parsing). See RFC 014 for the plan to improve error handling in generated code.
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+
+// Public modules
+pub mod ir;
 pub mod project;
 
-pub use codegen::RustCodegen;
-pub use project::ProjectGenerator;
+// Re-export the unified codegen entrypoint
+pub use ir::{GenerationError, IrCodegen};
+
+// Project generation (public API)
+pub use project::{
+    CargoCommand, CompilationPlan, ExecutionResult, Executor, PlannedDirectory, PlannedFile,
+    ProjectGenerator, UnknownCrateError,
+};
+
+// For tests that need to verify lowering behavior
+#[doc(hidden)]
+pub use ir::{AstLowering, LoweringError};

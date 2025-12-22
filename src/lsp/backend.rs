@@ -10,10 +10,10 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
-use crate::frontend::{lexer, parser, typechecker};
-use crate::frontend::ast::{Program, Declaration, Span, Type};
+use crate::frontend::ast::{Declaration, Program, Span, Type};
 use crate::frontend::module::resolve_import_path;
-use crate::lsp::diagnostics::{compile_error_to_diagnostic, span_to_range};
+use crate::frontend::{lexer, parser, typechecker};
+use crate::lsp::diagnostics::{compile_error_to_diagnostic, position_to_offset, span_to_range};
 
 /// Document state stored by the LSP
 #[derive(Debug, Clone)]
@@ -261,7 +261,11 @@ impl IncanLanguageServer {
                     return Some(SymbolInfo {
                         name: nt.name.clone(),
                         kind: "newtype".to_string(),
-                        detail: format!("newtype {} = {}", nt.name, format_type(&nt.underlying.node)),
+                        detail: format!(
+                            "newtype {} = {}",
+                            nt.name,
+                            format_type(&nt.underlying.node)
+                        ),
                         span,
                     });
                 }
@@ -273,11 +277,7 @@ impl IncanLanguageServer {
     }
 
     /// Find the definition location of a symbol
-    fn find_definition(
-        &self,
-        ast: &Program,
-        name: &str,
-    ) -> Option<Span> {
+    fn find_definition(&self, ast: &Program, name: &str) -> Option<Span> {
         for decl in &ast.declarations {
             match &decl.node {
                 Declaration::Function(func) if func.name == name => {
@@ -314,37 +314,6 @@ pub struct SymbolInfo {
     pub span: Span,
 }
 
-/// Convert LSP Position to byte offset
-fn position_to_offset(source: &str, position: Position) -> Option<usize> {
-    let mut line = 0u32;
-    let mut col = 0u32;
-    let mut offset = 0usize;
-
-    for (i, c) in source.char_indices() {
-        if line == position.line && col == position.character {
-            return Some(i);
-        }
-        if c == '\n' {
-            if line == position.line {
-                // Position is beyond line end
-                return Some(i);
-            }
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-        offset = i + c.len_utf8();
-    }
-
-    // Position at end of file
-    if line == position.line && col == position.character {
-        Some(offset)
-    } else {
-        None
-    }
-}
-
 /// Format a function signature for display
 fn format_function_signature(func: &crate::frontend::ast::FunctionDecl) -> String {
     let mut sig = String::new();
@@ -360,9 +329,7 @@ fn format_function_signature(func: &crate::frontend::ast::FunctionDecl) -> Strin
     let params: Vec<String> = func
         .params
         .iter()
-        .map(|p| {
-            format!("{}: {}", p.node.name, format_type(&p.node.ty.node))
-        })
+        .map(|p| format!("{}: {}", p.node.name, format_type(&p.node.ty.node)))
         .collect();
 
     sig.push_str(&params.join(", "));
@@ -417,7 +384,7 @@ impl LanguageServer for IncanLanguageServer {
             },
             server_info: Some(ServerInfo {
                 name: "incan-lsp".to_string(),
-                version: Some("0.1.0".to_string()),
+                version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
         })
     }
@@ -477,10 +444,7 @@ impl LanguageServer for IncanLanguageServer {
         };
 
         if let Some(info) = self.find_symbol_at_position(ast, &doc.source, position) {
-            let markdown = format!(
-                "```incan\n{}\n```\n\n*{}*",
-                info.detail, info.kind
-            );
+            let markdown = format!("```incan\n{}\n```\n\n*{}*", info.detail, info.kind);
 
             return Ok(Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
@@ -540,10 +504,10 @@ impl LanguageServer for IncanLanguageServer {
 
         // Add keywords
         let keywords = [
-            "def", "async", "await", "return", "if", "elif", "else", "match", "case",
-            "for", "in", "while", "let", "mut", "model", "class", "trait", "enum",
-            "newtype", "import", "from", "as", "with", "extends", "pub", "True", "False",
-            "None", "Ok", "Err", "Some", "Result", "Option",
+            "def", "async", "await", "return", "if", "elif", "else", "match", "case", "for", "in",
+            "while", "let", "mut", "model", "class", "trait", "enum", "newtype", "import", "from",
+            "as", "with", "extends", "pub", "True", "False", "None", "Ok", "Err", "Some", "Result",
+            "Option",
         ];
 
         for kw in keywords {

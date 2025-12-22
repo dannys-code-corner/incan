@@ -1,0 +1,643 @@
+//! Expression lowering for AST to IR conversion.
+//!
+//! This module handles lowering of all expression types: literals, identifiers,
+//! binary/unary operations, function calls, method calls, comprehensions, etc.
+
+use super::super::TypedExpr;
+use super::super::expr::{
+    BuiltinFn, IrExpr, IrExprKind, MatchArm, MethodKind, Pattern, UnaryOp, VarAccess,
+};
+use super::super::types::IrType;
+use super::AstLowering;
+use super::errors::LoweringError;
+use crate::frontend::ast::{self, Spanned};
+
+impl AstLowering {
+    /// Lower an expression to IR.
+    ///
+    /// Handles all expression types including:
+    /// - Literals (int, float, string, bool)
+    /// - Identifiers (variable references)
+    /// - Binary and unary operations
+    /// - Function and method calls
+    /// - Field and index access
+    /// - Control flow expressions (if, match)
+    /// - Collections (list, dict, set, tuple)
+    /// - Comprehensions (list, dict)
+    /// - Closures and async/await
+    ///
+    /// # Parameters
+    ///
+    /// * `expr` - The AST expression to lower
+    ///
+    /// # Returns
+    ///
+    /// A typed IR expression.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LoweringError` if the expression cannot be lowered.
+    pub fn lower_expr(&mut self, expr: &ast::Expr) -> Result<TypedExpr, LoweringError> {
+        let (kind, ty) = match expr {
+            ast::Expr::Ident(name) => {
+                let ty = self.lookup_var(name);
+                let access = if ty.is_copy() {
+                    VarAccess::Copy
+                } else {
+                    VarAccess::Move
+                };
+                (
+                    IrExprKind::Var {
+                        name: name.clone(),
+                        access,
+                    },
+                    ty,
+                )
+            }
+
+            ast::Expr::Literal(lit) => match lit {
+                ast::Literal::Int(n) => (IrExprKind::Int(*n), IrType::Int),
+                ast::Literal::Float(n) => (IrExprKind::Float(*n), IrType::Float),
+                ast::Literal::String(s) => (IrExprKind::String(s.clone()), IrType::String),
+                ast::Literal::Bool(b) => (IrExprKind::Bool(*b), IrType::Bool),
+                ast::Literal::None => (IrExprKind::Unit, IrType::Unit),
+                ast::Literal::Bytes(_) => (IrExprKind::Unit, IrType::Unknown),
+            },
+
+            ast::Expr::SelfExpr => (
+                IrExprKind::Var {
+                    name: "self".to_string(),
+                    access: VarAccess::Borrow,
+                },
+                IrType::Unknown,
+            ),
+
+            ast::Expr::Binary(l, op, r) => {
+                // Special handling for `in` and `not in` operators
+                // `x in collection` → `collection.contains(&x)`
+                // `x not in collection` → `!collection.contains(&x)`
+                match op {
+                    ast::BinaryOp::In | ast::BinaryOp::NotIn => {
+                        let item = self.lower_expr(&l.node)?;
+                        let collection = self.lower_expr(&r.node)?;
+
+                        // Generate collection.contains(&item)
+                        let contains_call = IrExprKind::MethodCall {
+                            receiver: Box::new(collection),
+                            method: "contains".to_string(),
+                            args: vec![item],
+                        };
+
+                        if matches!(op, ast::BinaryOp::NotIn) {
+                            // Wrap in negation for `not in`
+                            (
+                                IrExprKind::UnaryOp {
+                                    op: UnaryOp::Not,
+                                    operand: Box::new(IrExpr::new(contains_call, IrType::Bool)),
+                                },
+                                IrType::Bool,
+                            )
+                        } else {
+                            (contains_call, IrType::Bool)
+                        }
+                    }
+                    _ => {
+                        let left = self.lower_expr(&l.node)?;
+                        let right = self.lower_expr(&r.node)?;
+                        let result_ty = self.binary_result_type(&left.ty, op);
+                        (
+                            IrExprKind::BinOp {
+                                op: self.lower_binop(op),
+                                left: Box::new(left),
+                                right: Box::new(right),
+                            },
+                            result_ty,
+                        )
+                    }
+                }
+            }
+
+            ast::Expr::Unary(op, e) => {
+                let operand = self.lower_expr(&e.node)?;
+                let ty = operand.ty.clone();
+                (
+                    IrExprKind::UnaryOp {
+                        op: match op {
+                            ast::UnaryOp::Neg => UnaryOp::Neg,
+                            ast::UnaryOp::Not => UnaryOp::Not,
+                        },
+                        operand: Box::new(operand),
+                    },
+                    ty,
+                )
+            }
+
+            ast::Expr::Call(f, args) => {
+                // Check if this is a struct/model/class constructor call
+                if let ast::Expr::Ident(name) = &f.node {
+                    // Use two strategies for constructor detection:
+                    // 1. Known struct from current file (in struct_names map)
+                    // 2. Uppercase identifier heuristic (works cross-file like old codegen)
+                    let is_known_struct = self.struct_names.contains_key(name);
+                    let is_uppercase = name
+                        .chars()
+                        .next()
+                        .map(|c| c.is_uppercase())
+                        .unwrap_or(false);
+
+                    if is_known_struct || is_uppercase {
+                        // Get type if known, otherwise Unknown (will be inferred at emit time)
+                        let struct_ty = self
+                            .struct_names
+                            .get(name)
+                            .cloned()
+                            .unwrap_or(IrType::Unknown);
+                        // This is a constructor call - lower as struct instantiation
+                        let fields: Vec<(String, TypedExpr)> = args
+                            .iter()
+                            .map(|arg| {
+                                match arg {
+                                    ast::CallArg::Named(field_name, value) => {
+                                        let lowered_value = self.lower_expr(&value.node)?;
+                                        Ok((field_name.clone(), lowered_value))
+                                    }
+                                    ast::CallArg::Positional(value) => {
+                                        // Positional args - use empty string for field name
+                                        // (emitter will detect this and use tuple-style construction)
+                                        let lowered_value = self.lower_expr(&value.node)?;
+                                        Ok((String::new(), lowered_value))
+                                    }
+                                }
+                            })
+                            .collect::<Result<Vec<_>, LoweringError>>()?;
+                        return Ok(TypedExpr::new(
+                            IrExprKind::Struct {
+                                name: name.clone(),
+                                fields,
+                            },
+                            struct_ty,
+                        ));
+                    }
+
+                    // Check for known builtins (enum-based dispatch)
+                    if let Some(builtin) = BuiltinFn::from_name(name) {
+                        let args_ir = self.lower_call_args(args)?;
+                        return Ok(TypedExpr::new(
+                            IrExprKind::BuiltinCall {
+                                func: builtin,
+                                args: args_ir,
+                            },
+                            IrType::Unknown, // Return type depends on the builtin
+                        ));
+                    }
+                }
+
+                // Regular function call (user-defined or unknown)
+                let func = self.lower_expr(&f.node)?;
+                let args_ir = self.lower_call_args(args)?;
+                let ret_ty = if let IrType::Function { ret, .. } = &func.ty {
+                    (**ret).clone()
+                } else {
+                    IrType::Unknown
+                };
+                (
+                    IrExprKind::Call {
+                        func: Box::new(func),
+                        args: args_ir,
+                    },
+                    ret_ty,
+                )
+            }
+
+            ast::Expr::MethodCall(o, m, args) => {
+                let receiver = self.lower_expr(&o.node)?;
+                let args_ir = self.lower_call_args(args)?;
+
+                // Check for known methods (enum-based dispatch)
+                if let Some(kind) = MethodKind::from_name(m) {
+                    (
+                        IrExprKind::KnownMethodCall {
+                            receiver: Box::new(receiver),
+                            kind,
+                            args: args_ir,
+                        },
+                        IrType::Unknown,
+                    )
+                } else {
+                    // Unknown method - keep as string-based call
+                    (
+                        IrExprKind::MethodCall {
+                            receiver: Box::new(receiver),
+                            method: m.clone(),
+                            args: args_ir,
+                        },
+                        IrType::Unknown,
+                    )
+                }
+            }
+
+            ast::Expr::Index(o, i) => {
+                let obj = self.lower_expr(&o.node)?;
+                let idx = self.lower_expr(&i.node)?;
+                let elem_ty = match &obj.ty {
+                    IrType::List(e) => (**e).clone(),
+                    IrType::Dict(_, v) => (**v).clone(),
+                    _ => IrType::Unknown,
+                };
+                (
+                    IrExprKind::Index {
+                        object: Box::new(obj),
+                        index: Box::new(idx),
+                    },
+                    elem_ty,
+                )
+            }
+
+            ast::Expr::Field(o, f) => {
+                let obj = self.lower_expr(&o.node)?;
+                (
+                    IrExprKind::Field {
+                        object: Box::new(obj),
+                        field: f.clone(),
+                    },
+                    IrType::Unknown,
+                )
+            }
+
+            ast::Expr::Await(e) => {
+                let inner = self.lower_expr(&e.node)?;
+                let ty = inner.ty.clone();
+                (IrExprKind::Await(Box::new(inner)), ty)
+            }
+
+            ast::Expr::Try(e) => {
+                let inner = self.lower_expr(&e.node)?;
+                let ty = match &inner.ty {
+                    IrType::Result(ok, _) => (**ok).clone(),
+                    _ => inner.ty.clone(),
+                };
+                (IrExprKind::Try(Box::new(inner)), ty)
+            }
+
+            ast::Expr::Match(s, arms) => {
+                let scrutinee = self.lower_expr(&s.node)?;
+                let arms_ir = self.lower_match_arms(arms)?;
+                let ty = arms_ir
+                    .first()
+                    .map(|a| a.body.ty.clone())
+                    .unwrap_or(IrType::Unknown);
+                (
+                    IrExprKind::Match {
+                        scrutinee: Box::new(scrutinee),
+                        arms: arms_ir,
+                    },
+                    ty,
+                )
+            }
+
+            ast::Expr::If(i) => {
+                let cond = self.lower_expr(&i.condition.node)?;
+                let then_stmts = self.lower_statements(&i.then_body)?;
+                let then_expr = TypedExpr::new(
+                    IrExprKind::Block {
+                        stmts: then_stmts,
+                        value: None,
+                    },
+                    IrType::Unit,
+                );
+                let else_expr = i
+                    .else_body
+                    .as_ref()
+                    .map(|b| {
+                        self.lower_statements(b).map(|stmts| {
+                            TypedExpr::new(IrExprKind::Block { stmts, value: None }, IrType::Unit)
+                        })
+                    })
+                    .transpose()?;
+                (
+                    IrExprKind::If {
+                        condition: Box::new(cond),
+                        then_branch: Box::new(then_expr),
+                        else_branch: else_expr.map(Box::new),
+                    },
+                    IrType::Unit,
+                )
+            }
+
+            ast::Expr::Closure(params, body) => {
+                let param_pairs: Vec<(String, IrType)> = params
+                    .iter()
+                    .map(|p| (p.node.name.clone(), self.lower_type(&p.node.ty.node)))
+                    .collect();
+                let body_ir = self.lower_expr(&body.node)?;
+                let ret_ty = body_ir.ty.clone();
+                let param_tys: Vec<IrType> = param_pairs.iter().map(|(_, t)| t.clone()).collect();
+                (
+                    IrExprKind::Closure {
+                        params: param_pairs,
+                        body: Box::new(body_ir),
+                        captures: vec![],
+                    },
+                    IrType::Function {
+                        params: param_tys,
+                        ret: Box::new(ret_ty),
+                    },
+                )
+            }
+
+            ast::Expr::Tuple(items) => {
+                let items_ir: Vec<TypedExpr> = items
+                    .iter()
+                    .map(|i| self.lower_expr(&i.node))
+                    .collect::<Result<_, _>>()?;
+                let tys: Vec<IrType> = items_ir.iter().map(|i| i.ty.clone()).collect();
+                (IrExprKind::Tuple(items_ir), IrType::Tuple(tys))
+            }
+
+            ast::Expr::List(items) => {
+                let items_ir: Vec<TypedExpr> = items
+                    .iter()
+                    .map(|i| self.lower_expr(&i.node))
+                    .collect::<Result<_, _>>()?;
+                let elem = items_ir
+                    .first()
+                    .map(|i| i.ty.clone())
+                    .unwrap_or(IrType::Unknown);
+                (IrExprKind::List(items_ir), IrType::List(Box::new(elem)))
+            }
+
+            ast::Expr::Dict(pairs) => {
+                let pairs_ir: Vec<(TypedExpr, TypedExpr)> = pairs
+                    .iter()
+                    .map(|(k, v)| Ok((self.lower_expr(&k.node)?, self.lower_expr(&v.node)?)))
+                    .collect::<Result<_, LoweringError>>()?;
+                let (k, v) = pairs_ir
+                    .first()
+                    .map(|(k, v)| (k.ty.clone(), v.ty.clone()))
+                    .unwrap_or((IrType::Unknown, IrType::Unknown));
+                (
+                    IrExprKind::Dict(pairs_ir),
+                    IrType::Dict(Box::new(k), Box::new(v)),
+                )
+            }
+
+            ast::Expr::Set(items) => {
+                let items_ir: Vec<TypedExpr> = items
+                    .iter()
+                    .map(|i| self.lower_expr(&i.node))
+                    .collect::<Result<_, _>>()?;
+                let elem = items_ir
+                    .first()
+                    .map(|i| i.ty.clone())
+                    .unwrap_or(IrType::Unknown);
+                (IrExprKind::Set(items_ir), IrType::Set(Box::new(elem)))
+            }
+
+            ast::Expr::Paren(e) => return self.lower_expr(&e.node),
+
+            ast::Expr::Constructor(name, args) => {
+                let fields: Vec<(String, TypedExpr)> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        ast::CallArg::Named(n, e) => Ok((n.clone(), self.lower_expr(&e.node)?)),
+                        ast::CallArg::Positional(e) => {
+                            Ok((String::new(), self.lower_expr(&e.node)?))
+                        }
+                    })
+                    .collect::<Result<_, LoweringError>>()?;
+                (
+                    IrExprKind::Struct {
+                        name: name.clone(),
+                        fields,
+                    },
+                    IrType::Struct(name.clone()),
+                )
+            }
+
+            ast::Expr::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let s = self.lower_expr(&start.node)?;
+                let e = self.lower_expr(&end.node)?;
+                (
+                    IrExprKind::Range {
+                        start: Some(Box::new(s)),
+                        end: Some(Box::new(e)),
+                        inclusive: *inclusive,
+                    },
+                    IrType::Unknown,
+                )
+            }
+
+            ast::Expr::FString(parts) => {
+                // Lower f-string parts to Format IR
+                let ir_parts: Vec<super::super::expr::FormatPart> = parts
+                    .iter()
+                    .map(|part| match part {
+                        ast::FStringPart::Literal(s) => {
+                            Ok(super::super::expr::FormatPart::Literal(s.clone()))
+                        }
+                        ast::FStringPart::Expr(e) => {
+                            let lowered = self.lower_expr(&e.node)?;
+                            Ok(super::super::expr::FormatPart::Expr(lowered))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, LoweringError>>()?;
+                (IrExprKind::Format { parts: ir_parts }, IrType::String)
+            }
+
+            ast::Expr::Slice(target, slice) => {
+                // list[start:end] → list.get(start..end).unwrap().to_vec()
+                let target_expr = self.lower_expr(&target.node)?;
+                let start = if let Some(s) = &slice.start {
+                    Some(Box::new(self.lower_expr(&s.node)?))
+                } else {
+                    None
+                };
+                let end = if let Some(e) = &slice.end {
+                    Some(Box::new(self.lower_expr(&e.node)?))
+                } else {
+                    None
+                };
+                // Determine element type from target type
+                let elem_ty = if let IrType::List(ref inner) = target_expr.ty {
+                    (**inner).clone()
+                } else {
+                    IrType::Unknown
+                };
+                (
+                    IrExprKind::Slice {
+                        target: Box::new(target_expr),
+                        start,
+                        end,
+                    },
+                    IrType::List(Box::new(elem_ty)),
+                )
+            }
+
+            ast::Expr::ListComp(comp) => {
+                // [expr for var in iter if cond]
+                // → iter.iter().filter(|var| cond).map(|var| expr).collect()
+                let iter_expr = self.lower_expr(&comp.iter.node)?;
+                let var_name = comp.var.clone();
+
+                // Build the filter predicate if present
+                let filter_tokens = if let Some(filter) = &comp.filter {
+                    Some(Box::new(self.lower_expr(&filter.node)?))
+                } else {
+                    None
+                };
+
+                // Build the map expression
+                let map_expr = self.lower_expr(&comp.expr.node)?;
+
+                // Determine element type from map expression
+                let elem_ty = map_expr.ty.clone();
+
+                (
+                    IrExprKind::ListComp {
+                        element: Box::new(map_expr),
+                        variable: var_name,
+                        iterable: Box::new(iter_expr),
+                        filter: filter_tokens,
+                    },
+                    IrType::List(Box::new(elem_ty)),
+                )
+            }
+
+            ast::Expr::DictComp(comp) => {
+                // {key: value for var in iter if cond}
+                let iter_expr = self.lower_expr(&comp.iter.node)?;
+                let var_name = comp.var.clone();
+
+                let filter_tokens = if let Some(filter) = &comp.filter {
+                    Some(Box::new(self.lower_expr(&filter.node)?))
+                } else {
+                    None
+                };
+
+                let key_expr = self.lower_expr(&comp.key.node)?;
+                let value_expr = self.lower_expr(&comp.value.node)?;
+
+                let key_ty = key_expr.ty.clone();
+                let value_ty = value_expr.ty.clone();
+
+                (
+                    IrExprKind::DictComp {
+                        key: Box::new(key_expr),
+                        value: Box::new(value_expr),
+                        variable: var_name,
+                        iterable: Box::new(iter_expr),
+                        filter: filter_tokens,
+                    },
+                    IrType::Dict(Box::new(key_ty), Box::new(value_ty)),
+                )
+            }
+
+            // Expressions that need desugaring (emit placeholder for now)
+            ast::Expr::Yield(_) => (IrExprKind::Unit, IrType::Unknown),
+        };
+        Ok(TypedExpr::new(kind, ty))
+    }
+
+    /// Lower call arguments to IR expressions.
+    ///
+    /// Handles both positional and named arguments.
+    ///
+    /// # Parameters
+    ///
+    /// * `args` - The AST call arguments
+    ///
+    /// # Returns
+    ///
+    /// A vector of typed IR expressions.
+    pub(super) fn lower_call_args(
+        &mut self,
+        args: &[ast::CallArg],
+    ) -> Result<Vec<TypedExpr>, LoweringError> {
+        args.iter()
+            .map(|a| match a {
+                ast::CallArg::Positional(e) | ast::CallArg::Named(_, e) => self.lower_expr(&e.node),
+            })
+            .collect()
+    }
+
+    /// Lower match arms to IR.
+    ///
+    /// # Parameters
+    ///
+    /// * `arms` - The AST match arms
+    ///
+    /// # Returns
+    ///
+    /// A vector of IR match arms.
+    pub(super) fn lower_match_arms(
+        &mut self,
+        arms: &[Spanned<ast::MatchArm>],
+    ) -> Result<Vec<MatchArm>, LoweringError> {
+        arms.iter()
+            .map(|a| {
+                let pattern = self.lower_pattern(&a.node.pattern.node);
+                let guard = a
+                    .node
+                    .guard
+                    .as_ref()
+                    .map(|g| self.lower_expr(&g.node))
+                    .transpose()?;
+                let body = match &a.node.body {
+                    ast::MatchBody::Expr(e) => self.lower_expr(&e.node)?,
+                    ast::MatchBody::Block(stmts) => {
+                        let ir_stmts = self.lower_statements(stmts)?;
+                        TypedExpr::new(
+                            IrExprKind::Block {
+                                stmts: ir_stmts,
+                                value: None,
+                            },
+                            IrType::Unit,
+                        )
+                    }
+                };
+                Ok(MatchArm {
+                    pattern,
+                    guard,
+                    body,
+                })
+            })
+            .collect()
+    }
+
+    /// Lower a pattern to IR.
+    ///
+    /// Handles wildcard, binding, literal, constructor, and tuple patterns.
+    ///
+    /// # Parameters
+    ///
+    /// * `p` - The AST pattern
+    ///
+    /// # Returns
+    ///
+    /// The corresponding IR pattern.
+    pub(super) fn lower_pattern(&mut self, p: &ast::Pattern) -> Pattern {
+        match p {
+            ast::Pattern::Wildcard => Pattern::Wildcard,
+            ast::Pattern::Binding(name) => Pattern::Var(name.clone()),
+            ast::Pattern::Literal(lit) => {
+                // Lower the literal to an IR expression
+                // If lowering fails (unlikely for literals), fall back to wildcard
+                self.lower_expr(&ast::Expr::Literal(lit.clone()))
+                    .map(Pattern::Literal)
+                    .unwrap_or(Pattern::Wildcard)
+            }
+            ast::Pattern::Constructor(name, args) => Pattern::Enum {
+                name: String::new(),
+                variant: name.clone(),
+                fields: args.iter().map(|a| self.lower_pattern(&a.node)).collect(),
+            },
+            ast::Pattern::Tuple(items) => {
+                Pattern::Tuple(items.iter().map(|i| self.lower_pattern(&i.node)).collect())
+            }
+        }
+    }
+}

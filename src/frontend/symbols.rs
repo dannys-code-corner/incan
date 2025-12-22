@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::frontend::ast::{Span, Type, Receiver};
+use crate::frontend::ast::{Receiver, Span, Type};
 
 /// Unique identifier for symbols
 pub type SymbolId = usize;
@@ -24,7 +24,7 @@ impl SymbolTable {
             scopes: vec![Scope::new(None, ScopeKind::Module)],
             current_scope: 0,
         };
-        
+
         // Add builtin types
         table.add_builtins();
         table
@@ -33,11 +33,10 @@ impl SymbolTable {
     fn add_builtins(&mut self) {
         // Builtin types
         let builtin_types = [
-            "int", "float", "bool", "str", "bytes",
-            "List", "Dict", "Set", "Tuple",
-            "Option", "Result", "Unit",
+            "int", "float", "bool", "str", "bytes", "List", "Dict", "Set", "Tuple", "Option",
+            "Result", "Unit",
         ];
-        
+
         for name in builtin_types {
             self.define(Symbol {
                 name: name.to_string(),
@@ -49,9 +48,22 @@ impl SymbolTable {
 
         // Builtin traits
         let builtin_traits = [
-            "Debug", "Display", "Eq", "PartialEq", "Ord", "PartialOrd",
-            "Hash", "Clone", "Default", "From", "Into", "TryFrom", "TryInto",
-            "Iterator", "IntoIterator", "Error",
+            "Debug",
+            "Display",
+            "Eq",
+            "PartialEq",
+            "Ord",
+            "PartialOrd",
+            "Hash",
+            "Clone",
+            "Default",
+            "From",
+            "Into",
+            "TryFrom",
+            "TryInto",
+            "Iterator",
+            "IntoIterator",
+            "Error",
         ];
 
         for name in builtin_traits {
@@ -225,7 +237,7 @@ impl SymbolTable {
             span: Span::default(),
             scope: 0,
         });
-        
+
         // range() builtin - returns an iterator
         self.define(Symbol {
             name: "range".to_string(),
@@ -258,7 +270,9 @@ impl SymbolTable {
     pub fn define(&mut self, mut symbol: Symbol) -> SymbolId {
         symbol.scope = self.current_scope;
         let id = self.symbols.len();
-        self.scopes[self.current_scope].symbols.insert(symbol.name.clone(), id);
+        self.scopes[self.current_scope]
+            .symbols
+            .insert(symbol.name.clone(), id);
         self.symbols.push(symbol);
         id
     }
@@ -400,10 +414,7 @@ pub enum SymbolKind {
     /// Field
     Field(FieldInfo),
     /// Rust crate import (import rust::...)
-    RustModule {
-        crate_name: String,
-        path: String,
-    },
+    RustModule { crate_name: String, path: String },
 }
 
 /// Variable information
@@ -546,7 +557,7 @@ impl ResolvedType {
     /// Get the Ok type from Result[T, E]
     pub fn result_ok_type(&self) -> Option<&ResolvedType> {
         match self {
-            ResolvedType::Generic(name, args) if name == "Result" && args.len() >= 1 => {
+            ResolvedType::Generic(name, args) if name == "Result" && !args.is_empty() => {
                 Some(&args[0])
             }
             _ => None,
@@ -566,7 +577,7 @@ impl ResolvedType {
     /// Get the inner type from Option[T]
     pub fn option_inner_type(&self) -> Option<&ResolvedType> {
         match self {
-            ResolvedType::Generic(name, args) if name == "Option" && args.len() >= 1 => {
+            ResolvedType::Generic(name, args) if name == "Option" && !args.is_empty() => {
                 Some(&args[0])
             }
             _ => None,
@@ -622,6 +633,21 @@ impl std::fmt::Display for ResolvedType {
 }
 
 /// Convert AST Type to ResolvedType
+/// Normalize type name to canonical form (uppercase for built-in generics)
+fn normalize_type_name(name: &str) -> String {
+    match name {
+        // Python-style lowercase → Rust-style uppercase
+        "list" => "List".to_string(),
+        "dict" => "Dict".to_string(),
+        "set" => "Set".to_string(),
+        "tuple" => "Tuple".to_string(),
+        "option" => "Option".to_string(),
+        "result" => "Result".to_string(),
+        // Already uppercase or custom types
+        _ => name.to_string(),
+    }
+}
+
 pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
     match ty {
         Type::Simple(name) => match name.as_str() {
@@ -646,7 +672,9 @@ pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
                 .iter()
                 .map(|a| resolve_type(&a.node, symbols))
                 .collect();
-            ResolvedType::Generic(name.clone(), resolved_args)
+            // Normalize type name for built-in generics (list → List, dict → Dict, etc.)
+            let normalized_name = normalize_type_name(name);
+            ResolvedType::Generic(normalized_name, resolved_args)
         }
         Type::Function(params, ret) => {
             let resolved_params: Vec<_> = params
@@ -675,7 +703,7 @@ mod tests {
     #[test]
     fn test_scope_lookup() {
         let mut table = SymbolTable::new();
-        
+
         // Define in global scope
         table.define(Symbol {
             name: "x".to_string(),
@@ -690,10 +718,10 @@ mod tests {
 
         // Enter a new scope
         table.enter_scope(ScopeKind::Function);
-        
+
         // Should still find x
         assert!(table.lookup("x").is_some());
-        
+
         // Define y in inner scope
         table.define(Symbol {
             name: "y".to_string(),
@@ -720,7 +748,10 @@ mod tests {
     fn test_result_type_helpers() {
         let result_type = ResolvedType::Generic(
             "Result".to_string(),
-            vec![ResolvedType::Int, ResolvedType::Named("AppError".to_string())],
+            vec![
+                ResolvedType::Int,
+                ResolvedType::Named("AppError".to_string()),
+            ],
         );
 
         assert!(result_type.is_result());

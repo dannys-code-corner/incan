@@ -1,0 +1,527 @@
+//! Statement checking: assignments, returns, control flow.
+
+use crate::frontend::ast::*;
+use crate::frontend::diagnostics::{CompileError, errors};
+use crate::frontend::symbols::*;
+
+use super::TypeChecker;
+
+impl TypeChecker {
+    // ========================================================================
+    // Statements
+    // ========================================================================
+
+    /// Validate a statement and its subexpressions.
+    ///
+    /// Handles assignments (including mutability checks), control flow (`if`, `while`, `for`),
+    /// returns, and expression statements. Delegates expression validation to
+    /// [`check_expr`](Self::check_expr).
+    pub(crate) fn check_statement(&mut self, stmt: &Spanned<Statement>) {
+        match &stmt.node {
+            Statement::Assignment(assign) => self.check_assignment(assign, stmt.span),
+            Statement::FieldAssignment(field_assign) => {
+                self.check_field_assignment(field_assign, stmt.span)
+            }
+            Statement::IndexAssignment(index_assign) => {
+                self.check_index_assignment(index_assign, stmt.span)
+            }
+            Statement::Return(expr) => self.check_return(expr.as_ref(), stmt.span),
+            Statement::If(if_stmt) => self.check_if_stmt(if_stmt),
+            Statement::While(while_stmt) => self.check_while_stmt(while_stmt),
+            Statement::For(for_stmt) => self.check_for_stmt(for_stmt),
+            Statement::Expr(expr) => {
+                self.check_expr(expr);
+            }
+            Statement::Pass => {}
+            Statement::Break => {}
+            Statement::Continue => {}
+            Statement::CompoundAssignment(compound) => {
+                // Check that the variable exists and is mutable (search all scopes)
+                let var_info_opt = self
+                    .symbols
+                    .lookup(&compound.name)
+                    .and_then(|id| self.symbols.get(id))
+                    .and_then(|sym| {
+                        if let SymbolKind::Variable(var_info) = &sym.kind {
+                            Some((var_info.is_mutable, var_info.ty.clone()))
+                        } else {
+                            None
+                        }
+                    });
+
+                if let Some((is_mutable, var_ty)) = var_info_opt {
+                    if !is_mutable {
+                        self.errors
+                            .push(errors::mutation_without_mut(&compound.name, stmt.span));
+                    }
+                    // Type check the value expression
+                    let value_ty = self.check_expr(&compound.value);
+                    // For numeric operations, check type compatibility
+                    if !self.types_compatible(&value_ty, &var_ty) {
+                        self.errors.push(errors::type_mismatch(
+                            &var_ty.to_string(),
+                            &value_ty.to_string(),
+                            compound.value.span,
+                        ));
+                    }
+                } else {
+                    self.errors
+                        .push(errors::unknown_symbol(&compound.name, stmt.span));
+                }
+            }
+            Statement::TupleUnpack(unpack) => {
+                // Check the value expression and get its type
+                let value_ty = self.check_expr(&unpack.value);
+
+                // Extract element types if it's a tuple
+                let element_types: Vec<ResolvedType> = match &value_ty {
+                    ResolvedType::Tuple(types) => types.clone(),
+                    _ => {
+                        // Not a tuple, create Unknown types for each name
+                        vec![ResolvedType::Unknown; unpack.names.len()]
+                    }
+                };
+
+                // Check that tuple has enough elements
+                if element_types.len() < unpack.names.len() {
+                    self.errors.push(CompileError::type_error(
+                        format!(
+                            "Cannot unpack {} values from tuple with {} elements",
+                            unpack.names.len(),
+                            element_types.len()
+                        ),
+                        stmt.span,
+                    ));
+                }
+
+                // Define each variable with its corresponding type
+                let is_mutable = matches!(unpack.binding, BindingKind::Mutable);
+                for (i, name) in unpack.names.iter().enumerate() {
+                    let ty = element_types
+                        .get(i)
+                        .cloned()
+                        .unwrap_or(ResolvedType::Unknown);
+                    self.symbols.define(Symbol {
+                        name: name.clone(),
+                        kind: SymbolKind::Variable(VariableInfo {
+                            ty,
+                            is_mutable,
+                            is_used: false,
+                        }),
+                        span: stmt.span,
+                        scope: 0,
+                    });
+                    if is_mutable {
+                        self.mutable_bindings.insert(name.clone());
+                    }
+                }
+            }
+            Statement::TupleAssign(assign) => {
+                // Check the value expression (should be a tuple)
+                let value_ty = self.check_expr(&assign.value);
+
+                // Extract element types if it's a tuple
+                let element_types: Vec<ResolvedType> = match &value_ty {
+                    ResolvedType::Tuple(types) => types.clone(),
+                    _ => {
+                        // Not a tuple, create Unknown types for each target
+                        vec![ResolvedType::Unknown; assign.targets.len()]
+                    }
+                };
+
+                // Check that tuple has enough elements
+                if element_types.len() < assign.targets.len() {
+                    self.errors.push(CompileError::type_error(
+                        format!(
+                            "Cannot unpack {} values from tuple with {} elements",
+                            assign.targets.len(),
+                            element_types.len()
+                        ),
+                        stmt.span,
+                    ));
+                }
+
+                // Check each target expression - must be a valid lvalue
+                for (i, target) in assign.targets.iter().enumerate() {
+                    let target_ty = self.check_expr(target);
+                    let expected_ty = element_types
+                        .get(i)
+                        .cloned()
+                        .unwrap_or(ResolvedType::Unknown);
+
+                    // Check that target is a valid lvalue
+                    match &target.node {
+                        Expr::Ident(name) => {
+                            // TODO: lots of nested ifs here, we should refactor this to be more readable.
+                            // Check that the variable is mutable
+                            if let Some(id) = self.symbols.lookup_local(name) {
+                                if let Some(sym) = self.symbols.get(id) {
+                                    if let SymbolKind::Variable(var_info) = &sym.kind {
+                                        if !var_info.is_mutable {
+                                            self.errors.push(errors::mutation_without_mut(
+                                                name,
+                                                target.span,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Expr::Index(_, _) | Expr::Field(_, _) => {
+                            // Index and field expressions are valid lvalues
+                            // Type compatibility is checked below
+                        }
+                        _ => {
+                            self.errors.push(CompileError::syntax(
+                                "Invalid assignment target in tuple assignment".to_string(),
+                                target.span,
+                            ));
+                        }
+                    }
+
+                    // Check type compatibility
+                    if !self.types_compatible(&expected_ty, &target_ty) {
+                        self.errors.push(errors::type_mismatch(
+                            &target_ty.to_string(),
+                            &expected_ty.to_string(),
+                            target.span,
+                        ));
+                    }
+                }
+            }
+            Statement::ChainedAssignment(ca) => {
+                // Check the value expression
+                let value_ty = self.check_expr(&ca.value);
+
+                // Define all target variables with the same type
+                let is_mutable = matches!(ca.binding, BindingKind::Mutable);
+                for target in &ca.targets {
+                    self.symbols.define(Symbol {
+                        name: target.clone(),
+                        kind: SymbolKind::Variable(VariableInfo {
+                            ty: value_ty.clone(),
+                            is_mutable,
+                            is_used: false,
+                        }),
+                        span: stmt.span,
+                        scope: 0,
+                    });
+                    if is_mutable {
+                        self.mutable_bindings.insert(target.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_field_assignment(&mut self, field_assign: &FieldAssignmentStmt, span: Span) {
+        // Check the object expression
+        let obj_ty = self.check_expr(&field_assign.object);
+        // Check the value expression
+        let value_ty = self.check_expr(&field_assign.value);
+        let field = &field_assign.field;
+
+        // Tuples are immutable - disallow field assignment on tuples
+        if matches!(obj_ty, ResolvedType::Tuple(_)) {
+            self.errors.push(errors::tuple_field_assignment(span));
+            return;
+        }
+
+        // Verify field exists on object and value type matches field type
+        match &obj_ty {
+            ResolvedType::Named(type_name) => {
+                // TODO: lots of nested ifs here, we should refactor this to be more readable.
+                if let Some(id) = self.symbols.lookup(type_name) {
+                    if let Some(sym) = self.symbols.get(id) {
+                        if let SymbolKind::Type(type_info) = &sym.kind {
+                            let field_type = match type_info {
+                                TypeInfo::Model(model) => {
+                                    model.fields.get(field).map(|f| f.ty.clone())
+                                }
+                                TypeInfo::Class(class) => {
+                                    class.fields.get(field).map(|f| f.ty.clone())
+                                }
+                                _ => None,
+                            };
+
+                            match field_type {
+                                Some(expected_ty) => {
+                                    // Check type compatibility
+                                    if !self.types_compatible(&value_ty, &expected_ty) {
+                                        self.errors.push(errors::field_type_mismatch(
+                                            field,
+                                            &expected_ty.to_string(),
+                                            &value_ty.to_string(),
+                                            field_assign.value.span,
+                                        ));
+                                    }
+                                }
+                                None => {
+                                    // Field doesn't exist
+                                    self.errors
+                                        .push(errors::missing_field(type_name, field, span));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Type not found - already reported elsewhere
+            }
+            ResolvedType::Unknown => {
+                // Don't report additional errors on unknown types
+            }
+            _ => {
+                // Cannot assign fields to primitive types
+                self.errors
+                    .push(errors::missing_field(&obj_ty.to_string(), field, span));
+            }
+        }
+    }
+
+    fn check_index_assignment(&mut self, index_assign: &IndexAssignmentStmt, span: Span) {
+        // Check the object expression (should be a collection)
+        let obj_ty = self.check_expr(&index_assign.object);
+        // Check the index expression
+        let index_ty = self.check_expr(&index_assign.index);
+        // Check the value expression
+        let value_ty = self.check_expr(&index_assign.value);
+
+        // Verify object is indexable and types match
+        match &obj_ty {
+            ResolvedType::Generic(name, args) => match name.as_str() {
+                "List" => {
+                    // List[T] - index must be int, value must be T
+                    if !matches!(index_ty, ResolvedType::Int) {
+                        self.errors.push(errors::index_type_mismatch(
+                            "int",
+                            &index_ty.to_string(),
+                            index_assign.index.span,
+                        ));
+                    }
+                    if let Some(elem_ty) = args.first() {
+                        if !self.types_compatible(&value_ty, elem_ty) {
+                            self.errors.push(errors::index_value_type_mismatch(
+                                &elem_ty.to_string(),
+                                &value_ty.to_string(),
+                                index_assign.value.span,
+                            ));
+                        }
+                    }
+                }
+                "Dict" => {
+                    // Dict[K, V] - index must be K, value must be V
+                    if let Some(key_ty) = args.first() {
+                        if !self.types_compatible(&index_ty, key_ty) {
+                            self.errors.push(errors::index_type_mismatch(
+                                &key_ty.to_string(),
+                                &index_ty.to_string(),
+                                index_assign.index.span,
+                            ));
+                        }
+                    }
+                    if let Some(val_ty) = args.get(1) {
+                        if !self.types_compatible(&value_ty, val_ty) {
+                            self.errors.push(errors::index_value_type_mismatch(
+                                &val_ty.to_string(),
+                                &value_ty.to_string(),
+                                index_assign.value.span,
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    self.errors
+                        .push(errors::not_indexable(&obj_ty.to_string(), span));
+                }
+            },
+            ResolvedType::Tuple(_) => {
+                // Tuples are immutable - cannot assign to index
+                self.errors.push(errors::tuple_field_assignment(span));
+            }
+            ResolvedType::Str => {
+                // Strings are immutable in Incan
+                self.errors.push(CompileError::type_error(
+                    "Strings are immutable - cannot assign to index".to_string(),
+                    span,
+                ));
+            }
+            ResolvedType::Unknown => {
+                // Don't report additional errors on unknown types
+            }
+            _ => {
+                self.errors
+                    .push(errors::not_indexable(&obj_ty.to_string(), span));
+            }
+        }
+    }
+
+    fn check_assignment(&mut self, assign: &AssignmentStmt, span: Span) {
+        let value_ty = self.check_expr(&assign.value);
+
+        // Check if it's a re-assignment
+        if let Some(id) = self.symbols.lookup_local(&assign.name) {
+            // TODO: lots of nested ifs here, we should refactor this to be more readable.
+            // Re-assignment - check mutability
+            if let Some(sym) = self.symbols.get(id) {
+                if let SymbolKind::Variable(var_info) = &sym.kind {
+                    if !var_info.is_mutable {
+                        self.errors
+                            .push(errors::mutation_without_mut(&assign.name, span));
+                    }
+                    // Type check
+                    if !self.types_compatible(&value_ty, &var_info.ty) {
+                        self.errors.push(errors::type_mismatch(
+                            &var_info.ty.to_string(),
+                            &value_ty.to_string(),
+                            assign.value.span,
+                        ));
+                    }
+                }
+            }
+            return;
+        }
+
+        // New binding
+        let is_mutable = matches!(assign.binding, BindingKind::Mutable);
+
+        // Tuples are immutable - disallow `mut` on tuple bindings
+        if is_mutable && matches!(value_ty, ResolvedType::Tuple(_)) {
+            self.errors.push(errors::mutable_tuple(span));
+        }
+
+        if is_mutable {
+            self.mutable_bindings.insert(assign.name.clone());
+        }
+
+        let ty = if let Some(ty_ann) = &assign.ty {
+            let ann_ty = resolve_type(&ty_ann.node, &self.symbols);
+            // Check value matches annotation
+            if !self.types_compatible(&value_ty, &ann_ty) {
+                self.errors.push(errors::type_mismatch(
+                    &ann_ty.to_string(),
+                    &value_ty.to_string(),
+                    assign.value.span,
+                ));
+            }
+            ann_ty
+        } else {
+            value_ty
+        };
+
+        self.symbols.define(Symbol {
+            name: assign.name.clone(),
+            kind: SymbolKind::Variable(VariableInfo {
+                ty,
+                is_mutable,
+                is_used: false,
+            }),
+            span,
+            scope: 0,
+        });
+    }
+
+    fn check_return(&mut self, expr: Option<&Spanned<Expr>>, span: Span) {
+        let return_ty = if let Some(e) = expr {
+            self.check_expr(e)
+        } else {
+            ResolvedType::Unit
+        };
+
+        if let Some(expected) = self.symbols.current_return_type() {
+            if !self.types_compatible(&return_ty, expected) {
+                self.errors.push(errors::type_mismatch(
+                    &expected.to_string(),
+                    &return_ty.to_string(),
+                    span,
+                ));
+            }
+        }
+    }
+
+    fn check_if_stmt(&mut self, if_stmt: &IfStmt) {
+        let cond_ty = self.check_expr(&if_stmt.condition);
+        if !self.types_compatible(&cond_ty, &ResolvedType::Bool) {
+            self.errors.push(errors::type_mismatch(
+                "bool",
+                &cond_ty.to_string(),
+                if_stmt.condition.span,
+            ));
+        }
+
+        self.symbols.enter_scope(ScopeKind::Block);
+        for stmt in &if_stmt.then_body {
+            self.check_statement(stmt);
+        }
+        self.symbols.exit_scope();
+
+        if let Some(else_body) = &if_stmt.else_body {
+            self.symbols.enter_scope(ScopeKind::Block);
+            for stmt in else_body {
+                self.check_statement(stmt);
+            }
+            self.symbols.exit_scope();
+        }
+    }
+
+    fn check_while_stmt(&mut self, while_stmt: &WhileStmt) {
+        let cond_ty = self.check_expr(&while_stmt.condition);
+        if !self.types_compatible(&cond_ty, &ResolvedType::Bool) {
+            self.errors.push(errors::type_mismatch(
+                "bool",
+                &cond_ty.to_string(),
+                while_stmt.condition.span,
+            ));
+        }
+
+        self.symbols.enter_scope(ScopeKind::Block);
+        for stmt in &while_stmt.body {
+            self.check_statement(stmt);
+        }
+        self.symbols.exit_scope();
+    }
+
+    fn check_for_stmt(&mut self, for_stmt: &ForStmt) {
+        let iter_ty = self.check_expr(&for_stmt.iter);
+
+        // Infer element type from iterator
+        let elem_ty = self.infer_iterator_element_type(&iter_ty);
+
+        self.symbols.enter_scope(ScopeKind::Block);
+        self.symbols.define(Symbol {
+            name: for_stmt.var.clone(),
+            kind: SymbolKind::Variable(VariableInfo {
+                ty: elem_ty,
+                is_mutable: false,
+                is_used: false,
+            }),
+            span: for_stmt.iter.span,
+            scope: 0,
+        });
+
+        for stmt in &for_stmt.body {
+            self.check_statement(stmt);
+        }
+        self.symbols.exit_scope();
+    }
+
+    pub(crate) fn infer_iterator_element_type(&self, iter_ty: &ResolvedType) -> ResolvedType {
+        match iter_ty {
+            ResolvedType::Generic(name, args) => {
+                match name.as_str() {
+                    "List" | "Set" if !args.is_empty() => args[0].clone(),
+                    "Dict" if args.len() >= 2 => {
+                        // Iterating dict gives keys
+                        args[0].clone()
+                    }
+                    "Tuple" if !args.is_empty() => {
+                        // For tuple iteration, return first element type (simplified)
+                        args[0].clone()
+                    }
+                    _ => ResolvedType::Unknown,
+                }
+            }
+            ResolvedType::Str => ResolvedType::Str, // String iteration gives chars/strings
+            _ => ResolvedType::Unknown,
+        }
+    }
+}

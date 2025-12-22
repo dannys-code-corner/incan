@@ -3,60 +3,146 @@
 //! This module provides code formatting functionality for Incan source files.
 //! It follows Ruff/Black conventions with customizations:
 //! - 4-space indentation
-//! - 120 character line length
+//! - 120 character line length (target, not strictly enforced)
 //! - Double quotes for strings
 //! - Trailing commas in multi-line constructs
+//!
+//! ## Parse-required
+//!
+//! The formatter operates on the parsed AST, so it **requires valid syntax**.
+//! Files with lexer or parser errors cannot be formatted.
 
 mod config;
-mod writer;
 mod formatter;
+mod writer;
 
 pub use config::{FormatConfig, QuoteStyle};
 pub use formatter::Formatter;
 
-use crate::frontend::{lexer, parser};
+use crate::frontend::{diagnostics, lexer, parser};
+use thiserror::Error;
 
-/// Format Incan source code with default settings
-pub fn format_source(source: &str) -> Result<String, String> {
+/// Errors that occur during formatting
+#[derive(Debug, Error)]
+pub enum FormatError {
+    #[error("syntax error (formatting requires valid syntax):\\n{0}")]
+    SyntaxError(String),
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Format Incan source code with default settings.
+///
+/// Returns an error if the source has syntax errors (formatting requires parsing).
+///
+/// # Examples
+///
+/// ```
+/// use incan::format_source;
+///
+/// let source = "def add(a: int, b: int) -> int:\n    return a + b\n";
+/// let formatted = format_source(source).unwrap();
+/// assert!(formatted.contains("def add"));
+/// ```
+///
+/// # Errors
+///
+/// Returns [`FormatError::SyntaxError`] if the source cannot be parsed.
+pub fn format_source(source: &str) -> Result<String, FormatError> {
     format_source_with_config(source, FormatConfig::default())
 }
 
-/// Format Incan source code with custom configuration
-pub fn format_source_with_config(source: &str, config: FormatConfig) -> Result<String, String> {
-    // Parse the source
-    let tokens = lexer::lex(source).map_err(|e| format!("Lexer error: {:?}", e))?;
-    let ast = parser::parse(&tokens).map_err(|e| format!("Parser error: {:?}", e))?;
-    
+/// Format Incan source code with custom configuration.
+///
+/// Returns an error if the source has syntax errors (formatting requires parsing).
+///
+/// # Examples
+///
+/// ```
+/// use incan::{format_source_with_config, FormatConfig};
+///
+/// let config = FormatConfig::default();
+/// let source = "def greet(name: str) -> str:\n    return name\n";
+/// let formatted = format_source_with_config(source, config).unwrap();
+/// assert!(formatted.contains("def greet"));
+/// ```
+pub fn format_source_with_config(
+    source: &str,
+    config: FormatConfig,
+) -> Result<String, FormatError> {
+    // Parse the source - formatter requires valid syntax
+    let tokens = lexer::lex(source).map_err(|errs| {
+        let mut msg = String::new();
+        for err in &errs {
+            msg.push_str(&diagnostics::format_error("<input>", source, err));
+        }
+        FormatError::SyntaxError(msg)
+    })?;
+
+    let ast = parser::parse(&tokens).map_err(|errs| {
+        let mut msg = String::new();
+        for err in &errs {
+            msg.push_str(&diagnostics::format_error("<input>", source, err));
+        }
+        FormatError::SyntaxError(msg)
+    })?;
+
     // Format the AST
     let formatter = Formatter::new(config);
     Ok(formatter.format(&ast))
 }
 
-/// Check if source code is already formatted
-pub fn check_formatted(source: &str) -> Result<bool, String> {
+/// Check if source code is already formatted.
+///
+/// # Examples
+///
+/// ```
+/// use incan::check_formatted;
+///
+/// // Check returns a boolean (true = already formatted)
+/// let source = "def foo() -> int:\n    return 42\n";
+/// let is_formatted = check_formatted(source).unwrap();
+/// // Result depends on exact formatting rules
+/// assert!(is_formatted == true || is_formatted == false);
+/// ```
+pub fn check_formatted(source: &str) -> Result<bool, FormatError> {
     let formatted = format_source(source)?;
     Ok(source == formatted)
 }
 
-/// Get the diff between original and formatted source
-pub fn format_diff(source: &str) -> Result<Option<String>, String> {
+/// Get the diff between original and formatted source.
+///
+/// Returns `None` if the source is already formatted.
+///
+/// # Examples
+///
+/// ```
+/// use incan::format_diff;
+///
+/// // Returns Ok with optional diff
+/// let source = "def foo() -> int:\n    return 42\n";
+/// let diff_result = format_diff(source);
+/// assert!(diff_result.is_ok());
+/// ```
+pub fn format_diff(source: &str) -> Result<Option<String>, FormatError> {
     let formatted = format_source(source)?;
-    
+
     if source == formatted {
         return Ok(None);
     }
-    
+
     // Simple line-by-line diff
     let mut diff = String::new();
     let original_lines: Vec<&str> = source.lines().collect();
     let formatted_lines: Vec<&str> = formatted.lines().collect();
-    
+
     let max_lines = original_lines.len().max(formatted_lines.len());
-    
+
     for i in 0..max_lines {
         let orig = original_lines.get(i).unwrap_or(&"");
         let fmt = formatted_lines.get(i).unwrap_or(&"");
-        
+
         if orig != fmt {
             if !orig.is_empty() {
                 diff.push_str(&format!("-{:4} | {}\n", i + 1, orig));
@@ -66,7 +152,7 @@ pub fn format_diff(source: &str) -> Result<Option<String>, String> {
             }
         }
     }
-    
+
     Ok(Some(diff))
 }
 

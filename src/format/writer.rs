@@ -29,24 +29,24 @@ impl FormatWriter {
             current_line_length: 0,
         }
     }
-    
+
     /// Get the formatted output
     pub fn finish(self) -> String {
         self.output
     }
-    
+
     /// Increase indentation level
     pub fn indent(&mut self) {
         self.indent_level += 1;
     }
-    
+
     /// Decrease indentation level
     pub fn dedent(&mut self) {
         if self.indent_level > 0 {
             self.indent_level -= 1;
         }
     }
-    
+
     /// Write indentation if at line start
     fn write_indent(&mut self) {
         if self.at_line_start {
@@ -56,7 +56,7 @@ impl FormatWriter {
             self.at_line_start = false;
         }
     }
-    
+
     /// Write a string (with auto-indent)
     pub fn write(&mut self, s: &str) {
         if s.is_empty() {
@@ -66,45 +66,45 @@ impl FormatWriter {
         self.output.push_str(s);
         self.current_line_length += s.len();
     }
-    
+
     /// Write a string and newline
     pub fn writeln(&mut self, s: &str) {
         self.write(s);
         self.newline();
     }
-    
+
     /// Write just a newline
     pub fn newline(&mut self) {
         self.output.push('\n');
         self.at_line_start = true;
         self.current_line_length = 0;
     }
-    
+
     /// Write multiple blank lines (for spacing between declarations)
     pub fn blank_lines(&mut self, count: usize) {
         for _ in 0..count {
             self.newline();
         }
     }
-    
+
     /// Write a space
     #[allow(dead_code)]
     pub fn space(&mut self) {
         self.write(" ");
     }
-    
+
     /// Get current indentation level
     #[allow(dead_code)]
     pub fn current_indent(&self) -> usize {
         self.indent_level
     }
-    
+
     /// Get the configuration
     #[allow(dead_code)]
     pub fn config(&self) -> &FormatConfig {
         &self.config
     }
-    
+
     /// Check if current line would exceed max length with additional text
     #[allow(dead_code)]
     pub fn would_exceed_line_length(&self, additional: usize) -> bool {
@@ -115,7 +115,7 @@ impl FormatWriter {
         };
         self.current_line_length + indent_len + additional > self.config.line_length
     }
-    
+
     /// Get remaining space on current line
     #[allow(dead_code)]
     pub fn remaining_line_space(&self) -> usize {
@@ -377,7 +377,7 @@ mod tests {
             .with_line_length(100)
             .with_quote_style(QuoteStyle::Single);
         let writer = FormatWriter::new(config);
-        
+
         assert_eq!(writer.config().indent_width, 8);
         assert_eq!(writer.config().line_length, 100);
         assert_eq!(writer.config().quote_style, QuoteStyle::Single);
@@ -460,7 +460,7 @@ mod tests {
     fn test_nested_indentation() {
         let config = FormatConfig::new().with_indent_width(2);
         let mut writer = FormatWriter::new(config);
-        
+
         writer.writeln("fn main() {");
         writer.indent();
         writer.writeln("if true {");
@@ -470,7 +470,7 @@ mod tests {
         writer.writeln("}");
         writer.dedent();
         writer.writeln("}");
-        
+
         let expected = "fn main() {\n  if true {\n    println!(\"hello\");\n  }\n}\n";
         assert_eq!(writer.finish(), expected);
     }
@@ -478,14 +478,14 @@ mod tests {
     #[test]
     fn test_code_block_generation() {
         let mut writer = default_writer();
-        
+
         writer.writeln("struct Point {");
         writer.indent();
         writer.writeln("x: i32,");
         writer.writeln("y: i32,");
         writer.dedent();
         writer.writeln("}");
-        
+
         let output = writer.finish();
         assert!(output.contains("struct Point {"));
         assert!(output.contains("    x: i32,"));
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn test_mixed_operations() {
         let mut writer = default_writer();
-        
+
         writer.write("a");
         writer.space();
         writer.write("=");
@@ -505,7 +505,7 @@ mod tests {
         writer.blank_lines(1);
         writer.indent();
         writer.writeln("b = 2");
-        
+
         let output = writer.finish();
         assert_eq!(output, "a = 1\n\n    b = 2\n");
     }

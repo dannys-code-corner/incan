@@ -1,4 +1,13 @@
 //! Convert Incan compiler diagnostics to LSP diagnostics
+//!
+//! This module provides utilities for converting between:
+//! - Byte offsets (used by the Incan compiler) and LSP Positions (line/character)
+//! - Compiler errors and LSP Diagnostics
+//!
+//! ## Position/Offset Conversion
+//!
+//! All conversion functions handle UTF-8 correctly by counting characters,
+//! not bytes. LSP positions are 0-based (line 0, character 0 is the first).
 
 use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Position, Range, Url,
@@ -6,7 +15,17 @@ use tower_lsp::lsp_types::{
 
 use crate::frontend::diagnostics::{CompileError, ErrorKind};
 
-/// Convert a byte offset to LSP Position (0-based line and character)
+// ============================================================================
+// Position/Offset Conversion Utilities
+// ============================================================================
+// These are the single authoritative implementations for converting between
+// byte offsets and LSP positions. All LSP code should use these.
+
+/// Convert a byte offset to LSP Position (0-based line and character).
+///
+/// Handles UTF-8 correctly by iterating over characters, not bytes.
+/// If the offset is beyond the end of the source, returns the position
+/// at the end of the last line.
 pub fn offset_to_position(source: &str, offset: usize) -> Position {
     let offset = offset.min(source.len());
     let mut line = 0u32;
@@ -27,7 +46,41 @@ pub fn offset_to_position(source: &str, offset: usize) -> Position {
     Position::new(line, col)
 }
 
-/// Convert a span to LSP Range
+/// Convert an LSP Position (0-based line and character) to a byte offset.
+///
+/// Returns `None` if the position is beyond the end of the source.
+/// Handles UTF-8 correctly by iterating over characters, not bytes.
+pub fn position_to_offset(source: &str, position: Position) -> Option<usize> {
+    let mut line = 0u32;
+    let mut col = 0u32;
+    let mut offset = 0usize;
+
+    for (i, c) in source.char_indices() {
+        if line == position.line && col == position.character {
+            return Some(i);
+        }
+        if c == '\n' {
+            if line == position.line {
+                // Position is beyond line end - return end of line
+                return Some(i);
+            }
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+        offset = i + c.len_utf8();
+    }
+
+    // Position at end of file
+    if line == position.line && col == position.character {
+        Some(offset)
+    } else {
+        None
+    }
+}
+
+/// Convert a span (start, end byte offsets) to an LSP Range.
 pub fn span_to_range(source: &str, start: usize, end: usize) -> Range {
     let start_pos = offset_to_position(source, start);
     let end_pos = offset_to_position(source, end.max(start + 1));
@@ -44,11 +97,7 @@ fn error_kind_to_severity(kind: ErrorKind) -> DiagnosticSeverity {
 }
 
 /// Convert a CompileError to LSP Diagnostic
-pub fn compile_error_to_diagnostic(
-    error: &CompileError,
-    source: &str,
-    uri: &Url,
-) -> Diagnostic {
+pub fn compile_error_to_diagnostic(error: &CompileError, source: &str, uri: &Url) -> Diagnostic {
     let range = span_to_range(source, error.span.start, error.span.end);
     let severity = error_kind_to_severity(error.kind);
 
@@ -126,5 +175,38 @@ mod tests {
         let pos = offset_to_position(source, 10); // "e 2"
         assert_eq!(pos.line, 1);
         assert_eq!(pos.character, 3);
+    }
+
+    #[test]
+    fn test_position_to_offset() {
+        let source = "line 1\nline 2\nline 3";
+
+        // Start of file
+        let offset = position_to_offset(source, Position::new(0, 0));
+        assert_eq!(offset, Some(0));
+
+        // Start of line 2
+        let offset = position_to_offset(source, Position::new(1, 0));
+        assert_eq!(offset, Some(7));
+
+        // Middle of line 2 ("e 2")
+        let offset = position_to_offset(source, Position::new(1, 3));
+        assert_eq!(offset, Some(10));
+
+        // End of file
+        let offset = position_to_offset(source, Position::new(2, 6));
+        assert_eq!(offset, Some(20));
+    }
+
+    #[test]
+    fn test_roundtrip_offset_position() {
+        let source = "def foo():\n    pass\n";
+
+        // Test round-trip for various offsets
+        for offset in [0, 5, 10, 15, 19] {
+            let pos = offset_to_position(source, offset);
+            let back = position_to_offset(source, pos);
+            assert_eq!(back, Some(offset), "roundtrip failed for offset {}", offset);
+        }
     }
 }

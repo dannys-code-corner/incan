@@ -403,7 +403,7 @@ This is safer than Python's approach because you can't forget to close resources
 - [Error Handling Guide](./error_handling.md) — Working with Result types
 - [Derives Reference](./derives/) — Detailed docs for each derive
 - [Types Overview](./incan_types_overview.md) — All Incan types
-- [Models vs Classes](./incan_design_philosophy.md) — When to use each
+- [Models vs Classes](./models_and_classes.md) — When to use each
 - Examples:
   - `examples/advanced/derives_and_json.incn` — JSON serialization
   - `examples/advanced/dunder_and_traits.incn` — Dunder overrides

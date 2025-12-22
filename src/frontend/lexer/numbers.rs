@@ -2,8 +2,8 @@
 //!
 //! Handles integer and floating-point literals.
 
-use super::tokens::TokenKind;
 use super::Lexer;
+use super::tokens::TokenKind;
 use crate::frontend::ast::Span;
 use crate::frontend::diagnostics::CompileError;
 
@@ -88,4 +88,3 @@ impl<'a> Lexer<'a> {
         }
     }
 }
-

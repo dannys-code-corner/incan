@@ -1,0 +1,291 @@
+//! Statement emission for IR to Rust code generation
+//!
+//! This module handles emitting Rust statements from IR statements,
+//! including let bindings, assignments, control flow, and blocks.
+
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+
+use super::super::conversions::{ConversionContext, determine_conversion};
+use super::super::expr::{BinOp, IrExprKind};
+use super::super::stmt::{AssignTarget, IrStmt, IrStmtKind};
+use super::super::types::IrType;
+use super::super::types::Mutability;
+use super::{EmitError, IrEmitter};
+
+impl<'a> IrEmitter<'a> {
+    /// Emit a statement as Rust tokens.
+    pub(super) fn emit_stmt(&self, stmt: &IrStmt) -> Result<TokenStream, EmitError> {
+        match &stmt.kind {
+            IrStmtKind::Expr(expr) => {
+                let e = self.emit_expr(expr)?;
+                Ok(quote! { #e; })
+            }
+            IrStmtKind::Let {
+                name,
+                ty,
+                mutability,
+                value,
+            } => {
+                let n = format_ident!("{}", Self::escape_keyword(name));
+                let v = self.emit_expr(value)?;
+
+                // Apply conversion if needed based on variable type
+                let conversion =
+                    determine_conversion(value, Some(ty), ConversionContext::Assignment);
+                let converted_v = conversion.apply(v);
+
+                if matches!(mutability, Mutability::Mutable) {
+                    Ok(quote! { let mut #n = #converted_v; })
+                } else {
+                    Ok(quote! { let #n = #converted_v; })
+                }
+            }
+            IrStmtKind::Assign { target, value } => {
+                // For Dict index assignment, use .insert() instead of []=
+                // because HashMap's IndexMut doesn't work with owned keys
+                if let AssignTarget::Index { object, index } = target {
+                    if matches!(&object.ty, IrType::Dict(_, _) | IrType::Unknown) {
+                        let o = self.emit_expr(object)?;
+                        let k = self.emit_expr(index)?;
+                        let v = self.emit_expr(value)?;
+                        return Ok(quote! { #o.insert(#k, #v); });
+                    }
+                }
+                let t = self.emit_assign_target(target)?;
+                let v = self.emit_expr(value)?;
+                Ok(quote! { #t = #v; })
+            }
+            IrStmtKind::CompoundAssign { target, op, value } => {
+                let t = self.emit_assign_target(target)?;
+
+                // For String += operations, emit the RHS as &str to avoid .to_string()
+                // If the value is a String type and op is Add, the target must be String too
+                let is_string_add = matches!(op, BinOp::Add) && matches!(&value.ty, IrType::String);
+
+                let v = if is_string_add {
+                    // For string literals, emit without .to_string(), just as &str
+                    match &value.kind {
+                        IrExprKind::String(s) => quote! { #s },
+                        _ => {
+                            let expr = self.emit_expr(value)?;
+                            quote! { #expr.as_str() }
+                        }
+                    }
+                } else {
+                    self.emit_expr(value)?
+                };
+
+                let op_tokens = self.emit_compound_op(op);
+                Ok(quote! { #t #op_tokens #v; })
+            }
+            IrStmtKind::Return(Some(expr)) => {
+                // Set return context so function calls inside can use move semantics
+                *self.in_return_context.borrow_mut() = true;
+                let e = self.emit_expr(expr)?;
+                *self.in_return_context.borrow_mut() = false;
+
+                // Apply conversion if needed based on function return type
+                let converted = if let Some(return_type) =
+                    self.current_function_return_type.borrow().as_ref()
+                {
+                    let conversion = determine_conversion(
+                        expr,
+                        Some(return_type),
+                        ConversionContext::ReturnValue,
+                    );
+                    conversion.apply(e)
+                } else {
+                    e
+                };
+
+                Ok(quote! { return #converted; })
+            }
+            IrStmtKind::Return(None) => Ok(quote! { return; }),
+            IrStmtKind::Break(label) => {
+                if let Some(l) = label {
+                    let label_lifetime =
+                        syn::Lifetime::new(&format!("'{}", l), proc_macro2::Span::call_site());
+                    Ok(quote! { break #label_lifetime; })
+                } else {
+                    Ok(quote! { break; })
+                }
+            }
+            IrStmtKind::Continue(label) => {
+                if let Some(l) = label {
+                    let label_lifetime =
+                        syn::Lifetime::new(&format!("'{}", l), proc_macro2::Span::call_site());
+                    Ok(quote! { continue #label_lifetime; })
+                } else {
+                    Ok(quote! { continue; })
+                }
+            }
+            IrStmtKind::While {
+                label: _,
+                condition,
+                body,
+            } => {
+                let cond = self.emit_expr(condition)?;
+                let body_stmts: Vec<TokenStream> = body
+                    .iter()
+                    .map(|s| self.emit_stmt(s))
+                    .collect::<Result<_, _>>()?;
+                Ok(quote! {
+                    while #cond {
+                        #(#body_stmts)*
+                    }
+                })
+            }
+            IrStmtKind::For {
+                label: _,
+                pattern,
+                iterable,
+                body,
+            } => {
+                let pat = self.emit_pattern(pattern);
+                let iter = self.emit_expr(iterable)?;
+                let body_stmts: Vec<TokenStream> = body
+                    .iter()
+                    .map(|s| self.emit_stmt(s))
+                    .collect::<Result<_, _>>()?;
+                // For non-copy collections, iterate by reference to avoid move
+                // This handles the common case where a collection is used multiple times
+                // For primitive element types, use .iter().copied() to get values instead of references
+                let iter_expr = match &iterable.ty {
+                    // If the iterable is a mutable reference to a collection, use .iter_mut() for non-Copy types
+                    IrType::RefMut(inner) => {
+                        match inner.as_ref() {
+                            IrType::List(elem_ty) => {
+                                // For primitive types, use .iter().copied() to get values
+                                // For non-Copy types (structs), use .iter_mut() to allow mutation
+                                match elem_ty.as_ref() {
+                                    IrType::Int | IrType::Float | IrType::Bool => {
+                                        quote! { #iter.iter().copied() }
+                                    }
+                                    _ => quote! { #iter.iter_mut() },
+                                }
+                            }
+                            IrType::Set(_) | IrType::Dict(_, _) => {
+                                quote! { #iter.iter_mut() }
+                            }
+                            _ => quote! { #iter },
+                        }
+                    }
+                    // If the iterable is an immutable reference, use .iter()
+                    IrType::Ref(inner) => match inner.as_ref() {
+                        IrType::List(elem_ty) => match elem_ty.as_ref() {
+                            IrType::Int | IrType::Float | IrType::Bool => {
+                                quote! { #iter.iter().copied() }
+                            }
+                            _ => quote! { #iter.iter() },
+                        },
+                        IrType::Set(_) | IrType::Dict(_, _) => {
+                            quote! { #iter.iter() }
+                        }
+                        _ => quote! { #iter },
+                    },
+                    IrType::List(elem_ty) => {
+                        // If it's a variable, borrow it; otherwise use as-is
+                        if let IrExprKind::Var { .. } = &iterable.kind {
+                            // For primitive types, use .iter().copied() to avoid reference issues
+                            match elem_ty.as_ref() {
+                                IrType::Int | IrType::Float | IrType::Bool => {
+                                    quote! { #iter.iter().copied() }
+                                }
+                                _ => quote! { &#iter },
+                            }
+                        } else {
+                            quote! { #iter }
+                        }
+                    }
+                    IrType::Set(_) | IrType::Dict(_, _) => {
+                        if let IrExprKind::Var { .. } = &iterable.kind {
+                            quote! { &#iter }
+                        } else {
+                            quote! { #iter }
+                        }
+                    }
+                    _ => quote! { #iter },
+                };
+                Ok(quote! {
+                    for #pat in #iter_expr {
+                        #(#body_stmts)*
+                    }
+                })
+            }
+            IrStmtKind::Loop { label: _, body } => {
+                let body_stmts: Vec<TokenStream> = body
+                    .iter()
+                    .map(|s| self.emit_stmt(s))
+                    .collect::<Result<_, _>>()?;
+                Ok(quote! {
+                    loop {
+                        #(#body_stmts)*
+                    }
+                })
+            }
+            IrStmtKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let cond = self.emit_expr(condition)?;
+                let then_stmts: Vec<TokenStream> = then_branch
+                    .iter()
+                    .map(|s| self.emit_stmt(s))
+                    .collect::<Result<_, _>>()?;
+                if let Some(else_stmts) = else_branch {
+                    let else_tokens: Vec<TokenStream> = else_stmts
+                        .iter()
+                        .map(|s| self.emit_stmt(s))
+                        .collect::<Result<_, _>>()?;
+                    Ok(quote! {
+                        if #cond {
+                            #(#then_stmts)*
+                        } else {
+                            #(#else_tokens)*
+                        }
+                    })
+                } else {
+                    Ok(quote! {
+                        if #cond {
+                            #(#then_stmts)*
+                        }
+                    })
+                }
+            }
+            IrStmtKind::Match { scrutinee, arms } => {
+                let scrut = self.emit_expr(scrutinee)?;
+                let arm_tokens: Vec<TokenStream> = arms
+                    .iter()
+                    .map(|arm| {
+                        let pat = self.emit_pattern(&arm.pattern);
+                        let body = self.emit_expr(&arm.body)?;
+                        if let Some(guard) = &arm.guard {
+                            let g = self.emit_expr(guard)?;
+                            Ok(quote! { #pat if #g => #body })
+                        } else {
+                            Ok(quote! { #pat => #body })
+                        }
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(quote! {
+                    match #scrut {
+                        #(#arm_tokens),*
+                    }
+                })
+            }
+            IrStmtKind::Block(stmts) => {
+                let inner: Vec<TokenStream> = stmts
+                    .iter()
+                    .map(|s| self.emit_stmt(s))
+                    .collect::<Result<_, _>>()?;
+                Ok(quote! {
+                    {
+                        #(#inner)*
+                    }
+                })
+            }
+        }
+    }
+}

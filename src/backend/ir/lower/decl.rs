@@ -1,0 +1,699 @@
+//! Declaration lowering for AST to IR conversion.
+//!
+//! This module handles lowering of all declaration types: functions, models,
+//! classes, enums, newtypes, traits, and imports.
+
+use std::collections::HashMap;
+
+use super::super::decl::{
+    EnumVariant, FunctionParam, IrDecl, IrDeclKind, IrEnum, IrFunction, IrImpl, IrStruct, IrTrait,
+    StructField, VariantFields, Visibility,
+};
+use super::super::types::IrType;
+use super::super::{IrSpan, Mutability};
+use super::AstLowering;
+use super::errors::LoweringError;
+use crate::frontend::ast::{self, Spanned};
+
+impl AstLowering {
+    /// Lower a declaration to IR.
+    ///
+    /// # Parameters
+    ///
+    /// * `decl` - The AST declaration to lower
+    ///
+    /// # Returns
+    ///
+    /// The corresponding IR declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LoweringError` if the declaration cannot be lowered.
+    pub(super) fn lower_declaration(
+        &mut self,
+        decl: &ast::Declaration,
+    ) -> Result<IrDecl, LoweringError> {
+        let kind = match decl {
+            ast::Declaration::Function(f) => IrDeclKind::Function(self.lower_function(f)?),
+            ast::Declaration::Model(m) => {
+                let struct_ir = self.lower_model(m)?;
+                // Register struct name for constructor detection
+                self.struct_names.insert(
+                    struct_ir.name.clone(),
+                    IrType::Struct(struct_ir.name.clone()),
+                );
+                IrDeclKind::Struct(struct_ir)
+            }
+            ast::Declaration::Class(c) => {
+                let struct_ir = self.lower_class(c)?;
+                // Register struct name for constructor detection
+                self.struct_names.insert(
+                    struct_ir.name.clone(),
+                    IrType::Struct(struct_ir.name.clone()),
+                );
+                IrDeclKind::Struct(struct_ir)
+            }
+            ast::Declaration::Enum(e) => {
+                let enum_ir = self.lower_enum(e)?;
+                // Register enum name for type resolution
+                self.enum_names
+                    .insert(enum_ir.name.clone(), IrType::Enum(enum_ir.name.clone()));
+                IrDeclKind::Enum(enum_ir)
+            }
+            ast::Declaration::Newtype(n) => {
+                let struct_ir = self.lower_newtype(n)?;
+                // Register struct name for constructor detection
+                self.struct_names.insert(
+                    struct_ir.name.clone(),
+                    IrType::Struct(struct_ir.name.clone()),
+                );
+                IrDeclKind::Struct(struct_ir)
+            }
+            ast::Declaration::Import(i) => self.lower_import(i),
+            ast::Declaration::Trait(t) => IrDeclKind::Trait(self.lower_trait(t)?),
+            ast::Declaration::Docstring(_) => {
+                // Skip docstrings in codegen
+                return Err(LoweringError {
+                    message: "Docstrings are not lowered to IR".to_string(),
+                    span: IrSpan::default(),
+                });
+            }
+        };
+        Ok(IrDecl::new(kind))
+    }
+
+    /// Lower a function declaration.
+    ///
+    /// # Parameters
+    ///
+    /// * `f` - The AST function declaration
+    ///
+    /// # Returns
+    ///
+    /// The corresponding IR function.
+    pub(super) fn lower_function(
+        &mut self,
+        f: &ast::FunctionDecl,
+    ) -> Result<IrFunction, LoweringError> {
+        self.scopes.push(HashMap::new());
+
+        let params: Vec<FunctionParam> = f
+            .params
+            .iter()
+            .map(|p| {
+                let base_ty = self.lower_type(&p.node.ty.node);
+                // For mutable parameters, wrap in RefMut to track that it's a &mut reference
+                let ty = if p.node.is_mut {
+                    IrType::RefMut(Box::new(base_ty.clone()))
+                } else {
+                    base_ty.clone()
+                };
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.insert(p.node.name.clone(), ty.clone());
+                }
+                // Track mutable parameters
+                if p.node.is_mut {
+                    self.mutable_vars.insert(p.node.name.clone(), true);
+                }
+                FunctionParam {
+                    name: p.node.name.clone(),
+                    ty: base_ty, // Store the base type in the param (emit will add &mut)
+                    mutability: if p.node.is_mut {
+                        Mutability::Mutable
+                    } else {
+                        Mutability::Immutable
+                    },
+                    is_self: false,
+                }
+            })
+            .collect();
+
+        let return_type = self.lower_type(&f.return_type.node);
+        let body = self.lower_statements(&f.body)?;
+        self.scopes.pop();
+
+        Ok(IrFunction {
+            name: f.name.clone(),
+            params,
+            return_type,
+            body,
+            is_async: f.is_async,
+            visibility: Visibility::Public,
+            type_params: f.type_params.clone(),
+        })
+    }
+
+    /// Extract derives from decorators.
+    ///
+    /// Parses `@derive(Serialize, Deserialize)` decorators and returns the list
+    /// of derive names. Also adds prerequisite derives (e.g., Eq requires PartialEq).
+    pub(super) fn extract_derives(&self, decorators: &[Spanned<ast::Decorator>]) -> Vec<String> {
+        let mut derives = Vec::new();
+
+        for decorator in decorators {
+            if decorator.node.name == "derive" {
+                // Extract derive arguments: @derive(Serialize, Deserialize)
+                for arg in &decorator.node.args {
+                    if let ast::DecoratorArg::Positional(expr) = arg {
+                        // Handle simple identifier expressions
+                        if let ast::Expr::Ident(name) = &expr.node {
+                            derives.push(name.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add prerequisite derives automatically
+        // Eq requires PartialEq
+        if derives.contains(&"Eq".to_string()) && !derives.contains(&"PartialEq".to_string()) {
+            derives.push("PartialEq".to_string());
+        }
+        // Ord requires PartialOrd and Eq (and thus PartialEq)
+        if derives.contains(&"Ord".to_string()) {
+            if !derives.contains(&"PartialOrd".to_string()) {
+                derives.push("PartialOrd".to_string());
+            }
+            if !derives.contains(&"Eq".to_string()) {
+                derives.push("Eq".to_string());
+            }
+            if !derives.contains(&"PartialEq".to_string()) {
+                derives.push("PartialEq".to_string());
+            }
+        }
+
+        derives
+    }
+
+    /// Lower a model declaration to struct.
+    pub(super) fn lower_model(&mut self, m: &ast::ModelDecl) -> Result<IrStruct, LoweringError> {
+        let fields = m
+            .fields
+            .iter()
+            .map(|f| StructField {
+                name: f.node.name.clone(),
+                ty: self.lower_type(&f.node.ty.node),
+                visibility: Visibility::Public,
+            })
+            .collect();
+
+        let mut derives = self.extract_derives(&m.decorators);
+
+        // Models always get Debug and Clone by default
+        if !derives.contains(&"Debug".to_string()) {
+            derives.push("Debug".to_string());
+        }
+        if !derives.contains(&"Clone".to_string()) {
+            derives.push("Clone".to_string());
+        }
+        // Models always get FieldInfo for reflection
+        if !derives.contains(&"FieldInfo".to_string()) {
+            derives.push("FieldInfo".to_string());
+        }
+        // Models always get IncanClass for __class__() and __fields__() methods
+        if !derives.contains(&"IncanClass".to_string()) {
+            derives.push("IncanClass".to_string());
+        }
+
+        Ok(IrStruct {
+            name: m.name.clone(),
+            fields,
+            derives,
+            visibility: Visibility::Public,
+            type_params: m.type_params.clone(),
+        })
+    }
+
+    /// Lower a class declaration to struct.
+    pub(super) fn lower_class(&mut self, c: &ast::ClassDecl) -> Result<IrStruct, LoweringError> {
+        let mut fields: Vec<StructField> = Vec::new();
+
+        // If class extends a parent, include parent fields first
+        if let Some(parent_name) = &c.extends {
+            self.collect_inherited_fields(parent_name, &mut fields)?;
+        }
+
+        // Add this class's own fields
+        for f in &c.fields {
+            fields.push(StructField {
+                name: f.node.name.clone(),
+                ty: self.lower_type(&f.node.ty.node),
+                visibility: Visibility::Public,
+            });
+        }
+
+        let mut derives = self.extract_derives(&c.decorators);
+
+        // Classes always get Debug and Clone by default
+        if !derives.contains(&"Debug".to_string()) {
+            derives.push("Debug".to_string());
+        }
+        if !derives.contains(&"Clone".to_string()) {
+            derives.push("Clone".to_string());
+        }
+        // Classes always get FieldInfo for reflection
+        if !derives.contains(&"FieldInfo".to_string()) {
+            derives.push("FieldInfo".to_string());
+        }
+        // Classes always get IncanClass for __class__() and __fields__() methods
+        if !derives.contains(&"IncanClass".to_string()) {
+            derives.push("IncanClass".to_string());
+        }
+
+        Ok(IrStruct {
+            name: c.name.clone(),
+            fields,
+            derives,
+            visibility: Visibility::Public,
+            type_params: c.type_params.clone(),
+        })
+    }
+
+    /// Recursively collect all inherited fields from parent classes.
+    pub(super) fn collect_inherited_fields(
+        &self,
+        class_name: &str,
+        fields: &mut Vec<StructField>,
+    ) -> Result<(), LoweringError> {
+        if let Some(parent_class) = self.class_decls.get(class_name) {
+            // First, collect grandparent fields if any
+            if let Some(grandparent_name) = &parent_class.extends {
+                self.collect_inherited_fields(grandparent_name, fields)?;
+            }
+
+            // Then add parent's own fields
+            for f in &parent_class.fields {
+                fields.push(StructField {
+                    name: f.node.name.clone(),
+                    ty: self.lower_type(&f.node.ty.node),
+                    visibility: Visibility::Public,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Recursively collect all methods from this class and parent classes.
+    pub(super) fn collect_inherited_methods(
+        &self,
+        class_name: &str,
+        methods: &mut Vec<Spanned<ast::MethodDecl>>,
+    ) -> Result<(), LoweringError> {
+        if let Some(class) = self.class_decls.get(class_name) {
+            // First, collect grandparent methods if any
+            if let Some(parent_name) = &class.extends {
+                self.collect_inherited_methods(parent_name, methods)?;
+            }
+
+            // Then add/override with this class's own methods
+            // If a method with the same name exists, remove it first (child overrides parent)
+            for m in &class.methods {
+                // Remove any existing method with the same name
+                methods.retain(|existing| existing.node.name != m.node.name);
+                // Add the new method
+                methods.push(m.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// Lower a newtype declaration to tuple struct.
+    pub(super) fn lower_newtype(
+        &mut self,
+        n: &ast::NewtypeDecl,
+    ) -> Result<IrStruct, LoweringError> {
+        // Newtype compiles to a tuple struct: struct UserId(i64);
+        // Use "0" as the field name to trigger tuple struct emission
+        let underlying_ty = self.lower_type(&n.underlying.node);
+        let fields = vec![StructField {
+            name: "0".to_string(),
+            ty: underlying_ty.clone(),
+            visibility: Visibility::Public,
+        }];
+        // Newtypes auto-derive Debug, Clone
+        // Only add Copy if underlying type is Copy (int, float, bool)
+        let mut derives = vec!["Debug".to_string(), "Clone".to_string()];
+        if underlying_ty.is_copy() {
+            derives.push("Copy".to_string());
+        }
+        Ok(IrStruct {
+            name: n.name.clone(),
+            fields,
+            derives,
+            visibility: Visibility::Public,
+            type_params: vec![],
+        })
+    }
+
+    /// Lower model methods into an impl block.
+    pub(super) fn lower_model_methods(
+        &mut self,
+        type_name: &str,
+        methods: &[Spanned<ast::MethodDecl>],
+    ) -> Result<IrImpl, LoweringError> {
+        let lowered_methods: Vec<IrFunction> = methods
+            .iter()
+            .map(|m| self.lower_method(&m.node))
+            .collect::<Result<Vec<_>, LoweringError>>()?;
+
+        Ok(IrImpl {
+            target_type: type_name.to_string(),
+            trait_name: None,
+            methods: lowered_methods,
+        })
+    }
+
+    /// Lower trait implementation for a class.
+    ///
+    /// Only methods matching trait signatures go in `impl Trait for Type`.
+    pub(super) fn lower_trait_impl(
+        &mut self,
+        type_name: &str,
+        trait_name: &str,
+        class_methods: &[Spanned<ast::MethodDecl>],
+    ) -> Result<IrImpl, LoweringError> {
+        // Get trait method names to filter class methods
+        let trait_method_names: std::collections::HashSet<String> = self
+            .trait_methods
+            .get(trait_name)
+            .map(|v| v.iter().cloned().collect())
+            .unwrap_or_default();
+
+        // Only include methods that match trait signatures
+        let methods: Vec<IrFunction> = class_methods
+            .iter()
+            .filter(|m| trait_method_names.contains(&m.node.name))
+            .map(|m| {
+                self.scopes.push(HashMap::new());
+
+                // Handle receiver (self) parameter
+                let mut params = Vec::new();
+                if let Some(receiver) = &m.node.receiver {
+                    params.push(FunctionParam {
+                        name: "self".to_string(),
+                        ty: IrType::SelfType,
+                        mutability: match receiver {
+                            ast::Receiver::Immutable => Mutability::Immutable,
+                            ast::Receiver::Mutable => Mutability::Mutable,
+                        },
+                        is_self: true,
+                    });
+                }
+
+                // Add regular parameters
+                let other_params: Vec<FunctionParam> = m
+                    .node
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let base_ty = self.lower_type(&p.node.ty.node);
+                        FunctionParam {
+                            name: p.node.name.clone(),
+                            ty: base_ty,
+                            mutability: if p.node.is_mut {
+                                Mutability::Mutable
+                            } else {
+                                Mutability::Immutable
+                            },
+                            is_self: false,
+                        }
+                    })
+                    .collect();
+                params.extend(other_params);
+
+                let return_type = self.lower_type(&m.node.return_type.node);
+                let body = if let Some(ref body_stmts) = m.node.body {
+                    self.lower_statements(body_stmts)?
+                } else {
+                    vec![]
+                };
+
+                self.scopes.pop();
+
+                Ok(IrFunction {
+                    name: m.node.name.clone(),
+                    params,
+                    return_type,
+                    body,
+                    is_async: m.node.is_async,
+                    visibility: Visibility::Public,
+                    type_params: vec![],
+                })
+            })
+            .collect::<Result<Vec<_>, LoweringError>>()?;
+
+        Ok(IrImpl {
+            target_type: type_name.to_string(),
+            trait_name: Some(trait_name.to_string()),
+            methods,
+        })
+    }
+
+    /// Lower class methods into an impl block.
+    pub(super) fn lower_class_methods(
+        &mut self,
+        type_name: &str,
+        methods: &[Spanned<ast::MethodDecl>],
+    ) -> Result<IrImpl, LoweringError> {
+        let lowered_methods: Vec<IrFunction> = methods
+            .iter()
+            .filter_map(|m| self.lower_method(&m.node).ok())
+            .collect();
+
+        Ok(IrImpl {
+            target_type: type_name.to_string(),
+            trait_name: None,
+            methods: lowered_methods,
+        })
+    }
+
+    /// Lower a method declaration into a function.
+    pub(super) fn lower_method(
+        &mut self,
+        m: &ast::MethodDecl,
+    ) -> Result<IrFunction, LoweringError> {
+        self.scopes.push(HashMap::new());
+
+        let mut params: Vec<FunctionParam> = Vec::new();
+
+        // Add self parameter if receiver is present
+        if let Some(receiver) = m.receiver {
+            let is_mut = matches!(receiver, ast::Receiver::Mutable);
+            params.push(FunctionParam {
+                name: "self".to_string(),
+                ty: IrType::Unknown, // Will be determined by impl context
+                mutability: if is_mut {
+                    Mutability::Mutable
+                } else {
+                    Mutability::Immutable
+                },
+                is_self: true,
+            });
+            // Add self to scope
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.insert("self".to_string(), IrType::Unknown);
+            }
+        }
+
+        // Add regular parameters
+        let other_params: Vec<FunctionParam> = m
+            .params
+            .iter()
+            .map(|p| {
+                let base_ty = self.lower_type(&p.node.ty.node);
+                // For mutable parameters, wrap in RefMut
+                let ty = if p.node.is_mut {
+                    IrType::RefMut(Box::new(base_ty.clone()))
+                } else {
+                    base_ty.clone()
+                };
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.insert(p.node.name.clone(), ty.clone());
+                }
+                // Track mutable parameters
+                if p.node.is_mut {
+                    self.mutable_vars.insert(p.node.name.clone(), true);
+                }
+                FunctionParam {
+                    name: p.node.name.clone(),
+                    ty: base_ty,
+                    mutability: if p.node.is_mut {
+                        Mutability::Mutable
+                    } else {
+                        Mutability::Immutable
+                    },
+                    is_self: p.node.name == "self",
+                }
+            })
+            .collect();
+        params.extend(other_params);
+
+        let return_type = self.lower_type(&m.return_type.node);
+        let body = if let Some(ref body_stmts) = m.body {
+            self.lower_statements(body_stmts)?
+        } else {
+            // Abstract method with no body
+            vec![]
+        };
+        self.scopes.pop();
+
+        Ok(IrFunction {
+            name: m.name.clone(),
+            params,
+            return_type,
+            body,
+            is_async: m.is_async,
+            visibility: Visibility::Public,
+            type_params: vec![],
+        })
+    }
+
+    /// Lower a trait declaration.
+    pub(super) fn lower_trait(&mut self, t: &ast::TraitDecl) -> Result<IrTrait, LoweringError> {
+        let methods: Vec<IrFunction> = t
+            .methods
+            .iter()
+            .map(|m| {
+                self.scopes.push(HashMap::new());
+
+                // Handle receiver (self) parameter
+                let mut params = Vec::new();
+                if let Some(receiver) = &m.node.receiver {
+                    params.push(FunctionParam {
+                        name: "self".to_string(),
+                        ty: IrType::SelfType,
+                        mutability: match receiver {
+                            ast::Receiver::Immutable => Mutability::Immutable,
+                            ast::Receiver::Mutable => Mutability::Mutable,
+                        },
+                        is_self: true,
+                    });
+                }
+
+                // Add regular parameters
+                let other_params: Vec<FunctionParam> = m
+                    .node
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let ty = self.lower_type(&p.node.ty.node);
+                        FunctionParam {
+                            name: p.node.name.clone(),
+                            ty,
+                            mutability: if p.node.is_mut {
+                                Mutability::Mutable
+                            } else {
+                                Mutability::Immutable
+                            },
+                            is_self: false,
+                        }
+                    })
+                    .collect();
+                params.extend(other_params);
+
+                let return_type = self.lower_type(&m.node.return_type.node);
+                let body = if let Some(ref body_stmts) = m.node.body {
+                    self.lower_statements(body_stmts)?
+                } else {
+                    vec![]
+                };
+
+                self.scopes.pop();
+
+                Ok(IrFunction {
+                    name: m.node.name.clone(),
+                    params,
+                    return_type,
+                    body,
+                    is_async: m.node.is_async,
+                    visibility: Visibility::Public,
+                    type_params: vec![],
+                })
+            })
+            .collect::<Result<Vec<_>, LoweringError>>()?;
+
+        Ok(IrTrait {
+            name: t.name.clone(),
+            methods,
+            visibility: Visibility::Public,
+        })
+    }
+
+    /// Lower an enum declaration.
+    pub(super) fn lower_enum(&mut self, e: &ast::EnumDecl) -> Result<IrEnum, LoweringError> {
+        let variants = e
+            .variants
+            .iter()
+            .map(|v| {
+                let fields = if v.node.fields.is_empty() {
+                    VariantFields::Unit
+                } else {
+                    VariantFields::Tuple(
+                        v.node
+                            .fields
+                            .iter()
+                            .map(|t| self.lower_type(&t.node))
+                            .collect(),
+                    )
+                };
+                EnumVariant {
+                    name: v.node.name.clone(),
+                    fields,
+                }
+            })
+            .collect();
+
+        // Enums always get Debug, Clone, PartialEq by default
+        let derives = vec![
+            "Debug".to_string(),
+            "Clone".to_string(),
+            "PartialEq".to_string(),
+        ];
+
+        Ok(IrEnum {
+            name: e.name.clone(),
+            variants,
+            derives,
+            visibility: Visibility::Public,
+            type_params: e.type_params.clone(),
+        })
+    }
+
+    /// Lower an import declaration.
+    pub(super) fn lower_import(&self, i: &ast::ImportDecl) -> IrDeclKind {
+        let (path, ast_items) = match &i.kind {
+            ast::ImportKind::Module(p) => (p.segments.clone(), vec![]),
+            ast::ImportKind::From { module, items } => (module.segments.clone(), items.clone()),
+            ast::ImportKind::RustCrate { crate_name, path } => {
+                let mut segs = vec![crate_name.clone()];
+                segs.extend(path.clone());
+                (segs, vec![])
+            }
+            ast::ImportKind::RustFrom {
+                crate_name,
+                path,
+                items,
+            } => {
+                let mut segs = vec![crate_name.clone()];
+                segs.extend(path.clone());
+                (segs, items.clone())
+            }
+            ast::ImportKind::Python(s) => (vec![s.clone()], vec![]),
+        };
+
+        // Convert AST import items to IR import items
+        let ir_items: Vec<super::super::decl::IrImportItem> = ast_items
+            .iter()
+            .map(|item| super::super::decl::IrImportItem {
+                name: item.name.clone(),
+                alias: item.alias.clone(),
+            })
+            .collect();
+
+        IrDeclKind::Import {
+            path,
+            alias: i.alias.clone(),
+            items: ir_items,
+        }
+    }
+}

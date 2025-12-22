@@ -12,6 +12,16 @@
 //! - `strings` - String/f-string/byte-string scanning
 //! - `numbers` - Numeric literal scanning
 //! - `indent` - INDENT/DEDENT handling
+//!
+//! ## Examples
+//!
+//! ```
+//! use incan::lexer;
+//!
+//! let source = "x = 42";
+//! let tokens = lexer::lex(source).unwrap();
+//! assert!(!tokens.is_empty());
+//! ```
 
 mod indent;
 mod numbers;
@@ -188,8 +198,10 @@ impl<'a> Lexer<'a> {
                 }
                 // Skip blank lines (don't emit newline if we're already at line start)
                 if !self.at_line_start {
-                    self.tokens
-                        .push(Token::new(TokenKind::Newline, Span::new(start, self.current_pos)));
+                    self.tokens.push(Token::new(
+                        TokenKind::Newline,
+                        Span::new(start, self.current_pos),
+                    ));
                 }
                 self.at_line_start = true;
             }
@@ -199,8 +211,16 @@ impl<'a> Lexer<'a> {
 
             // Operators and punctuation
             '+' => self.operator(start, TokenKind::Plus, &[('=', TokenKind::PlusEq)]),
-            '-' => self.operator(start, TokenKind::Minus, &[('>', TokenKind::Arrow), ('=', TokenKind::MinusEq)]),
-            '*' => self.operator(start, TokenKind::Star, &[('=', TokenKind::StarEq)]),
+            '-' => self.operator(
+                start,
+                TokenKind::Minus,
+                &[('>', TokenKind::Arrow), ('=', TokenKind::MinusEq)],
+            ),
+            '*' => self.operator(
+                start,
+                TokenKind::Star,
+                &[('*', TokenKind::StarStar), ('=', TokenKind::StarEq)],
+            ),
             '/' => self.operator(start, TokenKind::Slash, &[('=', TokenKind::SlashEq)]),
             '%' => self.operator(start, TokenKind::Percent, &[('=', TokenKind::PercentEq)]),
             '?' => self.add_token(TokenKind::Question, start),
@@ -213,7 +233,11 @@ impl<'a> Lexer<'a> {
             '{' => self.open_bracket(TokenKind::LBrace, start),
             '}' => self.close_bracket(TokenKind::RBrace, start),
             ':' => self.operator(start, TokenKind::Colon, &[(':', TokenKind::ColonColon)]),
-            '=' => self.operator(start, TokenKind::Eq, &[('=', TokenKind::EqEq), ('>', TokenKind::FatArrow)]),
+            '=' => self.operator(
+                start,
+                TokenKind::Eq,
+                &[('=', TokenKind::EqEq), ('>', TokenKind::FatArrow)],
+            ),
             '!' => {
                 if self.match_char('=') {
                     self.add_token(TokenKind::NotEq, start);
@@ -250,7 +274,7 @@ impl<'a> Lexer<'a> {
                 let quote = self.advance().expect("f-string quote after peek check");
                 self.scan_fstring(start, quote);
             }
-            
+
             // b-strings (byte strings)
             'b' if self.peek() == Some('"') || self.peek() == Some('\'') => {
                 // Safe: we just checked peek() is Some quote char
@@ -342,7 +366,7 @@ impl<'a> Lexer<'a> {
         let kind = KEYWORDS
             .get(name.as_str())
             .cloned()
-            .unwrap_or_else(|| TokenKind::Ident(name));
+            .unwrap_or(TokenKind::Ident(name));
 
         self.add_token(kind, start);
     }
@@ -365,6 +389,7 @@ fn is_ident_continue(c: char) -> bool {
 /// Convenience function to lex a source string.
 ///
 /// This is a shorthand for `Lexer::new(source).tokenize()`.
+#[tracing::instrument(skip_all, fields(source_len = source.len()))]
 pub fn lex(source: &str) -> Result<Vec<Token>, Vec<CompileError>> {
     Lexer::new(source).tokenize()
 }
@@ -405,6 +430,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_numbers() {
         let tokens = lex("42 3.14 1_000_000 1e10").unwrap();
         assert!(matches!(tokens[0].kind, TokenKind::Int(42)));
@@ -424,11 +450,17 @@ mod tests {
     fn test_indentation() {
         let source = "def foo():\n  x = 1\n  y = 2\nx = 3";
         let tokens = lex(source).unwrap();
-        
+
         // Find indent and dedent tokens
-        let indent_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Indent)).count();
-        let dedent_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Dedent)).count();
-        
+        let indent_count = tokens
+            .iter()
+            .filter(|t| matches!(t.kind, TokenKind::Indent))
+            .count();
+        let dedent_count = tokens
+            .iter()
+            .filter(|t| matches!(t.kind, TokenKind::Dedent))
+            .count();
+
         assert_eq!(indent_count, 1, "Should have 1 INDENT token");
         assert_eq!(dedent_count, 1, "Should have 1 DEDENT token");
     }
@@ -462,7 +494,10 @@ mod tests {
     fn test_unicode_identifier_rejected() {
         // Unicode characters should not be valid identifiers (ASCII-only)
         let result = lex("π = 1");
-        assert!(result.is_err(), "Unicode identifier should produce an error");
+        assert!(
+            result.is_err(),
+            "Unicode identifier should produce an error"
+        );
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("Unexpected character"));
@@ -480,11 +515,19 @@ mod tests {
         // Same for ] and }
         let result = lex("]");
         assert!(result.is_err());
-        assert!(result.unwrap_err()[0].message.contains("Unmatched closing bracket"));
+        assert!(
+            result.unwrap_err()[0]
+                .message
+                .contains("Unmatched closing bracket")
+        );
 
         let result = lex("}");
         assert!(result.is_err());
-        assert!(result.unwrap_err()[0].message.contains("Unmatched closing bracket"));
+        assert!(
+            result.unwrap_err()[0]
+                .message
+                .contains("Unmatched closing bracket")
+        );
     }
 
     #[test]
@@ -501,10 +544,16 @@ mod tests {
         // Multiple dedent levels in one line
         let source = "def foo():\n  if True:\n    x = 1\ny = 2";
         let tokens = lex(source).unwrap();
-        
-        let indent_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Indent)).count();
-        let dedent_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Dedent)).count();
-        
+
+        let indent_count = tokens
+            .iter()
+            .filter(|t| matches!(t.kind, TokenKind::Indent))
+            .count();
+        let dedent_count = tokens
+            .iter()
+            .filter(|t| matches!(t.kind, TokenKind::Dedent))
+            .count();
+
         assert_eq!(indent_count, 2, "Should have 2 INDENT tokens");
         assert_eq!(dedent_count, 2, "Should have 2 DEDENT tokens");
     }
@@ -512,10 +561,13 @@ mod tests {
     #[test]
     fn test_tabs_as_spaces() {
         // Tabs count as 2 spaces
-        let source = "def foo():\n\tx = 1";  // Tab indentation
+        let source = "def foo():\n\tx = 1"; // Tab indentation
         let tokens = lex(source).unwrap();
-        
-        let indent_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Indent)).count();
+
+        let indent_count = tokens
+            .iter()
+            .filter(|t| matches!(t.kind, TokenKind::Indent))
+            .count();
         assert_eq!(indent_count, 1, "Tab should produce INDENT");
     }
 
@@ -524,8 +576,11 @@ mod tests {
         // Newlines inside brackets should NOT emit Newline tokens (implicit continuation)
         let source = "foo(\n  x,\n  y\n)";
         let tokens = lex(source).unwrap();
-        
-        let newline_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Newline)).count();
+
+        let newline_count = tokens
+            .iter()
+            .filter(|t| matches!(t.kind, TokenKind::Newline))
+            .count();
         assert_eq!(newline_count, 0, "No Newline tokens inside brackets");
     }
 
