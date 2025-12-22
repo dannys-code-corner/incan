@@ -1,10 +1,23 @@
 //! Parser for the Incan programming language
 //!
 //! Converts a token stream into an AST following RFC 000: Incan Core Language RFC (Phase 1).
+//!
+//! ## Examples
+//!
+//! ```
+//! use incan::{lexer, parser};
+//!
+//! let source = "def foo() -> int:\n    return 42\n";
+//! let tokens = lexer::lex(source).unwrap();
+//! let ast = parser::parse(&tokens).unwrap();
+//! assert_eq!(ast.declarations.len(), 1);
+//! ```
 
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::CompileError;
-use crate::frontend::lexer::{Token, TokenKind, FStringPart as LexFStringPart};
+use crate::frontend::lexer::{FStringPart as LexFStringPart, Token, TokenKind};
+
+type FieldsAndMethods = (Vec<Spanned<FieldDecl>>, Vec<Spanned<MethodDecl>>);
 
 /// Result of parsing index brackets - either a single index or a slice
 enum IndexOrSlice {
@@ -190,13 +203,17 @@ impl<'a> Parser<'a> {
             // Skip optional newline after docstring
             self.match_token(&TokenKind::Newline);
             let end = self.tokens[self.pos.saturating_sub(1)].span.end;
-            return Ok(Spanned::new(Declaration::Docstring(doc), Span::new(start, end)));
+            return Ok(Spanned::new(
+                Declaration::Docstring(doc),
+                Span::new(start, end),
+            ));
         }
 
         // Collect decorators
         let decorators = self.decorators()?;
 
-        let decl = if self.check_keyword(&TokenKind::Import) || self.check_keyword(&TokenKind::From) {
+        let decl = if self.check_keyword(&TokenKind::Import) || self.check_keyword(&TokenKind::From)
+        {
             Declaration::Import(self.import_decl()?)
         } else if self.check_keyword(&TokenKind::Model) {
             Declaration::Model(self.model_decl(decorators)?)
@@ -234,7 +251,10 @@ impl<'a> Parser<'a> {
                 Vec::new()
             };
             let end = self.tokens[self.pos - 1].span.end;
-            decorators.push(Spanned::new(Decorator { name, args }, Span::new(start, end)));
+            decorators.push(Spanned::new(
+                Decorator { name, args },
+                Span::new(start, end),
+            ));
             self.skip_newlines();
         }
         Ok(decorators)
@@ -281,8 +301,11 @@ impl<'a> Parser<'a> {
             if self.match_token(&TokenKind::RustKw) {
                 self.expect(&TokenKind::ColonColon, "Expected '::' after 'rust'")?;
                 let (crate_name, path) = self.rust_crate_path()?;
-                self.expect(&TokenKind::Import, "Expected 'import' after rust crate path")?;
-                
+                self.expect(
+                    &TokenKind::Import,
+                    "Expected 'import' after rust crate path",
+                )?;
+
                 // Parse import items
                 let mut items = Vec::new();
                 loop {
@@ -293,22 +316,26 @@ impl<'a> Parser<'a> {
                         None
                     };
                     items.push(ImportItem { name, alias });
-                    
+
                     if !self.match_token(&TokenKind::Comma) {
                         break;
                     }
                 }
-                
+
                 return Ok(ImportDecl {
-                    kind: ImportKind::RustFrom { crate_name, path, items },
+                    kind: ImportKind::RustFrom {
+                        crate_name,
+                        path,
+                        items,
+                    },
                     alias: None,
                 });
             }
-            
+
             // Regular from import
             let module = self.import_path()?;
             self.expect(&TokenKind::Import, "Expected 'import' after module path")?;
-            
+
             // Parse import items: item1, item2 as alias, item3, ...
             let mut items = Vec::new();
             loop {
@@ -319,18 +346,18 @@ impl<'a> Parser<'a> {
                     None
                 };
                 items.push(ImportItem { name, alias });
-                
+
                 if !self.match_token(&TokenKind::Comma) {
                     break;
                 }
             }
-            
+
             return Ok(ImportDecl {
                 kind: ImportKind::From { module, items },
                 alias: None,
             });
         }
-        
+
         // Regular import syntax (Rust-style)
         self.expect(&TokenKind::Import, "Expected 'import'")?;
 
@@ -357,7 +384,7 @@ impl<'a> Parser<'a> {
 
         Ok(ImportDecl { kind, alias })
     }
-    
+
     /// Parse a Rust crate path after `rust::`
     /// Returns (crate_name, optional_path_within_crate)
     /// Examples:
@@ -367,12 +394,12 @@ impl<'a> Parser<'a> {
     fn rust_crate_path(&mut self) -> Result<(String, Vec<Ident>), CompileError> {
         let crate_name = self.identifier()?;
         let mut path = Vec::new();
-        
+
         while self.match_token(&TokenKind::ColonColon) {
             let segment = self.identifier()?;
             path.push(segment);
         }
-        
+
         Ok((crate_name, path))
     }
 
@@ -410,7 +437,10 @@ impl<'a> Parser<'a> {
             // Expect :: or . after super
             if !self.match_token(&TokenKind::ColonColon) && !self.match_token(&TokenKind::Dot) {
                 // Could be end of path if no more segments
-                if !self.check(&TokenKind::Import) && !self.check(&TokenKind::As) && !self.check(&TokenKind::Newline) {
+                if !self.check(&TokenKind::Import)
+                    && !self.check(&TokenKind::As)
+                    && !self.check(&TokenKind::Newline)
+                {
                     return Err(CompileError::syntax(
                         "Expected '::' or '.' after 'super'".to_string(),
                         self.current_span(),
@@ -423,12 +453,10 @@ impl<'a> Parser<'a> {
         // First segment
         if let Ok(first) = self.identifier() {
             segments.push(first);
-            
+
             // Continue with :: or . separators
             loop {
-                if self.match_token(&TokenKind::ColonColon) {
-                    segments.push(self.identifier()?);
-                } else if self.match_token(&TokenKind::Dot) {
+                if self.match_token(&TokenKind::ColonColon) || self.match_token(&TokenKind::Dot) {
                     segments.push(self.identifier()?);
                 } else {
                     break;
@@ -443,7 +471,10 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn model_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<ModelDecl, CompileError> {
+    fn model_decl(
+        &mut self,
+        decorators: Vec<Spanned<Decorator>>,
+    ) -> Result<ModelDecl, CompileError> {
         self.expect(&TokenKind::Model, "Expected 'model'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -464,7 +495,10 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn class_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<ClassDecl, CompileError> {
+    fn class_decl(
+        &mut self,
+        decorators: Vec<Spanned<Decorator>>,
+    ) -> Result<ClassDecl, CompileError> {
         self.expect(&TokenKind::Class, "Expected 'class'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -500,7 +534,10 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn trait_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<TraitDecl, CompileError> {
+    fn trait_decl(
+        &mut self,
+        decorators: Vec<Spanned<Decorator>>,
+    ) -> Result<TraitDecl, CompileError> {
         self.expect(&TokenKind::Trait, "Expected 'trait'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -510,10 +547,16 @@ impl<'a> Parser<'a> {
 
         let mut methods = Vec::new();
         self.skip_newlines();
-        while !self.check(&TokenKind::Dedent) && !self.is_at_end() {
-            let method_decorators = self.decorators()?;
-            methods.push(self.method_decl(method_decorators)?);
+
+        // Allow empty trait body with just 'pass'
+        if self.match_token(&TokenKind::Pass) {
             self.skip_newlines();
+        } else {
+            while !self.check(&TokenKind::Dedent) && !self.is_at_end() {
+                let method_decorators = self.decorators()?;
+                methods.push(self.method_decl(method_decorators)?);
+                self.skip_newlines();
+            }
         }
 
         self.expect(&TokenKind::Dedent, "Expected dedent after trait body")?;
@@ -590,7 +633,8 @@ impl<'a> Parser<'a> {
 
     fn variant_decl(&mut self) -> Result<Spanned<VariantDecl>, CompileError> {
         let start = self.current_span().start;
-        let name = self.identifier()?;
+        // Allow keywords like "None" as variant names (Rust allows this)
+        let name = self.identifier_or_keyword()?;
         let fields = if self.match_token(&TokenKind::LParen) {
             let fields = self.type_list()?;
             self.expect(&TokenKind::RParen, "Expected ')' after variant fields")?;
@@ -599,17 +643,23 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(VariantDecl { name, fields }, Span::new(start, end)))
+        Ok(Spanned::new(
+            VariantDecl { name, fields },
+            Span::new(start, end),
+        ))
     }
 
-    fn function_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<FunctionDecl, CompileError> {
+    fn function_decl(
+        &mut self,
+        decorators: Vec<Spanned<Decorator>>,
+    ) -> Result<FunctionDecl, CompileError> {
         let is_async = self.match_token(&TokenKind::Async);
         self.expect(&TokenKind::Def, "Expected 'def'")?;
         let name = self.identifier()?;
-        
+
         // Parse optional generic type parameters: def func[T, E](...)
         let type_params = self.type_params()?;
-        
+
         self.expect(&TokenKind::LParen, "Expected '(' after function name")?;
         let params = self.params()?;
         self.expect(&TokenKind::RParen, "Expected ')' after parameters")?;
@@ -634,7 +684,10 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn method_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<Spanned<MethodDecl>, CompileError> {
+    fn method_decl(
+        &mut self,
+        decorators: Vec<Spanned<Decorator>>,
+    ) -> Result<Spanned<MethodDecl>, CompileError> {
         let start = self.current_span().start;
         let is_async = self.match_token(&TokenKind::Async);
         self.expect(&TokenKind::Def, "Expected 'def'")?;
@@ -648,8 +701,11 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Arrow, "Expected '->' before return type")?;
         let return_type = self.type_expr()?;
 
-        // Check for abstract method (...) or block
-        let body = if self.match_token(&TokenKind::Colon) {
+        // Check for abstract method (no body), ellipsis, or block
+        let body = if self.check(&TokenKind::Newline) {
+            // Abstract method with just newline (trait definition)
+            None
+        } else if self.match_token(&TokenKind::Colon) {
             if self.match_token(&TokenKind::Ellipsis) {
                 None
             } else {
@@ -661,7 +717,7 @@ impl<'a> Parser<'a> {
             }
         } else {
             return Err(CompileError::syntax(
-                "Expected ':' after return type".to_string(),
+                "Expected ':' after return type or newline for abstract method".to_string(),
                 self.current_span(),
             ));
         };
@@ -682,7 +738,9 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn receiver_and_params(&mut self) -> Result<(Option<Receiver>, Vec<Spanned<Param>>), CompileError> {
+    fn receiver_and_params(
+        &mut self,
+    ) -> Result<(Option<Receiver>, Vec<Spanned<Param>>), CompileError> {
         // Check for receiver
         let receiver = if self.check_keyword(&TokenKind::Mut) {
             self.advance();
@@ -736,10 +794,18 @@ impl<'a> Parser<'a> {
             None
         };
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(Param { is_mut, name, ty, default }, Span::new(start, end)))
+        Ok(Spanned::new(
+            Param {
+                is_mut,
+                name,
+                ty,
+                default,
+            },
+            Span::new(start, end),
+        ))
     }
 
-    fn fields_and_methods(&mut self) -> Result<(Vec<Spanned<FieldDecl>>, Vec<Spanned<MethodDecl>>), CompileError> {
+    fn fields_and_methods(&mut self) -> Result<FieldsAndMethods, CompileError> {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
 
@@ -777,7 +843,10 @@ impl<'a> Parser<'a> {
             None
         };
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(FieldDecl { name, ty, default }, Span::new(start, end)))
+        Ok(Spanned::new(
+            FieldDecl { name, ty, default },
+            Span::new(start, end),
+        ))
     }
 
     // ========================================================================
@@ -859,7 +928,10 @@ impl<'a> Parser<'a> {
         // Handle None as a type (alias for unit/void)
         if self.match_token(&TokenKind::None) {
             let end = self.tokens[self.pos - 1].span.end;
-            return Ok(Spanned::new(Type::Simple("None".to_string()), Span::new(start, end)));
+            return Ok(Spanned::new(
+                Type::Simple("None".to_string()),
+                Span::new(start, end),
+            ));
         }
 
         // Named type
@@ -876,7 +948,10 @@ impl<'a> Parser<'a> {
             let args = self.type_list()?;
             self.expect(&TokenKind::RBracket, "Expected ']' after type arguments")?;
             let end = self.tokens[self.pos - 1].span.end;
-            Ok(Spanned::new(Type::Generic(name, args), Span::new(start, end)))
+            Ok(Spanned::new(
+                Type::Generic(name, args),
+                Span::new(start, end),
+            ))
         } else {
             let end = self.tokens[self.pos - 1].span.end;
             Ok(Spanned::new(Type::Simple(name), Span::new(start, end)))
@@ -949,19 +1024,19 @@ impl<'a> Parser<'a> {
     /// Supports: return, expression statements, pass
     fn inline_statement(&mut self) -> Result<Spanned<Statement>, CompileError> {
         let start = self.current_span().start;
-        
+
         let stmt = if self.check_keyword(&TokenKind::Return) {
             self.advance();
-            let expr = if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Case) && !self.check(&TokenKind::Dedent) {
+            let expr = if !self.check(&TokenKind::Newline)
+                && !self.check(&TokenKind::Case)
+                && !self.check(&TokenKind::Dedent)
+            {
                 Some(self.expression()?)
             } else {
                 None
             };
             Statement::Return(expr)
-        } else if self.check_keyword(&TokenKind::Pass) {
-            self.advance();
-            Statement::Pass
-        } else if self.check(&TokenKind::Ellipsis) {
+        } else if self.check_keyword(&TokenKind::Pass) || self.check(&TokenKind::Ellipsis) {
             self.advance();
             Statement::Pass
         } else {
@@ -969,7 +1044,7 @@ impl<'a> Parser<'a> {
             let expr = self.expression()?;
             Statement::Expr(expr)
         };
-        
+
         let end = self.tokens[self.pos.saturating_sub(1)].span.end;
         Ok(Spanned::new(stmt, Span::new(start, end)))
     }
@@ -993,6 +1068,17 @@ impl<'a> Parser<'a> {
         let then_body = self.block()?;
         self.expect(&TokenKind::Dedent, "Expected dedent after if body")?;
 
+        let mut elif_branches = vec![];
+        while self.match_token(&TokenKind::Elif) {
+            let elif_condition = self.expression()?;
+            self.expect(&TokenKind::Colon, "Expected ':' after elif condition")?;
+            self.expect(&TokenKind::Newline, "Expected newline after ':'")?;
+            self.expect(&TokenKind::Indent, "Expected indented block")?;
+            let elif_body = self.block()?;
+            self.expect(&TokenKind::Dedent, "Expected dedent after elif body")?;
+            elif_branches.push((elif_condition, elif_body));
+        }
+
         let else_body = if self.match_token(&TokenKind::Else) {
             self.expect(&TokenKind::Colon, "Expected ':' after else")?;
             self.expect(&TokenKind::Newline, "Expected newline after ':'")?;
@@ -1007,6 +1093,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::If(IfStmt {
             condition,
             then_body,
+            elif_branches,
             else_body,
         }))
     }
@@ -1047,7 +1134,7 @@ impl<'a> Parser<'a> {
         };
 
         let name = self.identifier()?;
-        
+
         // Check for tuple unpacking: a, b, c = expr
         if self.match_token(&TokenKind::Comma) {
             let mut names = vec![name];
@@ -1065,30 +1152,53 @@ impl<'a> Parser<'a> {
                 value,
             }));
         }
-        
+
         let ty = if self.match_token(&TokenKind::Colon) {
             Some(self.type_expr()?)
         } else {
             None
         };
         self.expect(&TokenKind::Eq, "Expected '=' in assignment")?;
+
+        // Check for chained assignment: x = y = z = 5
+        // Collect all targets before the final value
+        let mut targets = vec![name];
+        while let TokenKind::Ident(_) = &self.peek().kind {
+            if self.peek_next().kind == TokenKind::Eq {
+                targets.push(self.identifier()?);
+                self.expect(&TokenKind::Eq, "Expected '=' in chained assignment")?;
+            } else {
+                break;
+            }
+        }
+
         let value = self.expression()?;
 
-        Ok(Statement::Assignment(AssignmentStmt {
-            binding,
-            name,
-            ty,
-            value,
-        }))
+        // If we have multiple targets, create a ChainedAssignment
+        if targets.len() > 1 {
+            Ok(Statement::ChainedAssignment(ChainedAssignmentStmt {
+                binding,
+                targets,
+                value,
+            }))
+        } else {
+            Ok(Statement::Assignment(AssignmentStmt {
+                binding,
+                name: targets.into_iter().next().unwrap(),
+                ty,
+                value,
+            }))
+        }
     }
 
     fn assignment_or_expr_stmt(&mut self) -> Result<Statement, CompileError> {
         // Look for `ident = expr` or `ident, ident = expr` pattern (simple or tuple assignment)
         if let TokenKind::Ident(_) = &self.peek().kind {
             // Check if next is = or : (for assignment) or , (for tuple unpacking)
-            if self.peek_next().kind == TokenKind::Eq 
+            if self.peek_next().kind == TokenKind::Eq
                 || self.peek_next().kind == TokenKind::Colon
-                || self.peek_next().kind == TokenKind::Comma {
+                || self.peek_next().kind == TokenKind::Comma
+            {
                 return self.assignment_stmt();
             }
             // Check for compound assignment: ident += expr, ident -= expr, etc.
@@ -1114,7 +1224,7 @@ impl<'a> Parser<'a> {
 
         // Parse the expression (could be field access like self.field or index like arr[i])
         let expr = self.expression()?;
-        
+
         // Check for tuple assignment: expr, expr, ... = value
         // This handles patterns like: arr[i], arr[j] = arr[j], arr[i]
         if self.match_token(&TokenKind::Comma) {
@@ -1128,12 +1238,9 @@ impl<'a> Parser<'a> {
             }
             self.expect(&TokenKind::Eq, "Expected '=' in tuple assignment")?;
             let value = self.expression()?;
-            return Ok(Statement::TupleAssign(TupleAssignStmt {
-                targets,
-                value,
-            }));
+            return Ok(Statement::TupleAssign(TupleAssignStmt { targets, value }));
         }
-        
+
         // Check for assignment: expr.field = value or expr[index] = value
         if self.match_token(&TokenKind::Eq) {
             match expr.node {
@@ -1161,7 +1268,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        
+
         // Check for compound assignment on field/index: expr.field += value, expr[i] -= value
         let compound_op = match &self.peek().kind {
             TokenKind::PlusEq => Some(CompoundOp::Add),
@@ -1177,10 +1284,8 @@ impl<'a> Parser<'a> {
             match expr.node {
                 Expr::Field(object, field) => {
                     // Convert field += rhs to field = field + rhs
-                    let field_expr = Spanned::new(
-                        Expr::Field(object.clone(), field.clone()),
-                        expr.span,
-                    );
+                    let field_expr =
+                        Spanned::new(Expr::Field(object.clone(), field.clone()), expr.span);
                     let bin_op = match op {
                         CompoundOp::Add => BinaryOp::Add,
                         CompoundOp::Sub => BinaryOp::Sub,
@@ -1200,10 +1305,8 @@ impl<'a> Parser<'a> {
                 }
                 Expr::Index(object, index) => {
                     // Convert arr[i] += rhs to arr[i] = arr[i] + rhs
-                    let index_expr = Spanned::new(
-                        Expr::Index(object.clone(), index.clone()),
-                        expr.span,
-                    );
+                    let index_expr =
+                        Spanned::new(Expr::Index(object.clone(), index.clone()), expr.span);
                     let bin_op = match op {
                         CompoundOp::Add => BinaryOp::Add,
                         CompoundOp::Sub => BinaryOp::Sub,
@@ -1237,7 +1340,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        
+
         // Otherwise it's an expression statement
         Ok(Statement::Expr(expr))
     }
@@ -1281,7 +1384,10 @@ impl<'a> Parser<'a> {
             let start = self.tokens[self.pos - 1].span.start;
             let expr = self.not_expr()?;
             let span = Span::new(start, expr.span.end);
-            Ok(Spanned::new(Expr::Unary(UnaryOp::Not, Box::new(expr)), span))
+            Ok(Spanned::new(
+                Expr::Unary(UnaryOp::Not, Box::new(expr)),
+                span,
+            ))
         } else {
             self.comparison()
         }
@@ -1305,7 +1411,8 @@ impl<'a> Parser<'a> {
                 BinaryOp::GtEq
             } else if self.match_token(&TokenKind::In) {
                 BinaryOp::In
-            } else if self.check_keyword(&TokenKind::Not) && self.peek_next().kind == TokenKind::In {
+            } else if self.check_keyword(&TokenKind::Not) && self.peek_next().kind == TokenKind::In
+            {
                 self.advance(); // not
                 self.advance(); // in
                 BinaryOp::NotIn
@@ -1370,7 +1477,7 @@ impl<'a> Parser<'a> {
     }
 
     fn multiplicative(&mut self) -> Result<Spanned<Expr>, CompileError> {
-        let mut left = self.unary()?;
+        let mut left = self.power()?;
 
         loop {
             let op = if self.match_token(&TokenKind::Star) {
@@ -1383,9 +1490,25 @@ impl<'a> Parser<'a> {
                 break;
             };
 
-            let right = self.unary()?;
+            let right = self.power()?;
             let span = left.span.merge(right.span);
             left = Spanned::new(Expr::Binary(Box::new(left), op, Box::new(right)), span);
+        }
+
+        Ok(left)
+    }
+
+    fn power(&mut self) -> Result<Spanned<Expr>, CompileError> {
+        let mut left = self.unary()?;
+
+        // Right-associative: 2**3**2 = 2**(3**2)
+        if self.match_token(&TokenKind::StarStar) {
+            let right = self.power()?; // recursive for right-associativity
+            let span = left.span.merge(right.span);
+            left = Spanned::new(
+                Expr::Binary(Box::new(left), BinaryOp::Pow, Box::new(right)),
+                span,
+            );
         }
 
         Ok(left)
@@ -1396,7 +1519,10 @@ impl<'a> Parser<'a> {
             let start = self.tokens[self.pos - 1].span.start;
             let expr = self.unary()?;
             let span = Span::new(start, expr.span.end);
-            Ok(Spanned::new(Expr::Unary(UnaryOp::Neg, Box::new(expr)), span))
+            Ok(Spanned::new(
+                Expr::Unary(UnaryOp::Neg, Box::new(expr)),
+                span,
+            ))
         } else if self.match_token(&TokenKind::Await) {
             let start = self.tokens[self.pos - 1].span.start;
             let expr = self.unary()?;
@@ -1424,7 +1550,8 @@ impl<'a> Parser<'a> {
                     // Use the index as a string field name
                     expr = Spanned::new(Expr::Field(Box::new(expr), idx.to_string()), span);
                 } else {
-                    let name = self.identifier()?;
+                    // Allow keywords like "None" as field/variant names
+                    let name = self.identifier_or_keyword()?;
                     if self.match_token(&TokenKind::LParen) {
                         let args = self.call_args()?;
                         self.expect(&TokenKind::RParen, "Expected ')' after arguments")?;
@@ -1468,7 +1595,7 @@ impl<'a> Parser<'a> {
         if self.check(&TokenKind::Colon) {
             return self.parse_slice(None);
         }
-        
+
         // Check for immediate closing bracket (not valid, but let expression handle error)
         if self.check(&TokenKind::RBracket) {
             return Err(CompileError::syntax(
@@ -1476,32 +1603,32 @@ impl<'a> Parser<'a> {
                 self.current_span(),
             ));
         }
-        
+
         // Parse first expression
         let first = self.expression()?;
-        
+
         // Check if this is a slice (has colon after first expression)
         if self.check(&TokenKind::Colon) {
             return self.parse_slice(Some(first));
         }
-        
+
         // Just a regular index
         Ok(IndexOrSlice::Index(first))
     }
-    
+
     /// Parse slice syntax after optional start expression
     /// start is already parsed, now parse [:end[:step]]
     fn parse_slice(&mut self, start: Option<Spanned<Expr>>) -> Result<IndexOrSlice, CompileError> {
         // Consume the first colon
         self.expect(&TokenKind::Colon, "Expected ':' in slice")?;
-        
+
         // Parse end (optional - check for ] or :)
         let end = if !self.check(&TokenKind::RBracket) && !self.check(&TokenKind::Colon) {
             Some(Box::new(self.expression()?))
         } else {
             None
         };
-        
+
         // Parse step (optional - only if there's another colon)
         let step = if self.match_token(&TokenKind::Colon) {
             if !self.check(&TokenKind::RBracket) {
@@ -1512,7 +1639,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        
+
         Ok(IndexOrSlice::Slice(SliceExpr {
             start: start.map(Box::new),
             end,
@@ -1522,12 +1649,15 @@ impl<'a> Parser<'a> {
 
     fn primary(&mut self) -> Result<Spanned<Expr>, CompileError> {
         let start = self.current_span().start;
-        
+
         // Await expression
         if self.match_token(&TokenKind::Await) {
             let inner = self.expression()?;
             let end = inner.span.end;
-            return Ok(Spanned::new(Expr::Await(Box::new(inner)), Span::new(start, end)));
+            return Ok(Spanned::new(
+                Expr::Await(Box::new(inner)),
+                Span::new(start, end),
+            ));
         }
 
         // Yield expression (for fixtures/generators)
@@ -1537,7 +1667,10 @@ impl<'a> Parser<'a> {
             if self.is_at_expr_start() {
                 let inner = self.expression()?;
                 let end = inner.span.end;
-                return Ok(Spanned::new(Expr::Yield(Some(Box::new(inner))), Span::new(start, end)));
+                return Ok(Spanned::new(
+                    Expr::Yield(Some(Box::new(inner))),
+                    Span::new(start, end),
+                ));
             } else {
                 return Ok(Spanned::new(Expr::Yield(None), Span::new(start, end_span)));
             }
@@ -1645,7 +1778,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn convert_fstring_parts(&self, parts: &[LexFStringPart], fstring_span: Span) -> Vec<FStringPart> {
+    fn convert_fstring_parts(
+        &self,
+        parts: &[LexFStringPart],
+        fstring_span: Span,
+    ) -> Vec<FStringPart> {
         parts
             .iter()
             .map(|p| match p {
@@ -1663,25 +1800,27 @@ impl<'a> Parser<'a> {
     fn parse_fstring_expr(&self, s: &str) -> Expr {
         // Properly parse the expression string by lexing and parsing it
         use crate::frontend::lexer;
-        
+
         // Try to lex and parse the expression
         if let Ok(mut tokens) = lexer::lex(s) {
             // Ensure we have an EOF token at the end for the parser
-            if tokens.is_empty() || !matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)) {
+            if tokens.is_empty() || !matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof))
+            {
                 tokens.push(Token {
                     kind: TokenKind::Eof,
                     span: Span::default(),
                 });
             }
-            
-            if tokens.len() > 1 { // At least one real token plus EOF
+
+            if tokens.len() > 1 {
+                // At least one real token plus EOF
                 let mut parser = Parser::new(&tokens);
                 if let Ok(expr) = parser.expression() {
                     return expr.node;
                 }
             }
         }
-        
+
         // Fallback: treat as simple identifier
         Expr::Ident(s.to_string())
     }
@@ -1713,16 +1852,16 @@ impl<'a> Parser<'a> {
         // Support both `case Pattern:` and `Pattern =>` syntax
         let pattern = if self.match_token(&TokenKind::Case) {
             let pat = self.pattern()?;
-            
+
             // Check for optional guard: `case pattern if condition:`
             let guard = if self.match_token(&TokenKind::If) {
                 Some(self.expression()?)
             } else {
                 None
             };
-            
+
             self.expect(&TokenKind::Colon, "Expected ':' after case pattern")?;
-            
+
             // Check if inline or block
             if self.match_token(&TokenKind::Newline) {
                 self.expect(&TokenKind::Indent, "Expected indented block")?;
@@ -1819,7 +1958,10 @@ impl<'a> Parser<'a> {
             }
             self.expect(&TokenKind::RParen, "Expected ')' after tuple pattern")?;
             let end = self.tokens[self.pos - 1].span.end;
-            return Ok(Spanned::new(Pattern::Tuple(patterns), Span::new(start, end)));
+            return Ok(Spanned::new(
+                Pattern::Tuple(patterns),
+                Span::new(start, end),
+            ));
         }
 
         // Identifier (binding) or constructor pattern
@@ -1829,17 +1971,26 @@ impl<'a> Parser<'a> {
 
             // Check for qualified pattern: Type.Variant or Type.Variant(args)
             if self.match_token(&TokenKind::Dot) {
-                if let TokenKind::Ident(variant) = &self.peek().kind {
-                    let variant = variant.clone();
-                    self.advance();
-                    // Build qualified name: "Type::Variant" for Rust
-                    name = format!("{}::{}", name, variant);
-                } else {
-                    return Err(CompileError::syntax(
-                        "Expected variant name after '.'".to_string(),
-                        self.current_span(),
-                    ));
-                }
+                let variant = match &self.peek().kind {
+                    TokenKind::Ident(v) => {
+                        let v = v.clone();
+                        self.advance();
+                        v
+                    }
+                    TokenKind::None => {
+                        // Allow "None" as a variant name (e.g., Maybe.None)
+                        self.advance();
+                        "None".to_string()
+                    }
+                    _ => {
+                        return Err(CompileError::syntax(
+                            "Expected variant name after '.'".to_string(),
+                            self.current_span(),
+                        ));
+                    }
+                };
+                // Build qualified name: "Type::Variant" for Rust
+                name = format!("{}::{}", name, variant);
             }
 
             if self.match_token(&TokenKind::LParen) {
@@ -1915,7 +2066,7 @@ impl<'a> Parser<'a> {
     fn list_or_comp(&mut self, start: usize) -> Result<Spanned<Expr>, CompileError> {
         // Implicit line continuation: skip newlines after [
         self.skip_newlines();
-        
+
         // Empty list
         if self.match_token(&TokenKind::RBracket) {
             let end = self.tokens[self.pos - 1].span.end;
@@ -1972,7 +2123,7 @@ impl<'a> Parser<'a> {
     fn dict_or_comp(&mut self, start: usize) -> Result<Spanned<Expr>, CompileError> {
         // Implicit line continuation: skip newlines after {
         self.skip_newlines();
-        
+
         // Empty dict/set
         if self.match_token(&TokenKind::RBrace) {
             let end = self.tokens[self.pos - 1].span.end;
@@ -1981,7 +2132,7 @@ impl<'a> Parser<'a> {
 
         let first = self.expression()?;
         self.skip_newlines();
-        
+
         // Determine if this is a dict (has :) or set (no :)
         if self.match_token(&TokenKind::Colon) {
             self.skip_newlines();
@@ -2057,7 +2208,7 @@ impl<'a> Parser<'a> {
     fn paren_or_tuple(&mut self, start: usize) -> Result<Spanned<Expr>, CompileError> {
         // Implicit line continuation: skip newlines after (
         self.skip_newlines();
-        
+
         // Empty parens - could be () => expr (closure) or () (unit tuple)
         if self.match_token(&TokenKind::RParen) {
             // Check for arrow function: () => expr
@@ -2065,7 +2216,10 @@ impl<'a> Parser<'a> {
                 self.skip_newlines();
                 let body = self.expression()?;
                 let end = body.span.end;
-                return Ok(Spanned::new(Expr::Closure(Vec::new(), Box::new(body)), Span::new(start, end)));
+                return Ok(Spanned::new(
+                    Expr::Closure(Vec::new(), Box::new(body)),
+                    Span::new(start, end),
+                ));
             }
             let end = self.tokens[self.pos - 1].span.end;
             return Ok(Spanned::new(Expr::Tuple(Vec::new()), Span::new(start, end)));
@@ -2092,39 +2246,51 @@ impl<'a> Parser<'a> {
                 }
             }
             self.expect(&TokenKind::RParen, "Expected ')' after tuple")?;
-            
+
             // Check for arrow function: (x, y) => expr
             if self.match_token(&TokenKind::FatArrow) {
                 self.skip_newlines();
                 let params = self.exprs_to_params(&elements)?;
                 let body = self.expression()?;
                 let end = body.span.end;
-                return Ok(Spanned::new(Expr::Closure(params, Box::new(body)), Span::new(start, end)));
+                return Ok(Spanned::new(
+                    Expr::Closure(params, Box::new(body)),
+                    Span::new(start, end),
+                ));
             }
-            
+
             let end = self.tokens[self.pos - 1].span.end;
             return Ok(Spanned::new(Expr::Tuple(elements), Span::new(start, end)));
         }
 
         // Just parenthesized expression (or single-param closure)
         self.expect(&TokenKind::RParen, "Expected ')'")?;
-        
+
         // Check for arrow function: (x) => expr
         if self.match_token(&TokenKind::FatArrow) {
             self.skip_newlines();
-            let params = self.exprs_to_params(&[first.clone()])?;
+            let params = self.exprs_to_params(std::slice::from_ref(&first))?;
             let body = self.expression()?;
             let end = body.span.end;
-            return Ok(Spanned::new(Expr::Closure(params, Box::new(body)), Span::new(start, end)));
+            return Ok(Spanned::new(
+                Expr::Closure(params, Box::new(body)),
+                Span::new(start, end),
+            ));
         }
-        
+
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(Expr::Paren(Box::new(first)), Span::new(start, end)))
+        Ok(Spanned::new(
+            Expr::Paren(Box::new(first)),
+            Span::new(start, end),
+        ))
     }
-    
+
     /// Convert expressions to closure parameters
     /// Only identifiers are valid as closure params
-    fn exprs_to_params(&self, exprs: &[Spanned<Expr>]) -> Result<Vec<Spanned<Param>>, CompileError> {
+    fn exprs_to_params(
+        &self,
+        exprs: &[Spanned<Expr>],
+    ) -> Result<Vec<Spanned<Param>>, CompileError> {
         let mut params = Vec::new();
         for expr in exprs {
             match &expr.node {
@@ -2132,7 +2298,7 @@ impl<'a> Parser<'a> {
                     // Closure params have inferred types (represented as "_")
                     let inferred_ty = Spanned::new(Type::Simple("_".to_string()), expr.span);
                     params.push(Spanned::new(
-                        Param { 
+                        Param {
                             is_mut: false,
                             name: name.clone(),
                             ty: inferred_ty,
@@ -2155,7 +2321,7 @@ impl<'a> Parser<'a> {
     fn call_args(&mut self) -> Result<Vec<CallArg>, CompileError> {
         // Implicit line continuation: skip newlines after (
         self.skip_newlines();
-        
+
         let mut args = Vec::new();
         if !self.check(&TokenKind::RParen) {
             loop {
@@ -2164,7 +2330,7 @@ impl<'a> Parser<'a> {
                 if self.check(&TokenKind::RParen) {
                     break;
                 }
-                
+
                 // Check for named argument
                 if let TokenKind::Ident(name) = &self.peek().kind {
                     let name = name.clone();
@@ -2210,6 +2376,26 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse an identifier, allowing certain keywords in specific contexts (like enum variants)
+    fn identifier_or_keyword(&mut self) -> Result<Ident, CompileError> {
+        match &self.peek().kind {
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                self.advance();
+                Ok(name)
+            }
+            TokenKind::None => {
+                // Allow "None" as an identifier in enum variant context
+                self.advance();
+                Ok("None".to_string())
+            }
+            _ => Err(CompileError::syntax(
+                format!("Expected identifier, found {:?}", self.peek().kind),
+                self.current_span(),
+            )),
+        }
+    }
+
     fn identifier_list(&mut self) -> Result<Vec<Ident>, CompileError> {
         let mut idents = vec![self.identifier()?];
         while self.match_token(&TokenKind::Comma) {
@@ -2234,6 +2420,7 @@ impl<'a> Parser<'a> {
 }
 
 /// Convenience function to parse a token stream
+#[tracing::instrument(skip_all, fields(token_count = tokens.len()))]
 pub fn parse(tokens: &[Token]) -> Result<Program, Vec<CompileError>> {
     Parser::new(tokens).parse()
 }
@@ -2253,8 +2440,13 @@ mod tests {
         // We intentionally allow the lexer to emit INDENT/DEDENT tokens at the top-level.
         // The parser should produce a single clear error and avoid cascading failures.
         let source = "  x = 1\n";
-        let err = parse_str(source).expect_err("Top-level indentation should be rejected by the parser");
-        assert_eq!(err.len(), 1, "Parser should return exactly one error (no cascade)");
+        let err =
+            parse_str(source).expect_err("Top-level indentation should be rejected by the parser");
+        assert_eq!(
+            err.len(),
+            1,
+            "Parser should return exactly one error (no cascade)"
+        );
         assert!(
             err[0].message.contains("Expected declaration") && err[0].message.contains("Indent"),
             "Error message should clearly indicate the unexpected INDENT token; got: {}",
@@ -2306,7 +2498,10 @@ def add(a: int, b: int) -> int:
             Declaration::Import(i) => {
                 match &i.kind {
                     ImportKind::Module(path) => {
-                        assert_eq!(path.segments, vec!["polars".to_string(), "prelude".to_string()]);
+                        assert_eq!(
+                            path.segments,
+                            vec!["polars".to_string(), "prelude".to_string()]
+                        );
                         assert_eq!(path.parent_levels, 0);
                         assert!(!path.is_absolute);
                     }

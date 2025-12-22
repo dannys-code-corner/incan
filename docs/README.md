@@ -44,6 +44,27 @@ Design proposals for upcoming features:
 | RFC | Status | Description |
 |-----|--------|-------------|
 | [000 Core RFC](RFCs/000_core_rfc.md) | Implemented | Core language design |
-| [001 Test Fixtures](RFCs/001_test_fixtures.md) | Draft | pytest-style fixtures |
+| [001 Test Fixtures](RFCs/001_test_fixtures.md) | In Progress | pytest-style fixtures |
 | [002 Test Parametrize](RFCs/002_test_parametrize.md) | Draft | Parametrized tests |
+| [003 Frontend WASM](RFCs/003_frontend_wasm.md) | Future | Frontend & WebAssembly support |
+| [004 Async Fixtures](RFCs/004_async_fixtures.md) | Draft | Async test fixtures |
+| [005 Rust Interop](RFCs/005_rust_interop.md) | Draft | Rust crate imports and type mapping |
+| [006 Generators](RFCs/006_generators.md) | Proposed | Python-style generators |
+| [007 Inline Tests](RFCs/007_inline_tests.md) | Proposed | Tests in source files |
+| [008 Const Bindings](RFCs/008_const_bindings.md) | Draft | Compile-time constants |
+| [009 Sized Integers](RFCs/009_sized_integers.md) | Proposed | i8, i16, i32, u8, u16, etc. |
 | [010 Tempfile](RFCs/010_tempfile.md) | Draft | Temporary files and directories |
+| [011 F-String Spans](RFCs/011_fstring_error_spans.md) | Draft | Precise error spans in f-strings |
+| [012 JsonValue](RFCs/012_json_value.md) | Draft | Dynamic JSON type |
+| [013 Rust Crate Dependencies](RFCs/013_rust_crate_dependencies.md) | Draft | Version annotations, incan.toml, lock files |
+| [014 Generated Code Errors](RFCs/014_generated_code_error_handling.md) | Draft | Better error messages in generated Rust |
+
+## Compiler & Contributing
+
+Docs for contributors working on the compiler and language evolution:
+
+| Document | Description |
+|----------|-------------|
+| [Compiler Architecture](architecture.md) | Compilation pipeline, module layout, and internal stages |
+| [Extending the Language](contributing/extending_language.md) | When to add builtins vs new syntax; end-to-end checklists |
+| [Contributing Index](contributing/README.md) | Contributor documentation landing page |

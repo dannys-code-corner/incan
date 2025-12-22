@@ -2,9 +2,9 @@
 //!
 //! Walks the AST and emits properly formatted source code.
 
-use crate::frontend::ast::*;
 use super::config::FormatConfig;
 use super::writer::FormatWriter;
+use crate::frontend::ast::*;
 
 /// Formatter that transforms AST back to formatted source code
 pub struct Formatter {
@@ -18,21 +18,21 @@ impl Formatter {
             writer: FormatWriter::new(config),
         }
     }
-    
+
     /// Format a program and return the formatted source
     pub fn format(mut self, program: &Program) -> String {
         self.format_program(program);
         self.writer.finish()
     }
-    
+
     // ========================================================================
     // Program
     // ========================================================================
-    
+
     fn format_program(&mut self, program: &Program) {
         let mut first = true;
         let mut prev_was_docstring = false;
-        
+
         for decl in &program.declarations {
             // Add blank lines between top-level declarations
             if !first {
@@ -44,20 +44,20 @@ impl Formatter {
                     self.writer.blank_lines(2);
                 }
             }
-            
+
             prev_was_docstring = matches!(&decl.node, Declaration::Docstring(_));
             self.format_declaration(&decl.node);
             first = false;
         }
-        
+
         // Ensure file ends with newline
         self.writer.newline();
     }
-    
+
     // ========================================================================
     // Declarations
     // ========================================================================
-    
+
     fn format_declaration(&mut self, decl: &Declaration) {
         match decl {
             Declaration::Import(import) => self.format_import(import),
@@ -70,7 +70,7 @@ impl Formatter {
             Declaration::Docstring(doc) => self.format_docstring(doc),
         }
     }
-    
+
     fn format_docstring(&mut self, doc: &str) {
         // Trim leading and trailing whitespace from the docstring content
         // to ensure idempotent formatting
@@ -91,7 +91,7 @@ impl Formatter {
             self.writer.writeln("\"\"\"");
         }
     }
-    
+
     fn format_import(&mut self, import: &ImportDecl) {
         match &import.kind {
             ImportKind::Module(path) => {
@@ -142,7 +142,11 @@ impl Formatter {
                 }
                 self.writer.newline();
             }
-            ImportKind::RustFrom { crate_name, path, items } => {
+            ImportKind::RustFrom {
+                crate_name,
+                path,
+                items,
+            } => {
                 self.writer.write("from rust::");
                 self.writer.write(crate_name);
                 for segment in path {
@@ -164,7 +168,7 @@ impl Formatter {
             }
         }
     }
-    
+
     fn format_import_path(&mut self, path: &ImportPath) {
         if path.is_absolute {
             self.writer.write("crate");
@@ -183,26 +187,26 @@ impl Formatter {
             self.writer.write(segment);
         }
     }
-    
+
     fn format_model(&mut self, model: &ModelDecl) {
         // Decorators
         for dec in &model.decorators {
             self.format_decorator(&dec.node);
         }
-        
+
         // model Name[T]:
         self.writer.write("model ");
         self.writer.write(&model.name);
         self.format_type_params(&model.type_params);
         self.writer.writeln(":");
         self.writer.indent();
-        
+
         // Fields
         let has_fields = !model.fields.is_empty();
         for field in &model.fields {
             self.format_field(&field.node);
         }
-        
+
         // Methods
         let mut first_method = true;
         for method in &model.methods {
@@ -212,31 +216,31 @@ impl Formatter {
             self.format_method(&method.node);
             first_method = false;
         }
-        
+
         // Empty body
         if model.fields.is_empty() && model.methods.is_empty() {
             self.writer.writeln("pass");
         }
-        
+
         self.writer.dedent();
     }
-    
+
     fn format_class(&mut self, class: &ClassDecl) {
         // Decorators
         for dec in &class.decorators {
             self.format_decorator(&dec.node);
         }
-        
+
         // class Name[T] extends Base with Trait1:
         self.writer.write("class ");
         self.writer.write(&class.name);
         self.format_type_params(&class.type_params);
-        
+
         if let Some(base) = &class.extends {
             self.writer.write(" extends ");
             self.writer.write(base);
         }
-        
+
         if !class.traits.is_empty() {
             self.writer.write(" with ");
             for (i, trait_name) in class.traits.iter().enumerate() {
@@ -246,16 +250,16 @@ impl Formatter {
                 self.writer.write(trait_name);
             }
         }
-        
+
         self.writer.writeln(":");
         self.writer.indent();
-        
+
         // Fields
         let has_fields = !class.fields.is_empty();
         for field in &class.fields {
             self.format_field(&field.node);
         }
-        
+
         // Methods
         let mut first_method = true;
         for method in &class.methods {
@@ -265,28 +269,28 @@ impl Formatter {
             self.format_method(&method.node);
             first_method = false;
         }
-        
+
         // Empty body
         if class.fields.is_empty() && class.methods.is_empty() {
             self.writer.writeln("pass");
         }
-        
+
         self.writer.dedent();
     }
-    
+
     fn format_trait(&mut self, tr: &TraitDecl) {
         // Decorators
         for dec in &tr.decorators {
             self.format_decorator(&dec.node);
         }
-        
+
         // trait Name[T]:
         self.writer.write("trait ");
         self.writer.write(&tr.name);
         self.format_type_params(&tr.type_params);
         self.writer.writeln(":");
         self.writer.indent();
-        
+
         // Methods
         let mut first = true;
         for method in &tr.methods {
@@ -296,15 +300,15 @@ impl Formatter {
             self.format_method(&method.node);
             first = false;
         }
-        
+
         // Empty body
         if tr.methods.is_empty() {
             self.writer.writeln("pass");
         }
-        
+
         self.writer.dedent();
     }
-    
+
     fn format_enum(&mut self, en: &EnumDecl) {
         // enum Name[T]:
         self.writer.write("enum ");
@@ -312,18 +316,18 @@ impl Formatter {
         self.format_type_params(&en.type_params);
         self.writer.writeln(":");
         self.writer.indent();
-        
+
         for variant in &en.variants {
             self.format_enum_variant(&variant.node);
         }
-        
+
         if en.variants.is_empty() {
             self.writer.writeln("pass");
         }
-        
+
         self.writer.dedent();
     }
-    
+
     fn format_enum_variant(&mut self, variant: &VariantDecl) {
         self.writer.write(&variant.name);
         if !variant.fields.is_empty() {
@@ -338,7 +342,7 @@ impl Formatter {
         }
         self.writer.newline();
     }
-    
+
     fn format_newtype(&mut self, nt: &NewtypeDecl) {
         // type Name = newtype underlying
         self.writer.write("type ");
@@ -346,7 +350,7 @@ impl Formatter {
         self.writer.write(" = newtype ");
         self.format_type(&nt.underlying.node);
         self.writer.newline();
-        
+
         // Methods if any
         if !nt.methods.is_empty() {
             self.writer.indent();
@@ -357,13 +361,13 @@ impl Formatter {
             self.writer.dedent();
         }
     }
-    
+
     fn format_function(&mut self, func: &FunctionDecl) {
         // Decorators
         for dec in &func.decorators {
             self.format_decorator(&dec.node);
         }
-        
+
         // async def name(params) -> ReturnType:
         if func.is_async {
             self.writer.write("async ");
@@ -375,9 +379,9 @@ impl Formatter {
         self.writer.write(") -> ");
         self.format_type(&func.return_type.node);
         self.writer.writeln(":");
-        
+
         self.writer.indent();
-        
+
         // Body
         if func.body.is_empty() {
             self.writer.writeln("pass");
@@ -386,16 +390,16 @@ impl Formatter {
                 self.format_statement(&stmt.node);
             }
         }
-        
+
         self.writer.dedent();
     }
-    
+
     fn format_method(&mut self, method: &MethodDecl) {
         // Decorators
         for dec in &method.decorators {
             self.format_decorator(&dec.node);
         }
-        
+
         // async def name(self, params) -> ReturnType:
         if method.is_async {
             self.writer.write("async ");
@@ -403,7 +407,7 @@ impl Formatter {
         self.writer.write("def ");
         self.writer.write(&method.name);
         self.writer.write("(");
-        
+
         // Receiver
         let has_receiver = method.receiver.is_some();
         if let Some(receiver) = &method.receiver {
@@ -412,25 +416,25 @@ impl Formatter {
                 Receiver::Mutable => self.writer.write("mut self"),
             }
         }
-        
+
         // Parameters
         if has_receiver && !method.params.is_empty() {
             self.writer.write(", ");
         }
         self.format_params(&method.params);
-        
+
         self.writer.write(") -> ");
         self.format_type(&method.return_type.node);
-        
+
         // Abstract method (ellipsis body)
         if method.body.is_none() {
             self.writer.writeln(": ...");
             return;
         }
-        
+
         self.writer.writeln(":");
         self.writer.indent();
-        
+
         if let Some(body) = &method.body {
             if body.is_empty() {
                 self.writer.writeln("pass");
@@ -440,10 +444,10 @@ impl Formatter {
                 }
             }
         }
-        
+
         self.writer.dedent();
     }
-    
+
     fn format_decorator(&mut self, dec: &Decorator) {
         self.writer.write("@");
         self.writer.write(&dec.name);
@@ -469,7 +473,7 @@ impl Formatter {
         }
         self.writer.newline();
     }
-    
+
     fn format_field(&mut self, field: &FieldDecl) {
         self.writer.write(&field.name);
         self.writer.write(": ");
@@ -480,7 +484,7 @@ impl Formatter {
         }
         self.writer.newline();
     }
-    
+
     fn format_params(&mut self, params: &[Spanned<Param>]) {
         for (i, param) in params.iter().enumerate() {
             if i > 0 {
@@ -489,7 +493,7 @@ impl Formatter {
             self.format_param(&param.node);
         }
     }
-    
+
     fn format_param(&mut self, param: &Param) {
         self.writer.write(&param.name);
         self.writer.write(": ");
@@ -499,7 +503,7 @@ impl Formatter {
             self.format_expr(&default.node);
         }
     }
-    
+
     fn format_type_params(&mut self, params: &[Ident]) {
         if !params.is_empty() {
             self.writer.write("[");
@@ -512,11 +516,11 @@ impl Formatter {
             self.writer.write("]");
         }
     }
-    
+
     // ========================================================================
     // Types
     // ========================================================================
-    
+
     fn format_type(&mut self, ty: &Type) {
         match ty {
             Type::Simple(name) => self.writer.write(name),
@@ -556,11 +560,11 @@ impl Formatter {
             Type::Unit => self.writer.write("None"),
         }
     }
-    
+
     // ========================================================================
     // Statements
     // ========================================================================
-    
+
     fn format_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Expr(expr) => {
@@ -641,9 +645,25 @@ impl Formatter {
                 self.format_expr(&assign.value.node);
                 self.writer.newline();
             }
+            Statement::ChainedAssignment(ca) => {
+                match ca.binding {
+                    BindingKind::Let => self.writer.write("let "),
+                    BindingKind::Mutable => self.writer.write("mut "),
+                    BindingKind::Inferred | BindingKind::Reassign => {}
+                }
+                for (i, target) in ca.targets.iter().enumerate() {
+                    if i > 0 {
+                        self.writer.write(" = ");
+                    }
+                    self.writer.write(target);
+                }
+                self.writer.write(" = ");
+                self.format_expr(&ca.value.node);
+                self.writer.newline();
+            }
         }
     }
-    
+
     fn format_assignment(&mut self, assign: &AssignmentStmt) {
         match assign.binding {
             BindingKind::Let => self.writer.write("let "),
@@ -659,7 +679,7 @@ impl Formatter {
         self.format_expr(&assign.value.node);
         self.writer.newline();
     }
-    
+
     fn format_if(&mut self, if_stmt: &IfStmt) {
         self.writer.write("if ");
         self.format_expr(&if_stmt.condition.node);
@@ -672,7 +692,21 @@ impl Formatter {
             self.writer.writeln("pass");
         }
         self.writer.dedent();
-        
+
+        for (elif_cond, elif_body) in &if_stmt.elif_branches {
+            self.writer.write("elif ");
+            self.format_expr(&elif_cond.node);
+            self.writer.writeln(":");
+            self.writer.indent();
+            for stmt in elif_body {
+                self.format_statement(&stmt.node);
+            }
+            if elif_body.is_empty() {
+                self.writer.writeln("pass");
+            }
+            self.writer.dedent();
+        }
+
         if let Some(else_body) = &if_stmt.else_body {
             self.writer.writeln("else:");
             self.writer.indent();
@@ -685,7 +719,7 @@ impl Formatter {
             self.writer.dedent();
         }
     }
-    
+
     fn format_while(&mut self, while_stmt: &WhileStmt) {
         self.writer.write("while ");
         self.format_expr(&while_stmt.condition.node);
@@ -699,7 +733,7 @@ impl Formatter {
         }
         self.writer.dedent();
     }
-    
+
     fn format_for(&mut self, for_stmt: &ForStmt) {
         self.writer.write("for ");
         self.writer.write(&for_stmt.var);
@@ -715,11 +749,11 @@ impl Formatter {
         }
         self.writer.dedent();
     }
-    
+
     // ========================================================================
     // Expressions
     // ========================================================================
-    
+
     fn format_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Ident(name) => self.writer.write(name),
@@ -911,7 +945,11 @@ impl Formatter {
                     self.format_expr(&inner.node);
                 }
             }
-            Expr::Range { start, end, inclusive } => {
+            Expr::Range {
+                start,
+                end,
+                inclusive,
+            } => {
                 self.format_expr(&start.node);
                 if *inclusive {
                     self.writer.write("..=");
@@ -922,7 +960,7 @@ impl Formatter {
             }
         }
     }
-    
+
     fn format_literal(&mut self, lit: &Literal) {
         match lit {
             Literal::Int(n) => self.writer.write(&n.to_string()),
@@ -947,7 +985,7 @@ impl Formatter {
             Literal::None => self.writer.write("None"),
         }
     }
-    
+
     fn format_binary_op(&mut self, op: &BinaryOp) {
         self.writer.write(match op {
             BinaryOp::Add => "+",
@@ -955,6 +993,7 @@ impl Formatter {
             BinaryOp::Mul => "*",
             BinaryOp::Div => "/",
             BinaryOp::Mod => "%",
+            BinaryOp::Pow => "**",
             BinaryOp::Eq => "==",
             BinaryOp::NotEq => "!=",
             BinaryOp::Lt => "<",
@@ -968,14 +1007,14 @@ impl Formatter {
             BinaryOp::Is => "is",
         });
     }
-    
+
     fn format_unary_op(&mut self, op: &UnaryOp) {
         self.writer.write(match op {
             UnaryOp::Neg => "-",
             UnaryOp::Not => "not ",
         });
     }
-    
+
     fn format_call_args(&mut self, args: &[CallArg]) {
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
@@ -991,7 +1030,7 @@ impl Formatter {
             }
         }
     }
-    
+
     fn format_match_arm(&mut self, arm: &MatchArm) {
         self.format_pattern(&arm.pattern.node);
         if let Some(guard) = &arm.guard {
@@ -1014,7 +1053,7 @@ impl Formatter {
             }
         }
     }
-    
+
     fn format_pattern(&mut self, pattern: &Pattern) {
         match pattern {
             Pattern::Wildcard => self.writer.write("_"),

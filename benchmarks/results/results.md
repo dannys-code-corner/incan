@@ -1,14 +1,14 @@
 # Benchmark Results
 
-Generated: Tue Dec 16 12:34:57 CET 2025
+Generated: Fri Dec 19 20:43:41 CET 2025
 
 | Benchmark | Incan | Rust | Python | Incan vs Python |
 |-----------|-------|------|--------|-----------------|
-| Fibonacci (1M) | 16ms | 15ms | -ms | N/A |
-| Collatz (1M) | 164ms | 154ms | -ms | N/A |
-| GCD (10M) | 295ms | 314ms | -ms | N/A |
-| Mandelbrot (2K) | 250ms | 251ms | -ms | N/A |
-| N-Body (500K) | 43ms | 42ms | -ms | N/A |
-| Prime Sieve (10M) | 130ms | 130ms | -ms | N/A |
-| Quicksort (1M) | 87ms | 81ms | -ms | N/A |
-| Mergesort (1M) | 201ms | 194ms | -ms | N/A |
+| Fibonacci (1M) | 8ms | 10ms | 336ms | 42.0x faster |
+| Collatz (1M) | 148ms | 148ms | 9050ms | 61.1x faster |
+| GCD (10M) | 324ms | 289ms | 1932ms | 5.9x faster |
+| Mandelbrot (2K) | 244ms | 242ms | 12289ms | 50.3x faster |
+| N-Body (500K) | 30ms | 40ms | 4843ms | 161.4x faster |
+| Prime Sieve (10M) | 127ms | 133ms | 9642ms | 75.9x faster |
+| Quicksort (1M) | 74ms | 77ms | 2575ms | 34.7x faster |
+| Mergesort (1M) | 191ms | 188ms | 3736ms | 19.5x faster |

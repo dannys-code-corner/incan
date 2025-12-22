@@ -11,47 +11,48 @@ use phf::phf_map;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // ========== Keywords ==========
-    Def,        // function definition
-    Async,      // async function
-    Await,      // async await expression
-    Class,      // class
-    Model,      // model
-    Trait,      // trait
-    Extends,    // extends statement
-    Enum,       // enum
-    Type,       // type definition
-    Newtype,    // newtype definition
-    Import,     // python-like import declaration
-    RustKw,     // rust keyword (for rust:: imports)
-    As,         // import alias keyword
-    Python,     // python import keyword (import python "package")  - TODO: figure out if we really need this at all
-    From,       // from import declaration
-    With,       // with statement
-    Return,     // return statement
-    If,         // if statement
-    Else,       // if-else statement
-    While,      // while loop statement
-    For,        // for loop statement
-    Break,      // break out of a loop statement
-    Continue,   // continue to the next iteration of a loop statement
-    In,         // in keyword
-    Match,      // match-case statement
-    Case,       // match-case statement
-    And,        // logical and operator
-    Or,         // logical or operator
-    Not,        // logical not operator
-    Is,         // is operator
-    True,       // true literal
-    False,      // false literal
-    None,       // none literal
-    Let,        // let binding
-    Mut,        // mut binding
-    SelfKw,     // self keyword
-    Pass,       // pass statement
-    Pub,        // pub keyword
-    Super,      // super (parent module)
-    Crate,      // crate (project root)
-    Yield,      // yield (for fixtures/generators)
+    Def,      // function definition
+    Async,    // async function
+    Await,    // async await expression
+    Class,    // class
+    Model,    // model
+    Trait,    // trait
+    Extends,  // extends statement
+    Enum,     // enum
+    Type,     // type definition
+    Newtype,  // newtype definition
+    Import,   // python-like import declaration
+    RustKw,   // rust keyword (for rust:: imports)
+    As,       // import alias keyword
+    Python, // python import keyword (import python "package")  - TODO: figure out if we really need this at all
+    From,   // from import declaration
+    With,   // with statement
+    Return, // return statement
+    If,     // if statement
+    Elif,   // elif statement
+    Else,   // if-else statement
+    While,  // while loop statement
+    For,    // for loop statement
+    Break,  // break out of a loop statement
+    Continue, // continue to the next iteration of a loop statement
+    In,     // in keyword
+    Match,  // match-case statement
+    Case,   // match-case statement
+    And,    // logical and operator
+    Or,     // logical or operator
+    Not,    // logical not operator
+    Is,     // is operator
+    True,   // true literal
+    False,  // false literal
+    None,   // none literal
+    Let,    // let binding
+    Mut,    // mut binding
+    SelfKw, // self keyword
+    Pass,   // pass statement
+    Pub,    // pub keyword
+    Super,  // super (parent module)
+    Crate,  // crate (project root)
+    Yield,  // yield (for fixtures/generators)
 
     // ========== Identifiers and Literals ==========
     Ident(String),
@@ -65,6 +66,7 @@ pub enum TokenKind {
     Plus,       // +
     Minus,      // -
     Star,       // *
+    StarStar,   // ** (power)
     Slash,      // /
     Percent,    // %
     Eq,         // =
@@ -91,12 +93,12 @@ pub enum TokenKind {
     At,         // @
 
     // ========== Brackets ==========
-    LParen,     // (
-    RParen,     // )
-    LBracket,   // [
-    RBracket,   // ]
-    LBrace,     // {
-    RBrace,     // }
+    LParen,   // (
+    RParen,   // )
+    LBracket, // [
+    RBracket, // ]
+    LBrace,   // {
+    RBrace,   // }
 
     // ========== Indentation ==========
     Newline,
@@ -104,8 +106,8 @@ pub enum TokenKind {
     Dedent,
 
     // ========== Special ==========
-    Ellipsis,   // ...
-    Eof,        // end of file
+    Ellipsis, // ...
+    Eof,      // end of file
 }
 
 /// Part of an f-string
@@ -149,6 +151,7 @@ pub static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "extends" => TokenKind::Extends,
     "return" => TokenKind::Return,
     "if" => TokenKind::If,
+    "elif" => TokenKind::Elif,
     "else" => TokenKind::Else,
     "while" => TokenKind::While,
     "for" => TokenKind::For,

@@ -147,24 +147,25 @@ src/                        # Rust compiler library
 ├── lib.rs                  # Compiler library entry point
 ├── main.rs                 # CLI entry point (`incan`)
 ├── frontend/               # Frontend module: Lexer → parser → AST → typechecking
-│   ├── lexer/              # Tokenizer (split by concern)
-│   │   ├── mod.rs
-│   │   ├── indent.rs       # Indentation + newline handling
-│   │   ├── numbers.rs      # Numeric literal lexing
-│   │   ├── strings.rs      # String + f-string lexing
-│   │   └── tokens.rs       # Token kinds + keyword table
+│   ├── lexer/              # Tokenizer
 │   ├── parser.rs           # Parser (tokens → AST)
 │   ├── ast.rs              # AST definitions
 │   ├── symbols.rs          # Symbol table + resolved types
-│   ├── typechecker.rs      # Type checker / inference rules
+│   ├── typechecker/        # Type checker (two-pass, split by responsibility)
 │   └── diagnostics.rs      # Error reporting + spans
-├── backend/                # Backend module: Rust code generation and project emission
-│   ├── codegen/            # Expression/statement/function emission
-│   ├── rust_emitter.rs     # Pretty-printer for Rust output
+├── backend/                # Backend module: IR lowering + Rust project emission
+│   ├── ir/                 # Intermediate representation (IR) + lowering + emission
+│   │   ├── codegen.rs      # IR pipeline entrypoint (orchestrates lowering + emission)
+│   │   ├── lower/          # AST → IR lowering (decl/stmt/expr/types)
+│   │   ├── emit/           # IR → Rust emission (includes emit/expressions/ split)
+│   │   ├── emit_service/   # Emission helpers split by IR layer (decl/stmt/expr/builtins)
+│   │   ├── conversions.rs  # Centralized type conversions (&str/String, borrows, clones, etc.)
+│   │   └── scanners.rs     # Feature scanning (serde/async/web/this/etc.) + import tracking
 │   └── project.rs          # Cargo project scaffolding for generated code
 ├── cli/                    # CLI subcommands (run/build/check/fmt/test)
 ├── format/                 # Incan formatter (`incan fmt`)
-└── lsp/                    # LSP backend logic (diagnostics/hover/goto)
+├── lsp/                    # LSP backend logic (diagnostics/hover/goto)
+└── bin/                    # Extra binaries (incan-lsp, incan-test, incan-fmt)
 
 stdlib/                      # Incan stdlib (prelude, traits, derives, web, async)
 examples/                    # Runnable language examples (simple/intermediate/advanced/web)

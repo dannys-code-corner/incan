@@ -4,14 +4,254 @@
 //! - Cargo.toml with dependencies
 //! - src/main.rs or src/lib.rs
 //! - Invokes cargo build
+//!
+//! ## Cargo Dependency Policy
+//!
+//! The project generator uses a **strict dependency policy**: unknown `rust::` crates must specify an explicit version
+//! and features. We never fall back to `*` (wildcard).
+//! FIXME: We will address this*See RFC 013*.
+//!
+//! ### Known-good crates
+//!
+//! A curated list of common crates have known-good version/feature defaults maintained in
+//! [`ProjectGenerator::add_rust_crate`]. To add a new crate to this list, submit a PR updating the match arm with
+//! tested version and features.
+//!
+//! ### Unknown crates
+//!
+//! If a crate is not in the known-good list, the compiler emits an error asking the user
+//! to provide explicit version/features via `add_rust_crate_with_version`.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const INCAN_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Error returned when a `rust::` crate import lacks a known-good version mapping.
+///
+/// The user must provide an explicit version/features spec for unknown crates.
+#[derive(Debug, Clone)]
+pub struct UnknownCrateError {
+    /// Name of the crate that is not in the known-good list
+    pub crate_name: String,
+}
+
+impl fmt::Display for UnknownCrateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "unknown Rust crate `{}`: no known-good version mapping exists.\n\
+             \n\
+             To use this crate, you must specify an explicit version. Options:\n\
+             \n\
+             1. Add a version annotation in your Incan code (if supported), or\n\
+             2. Request that `{}` be added to the known-good list by opening an issue/PR.\n\
+             \n\
+             Known-good crates: serde, serde_json, tokio, time, chrono, reqwest, uuid,\n\
+             rand, regex, anyhow, thiserror, tracing, clap, log, env_logger, sqlx,\n\
+             futures, bytes, itertools",
+            self.crate_name, self.crate_name
+        )
+    }
+}
+
+impl std::error::Error for UnknownCrateError {}
+
+// ============================================================================
+// CompilationPlan + Executor: separating "what to do" from "doing it"
+// ============================================================================
+
+/// A file to be written as part of a compilation plan.
+#[derive(Debug, Clone)]
+pub struct PlannedFile {
+    /// Path where the file should be written
+    pub path: PathBuf,
+    /// Content of the file
+    pub content: String,
+}
+
+/// A directory to be created as part of a compilation plan.
+#[derive(Debug, Clone)]
+pub struct PlannedDirectory {
+    /// Path to the directory
+    pub path: PathBuf,
+}
+
+/// A cargo command to execute as part of the build.
+#[derive(Debug, Clone)]
+pub enum CargoCommand {
+    /// `cargo build --release`
+    Build,
+    /// `cargo run --release`
+    Run,
+}
+
+/// A pure, testable representation of what the compiler will produce.
+///
+/// This struct contains all the information needed to generate a Rust project
+/// without performing any side effects. Use [`Executor::execute`] to actually
+/// write files and run commands.
+///
+/// # Design rationale
+///
+/// Separating planning from execution enables:
+/// - Unit testing the planning logic without touching the filesystem
+/// - Inspecting what would be generated before committing
+/// - Future: dry-run mode, caching, reproducibility checks
+#[derive(Debug, Clone)]
+pub struct CompilationPlan {
+    /// Project name
+    pub project_name: String,
+    /// Output directory for the generated project
+    pub output_dir: PathBuf,
+    /// Directories to create (in order)
+    pub directories: Vec<PlannedDirectory>,
+    /// Files to write (in order)
+    pub files: Vec<PlannedFile>,
+    /// Optional cargo command to run after generating files
+    pub cargo_command: Option<CargoCommand>,
+}
+
+impl CompilationPlan {
+    /// Create a new empty compilation plan.
+    pub fn new(project_name: impl Into<String>, output_dir: impl AsRef<Path>) -> Self {
+        Self {
+            project_name: project_name.into(),
+            output_dir: output_dir.as_ref().to_path_buf(),
+            directories: Vec::new(),
+            files: Vec::new(),
+            cargo_command: None,
+        }
+    }
+
+    /// Add a directory to create.
+    pub fn add_directory(&mut self, path: impl AsRef<Path>) {
+        self.directories.push(PlannedDirectory {
+            path: path.as_ref().to_path_buf(),
+        });
+    }
+
+    /// Add a file to write.
+    pub fn add_file(&mut self, path: impl AsRef<Path>, content: impl Into<String>) {
+        self.files.push(PlannedFile {
+            path: path.as_ref().to_path_buf(),
+            content: content.into(),
+        });
+    }
+
+    /// Set the cargo command to run after generating files.
+    pub fn set_cargo_command(&mut self, cmd: CargoCommand) {
+        self.cargo_command = Some(cmd);
+    }
+
+    /// Get the expected path to the built binary.
+    pub fn binary_path(&self) -> PathBuf {
+        self.output_dir
+            .join("target")
+            .join("release")
+            .join(&self.project_name)
+    }
+}
+
+/// Executes a [`CompilationPlan`] by performing filesystem operations and running commands.
+///
+/// This is the only place where side effects occur in the project generation pipeline.
+#[derive(Debug, Default)]
+pub struct Executor;
+
+impl Executor {
+    /// Create a new executor.
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Execute a compilation plan: create directories, write files, optionally run cargo.
+    ///
+    /// Returns the result of the cargo command if one was specified, or `Ok(None)` if
+    /// the plan only generates files.
+    pub fn execute(&self, plan: &CompilationPlan) -> io::Result<Option<ExecutionResult>> {
+        // Create directories
+        for dir in &plan.directories {
+            fs::create_dir_all(&dir.path)?;
+        }
+
+        // Write files
+        for file in &plan.files {
+            // Ensure parent directory exists
+            if let Some(parent) = file.path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&file.path, &file.content)?;
+        }
+
+        // Run cargo command if specified
+        match &plan.cargo_command {
+            Some(CargoCommand::Build) => {
+                let output = Command::new("cargo")
+                    .arg("build")
+                    .arg("--release")
+                    // Ensure we don't inherit a broken CA bundle path from the parent env.
+                    // This makes `cargo` more robust across environments (CI/sandboxes/local).
+                    .env_remove("SSL_CERT_FILE")
+                    .env_remove("SSL_CERT_DIR")
+                    .env_remove("CURL_CA_BUNDLE")
+                    .env_remove("REQUESTS_CA_BUNDLE")
+                    .env_remove("CARGO_HTTP_CAINFO")
+                    .current_dir(&plan.output_dir)
+                    .output()?;
+
+                Ok(Some(ExecutionResult {
+                    success: output.status.success(),
+                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                    exit_code: output.status.code(),
+                }))
+            }
+            Some(CargoCommand::Run) => {
+                let mut child = Command::new("cargo")
+                    .arg("run")
+                    .arg("--release")
+                    // Ensure we don't inherit a broken CA bundle path from the parent env.
+                    .env_remove("SSL_CERT_FILE")
+                    .env_remove("SSL_CERT_DIR")
+                    .env_remove("CURL_CA_BUNDLE")
+                    .env_remove("REQUESTS_CA_BUNDLE")
+                    .env_remove("CARGO_HTTP_CAINFO")
+                    .current_dir(&plan.output_dir)
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .spawn()?;
+
+                let status = child.wait()?;
+
+                Ok(Some(ExecutionResult {
+                    success: status.success(),
+                    stdout: String::new(), // Output went directly to terminal
+                    stderr: String::new(),
+                    exit_code: status.code(),
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+/// Result of executing a cargo command.
+#[derive(Debug, Clone)]
+pub struct ExecutionResult {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+}
+
+// ============================================================================
+// ProjectGenerator: high-level API that builds plans and executes them
+// ============================================================================
 
 /// Project generator for creating runnable Rust projects from Incan code
 pub struct ProjectGenerator {
@@ -44,40 +284,40 @@ impl ProjectGenerator {
             rust_crate_deps: std::collections::HashMap::new(),
         }
     }
-    
+
     /// Enable serde support (for JSON serialization)
     pub fn with_serde(mut self) -> Self {
         self.needs_serde = true;
         self
     }
-    
+
     /// Set whether serde is needed
     pub fn set_needs_serde(&mut self, needs: bool) {
         self.needs_serde = needs;
     }
-    
+
     /// Enable tokio support (for async runtime)
     pub fn with_tokio(mut self) -> Self {
         self.needs_tokio = true;
         self
     }
-    
+
     /// Set whether tokio is needed
     pub fn set_needs_tokio(&mut self, needs: bool) {
         self.needs_tokio = needs;
     }
-    
+
     /// Enable axum support (for web framework)
     pub fn with_axum(mut self) -> Self {
         self.needs_axum = true;
         self
     }
-    
+
     /// Set whether axum is needed
     pub fn set_needs_axum(&mut self, needs: bool) {
         self.needs_axum = needs;
     }
-    
+
     /// Add a Rust crate dependency from `import rust::crate_name`
     /// Uses a default version mapping for common crates, otherwise uses latest
     pub fn add_rust_crate(&mut self, crate_name: &str) {
@@ -85,8 +325,13 @@ impl ProjectGenerator {
         let version = match crate_name {
             "serde" => Some(r#"{ version = "1.0", features = ["derive"] }"#.to_string()),
             "serde_json" => Some(r#""1.0""#.to_string()),
-            "tokio" => Some(r#"{ version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }"#.to_string()),
-            "time" => Some(r#"{ version = "0.3", features = ["formatting", "macros"] }"#.to_string()),
+            "tokio" => Some(
+                r#"{ version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }"#
+                    .to_string(),
+            ),
+            "time" => {
+                Some(r#"{ version = "0.3", features = ["formatting", "macros"] }"#.to_string())
+            }
             "chrono" => Some(r#"{ version = "0.4", features = ["serde"] }"#.to_string()),
             "reqwest" => Some(r#"{ version = "0.11", features = ["json"] }"#.to_string()),
             "uuid" => Some(r#"{ version = "1.0", features = ["v4", "serde"] }"#.to_string()),
@@ -98,7 +343,10 @@ impl ProjectGenerator {
             "clap" => Some(r#"{ version = "4.0", features = ["derive"] }"#.to_string()),
             "log" => Some(r#""0.4""#.to_string()),
             "env_logger" => Some(r#""0.10""#.to_string()),
-            "sqlx" => Some(r#"{ version = "0.7", features = ["runtime-tokio-native-tls", "postgres"] }"#.to_string()),
+            "sqlx" => Some(
+                r#"{ version = "0.7", features = ["runtime-tokio-native-tls", "postgres"] }"#
+                    .to_string(),
+            ),
             "futures" => Some(r#""0.3""#.to_string()),
             "bytes" => Some(r#""1.0""#.to_string()),
             "itertools" => Some(r#""0.12""#.to_string()),
@@ -107,10 +355,11 @@ impl ProjectGenerator {
         };
         self.rust_crate_deps.insert(crate_name.to_string(), version);
     }
-    
+
     /// Add a Rust crate with a specific version spec
     pub fn add_rust_crate_with_version(&mut self, crate_name: &str, version_spec: &str) {
-        self.rust_crate_deps.insert(crate_name.to_string(), Some(version_spec.to_string()));
+        self.rust_crate_deps
+            .insert(crate_name.to_string(), Some(version_spec.to_string()));
     }
 
     /// Generate the project structure (single-file mode)
@@ -139,7 +388,11 @@ impl ProjectGenerator {
     /// # Arguments
     /// * `main_code` - The main.rs code (without mod declarations, they will be prepended)
     /// * `modules` - HashMap of module name to module code (e.g., "models" -> "pub struct User { ... }")
-    pub fn generate_multi(&self, main_code: &str, modules: &HashMap<String, String>) -> io::Result<()> {
+    pub fn generate_multi(
+        &self,
+        main_code: &str,
+        modules: &HashMap<String, String>,
+    ) -> io::Result<()> {
         // Create directories
         let src_dir = self.output_dir.join("src");
         fs::create_dir_all(&src_dir)?;
@@ -177,7 +430,7 @@ impl ProjectGenerator {
                     .map(|o| attr_pos + o + 1)
                     .unwrap_or(full_main.len());
                 full_main.insert_str(line_end, &mods);
-                full_main.insert_str(line_end + mods.len(), "\n");
+                full_main.insert(line_end + mods.len(), '\n');
             } else {
                 full_main = format!("{}\n{}", mods, full_main);
             }
@@ -203,7 +456,11 @@ impl ProjectGenerator {
     /// # Arguments
     /// * `main_code` - The main.rs code (without mod declarations, they will be prepended)
     /// * `modules` - HashMap of path segments to module code (e.g., ["db", "models"] -> "pub struct User { ... }")
-    pub fn generate_nested(&self, main_code: &str, modules: &HashMap<Vec<String>, String>) -> io::Result<()> {
+    pub fn generate_nested(
+        &self,
+        main_code: &str,
+        modules: &HashMap<Vec<String>, String>,
+    ) -> io::Result<()> {
         let src_dir = self.output_dir.join("src");
         fs::create_dir_all(&src_dir)?;
 
@@ -217,13 +474,14 @@ impl ProjectGenerator {
         //   - src/db/mod.rs with "pub mod models;"
         //   - src/db/models.rs with the code
         let mut dir_submodules: HashMap<Vec<String>, Vec<String>> = HashMap::new();
-        let mut top_level_modules: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut top_level_modules: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
 
-        for (path_segments, _) in modules {
-            if path_segments.len() >= 1 {
+        for path_segments in modules.keys() {
+            if !path_segments.is_empty() {
                 top_level_modules.insert(path_segments[0].clone());
             }
-            
+
             // For each intermediate directory, track what submodules it contains
             for i in 0..path_segments.len() {
                 let dir_path: Vec<String> = path_segments[..i].to_vec();
@@ -261,7 +519,7 @@ impl ProjectGenerator {
                 .map(|s| format!("pub mod {};", s))
                 .collect::<Vec<_>>()
                 .join("\n");
-            
+
             let mod_rs_path = dir.join("mod.rs");
             fs::write(mod_rs_path, format!("{}\n", mod_rs_content))?;
         }
@@ -274,10 +532,13 @@ impl ProjectGenerator {
                 file_path = file_path.join(segment);
             }
             fs::create_dir_all(&file_path)?;
-            
-            let file_name = format!("{}.rs", path_segments.last().unwrap());
+
+            let file_stem = path_segments
+                .last()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty module path"))?;
+            let file_name = format!("{file_stem}.rs");
             file_path = file_path.join(file_name);
-            
+
             fs::write(file_path, module_code)?;
         }
 
@@ -290,10 +551,7 @@ impl ProjectGenerator {
         let mut sorted_top: Vec<_> = top_level_modules.into_iter().collect();
         sorted_top.sort();
         if !sorted_top.is_empty() {
-            let mods: String = sorted_top
-                .iter()
-                .map(|m| format!("mod {};\n", m))
-                .collect();
+            let mods: String = sorted_top.iter().map(|m| format!("mod {};\n", m)).collect();
 
             if let Some(attr_pos) = full_main.find("#![allow(") {
                 let line_end = full_main[attr_pos..]
@@ -301,7 +559,7 @@ impl ProjectGenerator {
                     .map(|o| attr_pos + o + 1)
                     .unwrap_or(full_main.len());
                 full_main.insert_str(line_end, &mods);
-                full_main.insert_str(line_end + mods.len(), "\n");
+                full_main.insert(line_end + mods.len(), '\n');
             } else {
                 full_main = format!("{}\n{}", mods, full_main);
             }
@@ -329,20 +587,29 @@ path = "src/main.rs""#
 name = "{name}"
 path = "src/lib.rs""#
         };
-        
+
         // Build dependencies list
         let mut deps = Vec::new();
-        
+
         // Track which crates we've already added (to avoid duplicates)
         let mut added_crates: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        
+
+        // Always add incan_stdlib for standard library support
+        // Path is relative from target/incan/<project_name>/ to workspace root
+        deps.push(r#"incan_stdlib = { path = "../../../crates/incan_stdlib" }"#.to_string());
+        added_crates.insert("incan_stdlib");
+
+        // Always add incan_derive for derive macros
+        deps.push(r#"incan_derive = { path = "../../../crates/incan_derive" }"#.to_string());
+        added_crates.insert("incan_derive");
+
         if self.needs_serde {
             deps.push(r#"serde = { version = "1.0", features = ["derive"] }"#.to_string());
             deps.push(r#"serde_json = "1.0""#.to_string());
             added_crates.insert("serde");
             added_crates.insert("serde_json");
         }
-        
+
         if self.needs_axum {
             // Axum needs tokio with net feature and full features for web serving
             deps.push(r#"axum = "0.7""#.to_string());
@@ -353,14 +620,14 @@ path = "src/lib.rs""#
             deps.push(r#"tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }"#.to_string());
             added_crates.insert("tokio");
         }
-        
+
         // Add dependencies from rust:: imports
         for (crate_name, version_spec) in &self.rust_crate_deps {
             // Skip if already added above
             if added_crates.contains(crate_name.as_str()) {
                 continue;
             }
-            
+
             let dep_line = if let Some(spec) = version_spec {
                 format!("{} = {}", crate_name, spec)
             } else {
@@ -369,7 +636,7 @@ path = "src/lib.rs""#
             };
             deps.push(dep_line);
         }
-        
+
         let dependencies = if deps.is_empty() {
             "# No additional dependencies".to_string()
         } else {
@@ -383,6 +650,9 @@ version = "{incan_version}"
 edition = "2021"
 
 # Generated by the Incan compiler
+
+# Opt out of parent workspace (if any)
+[workspace]
 
 [dependencies]
 {dependencies}
@@ -401,6 +671,12 @@ edition = "2021"
         let output = Command::new("cargo")
             .arg("build")
             .arg("--release")
+            // Ensure we don't inherit a broken CA bundle path from the parent env.
+            .env_remove("SSL_CERT_FILE")
+            .env_remove("SSL_CERT_DIR")
+            .env_remove("CURL_CA_BUNDLE")
+            .env_remove("REQUESTS_CA_BUNDLE")
+            .env_remove("CARGO_HTTP_CAINFO")
             .current_dir(&self.output_dir)
             .output()?;
 
@@ -412,7 +688,7 @@ edition = "2021"
     }
 
     /// Run the project using cargo
-    /// 
+    ///
     /// Uses inherited stdio so output streams to terminal in real-time
     /// (important for long-running processes like web servers)
     ///
@@ -422,6 +698,12 @@ edition = "2021"
         let mut child = Command::new("cargo")
             .arg("run")
             .arg("--release")
+            // Ensure we don't inherit a broken CA bundle path from the parent env.
+            .env_remove("SSL_CERT_FILE")
+            .env_remove("SSL_CERT_DIR")
+            .env_remove("CURL_CA_BUNDLE")
+            .env_remove("REQUESTS_CA_BUNDLE")
+            .env_remove("CARGO_HTTP_CAINFO")
             .current_dir(&self.output_dir)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -431,7 +713,7 @@ edition = "2021"
 
         Ok(RunResult {
             success: status.success(),
-            stdout: String::new(),  // Output went directly to terminal
+            stdout: String::new(), // Output went directly to terminal
             stderr: String::new(),
             exit_code: status.code(),
         })
@@ -464,6 +746,7 @@ pub struct RunResult {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
@@ -480,34 +763,40 @@ mod tests {
     fn test_generate_multi_creates_mod_declarations() {
         let temp_dir = std::env::temp_dir().join("incan_test_multi");
         let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
-        
+
         let generator = ProjectGenerator::new(&temp_dir, "test_multi", true);
-        
+
         let mut modules = HashMap::new();
-        modules.insert("models".to_string(), "pub struct User { pub name: String }".to_string());
-        modules.insert("utils".to_string(), "pub fn greet() -> String { \"hello\".to_string() }".to_string());
-        
+        modules.insert(
+            "models".to_string(),
+            "pub struct User { pub name: String }".to_string(),
+        );
+        modules.insert(
+            "utils".to_string(),
+            "pub fn greet() -> String { \"hello\".to_string() }".to_string(),
+        );
+
         let main_code = "fn main() { println!(\"Hello\"); }";
-        
+
         generator.generate_multi(main_code, &modules).unwrap();
-        
+
         // Check main.rs has mod declarations
         let main_content = fs::read_to_string(temp_dir.join("src/main.rs")).unwrap();
         assert!(main_content.contains("mod models;"));
         assert!(main_content.contains("mod utils;"));
         assert!(main_content.contains("fn main()"));
-        
+
         // Check module files exist
         assert!(temp_dir.join("src/models.rs").exists());
         assert!(temp_dir.join("src/utils.rs").exists());
-        
+
         // Check module content
         let models_content = fs::read_to_string(temp_dir.join("src/models.rs")).unwrap();
         assert!(models_content.contains("pub struct User"));
-        
+
         let utils_content = fs::read_to_string(temp_dir.join("src/utils.rs")).unwrap();
         assert!(utils_content.contains("pub fn greet"));
-        
+
         // Cleanup
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -516,17 +805,17 @@ mod tests {
     fn test_generate_multi_empty_modules() {
         let temp_dir = std::env::temp_dir().join("incan_test_multi_empty");
         let _ = fs::remove_dir_all(&temp_dir);
-        
+
         let generator = ProjectGenerator::new(&temp_dir, "test_empty", true);
         let modules = HashMap::new();
         let main_code = "fn main() {}";
-        
+
         generator.generate_multi(main_code, &modules).unwrap();
-        
+
         let main_content = fs::read_to_string(temp_dir.join("src/main.rs")).unwrap();
         // Should just be the main code, no mod declarations
         assert_eq!(main_content, "fn main() {}");
-        
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }

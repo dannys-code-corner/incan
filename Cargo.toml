@@ -1,10 +1,16 @@
+[workspace]
+members = [".", "crates/incan_derive", "crates/incan_stdlib"]
+exclude = ["target/incan"]
+resolver = "2"
+
 [package]
 name = "incan"
 description = "The Incan programming language compiler"
 version = "0.1.0-alpha.1"
-license-file = "LICENSE"
+license = "Apache-2.0"
 readme = "README.md"
 edition = "2024"  # Rust 2024 edition
+rust-version = "1.85"
 repository = "https://github.com/dannys-code-corner/incan-programming-language"
 homepage = "https://github.com/dannys-code-corner/incan-programming-language"
 keywords = ["programming-language", "compiler", "rust", "python"]
@@ -21,8 +27,28 @@ serde_json = "1.0"
 # Perfect hash map for keyword lookup
 phf = { version = "0.11", features = ["macros"] }
 
+# CLI parsing with typed subcommands
+clap = { version = "4.4", features = ["derive"] }
+# Composable error types
+thiserror = "2.0"
+# Rich error diagnostics with source context
+miette = { version = "7.0", features = ["fancy"] }
+
+# AST-based Rust code generation
+syn = { version = "2.0", features = ["full", "parsing", "printing"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# Code formatting for generated Rust
+prettyplease = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 [dev-dependencies]
-pretty_assertions = "1.4"
+# Snapshot testing for codegen
+insta = { version = "1.45", features = ["glob"] }
+# Property-based testing
+proptest = "1"
 
 [[bin]]
 name = "incan"

@@ -1,0 +1,241 @@
+//! Type checker for the Incan programming language.
+//!
+//! Validates types, mutability, trait conformance, and error-handling semantics for a parsed Incan program.
+//! The checker runs in two passes over the AST and populates a [`SymbolTable`] with resolved type information.
+//!
+//! ## Notes
+//!
+//! - **Two-pass model**: The first pass ([`TypeChecker::check_program`]) collects all type and function declarations
+//!   into the symbol table. The second pass validates bodies, expressions, and cross-references.
+//! - **Import handling**: Call [`TypeChecker::import_module`] or use [`TypeChecker::check_with_imports`] to
+//!   pre-populate symbols from dependency modules before checking the main module.
+//! - **Error accumulation**: Errors are collected (not fatal) so the checker can report as many issues as possible in
+//!   a single run.
+//!
+//! ## What is validated
+//!
+//! - All referenced types and symbols are known
+//! - Type compatibility at assignments, calls, returns
+//! - Mutability rules (`mut` vs immutable bindings)
+//! - `?` operator only on `Result` types with compatible error types
+//! - Trait conformance for `with` clauses and `@derive` decorators
+//! - Newtype method signatures
+//! - Match exhaustiveness for enums, `Result`, and `Option`
+//!
+//! ## Examples
+//!
+//! ```ignore
+//! use incan::frontend::{parser, typechecker};
+//!
+//! let source = r#"
+//! def greet(name: str) -> str:
+//!     return f"Hello, {name}!"
+//! "#;
+//!
+//! let ast = parser::parse(source).expect("parse failed");
+//! let mut checker = typechecker::TypeChecker::new();
+//! checker.check_program(&ast)?;
+//! ```
+//!
+//! ## See also
+//!
+//! - [`symbols`](super::symbols) – symbol table and scope management
+//! - [`diagnostics`](super::diagnostics) – error types and pretty printing
+
+mod check_decl;
+mod check_expr;
+mod check_stmt;
+mod collect;
+
+#[cfg(test)]
+mod tests;
+
+use std::collections::HashSet;
+
+use crate::frontend::ast::*;
+use crate::frontend::diagnostics::CompileError;
+use crate::frontend::symbols::*;
+
+/// Valid derive names that can be used with @derive(...)
+pub(crate) const VALID_DERIVES: &[&str] = &[
+    // String representation
+    "Debug",
+    "Display",
+    // Comparison
+    "Eq",
+    "Ord",
+    "Hash",
+    // Copying
+    "Clone",
+    "Copy",
+    "Default",
+    // Serialization
+    "Serialize",
+    "Deserialize",
+];
+
+/// Type checker state.
+///
+/// Holds the symbol table, accumulated errors, and context needed for validation.
+/// Create with [`TypeChecker::new`], then call [`check_program`](Self::check_program) or
+/// [`check_with_imports`](Self::check_with_imports).
+pub struct TypeChecker {
+    /// Symbol table populated during the first pass.
+    pub(crate) symbols: SymbolTable,
+    /// Accumulated compile errors (non-fatal).
+    pub(crate) errors: Vec<CompileError>,
+    /// Track which bindings are mutable for mutation checks.
+    pub(crate) mutable_bindings: HashSet<String>,
+    /// Current function's error type for `?` operator compatibility.
+    pub(crate) current_return_error_type: Option<ResolvedType>,
+}
+
+impl TypeChecker {
+    pub fn new() -> Self {
+        Self {
+            symbols: SymbolTable::new(),
+            errors: Vec::new(),
+            mutable_bindings: HashSet::new(),
+            current_return_error_type: None,
+        }
+    }
+
+    /// Check a program and return errors if any.
+    ///
+    /// Runs the two-pass type-checking algorithm:
+    /// 1. **Collect**: register all type/function declarations in the symbol table.
+    /// 2. **Check**: validate bodies, expressions, and cross-references.
+    ///
+    /// ## Parameters
+    ///
+    /// - `program`: the parsed AST to validate.
+    ///
+    /// ## Returns
+    ///
+    /// - `Ok(())` if type checking succeeds.
+    /// - `Err(Vec<CompileError>)` containing all accumulated errors.
+    ///
+    /// ## Notes
+    ///
+    /// For multi-module projects, call [`import_module`](Self::import_module) first to populate dependency symbols,
+    /// or use [`check_with_imports`](Self::check_with_imports) to import dependencies first.
+    pub fn check_program(&mut self, program: &Program) -> Result<(), Vec<CompileError>> {
+        // First pass: collect type declarations
+        for decl in &program.declarations {
+            self.collect_declaration(decl);
+        }
+
+        // Second pass: check declarations
+        for decl in &program.declarations {
+            self.check_declaration(decl);
+        }
+
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(std::mem::take(&mut self.errors))
+        }
+    }
+
+    /// Import symbols from another module's AST into the symbol table.
+    ///
+    /// Call this before [`check_program`](Self::check_program) so the main module can reference types and functions
+    /// defined in dependencies.
+    ///
+    /// ## Parameters
+    ///
+    /// - `module_ast`: parsed AST of the dependency module.
+    /// - `_module_name`: reserved for future namespacing (currently unused).
+    pub fn import_module(&mut self, module_ast: &Program, _module_name: &str) {
+        // Collect all declarations from the imported module
+        for decl in &module_ast.declarations {
+            self.collect_declaration(decl);
+        }
+    }
+
+    /// Check a program that may have dependencies on other modules.
+    ///
+    /// Convenience wrapper that calls [`import_module`](Self::import_module) for each dependency,
+    /// then [`check_program`](Self::check_program).
+    ///
+    /// ## Parameters
+    ///
+    /// - `program`: parsed AST of the main module.
+    /// - `dependencies`: list of `(module_name, ast)` pairs to import first.
+    ///
+    /// ## Returns
+    ///
+    /// - `Ok(())` if type checking succeeds.
+    /// - `Err(Vec<CompileError>)` containing all accumulated errors.
+    #[tracing::instrument(skip_all, fields(decl_count = program.declarations.len(), dep_count = dependencies.len()))]
+    pub fn check_with_imports(
+        &mut self,
+        program: &Program,
+        dependencies: &[(&str, &Program)],
+    ) -> Result<(), Vec<CompileError>> {
+        // First: import all dependencies
+        for (name, dep_ast) in dependencies {
+            self.import_module(dep_ast, name);
+        }
+
+        // Then check the main program
+        self.check_program(program)
+    }
+
+    // ========================================================================
+    // Type compatibility (shared helper)
+    // ========================================================================
+
+    /// Check if two types are compatible for assignment or comparison.
+    ///
+    /// Returns `true` if `actual` can be used where `expected` is required.
+    /// Handles `Unknown` (error recovery), type variables (generics), and
+    /// recursive checks for generics, functions, and tuples.
+    #[allow(clippy::only_used_in_recursion)]
+    pub(crate) fn types_compatible(&self, actual: &ResolvedType, expected: &ResolvedType) -> bool {
+        if actual == expected {
+            return true;
+        }
+
+        match (actual, expected) {
+            (ResolvedType::Unknown, _) | (_, ResolvedType::Unknown) => true,
+            (ResolvedType::TypeVar(_), _) | (_, ResolvedType::TypeVar(_)) => true,
+            (ResolvedType::Generic(n1, a1), ResolvedType::Generic(n2, a2)) => {
+                n1 == n2
+                    && a1.len() == a2.len()
+                    && a1
+                        .iter()
+                        .zip(a2.iter())
+                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+            }
+            (ResolvedType::Function(p1, r1), ResolvedType::Function(p2, r2)) => {
+                p1.len() == p2.len()
+                    && p1
+                        .iter()
+                        .zip(p2.iter())
+                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+                    && self.types_compatible(r1, r2)
+            }
+            (ResolvedType::Tuple(e1), ResolvedType::Tuple(e2)) => {
+                e1.len() == e2.len()
+                    && e1
+                        .iter()
+                        .zip(e2.iter())
+                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Default for TypeChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convenience function to type-check an AST
+#[tracing::instrument(skip_all, fields(decl_count = program.declarations.len()))]
+pub fn check(program: &Program) -> Result<(), Vec<CompileError>> {
+    TypeChecker::new().check_program(program)
+}

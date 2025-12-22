@@ -57,7 +57,7 @@ pub enum Declaration {
     Newtype(NewtypeDecl),
     Enum(EnumDecl),
     Function(FunctionDecl),
-    Docstring(String),  // Module-level docstring
+    Docstring(String), // Module-level docstring
 }
 
 // ============================================================================
@@ -138,7 +138,7 @@ impl ImportPath {
     /// Convert to Rust-style path string (using ::)
     pub fn to_rust_path(&self) -> String {
         let mut parts = Vec::new();
-        
+
         if self.is_absolute {
             parts.push("crate".to_string());
         } else {
@@ -146,7 +146,7 @@ impl ImportPath {
                 parts.push("super".to_string());
             }
         }
-        
+
         parts.extend(self.segments.clone());
         parts.join("::")
     }
@@ -400,6 +400,8 @@ pub enum Statement {
     TupleUnpack(TupleUnpackStmt),
     /// Tuple assignment to lvalues: `arr[i], arr[j] = arr[j], arr[i]`
     TupleAssign(TupleAssignStmt),
+    /// Chained assignment: `x = y = z = value`
+    ChainedAssignment(ChainedAssignmentStmt),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -444,6 +446,13 @@ pub struct CompoundAssignmentStmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ChainedAssignmentStmt {
+    pub binding: BindingKind,
+    pub targets: Vec<Ident>,
+    pub value: Spanned<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TupleUnpackStmt {
     pub binding: BindingKind,
     pub names: Vec<Ident>,
@@ -462,17 +471,18 @@ pub struct TupleAssignStmt {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompoundOp {
-    Add,    // +=
-    Sub,    // -=
-    Mul,    // *=
-    Div,    // /=
-    Mod,    // %=
+    Add, // +=
+    Sub, // -=
+    Mul, // *=
+    Div, // /=
+    Mod, // %=
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IfStmt {
     pub condition: Spanned<Expr>,
     pub then_body: Vec<Spanned<Statement>>,
+    pub elif_branches: Vec<(Spanned<Expr>, Vec<Spanned<Statement>>)>,
     pub else_body: Option<Vec<Spanned<Statement>>>,
 }
 
@@ -585,6 +595,7 @@ pub enum BinaryOp {
     Mul,
     Div,
     Mod,
+    Pow,
     Eq,
     NotEq,
     Lt,
@@ -606,6 +617,7 @@ impl fmt::Display for BinaryOp {
             BinaryOp::Mul => write!(f, "*"),
             BinaryOp::Div => write!(f, "/"),
             BinaryOp::Mod => write!(f, "%"),
+            BinaryOp::Pow => write!(f, "**"),
             BinaryOp::Eq => write!(f, "=="),
             BinaryOp::NotEq => write!(f, "!="),
             BinaryOp::Lt => write!(f, "<"),
@@ -638,7 +650,7 @@ pub enum CallArg {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Spanned<Pattern>,
-    pub guard: Option<Spanned<Expr>>,  // `if condition` guard
+    pub guard: Option<Spanned<Expr>>, // `if condition` guard
     pub body: MatchBody,
 }
 

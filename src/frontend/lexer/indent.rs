@@ -2,8 +2,8 @@
 //!
 //! Implements Python-style INDENT/DEDENT tokens.
 
-use super::tokens::{Token, TokenKind};
 use super::Lexer;
+use super::tokens::{Token, TokenKind};
 use crate::frontend::ast::Span;
 use crate::frontend::diagnostics::CompileError;
 
@@ -59,8 +59,10 @@ impl<'a> Lexer<'a> {
 
         if indent > current_indent {
             self.indent_stack.push(indent);
-            self.tokens
-                .push(Token::new(TokenKind::Indent, Span::new(start, self.current_pos)));
+            self.tokens.push(Token::new(
+                TokenKind::Indent,
+                Span::new(start, self.current_pos),
+            ));
         } else if indent < current_indent {
             // Count how many dedents we need BEFORE modifying the stack
             let mut count = 0;
@@ -87,15 +89,20 @@ impl<'a> Lexer<'a> {
             let final_indent = *self.indent_stack.last().unwrap_or(&0);
             if indent != final_indent {
                 self.errors.push(CompileError::new(
-                    format!("Inconsistent indentation: expected {} spaces, got {}", final_indent, indent),
+                    format!(
+                        "Inconsistent indentation: expected {} spaces, got {}",
+                        final_indent, indent
+                    ),
                     Span::new(start, self.current_pos),
                 ));
             }
 
             // Emit dedent tokens
             if count > 0 {
-                self.tokens
-                    .push(Token::new(TokenKind::Dedent, Span::new(start, self.current_pos)));
+                self.tokens.push(Token::new(
+                    TokenKind::Dedent,
+                    Span::new(start, self.current_pos),
+                ));
                 if count > 1 {
                     self.pending_dedents = count - 1;
                 }

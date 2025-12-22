@@ -2,8 +2,8 @@
 //!
 //! Handles regular strings, f-strings, and byte strings.
 
-use super::tokens::{FStringPart, Token, TokenKind};
 use super::Lexer;
+use super::tokens::{FStringPart, Token, TokenKind};
 use crate::frontend::ast::Span;
 use crate::frontend::diagnostics::CompileError;
 
@@ -62,8 +62,12 @@ impl<'a> Lexer<'a> {
             Some('x') => {
                 // Hex escape \xNN
                 let mut hex = String::new();
-                if let Some(c) = self.advance() { hex.push(c); }
-                if let Some(c) = self.advance() { hex.push(c); }
+                if let Some(c) = self.advance() {
+                    hex.push(c);
+                }
+                if let Some(c) = self.advance() {
+                    hex.push(c);
+                }
                 match u8::from_str_radix(&hex, 16) {
                     Ok(byte) => ByteEscapeResult::Hex(byte),
                     Err(_) => ByteEscapeResult::HexError(hex),
@@ -163,7 +167,7 @@ impl<'a> Lexer<'a> {
             Span::new(start, self.current_pos),
         ));
     }
-    
+
     pub(super) fn scan_byte_string(&mut self, start: usize, quote: char) {
         let mut value = Vec::new();
 

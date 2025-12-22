@@ -4,13 +4,13 @@
 //! and manages loading/parsing of dependent modules.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use super::ast::{Declaration, ImportDecl, ImportKind, Program, Span};
+use super::diagnostics::CompileError;
 use super::lexer;
 use super::parser;
-use super::diagnostics::CompileError;
 
 /// Represents a resolved module with its AST and metadata
 #[derive(Debug)]
@@ -36,43 +36,44 @@ impl ModuleCollector {
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
-        
+
         Self {
             base_dir,
             loaded: HashMap::new(),
             loading: HashSet::new(),
         }
     }
-    
+
     /// Load the entry file and all its dependencies
     pub fn collect(&mut self, entry_file: &Path) -> Result<Vec<ResolvedModule>, Vec<CompileError>> {
-        let canonical = entry_file.canonicalize()
+        let canonical = entry_file
+            .canonicalize()
             .unwrap_or_else(|_| entry_file.to_path_buf());
-        
+
         self.load_module(&canonical)?;
-        
+
         // Return modules in dependency order (dependencies first)
         let mut result = Vec::new();
         let entry_key = canonical.clone();
-        
+
         // First add all non-entry modules
         for (path, module) in self.loaded.drain() {
             if path != entry_key {
                 result.push(module);
             }
         }
-        
+
         // Entry module is handled separately
         Ok(result)
     }
-    
+
     /// Load a single module and its dependencies
     fn load_module(&mut self, path: &Path) -> Result<(), Vec<CompileError>> {
         // Already loaded?
         if self.loaded.contains_key(path) {
             return Ok(());
         }
-        
+
         // Cycle detection
         if self.loading.contains(path) {
             return Err(vec![CompileError::new(
@@ -80,19 +81,20 @@ impl ModuleCollector {
                 Span::default(),
             )]);
         }
-        
+
         self.loading.insert(path.to_path_buf());
-        
+
         // Read and parse
-        let source = fs::read_to_string(path)
-            .map_err(|e| vec![CompileError::new(
+        let source = fs::read_to_string(path).map_err(|e| {
+            vec![CompileError::new(
                 format!("Cannot read '{}': {}", path.display(), e),
                 Span::default(),
-            )])?;
-        
+            )]
+        })?;
+
         let tokens = lexer::lex(&source)?;
         let ast = parser::parse(&tokens)?;
-        
+
         // Find and load dependencies
         for decl in &ast.declarations {
             if let Declaration::Import(import) = &decl.node {
@@ -101,27 +103,30 @@ impl ModuleCollector {
                 }
             }
         }
-        
+
         self.loading.remove(path);
-        self.loaded.insert(path.to_path_buf(), ResolvedModule {
-            path: path.to_path_buf(),
-            source,
-            ast,
-        });
-        
+        self.loaded.insert(
+            path.to_path_buf(),
+            ResolvedModule {
+                path: path.to_path_buf(),
+                source,
+                ast,
+            },
+        );
+
         Ok(())
     }
-    
+
     /// Resolve an import to a file path (relative to this collector's base directory).
     fn resolve_import(&self, import: &ImportDecl) -> Option<PathBuf> {
         resolve_import_path(&self.base_dir, import)
     }
-    
+
     /// Get all loaded modules
     pub fn modules(&self) -> impl Iterator<Item = &ResolvedModule> {
         self.loaded.values()
     }
-    
+
     /// Take ownership of loaded modules
     pub fn into_modules(self) -> HashMap<PathBuf, ResolvedModule> {
         self.loaded
@@ -136,9 +141,11 @@ pub fn resolve_import_path(base_dir: &Path, import: &ImportDecl) -> Option<PathB
         ImportKind::Module(p) if !p.segments.is_empty() => {
             (p.segments.clone(), p.is_absolute, p.parent_levels)
         }
-        ImportKind::From { module, .. } if !module.segments.is_empty() => {
-            (module.segments.clone(), module.is_absolute, module.parent_levels)
-        }
+        ImportKind::From { module, .. } if !module.segments.is_empty() => (
+            module.segments.clone(),
+            module.is_absolute,
+            module.parent_levels,
+        ),
         // Rust crate imports don't resolve to Incan files
         ImportKind::RustCrate { .. } | ImportKind::RustFrom { .. } => return None,
         ImportKind::Python(_) | ImportKind::Module(_) | ImportKind::From { .. } => return None,
@@ -217,7 +224,7 @@ pub fn resolve_import_path(base_dir: &Path, import: &ImportDecl) -> Option<PathB
 /// Extract what symbols a module exports
 pub fn exported_symbols(ast: &Program) -> Vec<ExportedSymbol> {
     let mut exports = Vec::new();
-    
+
     for decl in &ast.declarations {
         match &decl.node {
             Declaration::Model(m) => {
@@ -248,7 +255,7 @@ pub fn exported_symbols(ast: &Program) -> Vec<ExportedSymbol> {
             Declaration::Import(_) | Declaration::Docstring(_) => {}
         }
     }
-    
+
     exports
 }
 
@@ -257,7 +264,10 @@ pub enum ExportedSymbol {
     Type(String),
     Trait(String),
     Function(String),
-    Variant { enum_name: String, variant_name: String },
+    Variant {
+        enum_name: String,
+        variant_name: String,
+    },
 }
 
 #[cfg(test)]
@@ -269,7 +279,10 @@ mod tests {
     };
 
     fn make_spanned<T>(node: T) -> Spanned<T> {
-        Spanned { node, span: Span::default() }
+        Spanned {
+            node,
+            span: Span::default(),
+        }
     }
 
     // ========================================
@@ -298,7 +311,9 @@ mod tests {
 
     #[test]
     fn test_exported_symbols_empty_program() {
-        let program = Program { declarations: vec![] };
+        let program = Program {
+            declarations: vec![],
+        };
         let exports = exported_symbols(&program);
         assert!(exports.is_empty());
     }
@@ -371,16 +386,19 @@ mod tests {
         let exports = exported_symbols(&program);
         // 1 type + 3 variants = 4 exports
         assert_eq!(exports.len(), 4);
-        
+
         // First should be the type
         match &exports[0] {
             ExportedSymbol::Type(name) => assert_eq!(name, "Color"),
             _ => panic!("Expected Type export"),
         }
-        
+
         // Rest are variants
         match &exports[1] {
-            ExportedSymbol::Variant { enum_name, variant_name } => {
+            ExportedSymbol::Variant {
+                enum_name,
+                variant_name,
+            } => {
                 assert_eq!(enum_name, "Color");
                 assert_eq!(variant_name, "Red");
             }
@@ -467,7 +485,9 @@ mod tests {
     #[test]
     fn test_exported_symbols_ignores_docstrings() {
         let program = Program {
-            declarations: vec![make_spanned(Declaration::Docstring("Module documentation".to_string()))],
+            declarations: vec![make_spanned(Declaration::Docstring(
+                "Module documentation".to_string(),
+            ))],
         };
         let exports = exported_symbols(&program);
         assert!(exports.is_empty());
@@ -530,7 +550,10 @@ mod tests {
         };
         let cloned = sym.clone();
         match cloned {
-            ExportedSymbol::Variant { enum_name, variant_name } => {
+            ExportedSymbol::Variant {
+                enum_name,
+                variant_name,
+            } => {
                 assert_eq!(enum_name, "Status");
                 assert_eq!(variant_name, "Active");
             }
@@ -555,7 +578,9 @@ mod tests {
         let module = ResolvedModule {
             path: std::path::PathBuf::from("/test/module.incn"),
             source: "fn main(): ()".to_string(),
-            ast: Program { declarations: vec![] },
+            ast: Program {
+                declarations: vec![],
+            },
         };
         let debug_str = format!("{:?}", module);
         assert!(debug_str.contains("ResolvedModule"));
