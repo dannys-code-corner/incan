@@ -39,7 +39,7 @@ impl<'a> IrEmitter<'a> {
         &self,
         name: &str,
         ty: &IrType,
-        _value: &TypedExpr,
+        value: &TypedExpr,
     ) -> Result<(), EmitError> {
         fn ok_ty(ty: &IrType) -> bool {
             match ty {
@@ -64,17 +64,101 @@ impl<'a> IrEmitter<'a> {
             }
         }
 
-        if ok_ty(ty) {
-            return Ok(());
+        if !ok_ty(ty) {
+            let ty_name = ty.rust_name();
+            return Err(EmitError::Unsupported(format!(
+                "const '{}' of type '{}' is not representable as a Rust const.\n\
+                 Allowed: int/float/bool/&'static str/&'static [u8]/tuples, FrozenList/Set/Dict with allowed element types.\n\
+                 Consider computing at runtime or simplifying the const.",
+                name, ty_name
+            )));
         }
 
-        let ty_name = ty.rust_name();
-        Err(EmitError::Unsupported(format!(
-            "const '{}' of type '{}' is not representable as a Rust const.\n\
-             Allowed: int/float/bool/&'static str/&'static [u8]/tuples, FrozenList/Set/Dict with allowed element types.\n\
-             Consider computing at runtime or simplifying the const.",
-            name, ty_name
-        )))
+        self.validate_const_expr_kind(&value.kind)
+    }
+
+    /// RFC 008 const expression shape check (defensive backend guard).
+    ///
+    /// Frontend const-eval should already reject non-const expressions, but this
+    /// backend guard prevents emitting invalid consts when typechecker info is
+    /// missing and lowering falls back to heuristic typing.
+    fn validate_const_expr_kind(&self, kind: &IrExprKind) -> Result<(), EmitError> {
+        use IrExprKind as K;
+
+        match kind {
+            // Primitives and static literals
+            K::Unit
+            | K::None
+            | K::Bool(_)
+            | K::Int(_)
+            | K::Float(_)
+            | K::String(_)
+            | K::Bytes(_) => Ok(()),
+            K::Literal(IrLiteral::StaticStr(_)) => Ok(()),
+
+            // Const-to-const references
+            K::Var { .. } => Ok(()),
+
+            // Unary / binary operations (operands must be const-safe)
+            K::UnaryOp { operand, .. } => self.validate_const_expr_kind(&operand.kind),
+            K::BinOp { left, right, .. } => {
+                self.validate_const_expr_kind(&left.kind)?;
+                self.validate_const_expr_kind(&right.kind)
+            }
+
+            // Collections: validate elements (and key/value pairs)
+            K::Tuple(items) | K::List(items) | K::Set(items) => {
+                for item in items {
+                    self.validate_const_expr_kind(&item.kind)?;
+                }
+                Ok(())
+            }
+            K::Dict(pairs) => {
+                for (k, v) in pairs {
+                    self.validate_const_expr_kind(&k.kind)?;
+                    self.validate_const_expr_kind(&v.kind)?;
+                }
+                Ok(())
+            }
+
+            // Disallowed constructs in const initializers
+            K::Call { .. } => Err(EmitError::Unsupported(
+                "Function calls are not allowed in const initializers".to_string(),
+            )),
+            K::BuiltinCall { .. } => Err(EmitError::Unsupported(
+                "Builtin calls are not allowed in const initializers".to_string(),
+            )),
+            K::MethodCall { .. } | K::KnownMethodCall { .. } => Err(EmitError::Unsupported(
+                "Method calls are not allowed in const initializers".to_string(),
+            )),
+            K::ListComp { .. } | K::DictComp { .. } => Err(EmitError::Unsupported(
+                "Comprehensions are not allowed in const initializers".to_string(),
+            )),
+            K::Closure { .. } => Err(EmitError::Unsupported(
+                "Closures are not allowed in const initializers".to_string(),
+            )),
+            K::Await(_) => Err(EmitError::Unsupported(
+                "Await expressions are not allowed in const initializers".to_string(),
+            )),
+            K::If { .. }
+            | K::Match { .. }
+            | K::Block { .. }
+            | K::Field { .. }
+            | K::Index { .. }
+            | K::Slice { .. }
+            | K::Struct { .. }
+            | K::Range { .. }
+            | K::Cast { .. }
+            | K::Format { .. }
+            | K::Try(_) => Err(EmitError::Unsupported(
+                "Expression is not allowed in const initializers (phase 1)".to_string(),
+            )),
+
+            // Catch-all for future/unknown kinds
+            other => Err(EmitError::Unsupported(format!(
+                "Expression kind '{other:?}' is not allowed in const initializers"
+            ))),
+        }
     }
 
     /// Evaluate a TypedExpr as a compile-time `'static` string value, if possible.

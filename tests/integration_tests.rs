@@ -201,8 +201,8 @@ mod codegen_tests {
     fn test_run_c_import_this() {
         let output = Command::new("target/debug/incan")
             .args(["run", "-c", "import this"])
-            // This test should not require network access. We expect the workspace
-            // dependencies to already be available (the test suite built them).
+            // This test should not require network access. We expect the workspace dependencies to already be available
+            // (the test suite built them)
             .env("CARGO_NET_OFFLINE", "true")
             .output()
             .expect("failed to run incan");
@@ -262,6 +262,64 @@ mod codegen_tests {
         }
 
         rustc_compile_ok(&rust_code).expect("generated quicksort Rust failed to compile");
+    }
+
+    #[test]
+    fn test_const_declarations_compile_and_run() {
+        let output = Command::new("target/debug/incan")
+            .args([
+                "run",
+                "-c",
+                r#"
+const PI: float = 3.14159
+const APP_NAME: str = "Incan"
+const MAGIC: int = 42
+const ENABLED: bool = true
+const RAW_DATA: bytes = b"\x00\x01\x02\x03"
+const FROZEN_TEXT: FrozenStr = "frozen"
+const NUMBERS: FrozenList[int] = [1, 2, 3, 4, 5]
+const GREETING: str = "Hello World"
+
+def main() -> None:
+    print(PI)
+    print(APP_NAME)
+    print(MAGIC)
+    print(ENABLED)
+    print(RAW_DATA.len())
+    print(FROZEN_TEXT.len())
+    print(NUMBERS.len())
+    print(GREETING)
+"#,
+            ])
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+            .expect("failed to run incan");
+
+        assert!(
+            output.status.success(),
+            "const declarations test failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("3.14159"), "PI const not emitted correctly");
+        assert!(
+            stdout.contains("Incan"),
+            "APP_NAME const not emitted correctly"
+        );
+        assert!(stdout.contains("42"), "MAGIC const not emitted correctly");
+        assert!(
+            stdout.contains("true"),
+            "ENABLED const not emitted correctly"
+        );
+        assert!(stdout.contains("4"), "RAW_DATA length incorrect");
+        assert!(stdout.contains("6"), "FROZEN_TEXT length incorrect");
+        assert!(stdout.contains("5"), "NUMBERS length incorrect");
+        assert!(
+            stdout.contains("Hello World"),
+            "GREETING concat not working"
+        );
     }
 }
 
