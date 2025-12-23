@@ -1,0 +1,513 @@
+//! Python-like numeric operations for Incan-generated Rust code.
+//!
+//! This module provides:
+//! - Generic entry points (`py_div`, `py_mod`, `py_floor_div`) working across supported ints/floats.
+//! - Specialized suffixed helpers (`*_i64`, `*_f64`) kept for compatibility and tests.
+//!
+//! Key behaviors:
+//! - `py_div`: always returns `f64`.
+//! - `py_mod`: remainder has the sign of the divisor (Python semantics).
+//! - `py_floor_div`: rounds toward negative infinity (Python `//`).
+//! - Zero division (int or float) panics with `ZeroDivisionError: float division by zero`.
+//! - NaN/Inf follow IEEE/Rust behavior (documented divergence from Python).
+//!
+//! ## Examples
+//!
+//! ```rust
+//! use incan_stdlib::num::{py_div, py_mod, py_floor_div};
+//!
+//! assert_eq!(py_floor_div(7_i64, 3_i64), 2);
+//! assert!( (py_mod(-7.0_f64, 3.0_f64) - 2.0).abs() < 1e-10 );
+//! assert!( (py_div(7, 2) - 3.5).abs() < 1e-10 );
+//! ```
+
+/// Python-style floor division for integers.
+///
+/// Rounds toward negative infinity (unlike Rust's `/` which truncates toward zero).
+///
+/// ## Examples
+///
+/// ```
+/// use incan_stdlib::num::py_floor_div_i64;
+/// assert_eq!(py_floor_div_i64(7, 3), 2);
+/// assert_eq!(py_floor_div_i64(-7, 3), -3);  // Rust would give -2
+/// assert_eq!(py_floor_div_i64(7, -3), -3);  // Rust would give -2
+/// assert_eq!(py_floor_div_i64(-7, -3), 2);
+/// ```
+
+// --- Generic helpers and sealed traits ---------------------------------------------------------
+
+mod sealed {
+    // TODO: Consider making the "canonical float" configurable (e.g., via a type alias or associated type) if we add
+    //       multiple float backends (f32/f64) or want platform-specific tuning. Today we canonicalize to f64.
+
+    // --- Sealed traits ---
+    /// Sealing trait to restrict external implementations.
+    pub trait Sealed {}
+    impl Sealed for i64 {}
+    impl Sealed for f64 {}
+
+    // --- Incan integer types ---
+    /// Marker for Incan integer types (future-friendly: add i8/i16/i32/i64/etc.).
+    pub trait IncanInt: Sealed {
+        fn to_float(self) -> f64;
+    }
+
+    impl IncanInt for i64 {
+        #[inline]
+        fn to_float(self) -> f64 {
+            self as f64
+        }
+    }
+
+    // --- Incan float types ---
+    /// Marker for Incan float types (future-friendly: add f32/f64/etc.).
+    pub trait IncanFloat: Sealed {
+        fn to_float(self) -> f64;
+    }
+
+    impl IncanFloat for f64 {
+        #[inline]
+        fn to_float(self) -> f64 {
+            self
+        }
+    }
+
+    // --- Unified numeric trait ---
+    /// Unified numeric trait to allow shared bounds across supported ints/floats.
+    pub trait IncanNumeric: Sealed {
+        fn to_float(self) -> f64;
+    }
+
+    impl IncanNumeric for i64 {
+        #[inline]
+        fn to_float(self) -> f64 {
+            <Self as IncanInt>::to_float(self)
+        }
+    }
+
+    impl IncanNumeric for f64 {
+        #[inline]
+        fn to_float(self) -> f64 {
+            <Self as IncanFloat>::to_float(self)
+        }
+    }
+}
+
+/// Python-like division: always returns `f64`, uses `f64` math.
+///
+/// ## Returns
+///
+/// - (`f64`): the quotient `lhs / rhs`
+///
+/// ## Panics
+///
+/// - `ZeroDivisionError: float division by zero` if `rhs` is zero (finite zero)
+///
+/// ## Notes
+///
+/// - NaN/Inf follow IEEE/Rust behavior (documented divergence from Python).
+///
+/// ## Examples
+///
+/// ```incan
+/// result = py_div(7, 2)  # result is 3.5
+/// # semantically the same as:
+/// # result = 7 / 2
+/// ``````
+///
+/// ```rust
+/// use incan_stdlib::num::py_div;
+/// assert!((py_div(7_i64, 2_i64) - 3.5).abs() < 1e-10);
+/// assert!((py_div(7_i64, 2.0_f64) - 3.5).abs() < 1e-10);
+/// ```
+pub fn py_div<L, R>(lhs: L, rhs: R) -> f64
+where
+    L: sealed::IncanNumeric,
+    R: sealed::IncanNumeric,
+{
+    let l: f64 = lhs.to_float();
+    let r: f64 = rhs.to_float();
+    if r == 0.0 {
+        panic!("ZeroDivisionError: float division by zero");
+    }
+    l / r
+}
+
+/// Python-like modulo (remainder has the sign of the divisor).
+///
+/// ## Returns
+///
+/// - Same numeric type as the operation result (see implementations)
+///
+/// ## Panics
+///
+/// - `ZeroDivisionError: float division by zero` if `rhs` is zero (finite zero)
+///
+/// ## Notes
+///
+/// - Remainder sign matches the divisor (Python semantics).
+/// - NaN/Inf follow IEEE/Rust behavior (documented divergence from Python).
+///
+/// ## Examples
+///
+/// ```incan
+/// result = py_mod(7, 2)  # result is 1
+/// # semantically the same as:
+/// # result = 7 % 2
+/// ```
+///
+/// ```rust
+/// use incan_stdlib::num::py_mod;
+/// assert_eq!(py_mod(7_i64, 3_i64), 1);
+/// assert!((py_mod(-7.0_f64, 3.0_f64) - 2.0).abs() < 1e-10);
+/// ```
+pub fn py_mod<L, R>(lhs: L, rhs: R) -> <L as PyModImpl<R>>::Output
+where
+    L: PyModImpl<R>,
+    R: sealed::IncanNumeric + Copy,
+{
+    if rhs.to_float() == 0.0 {
+        panic!("ZeroDivisionError: float division by zero");
+    }
+    <L as PyModImpl<R>>::py_mod(lhs, rhs)
+}
+
+/// Python-like floor division (rounds toward negative infinity).
+///
+/// ## Returns
+///
+/// - Same numeric type as the operation result (see implementations)
+///
+/// ## Panics
+///
+/// - `ZeroDivisionError: float division by zero` if `rhs` is zero (finite zero)
+///
+/// ## Notes
+///
+/// - Rounds toward negative infinity (Python `//`).
+/// - NaN/Inf follow IEEE/Rust behavior (documented divergence from Python).
+///
+/// ## Examples
+///
+/// ```incan
+/// result = py_floor_div(7, 2)  # result is 3
+/// # semantically the same as:
+/// # result = 7 // 2
+/// ```
+///
+/// ```rust
+/// use incan_stdlib::num::py_floor_div;
+/// assert_eq!(py_floor_div(7_i64, 3_i64), 2);
+/// assert!((py_floor_div(-7.0_f64, 3.0_f64) + 3.0).abs() < 1e-10);
+/// ```
+pub fn py_floor_div<L, R>(lhs: L, rhs: R) -> <L as PyFloorDivImpl<R>>::Output
+where
+    L: PyFloorDivImpl<R>,
+    R: sealed::IncanNumeric + Copy,
+{
+    if rhs.to_float() == 0.0 {
+        panic!("ZeroDivisionError: float division by zero");
+    }
+    <L as PyFloorDivImpl<R>>::py_floor_div(lhs, rhs)
+}
+
+// --- Internal helpers reused across impls ------------------------------------------------------
+
+#[inline]
+fn py_mod_i64_impl(a: i64, b: i64) -> i64 {
+    debug_assert!(b != 0);
+    let r = a % b;
+    if (r > 0 && b < 0) || (r < 0 && b > 0) {
+        r + b
+    } else {
+        r
+    }
+}
+
+#[inline]
+fn py_floor_div_i64_impl(a: i64, b: i64) -> i64 {
+    debug_assert!(b != 0);
+    let q = a / b;
+    let r = a % b;
+    if (r > 0 && b < 0) || (r < 0 && b > 0) {
+        q - 1
+    } else {
+        q
+    }
+}
+
+#[inline]
+fn py_mod_f64_impl(a: f64, b: f64) -> f64 {
+    debug_assert!(b != 0.0);
+    let r = a % b;
+    if (r > 0.0 && b < 0.0) || (r < 0.0 && b > 0.0) {
+        r + b
+    } else {
+        r
+    }
+}
+
+// --- Python-like modulo -----------------------------------------------------------------------
+
+/// Trait for Python-like modulo across type pairs.
+pub trait PyModImpl<Rhs>: sealed::Sealed {
+    type Output;
+    fn py_mod(self, rhs: Rhs) -> Self::Output;
+}
+
+impl PyModImpl<i64> for i64 {
+    type Output = i64;
+    #[inline]
+    fn py_mod(self, rhs: i64) -> Self::Output {
+        py_mod_i64_impl(self, rhs)
+    }
+}
+
+impl PyModImpl<f64> for i64 {
+    type Output = f64;
+    #[inline]
+    fn py_mod(self, rhs: f64) -> Self::Output {
+        py_mod_f64_impl(self as f64, rhs)
+    }
+}
+
+impl PyModImpl<i64> for f64 {
+    type Output = f64;
+    #[inline]
+    fn py_mod(self, rhs: i64) -> Self::Output {
+        py_mod_f64_impl(self, rhs as f64)
+    }
+}
+
+impl PyModImpl<f64> for f64 {
+    type Output = f64;
+    #[inline]
+    fn py_mod(self, rhs: f64) -> Self::Output {
+        py_mod_f64_impl(self, rhs)
+    }
+}
+
+impl PyFloorDivImpl<i64> for i64 {
+    type Output = i64;
+    #[inline]
+    fn py_floor_div(self, rhs: i64) -> Self::Output {
+        py_floor_div_i64_impl(self, rhs)
+    }
+}
+
+// --- Python-like floor division ----------------------------------------------------------------
+
+/// Trait for Python-like floor division across type pairs.
+pub trait PyFloorDivImpl<Rhs>: sealed::Sealed {
+    type Output;
+    fn py_floor_div(self, rhs: Rhs) -> Self::Output;
+}
+
+impl PyFloorDivImpl<f64> for i64 {
+    type Output = f64;
+    #[inline]
+    fn py_floor_div(self, rhs: f64) -> Self::Output {
+        (self as f64 / rhs).floor()
+    }
+}
+
+impl PyFloorDivImpl<i64> for f64 {
+    type Output = f64;
+    #[inline]
+    fn py_floor_div(self, rhs: i64) -> Self::Output {
+        (self / rhs as f64).floor()
+    }
+}
+
+impl PyFloorDivImpl<f64> for f64 {
+    type Output = f64;
+    #[inline]
+    fn py_floor_div(self, rhs: f64) -> Self::Output {
+        (self / rhs).floor()
+    }
+}
+
+// --- Compatibility wrappers (existing API) ----------------------------------------------------
+
+#[inline]
+pub fn py_floor_div_i64(a: i64, b: i64) -> i64 {
+    py_floor_div(a, b)
+}
+
+/// Python-style floor division for floats.
+///
+/// Returns `(a / b).floor()`.
+///
+/// ## Examples
+///
+/// ```
+/// use incan_stdlib::num::py_floor_div_f64;
+/// assert!((py_floor_div_f64(7.0, 3.0) - 2.0).abs() < 1e-10);
+/// assert!((py_floor_div_f64(-7.0, 3.0) - (-3.0)).abs() < 1e-10);
+/// assert!((py_floor_div_f64(7.0, -3.0) - (-3.0)).abs() < 1e-10);
+/// ```
+#[inline]
+pub fn py_floor_div_f64(a: f64, b: f64) -> f64 {
+    py_floor_div(a, b)
+}
+
+/// Python-style modulo for integers.
+///
+/// The result has the same sign as the divisor (unlike Rust's `%`).
+///
+/// Satisfies: `a == py_floor_div_i64(a, b) * b + py_mod_i64(a, b)`
+///
+/// ## Examples
+///
+/// ```
+/// use incan_stdlib::num::py_mod_i64;
+/// assert_eq!(py_mod_i64(7, 3), 1);
+/// assert_eq!(py_mod_i64(-7, 3), 2);   // Rust % gives -1
+/// assert_eq!(py_mod_i64(7, -3), -2);  // Rust % gives 1
+/// assert_eq!(py_mod_i64(-7, -3), -1);
+/// ```
+#[inline]
+pub fn py_mod_i64(a: i64, b: i64) -> i64 {
+    py_mod(a, b)
+}
+
+/// Python-style modulo for floats.
+///
+/// The result has the same sign as the divisor.
+///
+/// ## Examples
+///
+/// ```
+/// use incan_stdlib::num::py_mod_f64;
+/// assert!((py_mod_f64(7.0, 3.0) - 1.0).abs() < 1e-10);
+/// assert!((py_mod_f64(-7.0, 3.0) - 2.0).abs() < 1e-10);
+/// assert!((py_mod_f64(7.0, -3.0) - (-2.0)).abs() < 1e-10);
+/// ```
+#[inline]
+pub fn py_mod_f64(a: f64, b: f64) -> f64 {
+    py_mod(a, b)
+}
+
+// --- Tests -------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64;
+
+    fn approx_eq(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-10
+    }
+
+    #[test]
+    fn test_matrix_py_div() {
+        assert!(approx_eq(py_div(2_i64, 2_i64), 1.0));
+        assert!(approx_eq(py_div(2_i64, 2.0_f64), 1.0));
+        assert!(approx_eq(py_div(2.0_f64, 2_i64), 1.0));
+        assert!(approx_eq(py_div(2.0_f64, 2.0_f64), 1.0));
+    }
+
+    #[test]
+    fn test_matrix_py_mod() {
+        assert_eq!(py_mod(7_i64, 3_i64), 1);
+        assert!(approx_eq(py_mod(7_i64, 3.0_f64), 1.0));
+        assert!(approx_eq(py_mod(7.0_f64, 3_i64), 1.0));
+        assert!(approx_eq(py_mod(7.0_f64, 3.0_f64), 1.0));
+    }
+
+    #[test]
+    fn test_matrix_py_floor_div() {
+        assert_eq!(py_floor_div(7_i64, 3_i64), 2);
+        assert!(approx_eq(py_floor_div(7_i64, 3.0_f64), 2.0));
+        assert!(approx_eq(py_floor_div(7.0_f64, 3_i64), 2.0));
+        assert!(approx_eq(py_floor_div(7.0_f64, 3.0_f64), 2.0));
+    }
+
+    #[test]
+    fn test_py_floor_div_signs() {
+        assert_eq!(py_floor_div_i64(-7, 3), -3);
+        assert_eq!(py_floor_div_i64(7, -3), -3);
+        assert_eq!(py_floor_div_i64(-7, -3), 2);
+        assert_eq!(py_floor_div_i64(-9, 3), -3);
+        assert!(approx_eq(py_floor_div(-7.0_f64, 3.0_f64), -3.0));
+        assert!(approx_eq(py_floor_div(7.0_f64, -3.0_f64), -3.0));
+        assert!(approx_eq(py_floor_div(-7.0_f64, -3.0_f64), 2.0));
+    }
+
+    #[test]
+    fn test_py_mod_signs() {
+        assert_eq!(py_mod_i64(7, 3), 1);
+        assert_eq!(py_mod_i64(-7, 3), 2);
+        assert_eq!(py_mod_i64(7, -3), -2);
+        assert_eq!(py_mod_i64(-7, -3), -1);
+        assert!(approx_eq(py_mod(7.0_f64, 3.0_f64), 1.0));
+        assert!(approx_eq(py_mod(-7.0_f64, 3.0_f64), 2.0));
+        assert!(approx_eq(py_mod(7.0_f64, -3.0_f64), -2.0));
+        assert!(approx_eq(py_mod(-7.0_f64, -3.0_f64), -1.0));
+    }
+
+    #[test]
+    fn test_floor_div_mod_relationship() {
+        // a == (a // b) * b + (a % b)
+        for a in [-10, -7, -1, 0, 1, 7, 10] {
+            for b in [-3, -1, 1, 3] {
+                let q = py_floor_div_i64(a, b);
+                let r = py_mod_i64(a, b);
+                assert_eq!(a, q * b + r, "a={}, b={}, q={}, r={}", a, b, q, r);
+            }
+        }
+    }
+
+    // --- Zero division panics ---
+
+    #[test]
+    #[should_panic(expected = "ZeroDivisionError: float division by zero")]
+    fn test_div_zero_int() {
+        let _ = py_div(1_i64, 0_i64);
+    }
+
+    #[test]
+    #[should_panic(expected = "ZeroDivisionError: float division by zero")]
+    fn test_div_zero_float() {
+        let _ = py_div(1.0_f64, 0.0_f64);
+    }
+
+    #[test]
+    #[should_panic(expected = "ZeroDivisionError: float division by zero")]
+    fn test_mod_zero_int() {
+        let _ = py_mod(1_i64, 0_i64);
+    }
+
+    #[test]
+    #[should_panic(expected = "ZeroDivisionError: float division by zero")]
+    fn test_mod_zero_float() {
+        let _ = py_mod(1.0_f64, 0.0_f64);
+    }
+
+    #[test]
+    #[should_panic(expected = "ZeroDivisionError: float division by zero")]
+    fn test_floor_div_zero_int() {
+        let _ = py_floor_div(1_i64, 0_i64);
+    }
+
+    #[test]
+    #[should_panic(expected = "ZeroDivisionError: float division by zero")]
+    fn test_floor_div_zero_float() {
+        let _ = py_floor_div(1.0_f64, 0.0_f64);
+    }
+
+    // --- NaN/Inf divergence (documented) ---
+
+    #[test]
+    fn test_nan_behavior_mod() {
+        let res = py_mod(f64::NAN, 2.0_f64);
+        assert!(res.is_nan());
+    }
+
+    #[test]
+    fn test_inf_behavior_mod() {
+        let res = py_mod(f64::INFINITY, 2.0_f64);
+        assert!(res.is_nan() || res.is_infinite()); // IEEE behavior; documented divergence
+    }
+}

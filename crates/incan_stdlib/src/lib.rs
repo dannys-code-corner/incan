@@ -1,11 +1,12 @@
 //! Standard library for Incan-generated Rust code.
 //!
-//! This crate provides traits and utilities that generated Incan code depends on,
-//! including reflection capabilities and JSON serialization helpers.
+//! This crate provides traits and utilities that generated Incan code depends on, including reflection capabilities,
+//! JSON serialization helpers, and numeric operations.
 
 #![deny(clippy::unwrap_used)]
 
 pub mod frozen;
+pub mod num;
 pub mod prelude;
 pub mod reflection;
 
