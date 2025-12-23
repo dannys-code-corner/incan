@@ -269,6 +269,7 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    FloorDiv, // // (Python-style floor division)
     Mod,
     Pow,
 

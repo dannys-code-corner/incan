@@ -34,7 +34,7 @@ pub fn test_while_loops() {
     let i = 0;
     while i < 5 {
         println!("{}", i);
-        i += 1;
+        i = i + 1;
     }
     let j = 0;
     while true {
@@ -42,11 +42,11 @@ pub fn test_while_loops() {
             break;
         }
         println!("{}", j);
-        j += 1;
+        j = j + 1;
     }
     let k = 0;
     while k < 5 {
-        k += 1;
+        k = k + 1;
         if k == 3 {
             continue;
         }

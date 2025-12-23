@@ -1,0 +1,6 @@
+config:
+  # Match our docs style: allow up to 120 chars per line.
+  MD013:
+    line_length: 120
+    code_blocks: false
+    tables: false

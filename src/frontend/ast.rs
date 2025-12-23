@@ -491,11 +491,12 @@ pub struct TupleAssignStmt {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompoundOp {
-    Add, // +=
-    Sub, // -=
-    Mul, // *=
-    Div, // /=
-    Mod, // %=
+    Add,      // +=
+    Sub,      // -=
+    Mul,      // *=
+    Div,      // /=
+    FloorDiv, // //=
+    Mod,      // %=
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -614,6 +615,7 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    FloorDiv, // // (Python-style floor division)
     Mod,
     Pow,
     Eq,
@@ -636,6 +638,7 @@ impl fmt::Display for BinaryOp {
             BinaryOp::Sub => write!(f, "-"),
             BinaryOp::Mul => write!(f, "*"),
             BinaryOp::Div => write!(f, "/"),
+            BinaryOp::FloorDiv => write!(f, "//"),
             BinaryOp::Mod => write!(f, "%"),
             BinaryOp::Pow => write!(f, "**"),
             BinaryOp::Eq => write!(f, "=="),

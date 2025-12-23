@@ -8,7 +8,10 @@ use incan::frontend::{lexer, parser, typechecker};
 /// Helper to run full pipeline on a source file
 fn compile_file(path: &Path) -> Result<(), Vec<String>> {
     let source = fs::read_to_string(path).map_err(|e| vec![e.to_string()])?;
+    compile_source(&source)
+}
 
+fn compile_source(source: &str) -> Result<(), Vec<String>> {
     let tokens = lexer::lex(&source).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
     let ast = parser::parse(&tokens).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
@@ -16,6 +19,21 @@ fn compile_file(path: &Path) -> Result<(), Vec<String>> {
     typechecker::check(&ast).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
     Ok(())
+}
+
+/// Regression: float compound-assign with int RHS should typecheck (Python-like / promotion).
+#[test]
+fn test_compound_assign_float_with_int_rhs() {
+    let program = r#"
+def main() -> None:
+    mut y: float = 100.0
+    y /= 3
+    y %= 7
+    println(y)
+"#;
+
+    let result = compile_source(program);
+    assert!(result.is_ok(), "Expected program to typecheck, got {:?}", result.err());
 }
 
 /// Test that all valid fixtures compile successfully
@@ -66,6 +84,15 @@ fn test_invalid_fixtures() {
 /// Test specific lexer behavior
 mod lexer_tests {
     use incan::frontend::lexer::{TokenKind, lex};
+
+    #[test]
+    fn test_floor_div_tokens() {
+        let tokens = lex("a //= b\nc // d").unwrap();
+        let has_floor_div_eq = tokens.iter().any(|t| matches!(t.kind, TokenKind::SlashSlashEq));
+        let has_floor_div = tokens.iter().any(|t| matches!(t.kind, TokenKind::SlashSlash));
+        assert!(has_floor_div_eq, "expected to see //= token");
+        assert!(has_floor_div, "expected to see // token");
+    }
 
     #[test]
     fn test_rust_style_imports() {
@@ -132,6 +159,28 @@ mod lexer_tests {
         assert!(matches!(tokens[1].kind, TokenKind::RustKw));
         assert!(matches!(tokens[2].kind, TokenKind::ColonColon));
         assert!(matches!(&tokens[3].kind, TokenKind::Ident(s) if s == "serde_json"));
+    }
+}
+
+mod numeric_semantics_tests {
+    use incan::frontend::{lexer, parser, typechecker};
+
+    #[test]
+    fn test_python_like_numeric_ops_compile() {
+        let source = r#"
+def main() -> None:
+  a: int = 7
+  b: int = -3
+  x = a / b       # float
+  y = a // b      # floor div
+  z = a % b       # python remainder
+  f: float = 7.0
+  g = f % 2.0
+  h = f // 2.0
+"#;
+        let tokens = lexer::lex(source).expect("lexing failed");
+        let ast = parser::parse(&tokens).expect("parse failed");
+        typechecker::check(&ast).expect("typecheck failed");
     }
 }
 

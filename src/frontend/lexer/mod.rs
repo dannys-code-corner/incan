@@ -209,7 +209,7 @@ impl<'a> Lexer<'a> {
                 TokenKind::Star,
                 &[('*', TokenKind::StarStar), ('=', TokenKind::StarEq)],
             ),
-            '/' => self.operator(start, TokenKind::Slash, &[('=', TokenKind::SlashEq)]),
+            '/' => self.scan_slash(start),
             '%' => self.operator(start, TokenKind::Percent, &[('=', TokenKind::PercentEq)]),
             '?' => self.add_token(TokenKind::Question, start),
             '@' => self.add_token(TokenKind::At, start),
@@ -311,6 +311,24 @@ impl<'a> Lexer<'a> {
             }
         }
         self.add_token(simple, start);
+    }
+
+    /// Scan slash operators: `/`, `/=`, `//`, `//=`.
+    fn scan_slash(&mut self, start: usize) {
+        if self.match_char('/') {
+            // `//` or `//=`
+            if self.match_char('=') {
+                self.add_token(TokenKind::SlashSlashEq, start);
+            } else {
+                self.add_token(TokenKind::SlashSlash, start);
+            }
+        } else if self.match_char('=') {
+            // `/=`
+            self.add_token(TokenKind::SlashEq, start);
+        } else {
+            // `/`
+            self.add_token(TokenKind::Slash, start);
+        }
     }
 
     /// Emit a bracket token and track bracket depth.

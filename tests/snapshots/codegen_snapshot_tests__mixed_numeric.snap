@@ -14,8 +14,8 @@ pub fn mixed_ops(x: i64, y: f64) -> f64 {
     let a = (x as f64) + y;
     let b = y + (x as f64);
     let c = (x as f64) * y;
-    let d = y / (x as f64);
-    let e = (x as f64) / y;
+    let d = incan_stdlib::num::py_div(y, (x as f64));
+    let e = incan_stdlib::num::py_div((x as f64), y);
     let f = (x as f64) - y;
     return a + b + c + d + e + f;
 }
@@ -23,4 +23,3 @@ fn main() {
     let result = mixed_ops(2, 3.5f64);
     println!("{}", result);
 }
-

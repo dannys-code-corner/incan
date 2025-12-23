@@ -240,11 +240,43 @@ impl AstLowering {
             ast::Statement::Break => IrStmtKind::Break(None),
             ast::Statement::Continue => IrStmtKind::Continue(None),
 
-            ast::Statement::CompoundAssignment(ca) => IrStmtKind::CompoundAssign {
-                target: AssignTarget::Var(ca.name.clone()),
-                op: self.lower_compound_op(&ca.op),
-                value: self.lower_expr_spanned(&ca.value)?,
-            },
+            ast::Statement::CompoundAssignment(ca) => {
+                // Desugar `x <op>= y` into `x = x <op> y`
+                let lhs_ty = self.lookup_var(&ca.name);
+                let lhs_expr = TypedExpr::new(
+                    IrExprKind::Var {
+                        name: ca.name.clone(),
+                        access: VarAccess::Move,
+                    },
+                    lhs_ty.clone(),
+                );
+                let rhs_expr = self.lower_expr_spanned(&ca.value)?;
+
+                // Determine result type using the same policy as binary ops.
+                let binop_ast = match ca.op {
+                    ast::CompoundOp::Add => ast::BinaryOp::Add,
+                    ast::CompoundOp::Sub => ast::BinaryOp::Sub,
+                    ast::CompoundOp::Mul => ast::BinaryOp::Mul,
+                    ast::CompoundOp::Div => ast::BinaryOp::Div,
+                    ast::CompoundOp::FloorDiv => ast::BinaryOp::FloorDiv,
+                    ast::CompoundOp::Mod => ast::BinaryOp::Mod,
+                };
+                let result_ty = self.binary_result_type(&lhs_ty, &rhs_expr.ty, &binop_ast, None);
+
+                let binop_expr = TypedExpr::new(
+                    IrExprKind::BinOp {
+                        op: self.lower_binop(&binop_ast),
+                        left: Box::new(lhs_expr),
+                        right: Box::new(rhs_expr),
+                    },
+                    result_ty,
+                );
+
+                IrStmtKind::Assign {
+                    target: AssignTarget::Var(ca.name.clone()),
+                    value: binop_expr,
+                }
+            }
 
             ast::Statement::TupleUnpack(tu) => {
                 let value = self.lower_expr_spanned(&tu.value)?;

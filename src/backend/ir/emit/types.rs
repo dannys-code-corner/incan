@@ -7,7 +7,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::super::decl::Visibility;
-use super::super::expr::{BinOp, IrExprKind, Pattern};
+use super::super::expr::{IrExprKind, Pattern};
 use super::super::types::IrType;
 use super::IrEmitter;
 
@@ -89,48 +89,6 @@ impl<'a> IrEmitter<'a> {
             Visibility::Private => quote! {},
             Visibility::Public => quote! { pub },
             Visibility::Crate => quote! { pub(crate) },
-        }
-    }
-
-    /// Emit a binary operator.
-    pub(super) fn emit_binop(&self, op: &BinOp) -> TokenStream {
-        match op {
-            BinOp::Add => quote! { + },
-            BinOp::Sub => quote! { - },
-            BinOp::Mul => quote! { * },
-            BinOp::Div => quote! { / },
-            BinOp::Mod => quote! { % },
-            BinOp::Pow => quote! { .pow },
-            BinOp::Eq => quote! { == },
-            BinOp::Ne => quote! { != },
-            BinOp::Lt => quote! { < },
-            BinOp::Le => quote! { <= },
-            BinOp::Gt => quote! { > },
-            BinOp::Ge => quote! { >= },
-            BinOp::And => quote! { && },
-            BinOp::Or => quote! { || },
-            BinOp::BitAnd => quote! { & },
-            BinOp::BitOr => quote! { | },
-            BinOp::BitXor => quote! { ^ },
-            BinOp::Shl => quote! { << },
-            BinOp::Shr => quote! { >> },
-        }
-    }
-
-    /// Emit a compound assignment operator.
-    pub(super) fn emit_compound_op(&self, op: &BinOp) -> TokenStream {
-        match op {
-            BinOp::Add => quote! { += },
-            BinOp::Sub => quote! { -= },
-            BinOp::Mul => quote! { *= },
-            BinOp::Div => quote! { /= },
-            BinOp::Mod => quote! { %= },
-            BinOp::BitAnd => quote! { &= },
-            BinOp::BitOr => quote! { |= },
-            BinOp::BitXor => quote! { ^= },
-            BinOp::Shl => quote! { <<= },
-            BinOp::Shr => quote! { >>= },
-            _ => quote! { = },
         }
     }
 

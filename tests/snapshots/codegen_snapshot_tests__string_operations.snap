@@ -41,8 +41,8 @@ pub fn test_string_join() {
 }
 pub fn test_string_concatenation() {
     let mut result = "hello".to_string();
-    result += " ";
-    result += "world";
+    result = result + " ";
+    result = result + "world";
     println!("{}", result);
 }
 fn main() {

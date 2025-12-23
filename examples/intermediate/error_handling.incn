@@ -9,12 +9,12 @@ This example demonstrates:
 
 Python equivalent (using exceptions):
 ```python
-def divide(a: int, b: int) -> int:
+def divide(a: int, b: int) -> float:
     if b == 0:
         raise ValueError("division by zero")
-    return a // b
+    return a / b
 
-def process(a: int, b: int) -> int:
+def process(a: int, b: int) -> float:
     return divide(a, b)  # may raise
 ```
 """
@@ -24,13 +24,13 @@ enum MathError:
     Overflow
 
 
-def divide(a: int, b: int) -> Result[int, MathError]:
+def divide(a: int, b: int) -> Result[float, MathError]:
     if b == 0:
         return Err(MathError.DivisionByZero)
     return Ok(a / b)
 
 
-def calculate(a: int, b: int) -> Result[int, MathError]:
+def calculate(a: int, b: int) -> Result[float, MathError]:
     result = divide(a, b)?
     return Ok(result * 2)
 

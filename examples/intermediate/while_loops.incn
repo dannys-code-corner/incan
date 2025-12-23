@@ -41,12 +41,15 @@ def main() -> None:
             continue
         println(f"  {j}")
 
-    mut x = 100
+    mut x: int = 100
     x -= 10
     x *= 2
-    x /= 3
-    x %= 7
     println(f"After compound ops: {x}")
+    
+    mut y: float = 100.0
+    y /= 3
+    y %= 7
+    println(f"After compound ops: {y}")
     
     mut k = 3
     println("Countdown:")

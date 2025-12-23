@@ -46,6 +46,7 @@ pub enum IrStmtKind {
         target: AssignTarget,
         op: super::expr::BinOp,
         value: IrExpr,
+        lhs_ty: IrType,
     },
 
     /// Return statement
