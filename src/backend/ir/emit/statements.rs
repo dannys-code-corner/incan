@@ -7,11 +7,85 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::super::conversions::{ConversionContext, determine_conversion};
-use super::super::expr::{BinOp, IrExprKind};
+use super::super::expr::{BinOp, IrExprKind, Pattern};
 use super::super::stmt::{AssignTarget, IrStmt, IrStmtKind};
 use super::super::types::IrType;
 use super::super::types::Mutability;
 use super::{EmitError, IrEmitter};
+
+/// Determine whether a `for` loop body requires mutable iteration of the loop variable.
+///
+/// We use this as a *codegen heuristic* to avoid emitting `.iter_mut()` when the loop body performs no mutation of the
+/// loop item. Emitting `.iter_mut()`:
+/// 
+/// - requires mutable access to the source collection, and
+/// - changes the loop item type from `&T` to `&mut T`.
+fn for_body_needs_mut_iteration(pattern: &Pattern, body: &[IrStmt]) -> bool {
+    let loop_var = match pattern {
+        Pattern::Var(name) => name.as_str(),
+        _ => return false,
+    };
+
+    /// Get the root variable name of an expression.
+    fn root_var_name(expr: &super::super::expr::IrExpr) -> Option<&str> {
+        match &expr.kind {
+            IrExprKind::Var { name, .. } => Some(name.as_str()),
+            IrExprKind::Field { object, .. } => root_var_name(object),
+            IrExprKind::Index { object, .. } => root_var_name(object),
+            _ => None,
+        }
+    }
+
+    /// Check if an assignment target mutates a variable.
+    fn target_mutates_var(target: &AssignTarget, var: &str) -> bool {
+        match target {
+            AssignTarget::Var(name) => name == var,
+            AssignTarget::Field { object, .. } => root_var_name(object).is_some_and(|n| n == var),
+            AssignTarget::Index { object, .. } => root_var_name(object).is_some_and(|n| n == var),
+        }
+    }
+
+    /// Check if an expression contains a mutation of a variable.
+    fn expr_contains_mutation(expr: &super::super::expr::IrExpr, var: &str) -> bool {
+        match &expr.kind {
+            IrExprKind::Block { stmts, value } => {
+                stmts.iter().any(|s| stmt_mutates_var(s, var))
+                    || value
+                        .as_ref()
+                        .is_some_and(|v| expr_contains_mutation(v, var))
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a statement mutates a variable.
+    fn stmt_mutates_var(stmt: &IrStmt, var: &str) -> bool {
+        match &stmt.kind {
+            IrStmtKind::Assign { target, .. } => target_mutates_var(target, var),
+            IrStmtKind::CompoundAssign { target, .. } => target_mutates_var(target, var),
+            IrStmtKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                then_branch.iter().any(|s| stmt_mutates_var(s, var))
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|b| b.iter().any(|s| stmt_mutates_var(s, var)))
+            }
+            IrStmtKind::While { body, .. } => body.iter().any(|s| stmt_mutates_var(s, var)),
+            IrStmtKind::For { body, .. } => body.iter().any(|s| stmt_mutates_var(s, var)),
+            IrStmtKind::Loop { body, .. } => body.iter().any(|s| stmt_mutates_var(s, var)),
+            IrStmtKind::Block(stmts) => stmts.iter().any(|s| stmt_mutates_var(s, var)),
+            IrStmtKind::Match { arms, .. } => arms
+                .iter()
+                .any(|arm| expr_contains_mutation(&arm.body, var)),
+            _ => false,
+        }
+    }
+
+    body.iter().any(|s| stmt_mutates_var(s, loop_var))
+}
 
 impl<'a> IrEmitter<'a> {
     /// Emit a statement as Rust tokens.
@@ -151,6 +225,7 @@ impl<'a> IrEmitter<'a> {
                 // For non-copy collections, iterate by reference to avoid move
                 // This handles the common case where a collection is used multiple times
                 // For primitive element types, use .iter().copied() to get values instead of references
+                let needs_mut_items = for_body_needs_mut_iteration(pattern, body);
                 let iter_expr = match &iterable.ty {
                     // If the iterable is a mutable reference to a collection, use .iter_mut() for non-Copy types
                     IrType::RefMut(inner) => {
@@ -192,9 +267,13 @@ impl<'a> IrEmitter<'a> {
                                 IrType::Int | IrType::Float | IrType::Bool => {
                                     quote! { #iter.iter().copied() }
                                 }
-                                // For non-Copy element types, iterate mutably to avoid moving the Vec
-                                // and to match the codegen behavior used throughout the project.
-                                _ => quote! { #iter.iter_mut() },
+                                _ => {
+                                    if needs_mut_items {
+                                        quote! { #iter.iter_mut() }
+                                    } else {
+                                        quote! { #iter.iter() }
+                                    }
+                                }
                             }
                         } else {
                             quote! { #iter }
