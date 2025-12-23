@@ -12,7 +12,7 @@ fn compile_file(path: &Path) -> Result<(), Vec<String>> {
 }
 
 fn compile_source(source: &str) -> Result<(), Vec<String>> {
-    let tokens = lexer::lex(&source).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
+    let tokens = lexer::lex(source).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
     let ast = parser::parse(&tokens).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
