@@ -59,8 +59,8 @@ def energy(bodies: List[Body]) -> float:
     return e
 
 def offset_momentum(mut bodies: List[Body]) -> None:
-    PI = 3.141592653589793
-    SOLAR_MASS = 4.0 * PI * PI
+    PI: float = 3.141592653589793
+    SOLAR_MASS: float = 4.0 * PI * PI
     mut px = 0.0
     mut py = 0.0
     mut pz = 0.0
@@ -75,9 +75,9 @@ def offset_momentum(mut bodies: List[Body]) -> None:
     bodies[0].vz = -pz / SOLAR_MASS
 
 def main() -> None:
-    PI = constPi
-    SOLAR_MASS = 4.0 * PI * PI
-    DAYS_PER_YEAR = 365.24
+    PI: float = 3.141592653589793
+    SOLAR_MASS: float = 4.0 * PI * PI
+    DAYS_PER_YEAR: float = 365.24
 
     mut bodies = [
         # Sun

@@ -64,34 +64,36 @@ pub enum TokenKind {
     FString(Vec<FStringPart>),
 
     // ========== Operators ==========
-    Plus,       // +
-    Minus,      // -
-    Star,       // *
-    StarStar,   // ** (power)
-    Slash,      // /
-    Percent,    // %
-    Eq,         // =
-    EqEq,       // ==
-    NotEq,      // !=
-    PlusEq,     // +=
-    MinusEq,    // -=
-    StarEq,     // *=
-    SlashEq,    // /=
-    PercentEq,  // %=
-    Lt,         // <
-    Gt,         // >
-    LtEq,       // <=
-    GtEq,       // >=
-    Arrow,      // ->
-    FatArrow,   // =>
-    Question,   // ?
-    Colon,      // :
-    ColonColon, // ::
-    Dot,        // .
-    DotDot,     // ..
-    DotDotEq,   // ..= (inclusive range)
-    Comma,      // ,
-    At,         // @
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    StarStar,     // ** (power)
+    Slash,        // /
+    SlashSlash,   // // (floor division)
+    Percent,      // % (modulo)
+    Eq,           // =
+    EqEq,         // ==
+    NotEq,        // !=
+    PlusEq,       // +=
+    MinusEq,      // -=
+    StarEq,       // *=
+    SlashEq,      // /=
+    SlashSlashEq, // //=
+    PercentEq,    // %=
+    Lt,           // <
+    Gt,           // >
+    LtEq,         // <=
+    GtEq,         // >=
+    Arrow,        // ->
+    FatArrow,     // =>
+    Question,     // ?
+    Colon,        // :
+    ColonColon,   // ::
+    Dot,          // .
+    DotDot,       // ..
+    DotDotEq,     // ..= (inclusive range)
+    Comma,        // ,
+    At,           // @
 
     // ========== Brackets ==========
     LParen,   // (

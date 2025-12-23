@@ -132,8 +132,9 @@ def foo() -> int:
 
 #[test]
 fn test_arithmetic_division() {
+    // Division always returns float (Python-like semantics)
     let source = r#"
-def foo() -> int:
+def foo() -> float:
   return 10 / 2
 "#;
     assert!(check_str(source).is_ok());

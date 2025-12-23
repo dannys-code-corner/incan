@@ -5,7 +5,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use super::super::super::conversions::{ConversionContext, determine_conversion};
+use super::super::super::conversions::{BinOpEmitKind, ConversionContext, determine_binop_plan, determine_conversion};
 use super::super::super::expr::{BinOp, IrExprKind, TypedExpr, VarAccess};
 use super::super::super::types::{IrType, Mutability};
 use super::super::{EmitError, IrEmitter};
@@ -110,35 +110,43 @@ impl<'a> IrEmitter<'a> {
             }
         }
 
-        let l = self.emit_expr(left)?;
-        let r = self.emit_expr(right)?;
+        let l_raw = self.emit_expr(left)?;
+        let r_raw = self.emit_expr(right)?;
 
-        // Power operator is a method call, not an infix operator
-        if matches!(op, BinOp::Pow) {
-            match &left.ty {
-                IrType::Float => return Ok(quote! { #l.powf(#r) }),
-                IrType::Int => return Ok(quote! { #l.pow(#r as u32) }),
-                _ => return Ok(quote! { #l.powf(#r) }),
+        // Determine binop plan (conversions + emit strategy)
+        let plan = determine_binop_plan(op, left, right);
+        let l = plan.lhs_conv.apply(l_raw);
+        let r = plan.rhs_conv.apply(r_raw);
+
+        match plan.emit {
+            BinOpEmitKind::StdlibCall { path } => Ok(quote! { #path(#l, #r) }),
+            BinOpEmitKind::Pow { result_is_int } => {
+                if result_is_int {
+                    Ok(quote! { #l.pow(#r as u32) })
+                } else {
+                    Ok(quote! { #l.powf(#r) })
+                }
+            }
+            BinOpEmitKind::Infix { token } => {
+                let op_tokens = token;
+
+                // Handle reference vs value comparisons
+                let is_comparison = matches!(
+                    op,
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+                );
+
+                if is_comparison {
+                    let left_is_ref = matches!(&left.ty, IrType::Ref(_) | IrType::RefMut(_));
+                    let right_is_value = !matches!(&right.ty, IrType::Ref(_) | IrType::RefMut(_));
+
+                    if left_is_ref && right_is_value {
+                        return Ok(quote! { *#l #op_tokens #r });
+                    }
+                }
+
+                Ok(quote! { #l #op_tokens #r })
             }
         }
-
-        let op_tokens = self.emit_binop(op);
-
-        // Handle reference vs value comparisons
-        let is_comparison = matches!(
-            op,
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-        );
-
-        if is_comparison {
-            let left_is_ref = matches!(&left.ty, IrType::Ref(_) | IrType::RefMut(_));
-            let right_is_value = !matches!(&right.ty, IrType::Ref(_) | IrType::RefMut(_));
-
-            if left_is_ref && right_is_value {
-                return Ok(quote! { *#l #op_tokens #r });
-            }
-        }
-
-        Ok(quote! { #l #op_tokens #r })
     }
 }

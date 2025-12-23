@@ -26,6 +26,8 @@ pub mod cli;
 pub mod format;
 pub mod frontend;
 pub mod lsp;
+pub mod numeric;
+pub mod numeric_adapters;
 
 pub use frontend::ast;
 pub use frontend::diagnostics;

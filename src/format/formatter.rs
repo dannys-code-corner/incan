@@ -614,6 +614,7 @@ impl Formatter {
                     CompoundOp::Sub => "-=",
                     CompoundOp::Mul => "*=",
                     CompoundOp::Div => "/=",
+                    CompoundOp::FloorDiv => "//=",
                     CompoundOp::Mod => "%=",
                 });
                 self.writer.write(" ");
@@ -1004,6 +1005,7 @@ impl Formatter {
             BinaryOp::Sub => "-",
             BinaryOp::Mul => "*",
             BinaryOp::Div => "/",
+            BinaryOp::FloorDiv => "//",
             BinaryOp::Mod => "%",
             BinaryOp::Pow => "**",
             BinaryOp::Eq => "==",

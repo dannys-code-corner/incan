@@ -7,7 +7,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::super::conversions::{ConversionContext, determine_conversion};
-use super::super::expr::{BinOp, IrExprKind, Pattern};
+use super::super::expr::{IrExprKind, Pattern};
 use super::super::stmt::{AssignTarget, IrStmt, IrStmtKind};
 use super::super::types::IrType;
 use super::super::types::Mutability;
@@ -60,7 +60,6 @@ fn for_body_needs_mut_iteration(pattern: &Pattern, body: &[IrStmt]) -> bool {
     fn stmt_mutates_var(stmt: &IrStmt, var: &str) -> bool {
         match &stmt.kind {
             IrStmtKind::Assign { target, .. } => target_mutates_var(target, var),
-            IrStmtKind::CompoundAssign { target, .. } => target_mutates_var(target, var),
             IrStmtKind::If {
                 then_branch,
                 else_branch,
@@ -124,29 +123,6 @@ impl<'a> IrEmitter<'a> {
                 let t = self.emit_assign_target(target)?;
                 let v = self.emit_expr(value)?;
                 Ok(quote! { #t = #v; })
-            }
-            IrStmtKind::CompoundAssign { target, op, value } => {
-                let t = self.emit_assign_target(target)?;
-
-                // For String += operations, emit the RHS as &str to avoid .to_string()
-                // If the value is a String type and op is Add, the target must be String too
-                let is_string_add = matches!(op, BinOp::Add) && matches!(&value.ty, IrType::String);
-
-                let v = if is_string_add {
-                    // For string literals, emit without .to_string(), just as &str
-                    match &value.kind {
-                        IrExprKind::String(s) => quote! { #s },
-                        _ => {
-                            let expr = self.emit_expr(value)?;
-                            quote! { #expr.as_str() }
-                        }
-                    }
-                } else {
-                    self.emit_expr(value)?
-                };
-
-                let op_tokens = self.emit_compound_op(op);
-                Ok(quote! { #t #op_tokens #v; })
             }
             IrStmtKind::Return(Some(expr)) => {
                 // Set return context so function calls inside can use move semantics
@@ -341,6 +317,9 @@ impl<'a> IrEmitter<'a> {
                     }
                 })
             }
+            IrStmtKind::CompoundAssign { .. } => Err(EmitError::Unsupported(
+                "CompoundAssign should be lowered into a regular assignment before emission".to_string(),
+            )),
         }
     }
 }

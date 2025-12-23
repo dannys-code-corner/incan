@@ -2,12 +2,18 @@
 //!
 //! This module contains helper functions for converting AST types, operators,
 //! and performing variable lookups during the lowering pass.
+//!
+//! Numeric semantics follow Python-like rules (via `crate::numeric`):
+//! - `/` always yields `Float` (even `int / int`)
+//! - `%` supports floats with Python remainder semantics
+//! - `**` yields `Int` only for non-negative int literal exponents; otherwise `Float`
 
 use super::super::expr::BinOp;
 use super::super::types::IrType;
 use super::AstLowering;
 use crate::frontend::ast;
 use crate::frontend::symbols::ResolvedType;
+use crate::numeric::{NumericOp, NumericTy, PowExponentKind, result_numeric_type};
 
 impl AstLowering {
     /// Lower an AST type in a `const` context, applying RFC 008 freezing rules.
@@ -244,6 +250,7 @@ impl AstLowering {
             ast::BinaryOp::Sub => BinOp::Sub,
             ast::BinaryOp::Mul => BinOp::Mul,
             ast::BinaryOp::Div => BinOp::Div,
+            ast::BinaryOp::FloorDiv => BinOp::FloorDiv,
             ast::BinaryOp::Mod => BinOp::Mod,
             ast::BinaryOp::Pow => BinOp::Pow,
             ast::BinaryOp::Eq => BinOp::Eq,
@@ -258,36 +265,26 @@ impl AstLowering {
         }
     }
 
-    /// Lower a compound assignment operator.
+    /// Determine the result type of a binary operation using Python-like numeric semantics.
     ///
-    /// # Parameters
+    /// ## Parameters
     ///
-    /// * `op` - The AST compound assignment operator
+    /// - `left`: The type of the left operand
+    /// - `right`: The type of the right operand
+    /// - `op`: The binary operator
+    /// - `pow_exp_kind`: For `Pow` operations, describes whether the exponent is a non-negative
+    ///   int literal (yields `Int`) or something else (yields `Float`)
     ///
-    /// # Returns
-    ///
-    /// The corresponding IR binary operator (for the operation part).
-    pub(super) fn lower_compound_op(&self, op: &ast::CompoundOp) -> BinOp {
-        match op {
-            ast::CompoundOp::Add => BinOp::Add,
-            ast::CompoundOp::Sub => BinOp::Sub,
-            ast::CompoundOp::Mul => BinOp::Mul,
-            ast::CompoundOp::Div => BinOp::Div,
-            ast::CompoundOp::Mod => BinOp::Mod,
-        }
-    }
-
-    /// Determine the result type of a binary operation.
-    ///
-    /// # Parameters
-    ///
-    /// * `left` - The type of the left operand
-    /// * `op` - The binary operator
-    ///
-    /// # Returns
+    /// ## Returns
     ///
     /// The result type of the operation.
-    pub(super) fn binary_result_type(&self, left: &IrType, op: &ast::BinaryOp) -> IrType {
+    pub(super) fn binary_result_type(
+        &self,
+        left: &IrType,
+        right: &IrType,
+        op: &ast::BinaryOp,
+        pow_exp_kind: Option<PowExponentKind>,
+    ) -> IrType {
         match op {
             ast::BinaryOp::Eq
             | ast::BinaryOp::NotEq
@@ -300,7 +297,61 @@ impl AstLowering {
             | ast::BinaryOp::In
             | ast::BinaryOp::NotIn
             | ast::BinaryOp::Is => IrType::Bool,
-            _ => left.clone(),
+            ast::BinaryOp::Add
+            | ast::BinaryOp::Sub
+            | ast::BinaryOp::Mul
+            | ast::BinaryOp::Div
+            | ast::BinaryOp::FloorDiv
+            | ast::BinaryOp::Mod
+            | ast::BinaryOp::Pow => {
+                // Convert to NumericTy
+                let lhs_num = Self::ir_type_to_numeric_ty(left);
+                let rhs_num = Self::ir_type_to_numeric_ty(right);
+
+                match (lhs_num, rhs_num) {
+                    (Some(lhs), Some(rhs)) => {
+                        if let Some(num_op) = Self::binop_to_numeric_op(*op) {
+                            let result = result_numeric_type(num_op, lhs, rhs, pow_exp_kind);
+                            match result {
+                                NumericTy::Int => IrType::Int,
+                                NumericTy::Float => IrType::Float,
+                            }
+                        } else {
+                            IrType::Unknown
+                        }
+                    }
+                    _ => left.clone(),
+                }
+            }
+        }
+    }
+
+    /// Convert an IrType to NumericTy for policy lookup.
+    fn ir_type_to_numeric_ty(ty: &IrType) -> Option<NumericTy> {
+        match ty {
+            IrType::Int => Some(NumericTy::Int),
+            IrType::Float => Some(NumericTy::Float),
+            _ => None,
+        }
+    }
+
+    /// Convert a BinaryOp to NumericOp for policy lookup.
+    fn binop_to_numeric_op(op: ast::BinaryOp) -> Option<NumericOp> {
+        match op {
+            ast::BinaryOp::Add => Some(NumericOp::Add),
+            ast::BinaryOp::Sub => Some(NumericOp::Sub),
+            ast::BinaryOp::Mul => Some(NumericOp::Mul),
+            ast::BinaryOp::Div => Some(NumericOp::Div),
+            ast::BinaryOp::FloorDiv => Some(NumericOp::FloorDiv),
+            ast::BinaryOp::Mod => Some(NumericOp::Mod),
+            ast::BinaryOp::Pow => Some(NumericOp::Pow),
+            ast::BinaryOp::Eq => Some(NumericOp::Eq),
+            ast::BinaryOp::NotEq => Some(NumericOp::NotEq),
+            ast::BinaryOp::Lt => Some(NumericOp::Lt),
+            ast::BinaryOp::Gt => Some(NumericOp::Gt),
+            ast::BinaryOp::LtEq => Some(NumericOp::LtEq),
+            ast::BinaryOp::GtEq => Some(NumericOp::GtEq),
+            _ => None,
         }
     }
 

@@ -1192,6 +1192,7 @@ impl<'a> Parser<'a> {
                 TokenKind::MinusEq => Some(CompoundOp::Sub),
                 TokenKind::StarEq => Some(CompoundOp::Mul),
                 TokenKind::SlashEq => Some(CompoundOp::Div),
+                TokenKind::SlashSlashEq => Some(CompoundOp::FloorDiv),
                 TokenKind::PercentEq => Some(CompoundOp::Mod),
                 _ => None,
             };
@@ -1257,6 +1258,7 @@ impl<'a> Parser<'a> {
             TokenKind::MinusEq => Some(CompoundOp::Sub),
             TokenKind::StarEq => Some(CompoundOp::Mul),
             TokenKind::SlashEq => Some(CompoundOp::Div),
+            TokenKind::SlashSlashEq => Some(CompoundOp::FloorDiv),
             TokenKind::PercentEq => Some(CompoundOp::Mod),
             _ => None,
         };
@@ -1272,6 +1274,7 @@ impl<'a> Parser<'a> {
                         CompoundOp::Sub => BinaryOp::Sub,
                         CompoundOp::Mul => BinaryOp::Mul,
                         CompoundOp::Div => BinaryOp::Div,
+                        CompoundOp::FloorDiv => BinaryOp::FloorDiv,
                         CompoundOp::Mod => BinaryOp::Mod,
                     };
                     let new_value = Spanned::new(Expr::Binary(Box::new(field_expr), bin_op, Box::new(rhs)), expr.span);
@@ -1289,6 +1292,7 @@ impl<'a> Parser<'a> {
                         CompoundOp::Sub => BinaryOp::Sub,
                         CompoundOp::Mul => BinaryOp::Mul,
                         CompoundOp::Div => BinaryOp::Div,
+                        CompoundOp::FloorDiv => BinaryOp::FloorDiv,
                         CompoundOp::Mod => BinaryOp::Mod,
                     };
                     let new_value = Spanned::new(Expr::Binary(Box::new(index_expr), bin_op, Box::new(rhs)), expr.span);
@@ -1446,6 +1450,9 @@ impl<'a> Parser<'a> {
         loop {
             let op = if self.match_token(&TokenKind::Star) {
                 BinaryOp::Mul
+            } else if self.match_token(&TokenKind::SlashSlash) {
+                // Check // before / since lexer produces distinct tokens
+                BinaryOp::FloorDiv
             } else if self.match_token(&TokenKind::Slash) {
                 BinaryOp::Div
             } else if self.match_token(&TokenKind::Percent) {

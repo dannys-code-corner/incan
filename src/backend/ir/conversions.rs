@@ -164,7 +164,10 @@
 //! let data = std::fs::read_to_string(&content);  // ← borrow applied
 //! ```
 
-use super::{IrExpr, IrExprKind, IrType};
+use super::expr::BinOp;
+use super::{IrExpr, IrExprKind, IrType, TypedExpr};
+use crate::numeric::{NumericOp, NumericTy, needs_float_promotion, result_numeric_type};
+use crate::numeric_adapters::{ir_type_to_numeric_ty, numeric_op_from_ir, pow_exponent_kind_from_ir};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -218,6 +221,160 @@ impl Conversion {
                 quote! { #tokens.into_iter().map(|s| s.to_string()).collect() }
             }
         }
+    }
+}
+
+/// Numeric coercions for binary operations (int/float promotion).
+///
+/// Promotes integer operands to `f64` when the paired operand is `f64`,
+/// or when the operation requires float (e.g., division).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericConversion {
+    None,
+    ToFloat,
+}
+
+impl NumericConversion {
+    /// Apply the numeric coercion to an emitted token stream.
+    ///
+    /// Uses `as f64` casting to align with the backend's float representation.
+    pub fn apply(&self, tokens: TokenStream) -> TokenStream {
+        match self {
+            NumericConversion::None => tokens,
+            // Use `(expr) as f64` to preserve precedence without wrapping the entire cast expression.
+            // This avoids Rust's `unused_parens` warnings in call arguments like `f(x, (3 as f64))`.
+            NumericConversion::ToFloat => quote! { (#tokens) as f64 },
+        }
+    }
+}
+
+// ---------------------- BinOpPlan (centralized binop emission strategy) ------------------------
+
+/// Emission strategy for a binary op after conversions are applied.
+#[derive(Debug, Clone)]
+pub enum BinOpEmitKind {
+    /// Emit as infix tokens, e.g., `+`, `-`, `*`, `==`
+    Infix { token: TokenStream },
+    /// Emit a stdlib helper call, e.g., `incan_stdlib::num::py_mod`
+    StdlibCall { path: TokenStream },
+    /// Emit power; choose powf vs pow based on kind
+    Pow { result_is_int: bool },
+}
+
+/// Plan for emitting a binary operation.
+#[derive(Debug, Clone)]
+pub struct BinOpPlan {
+    pub lhs_conv: NumericConversion,
+    pub rhs_conv: NumericConversion,
+    pub result_ty: IrType,
+    pub emit: BinOpEmitKind,
+}
+
+fn emit_binop_token(op: &BinOp) -> TokenStream {
+    match op {
+        BinOp::Add => quote! { + },
+        BinOp::Sub => quote! { - },
+        BinOp::Mul => quote! { * },
+        BinOp::Div => quote! { / },
+        BinOp::FloorDiv => quote! { / },
+        BinOp::Mod => quote! { % },
+        BinOp::Pow => quote! { .pow },
+        BinOp::Eq => quote! { == },
+        BinOp::Ne => quote! { != },
+        BinOp::Lt => quote! { < },
+        BinOp::Le => quote! { <= },
+        BinOp::Gt => quote! { > },
+        BinOp::Ge => quote! { >= },
+        BinOp::And => quote! { && },
+        BinOp::Or => quote! { || },
+        BinOp::BitAnd => quote! { & },
+        BinOp::BitOr => quote! { | },
+        BinOp::BitXor => quote! { ^ },
+        BinOp::Shl => quote! { << },
+        BinOp::Shr => quote! { >> },
+    }
+}
+
+/// Determine a BinOpPlan: conversions + emit strategy in one place.
+pub fn determine_binop_plan(op: &BinOp, left: &TypedExpr, right: &TypedExpr) -> BinOpPlan {
+    let num_op = match numeric_op_from_ir(op) {
+        Some(op) => op,
+        None => {
+            return BinOpPlan {
+                lhs_conv: NumericConversion::None,
+                rhs_conv: NumericConversion::None,
+                result_ty: left.ty.clone(),
+                emit: BinOpEmitKind::Infix {
+                    token: emit_binop_token(op),
+                },
+            };
+        }
+    };
+
+    let lhs_num = ir_type_to_numeric_ty(&left.ty);
+    let rhs_num = ir_type_to_numeric_ty(&right.ty);
+
+    let pow_exp_kind = if matches!(op, BinOp::Pow) {
+        Some(pow_exponent_kind_from_ir(right))
+    } else {
+        None
+    };
+
+    let (lhs_conv, rhs_conv, result_ty) = match (lhs_num, rhs_num) {
+        (Some(lhs), Some(rhs)) => {
+            let (l_promote, r_promote) = needs_float_promotion(num_op, lhs, rhs, pow_exp_kind);
+            let res = result_numeric_type(num_op, lhs, rhs, pow_exp_kind);
+            let l = if l_promote {
+                NumericConversion::ToFloat
+            } else {
+                NumericConversion::None
+            };
+            let r = if r_promote {
+                NumericConversion::ToFloat
+            } else {
+                NumericConversion::None
+            };
+            let ty = match res {
+                NumericTy::Int => IrType::Int,
+                NumericTy::Float => IrType::Float,
+            };
+            (l, r, ty)
+        }
+        _ => (NumericConversion::None, NumericConversion::None, left.ty.clone()),
+    };
+
+    let emit = match num_op {
+        NumericOp::Pow => {
+            let result_is_int = matches!(result_ty, IrType::Int);
+            BinOpEmitKind::Pow { result_is_int }
+        }
+        NumericOp::Mod => BinOpEmitKind::StdlibCall {
+            path: quote! { incan_stdlib::num::py_mod },
+        },
+        NumericOp::FloorDiv => BinOpEmitKind::StdlibCall {
+            path: quote! { incan_stdlib::num::py_floor_div },
+        },
+        NumericOp::Div => BinOpEmitKind::StdlibCall {
+            path: quote! { incan_stdlib::num::py_div },
+        },
+        NumericOp::Add
+        | NumericOp::Sub
+        | NumericOp::Mul
+        | NumericOp::Eq
+        | NumericOp::NotEq
+        | NumericOp::Lt
+        | NumericOp::LtEq
+        | NumericOp::Gt
+        | NumericOp::GtEq => BinOpEmitKind::Infix {
+            token: emit_binop_token(op),
+        },
+    };
+
+    BinOpPlan {
+        lhs_conv,
+        rhs_conv,
+        result_ty,
+        emit,
     }
 }
 

@@ -18,8 +18,8 @@ pub fn bump() -> i64 {
 pub fn collatz_inner(n: i64) -> i64 {
     let mut num = n;
     while num != 1 {
-        if num % 2 == 0 {
-            num = num / 2;
+        if incan_stdlib::num::py_mod(num, 2) == 0 {
+            num = incan_stdlib::num::py_div((num) as f64, (2) as f64);
         } else {
             num = 3 * num + 1;
         }

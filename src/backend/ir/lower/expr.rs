@@ -9,6 +9,7 @@ use super::super::types::IrType;
 use super::AstLowering;
 use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
+use crate::numeric::PowExponentKind;
 
 impl AstLowering {
     /// Lower an expression using the available typechecker output (if present).
@@ -110,9 +111,15 @@ impl AstLowering {
                         }
                     }
                     _ => {
-                        let left = self.lower_expr(&l.node)?;
-                        let right = self.lower_expr(&r.node)?;
-                        let result_ty = self.binary_result_type(&left.ty, op);
+                        let left = self.lower_expr_spanned(l)?;
+                        let right = self.lower_expr_spanned(r)?;
+                        // For Pow, compute exponent kind for policy-based result type
+                        let pow_exp_kind = if matches!(op, ast::BinaryOp::Pow) {
+                            Some(Self::pow_exponent_kind(r, &right.ty))
+                        } else {
+                            None
+                        };
+                        let result_ty = self.binary_result_type(&left.ty, &right.ty, op, pow_exp_kind);
                         (
                             IrExprKind::BinOp {
                                 op: self.lower_binop(op),
@@ -600,6 +607,32 @@ impl AstLowering {
                 fields: args.iter().map(|a| self.lower_pattern(&a.node)).collect(),
             },
             ast::Pattern::Tuple(items) => Pattern::Tuple(items.iter().map(|i| self.lower_pattern(&i.node)).collect()),
+        }
+    }
+
+    /// Determine PowExponentKind for a power expression's right operand.
+    ///
+    /// Used to implement Python-like `**` semantics where `int ** int` yields `Int`
+    /// only for non-negative int literal exponents; otherwise `Float`.
+    fn pow_exponent_kind(right_ast: &Spanned<ast::Expr>, right_ty: &IrType) -> PowExponentKind {
+        let rhs_is_float = matches!(right_ty, IrType::Float);
+        let rhs_int_literal = Self::extract_int_literal(right_ast);
+        PowExponentKind::from_literal_info(rhs_is_float, rhs_int_literal)
+    }
+
+    /// Extract an integer literal value from an AST expression.
+    fn extract_int_literal(expr: &Spanned<ast::Expr>) -> Option<i64> {
+        match &expr.node {
+            ast::Expr::Literal(ast::Literal::Int(n)) => Some(*n),
+            ast::Expr::Unary(ast::UnaryOp::Neg, inner) => {
+                if let ast::Expr::Literal(ast::Literal::Int(n)) = &inner.node {
+                    Some(-n)
+                } else {
+                    None
+                }
+            }
+            ast::Expr::Paren(inner) => Self::extract_int_literal(inner),
+            _ => None,
         }
     }
 }

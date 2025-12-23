@@ -3,6 +3,8 @@
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::*;
+use crate::numeric::{NumericTy, result_numeric_type};
+use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved};
 
 use super::TypeChecker;
 
@@ -52,8 +54,36 @@ impl TypeChecker {
                     }
                     // Type check the value expression
                     let value_ty = self.check_expr(&compound.value);
-                    // For numeric operations, check type compatibility
-                    if !self.types_compatible(&value_ty, &var_ty) {
+
+                    // Treat `x <op>= y` as `x = x <op> y` using numeric policy.
+                    let binop = match compound.op {
+                        CompoundOp::Add => BinaryOp::Add,
+                        CompoundOp::Sub => BinaryOp::Sub,
+                        CompoundOp::Mul => BinaryOp::Mul,
+                        CompoundOp::Div => BinaryOp::Div,
+                        CompoundOp::FloorDiv => BinaryOp::FloorDiv,
+                        CompoundOp::Mod => BinaryOp::Mod,
+                    };
+
+                    let lhs_num = numeric_ty_from_resolved(&var_ty);
+                    let rhs_num = numeric_ty_from_resolved(&value_ty);
+
+                    if let (Some(lhs), Some(rhs)) = (lhs_num, rhs_num) {
+                        let num_op = numeric_op_from_ast(&binop).expect("compound op maps to numeric op");
+                        let res_num = result_numeric_type(num_op, lhs, rhs, None);
+                        let res_ty = match res_num {
+                            NumericTy::Int => ResolvedType::Int,
+                            NumericTy::Float => ResolvedType::Float,
+                        };
+                        if !self.types_compatible(&res_ty, &var_ty) {
+                            self.errors.push(errors::type_mismatch(
+                                &var_ty.to_string(),
+                                &res_ty.to_string(),
+                                compound.value.span,
+                            ));
+                        }
+                    } else if !self.types_compatible(&value_ty, &var_ty) {
+                        // Non-numeric: fall back to simple compatibility check.
                         self.errors.push(errors::type_mismatch(
                             &var_ty.to_string(),
                             &value_ty.to_string(),

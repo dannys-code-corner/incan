@@ -64,6 +64,13 @@ fn test_operators_codegen() {
 }
 
 #[test]
+fn test_mixed_numeric_codegen() {
+    let source = load_test_file("mixed_numeric");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("mixed_numeric", rust_code);
+}
+
+#[test]
 fn test_function_calls_codegen() {
     let source = load_test_file("function_calls");
     let rust_code = generate_rust(&source);

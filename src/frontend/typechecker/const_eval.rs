@@ -2,10 +2,17 @@
 //!
 //! This module does not compute runtime values; it validates that an initializer is const-evaluable,
 //! determines its type, classifies it (Rust-native vs frozen), and detects const dependency cycles.
+//!
+//! Numeric semantics follow Python-like rules (via `crate::numeric`):
+//! - `/` always yields `Float` (even `int / int`)
+//! - `%` supports floats with Python remainder semantics
+//! - `**` yields `Int` only for non-negative int literal exponents; otherwise `Float`
 
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::{ResolvedType, resolve_type};
+use crate::numeric::{NumericTy, result_numeric_type};
+use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved, pow_exponent_kind_from_ast};
 
 use super::TypeChecker;
 
@@ -213,32 +220,70 @@ impl TypeChecker {
                 let r = self.eval_const_expr(right, None, stack, decl_span)?;
 
                 let (result_ty, result_kind) = match op {
-                    // Numeric ops
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
+                    // Numeric ops (Python-like semantics via numeric policy)
+                    BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::FloorDiv
+                    | BinaryOp::Mod
+                    | BinaryOp::Pow => {
                         // Special-case string concatenation for frozen strings
                         if matches!(op, BinaryOp::Add)
                             && matches!(l.ty, ResolvedType::Named(ref n) if n == "FrozenStr")
                             && matches!(r.ty, ResolvedType::Named(ref n) if n == "FrozenStr")
                         {
                             (ResolvedType::Named("FrozenStr".to_string()), ConstKind::Frozen)
-                        } else if matches!(l.ty, ResolvedType::Int | ResolvedType::Float)
-                            && self.types_compatible(&r.ty, &l.ty)
-                        {
-                            (l.ty.clone(), ConstKind::RustNative)
+                        } else {
+                            // Convert to NumericTy
+                            let lhs_num = numeric_ty_from_resolved(&l.ty);
+                            let rhs_num = numeric_ty_from_resolved(&r.ty);
+
+                            match (lhs_num, rhs_num) {
+                                (Some(lhs), Some(rhs)) => {
+                                    let num_op = numeric_op_from_ast(op).expect("INVARIANT: arithmetic op");
+                                    let pow_exp = if matches!(op, BinaryOp::Pow) {
+                                        Some(pow_exponent_kind_from_ast(right, &r.ty))
+                                    } else {
+                                        None
+                                    };
+                                    let result = result_numeric_type(num_op, lhs, rhs, pow_exp);
+                                    let ty = match result {
+                                        NumericTy::Int => ResolvedType::Int,
+                                        NumericTy::Float => ResolvedType::Float,
+                                    };
+                                    (ty, ConstKind::RustNative)
+                                }
+                                _ => {
+                                    self.errors.push(CompileError::type_error(
+                                        format!(
+                                            "Binary operator '{}' is not supported for types '{}' and '{}'",
+                                            op, l.ty, r.ty
+                                        ),
+                                        expr.span,
+                                    ));
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                    // Comparisons always yield bool (mixed numeric allowed)
+                    BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => {
+                        // Validate operands are comparable (same type or both numeric)
+                        let lhs_num = numeric_ty_from_resolved(&l.ty);
+                        let rhs_num = numeric_ty_from_resolved(&r.ty);
+                        if lhs_num.is_some() && rhs_num.is_some() {
+                            // Mixed numeric comparison is valid
+                            (ResolvedType::Bool, ConstKind::RustNative)
+                        } else if self.types_compatible(&l.ty, &r.ty) {
+                            (ResolvedType::Bool, ConstKind::RustNative)
                         } else {
                             self.errors.push(CompileError::type_error(
-                                format!(
-                                    "Binary operator '{}' is not supported for types '{}' and '{}'",
-                                    op, l.ty, r.ty
-                                ),
+                                format!("Cannot compare '{}' with '{}'", l.ty, r.ty),
                                 expr.span,
                             ));
                             return None;
                         }
-                    }
-                    // Comparisons always yield bool
-                    BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => {
-                        (ResolvedType::Bool, ConstKind::RustNative)
                     }
                     BinaryOp::And | BinaryOp::Or => {
                         if matches!(l.ty, ResolvedType::Bool) && matches!(r.ty, ResolvedType::Bool) {
