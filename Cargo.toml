@@ -31,8 +31,6 @@ phf = { version = "0.11", features = ["macros"] }
 clap = { version = "4.4", features = ["derive"] }
 # Composable error types
 thiserror = "2.0"
-# UTF-8 path handling (eliminates to_string_lossy())
-camino = "1.1"
 # Rich error diagnostics with source context
 miette = { version = "7.0", features = ["fancy"] }
 
@@ -46,7 +44,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-pretty_assertions = "1.4"
 # Snapshot testing for codegen
 insta = { version = "1.45", features = ["glob"] }
 # Property-based testing

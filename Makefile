@@ -69,10 +69,12 @@ lint:
 check: fmt-check lint
 	@echo "\033[32m✓ All checks passed\033[0m"
 
-.PHONY: pre-commit  ## quality - Full CI check: fmt, lint, test, and build
+.PHONY: pre-commit  ## quality - Full CI check: fmt, lint, test, udeps, and build
 pre-commit: fmt lint
 	@echo "\033[1mRunning tests...\033[0m"
 	@cargo test --quiet
+	@echo "\033[1mChecking for unused dependencies (requires nightly + cargo-udeps)...\033[0m"
+	@cargo +nightly udeps --quiet || echo "\033[33m⚠ cargo-udeps skipped (requires nightly rustc 1.85+)\033[0m"
 	@echo "\033[1mBuilding release...\033[0m"
 	@cargo build --release --quiet
 	@echo "\033[32m✓ Pre-commit checks passed\033[0m"
