@@ -47,6 +47,7 @@ impl SymbolTable {
             "Unit",
             // RFC 008 frozen const types
             "FrozenStr",
+            "FrozenBytes",
             "FrozenList",
             "FrozenSet",
             "FrozenDict",

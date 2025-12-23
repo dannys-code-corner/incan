@@ -739,6 +739,28 @@ const DATA: FrozenBytes = b"hi"
 }
 
 #[test]
+fn test_frozen_bytes_method_len() {
+    let source = r#"
+const DATA: FrozenBytes = b"hi"
+
+def foo() -> int:
+  return DATA.len()
+"#;
+    assert!(check_str(source).is_ok());
+}
+
+#[test]
+fn test_frozen_bytes_method_is_empty() {
+    let source = r#"
+const DATA: FrozenBytes = b"hi"
+
+def foo() -> bool:
+  return DATA.is_empty()
+"#;
+    assert!(check_str(source).is_ok());
+}
+
+#[test]
 fn test_frozen_list_method_len() {
     let source = r#"
 const NUMS: FrozenList[int] = [1, 2, 3]

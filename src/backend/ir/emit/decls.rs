@@ -13,7 +13,7 @@
 //! - [`crate::backend::ir::emit::consts`]
 //! - [`crate::backend::ir::emit::types`]
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Literal, TokenStream};
 use quote::{format_ident, quote};
 
 use super::super::decl::{IrDecl, IrDeclKind};
@@ -86,7 +86,19 @@ impl<'a> IrEmitter<'a> {
                 let value_tokens = if let Some(tok) = specialized_tokens {
                     tok
                 } else {
-                    self.emit_expr(value)?
+                    match (ty, &value.kind) {
+                        // RFC 008: frozen scalars.
+                        //
+                        // These types are wrappers around `'static` data and must be constructed explicitly.
+                        (T::Struct(name), IrExprKind::String(s)) if name == "FrozenStr" => {
+                            quote! { FrozenStr::new(#s) }
+                        }
+                        (T::Struct(name), IrExprKind::Bytes(bytes)) if name == "FrozenBytes" => {
+                            let lit = Literal::byte_string(bytes);
+                            quote! { FrozenBytes::new(#lit) }
+                        }
+                        _ => self.emit_expr(value)?,
+                    }
                 };
 
                 Ok(quote! {

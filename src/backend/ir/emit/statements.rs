@@ -17,7 +17,7 @@ use super::{EmitError, IrEmitter};
 ///
 /// We use this as a *codegen heuristic* to avoid emitting `.iter_mut()` when the loop body performs no mutation of the
 /// loop item. Emitting `.iter_mut()`:
-/// 
+///
 /// - requires mutable access to the source collection, and
 /// - changes the loop item type from `&T` to `&mut T`.
 fn for_body_needs_mut_iteration(pattern: &Pattern, body: &[IrStmt]) -> bool {
@@ -267,6 +267,7 @@ impl<'a> IrEmitter<'a> {
                                 IrType::Int | IrType::Float | IrType::Bool => {
                                     quote! { #iter.iter().copied() }
                                 }
+                                // For non-Copy types (structs), use .iter_mut() to allow mutation
                                 _ => {
                                     if needs_mut_items {
                                         quote! { #iter.iter_mut() }

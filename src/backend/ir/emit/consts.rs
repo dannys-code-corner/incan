@@ -48,6 +48,7 @@ impl<'a> IrEmitter<'a> {
                 | IrType::Bool
                 | IrType::StaticStr
                 | IrType::StaticBytes => true,
+                IrType::Struct(name) if name == "FrozenStr" || name == "FrozenBytes" => true,
                 IrType::Tuple(items) => items.iter().all(ok_ty),
                 IrType::NamedGeneric(name, args) if name == "FrozenList" => {
                     args.first().map(ok_ty).unwrap_or(false)

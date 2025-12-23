@@ -216,6 +216,13 @@ fn test_const_str_chain_codegen() {
 }
 
 #[test]
+fn test_const_bytes_codegen() {
+    let source = load_test_file("const_bytes");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("const_bytes", rust_code);
+}
+
+#[test]
 fn test_inferred_reassign_codegen() {
     // Snapshot test to keep style consistent with this file.
     let source = load_test_file("inferred_reassign");
