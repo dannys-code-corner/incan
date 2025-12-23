@@ -1,6 +1,7 @@
 # Contributing to Incan
 
-Thank you for your interest in contributing to the Incan programming language! This document provides guidelines for contributing to the project.
+Thank you for your interest in contributing to the Incan programming language! This document provides
+guidelines for contributing to the project.
 
 ## Start Here (Docs)
 
@@ -32,13 +33,32 @@ Thank you for your interest in contributing to the Incan programming language! T
 
 ## Project Structure
 
-The compiler is organized into a **frontend** (lex/parse/typecheck), a **backend** (lowering + Rust emission), plus CLI and tooling.
+The compiler is organized into a **frontend** (lex/parse/typecheck), a **backend** (lowering + Rust
+emission), plus CLI and tooling.
 
 For an up-to-date module map, see:
 
 - [Compiler Architecture](docs/architecture.md) (includes a module layout table)
 
 ## Key Development Tasks
+
+### Bumping the Version
+
+The workspace uses **Cargo workspace package metadata**, so you only bump versions in **one place**.
+
+1. Edit the root `Cargo.toml` and update:
+   - `[workspace.package] version = "..."` (this is the single source of truth)
+2. Verify everything still passes:
+   - `cargo test`
+   - `make pre-commit` (recommended)
+3. Commit the change.
+
+Notes:
+
+- The compiler exposes the version as `incan::version::INCAN_VERSION`, backed by
+  `env!("CARGO_PKG_VERSION")`, so it updates automatically with the Cargo version.
+- Codegen snapshots are version-agnostic (they normalize the codegen header to
+  `v<INCAN_VERSION>`), so version bumps should not churn snapshot files.
 
 ### Code Generation Overview
 
@@ -69,7 +89,9 @@ Key files:
 
 ### Type Conversions System
 
-The `conversions` module (`src/backend/ir/conversions.rs`) provides centralized handling of type conversions and borrow checking during Rust codegen. This is where we handle the mismatch between Incan's simple `str` type and Rust's `&str` vs `String` split for example.
+The `conversions` module (`src/backend/ir/conversions.rs`) provides centralized handling of type
+conversions and borrow checking during Rust codegen. This is where we handle the mismatch between
+Incan's simple `str` type and Rust's `&str` vs `String` split for example.
 
 **When to use conversions:**
 
@@ -115,7 +137,8 @@ Example:
 
 ### Adding a New Expression Type
 
-See [Extending the Language](docs/contributing/extending_language.md) for the up-to-date end-to-end checklist (lexer → parser/AST → typechecker → lowering → IR → emission).
+See [Extending the Language](docs/contributing/extending_language.md) for the up-to-date end-to-end
+checklist (lexer → parser/AST → typechecker → lowering → IR → emission).
 
 ### Running Snapshot Tests
 
@@ -152,9 +175,11 @@ Snapshot files are in `tests/snapshots/`.
 
 From `src/lib.rs`:
 
-> The compiler should not panic under normal operation. All user-facing errors should be returned as `Result` types and handled gracefully.
+> The compiler should not panic under normal operation. All user-facing errors should be returned
+> as `Result` types and handled gracefully.
 >
-> Exception: Codegen may emit `.unwrap()` and `.expect()` **as literal strings** in generated Rust code. This is intentional - runtime errors
+> Exception: Codegen may emit `.unwrap()` and `.expect()` **as literal strings** in generated Rust
+> code. This is intentional - runtime errors
 > in generated code should panic with clear messages.
 
 ### CLI Design
@@ -164,7 +189,8 @@ instead of calling `process::exit` directly. This makes commands testable.
 
 ### Prelude Status
 
-The stdlib prelude (`stdlib/`) contains trait definitions but is not yet integrated into compilation. Derives like `Debug`, `Clone` work through
+The stdlib prelude (`stdlib/`) contains trait definitions but is not yet integrated into
+compilation. Derives like `Debug`, `Clone` work through
 codegen heuristics rather than actual trait implementations.
 
 ### Fuzzing

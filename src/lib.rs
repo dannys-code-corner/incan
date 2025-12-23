@@ -28,6 +28,7 @@ pub mod frontend;
 pub mod lsp;
 pub mod numeric;
 pub mod numeric_adapters;
+pub mod version;
 
 pub use frontend::ast;
 pub use frontend::diagnostics;

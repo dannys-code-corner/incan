@@ -29,7 +29,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const INCAN_VERSION: &str = env!("CARGO_PKG_VERSION");
+const INCAN_VERSION: &str = crate::version::INCAN_VERSION;
 
 /// Error returned when a `rust::` crate import lacks a known-good version mapping.
 ///
