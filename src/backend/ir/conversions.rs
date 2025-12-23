@@ -241,7 +241,9 @@ impl NumericConversion {
     pub fn apply(&self, tokens: TokenStream) -> TokenStream {
         match self {
             NumericConversion::None => tokens,
-            NumericConversion::ToFloat => quote! { (#tokens as f64) },
+            // Use `(expr) as f64` to preserve precedence without wrapping the entire cast expression.
+            // This avoids Rust's `unused_parens` warnings in call arguments like `f(x, (3 as f64))`.
+            NumericConversion::ToFloat => quote! { (#tokens) as f64 },
         }
     }
 }
