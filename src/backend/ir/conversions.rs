@@ -164,6 +164,7 @@
 //! let data = std::fs::read_to_string(&content);  // ← borrow applied
 //! ```
 
+use super::expr::BinOp;
 use super::{IrExpr, IrExprKind, IrType};
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -193,6 +194,8 @@ pub enum ConversionContext {
 pub enum Conversion {
     /// Pass value as-is
     None,
+    /// Convert numeric value to f64 via `as f64`
+    ToFloat,
     /// Convert &str to String with .to_string()
     ToString,
     /// Borrow with &
@@ -210,6 +213,7 @@ impl Conversion {
     pub fn apply(&self, tokens: TokenStream) -> TokenStream {
         match self {
             Conversion::None => tokens,
+            Conversion::ToFloat => quote! { (#tokens as f64) },
             Conversion::ToString => quote! { #tokens.to_string() },
             Conversion::Borrow => quote! { &#tokens },
             Conversion::MutBorrow => quote! { &mut #tokens },
@@ -219,6 +223,74 @@ impl Conversion {
             }
         }
     }
+}
+
+/// Numeric coercions for binary operations (int/float promotion).
+///
+/// Promotes integer operands to `f64` when the paired operand is `f64`,
+/// keeping pure-int arithmetic untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericConversion {
+    None,
+    ToFloat,
+}
+
+impl NumericConversion {
+    /// Apply the numeric coercion to an emitted token stream.
+    ///
+    /// Uses `as f64` casting to align with the backend's float representation.
+    pub fn apply(&self, tokens: TokenStream) -> TokenStream {
+        match self {
+            NumericConversion::None => tokens,
+            NumericConversion::ToFloat => quote! { (#tokens as f64) },
+        }
+    }
+}
+
+/// Determine numeric coercions for a binary op and the resulting type.
+///
+/// - Promote ints to floats when either operand is float.
+/// - Keep int/int operations as ints (including division).
+pub fn determine_numeric_coercion(
+    left: &IrType,
+    right: &IrType,
+    op: &BinOp,
+) -> (NumericConversion, NumericConversion, IrType) {
+    let is_numeric_op = matches!(
+        op,
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow
+    );
+    if !is_numeric_op {
+        return (NumericConversion::None, NumericConversion::None, left.clone());
+    }
+
+    let left_is_float = matches!(left, IrType::Float);
+    let right_is_float = matches!(right, IrType::Float);
+    let left_is_int = matches!(left, IrType::Int);
+    let right_is_int = matches!(right, IrType::Int);
+
+    // If either side is float, promote ints to float and produce float result.
+    if left_is_float || right_is_float {
+        let l_conv = if left_is_int {
+            NumericConversion::ToFloat
+        } else {
+            NumericConversion::None
+        };
+        let r_conv = if right_is_int {
+            NumericConversion::ToFloat
+        } else {
+            NumericConversion::None
+        };
+        return (l_conv, r_conv, IrType::Float);
+    }
+
+    // Pure integer arithmetic stays integer.
+    if left_is_int && right_is_int {
+        return (NumericConversion::None, NumericConversion::None, IrType::Int);
+    }
+
+    // Fallback: no coercion; preserve left type.
+    (NumericConversion::None, NumericConversion::None, left.clone())
 }
 
 /// Determines what conversion (if any) is needed for a value

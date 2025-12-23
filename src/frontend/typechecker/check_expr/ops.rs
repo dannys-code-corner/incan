@@ -23,7 +23,7 @@ impl TypeChecker {
 
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
-                // Numeric operations
+                // Numeric operations (with mixed int/float promotion)
                 if self.types_compatible(&left_ty, &ResolvedType::Int)
                     && self.types_compatible(&right_ty, &ResolvedType::Int)
                 {
@@ -31,6 +31,7 @@ impl TypeChecker {
                 } else if self.types_compatible(&left_ty, &ResolvedType::Float)
                     || self.types_compatible(&right_ty, &ResolvedType::Float)
                 {
+                    // Promote to float if either side is float (covers int/float mixes).
                     ResolvedType::Float
                 } else if matches!(op, BinaryOp::Add) && self.types_compatible(&left_ty, &ResolvedType::Str) {
                     ResolvedType::Str

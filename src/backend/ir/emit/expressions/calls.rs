@@ -5,7 +5,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use super::super::super::conversions::{ConversionContext, determine_conversion};
+use super::super::super::conversions::{ConversionContext, determine_conversion, determine_numeric_coercion};
 use super::super::super::expr::{BinOp, IrExprKind, TypedExpr, VarAccess};
 use super::super::super::types::{IrType, Mutability};
 use super::super::{EmitError, IrEmitter};
@@ -110,16 +110,21 @@ impl<'a> IrEmitter<'a> {
             }
         }
 
-        let l = self.emit_expr(left)?;
-        let r = self.emit_expr(right)?;
+        let l_raw = self.emit_expr(left)?;
+        let r_raw = self.emit_expr(right)?;
+
+        // Insert numeric promotions for mixed int/float arithmetic so Rust type-checks.
+        let (l_conv, r_conv, result_ty) = determine_numeric_coercion(&left.ty, &right.ty, op);
+        let l = l_conv.apply(l_raw);
+        let r = r_conv.apply(r_raw);
 
         // Power operator is a method call, not an infix operator
         if matches!(op, BinOp::Pow) {
-            match &left.ty {
-                IrType::Float => return Ok(quote! { #l.powf(#r) }),
-                IrType::Int => return Ok(quote! { #l.pow(#r as u32) }),
-                _ => return Ok(quote! { #l.powf(#r) }),
-            }
+            return match result_ty {
+                IrType::Float => Ok(quote! { #l.powf(#r) }),
+                IrType::Int => Ok(quote! { #l.pow(#r as u32) }),
+                _ => Ok(quote! { #l.powf(#r) }),
+            };
         }
 
         let op_tokens = self.emit_binop(op);

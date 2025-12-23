@@ -302,6 +302,39 @@ def main() -> None:
         assert!(stdout.contains("5"), "NUMBERS length incorrect");
         assert!(stdout.contains("Hello World"), "GREETING concat not working");
     }
+
+    #[test]
+    fn test_mixed_numeric_codegen_runs() {
+        let output = Command::new("target/debug/incan")
+            .args([
+                "run",
+                "-c",
+                r#"
+def main() -> None:
+    size: int = 2
+    x: float = 3.0
+    result = 2.0 * x / size
+    println(result)
+"#,
+            ])
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+            .expect("failed to run incan");
+
+        assert!(
+            output.status.success(),
+            "mixed numeric run failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains('3'),
+            "mixed numeric output missing expected result; stdout={}",
+            stdout
+        );
+    }
 }
 
 /// Test specific parser behavior

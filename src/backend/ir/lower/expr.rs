@@ -110,9 +110,9 @@ impl AstLowering {
                         }
                     }
                     _ => {
-                        let left = self.lower_expr(&l.node)?;
-                        let right = self.lower_expr(&r.node)?;
-                        let result_ty = self.binary_result_type(&left.ty, op);
+                        let left = self.lower_expr_spanned(l)?;
+                        let right = self.lower_expr_spanned(r)?;
+                        let result_ty = self.binary_result_type(&left.ty, &right.ty, op);
                         (
                             IrExprKind::BinOp {
                                 op: self.lower_binop(op),

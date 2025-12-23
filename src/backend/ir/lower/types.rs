@@ -282,12 +282,13 @@ impl AstLowering {
     /// # Parameters
     ///
     /// * `left` - The type of the left operand
+    /// * `right` - The type of the right operand
     /// * `op` - The binary operator
     ///
     /// # Returns
     ///
     /// The result type of the operation.
-    pub(super) fn binary_result_type(&self, left: &IrType, op: &ast::BinaryOp) -> IrType {
+    pub(super) fn binary_result_type(&self, left: &IrType, right: &IrType, op: &ast::BinaryOp) -> IrType {
         match op {
             ast::BinaryOp::Eq
             | ast::BinaryOp::NotEq
@@ -300,7 +301,20 @@ impl AstLowering {
             | ast::BinaryOp::In
             | ast::BinaryOp::NotIn
             | ast::BinaryOp::Is => IrType::Bool,
-            _ => left.clone(),
+            ast::BinaryOp::Add
+            | ast::BinaryOp::Sub
+            | ast::BinaryOp::Mul
+            | ast::BinaryOp::Div
+            | ast::BinaryOp::Mod
+            | ast::BinaryOp::Pow => {
+                if matches!(left, IrType::Float) || matches!(right, IrType::Float) {
+                    IrType::Float
+                } else if matches!(left, IrType::Int) && matches!(right, IrType::Int) {
+                    IrType::Int
+                } else {
+                    left.clone()
+                }
+            }
         }
     }
 
