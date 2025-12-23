@@ -59,10 +59,8 @@ impl<'a> Lexer<'a> {
 
         if indent > current_indent {
             self.indent_stack.push(indent);
-            self.tokens.push(Token::new(
-                TokenKind::Indent,
-                Span::new(start, self.current_pos),
-            ));
+            self.tokens
+                .push(Token::new(TokenKind::Indent, Span::new(start, self.current_pos)));
         } else if indent < current_indent {
             // Count how many dedents we need BEFORE modifying the stack
             let mut count = 0;
@@ -99,10 +97,8 @@ impl<'a> Lexer<'a> {
 
             // Emit dedent tokens
             if count > 0 {
-                self.tokens.push(Token::new(
-                    TokenKind::Dedent,
-                    Span::new(start, self.current_pos),
-                ));
+                self.tokens
+                    .push(Token::new(TokenKind::Dedent, Span::new(start, self.current_pos)));
                 if count > 1 {
                     self.pending_dedents = count - 1;
                 }

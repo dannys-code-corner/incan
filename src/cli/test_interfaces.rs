@@ -96,11 +96,7 @@ pub trait HarnessGenerator {
 pub trait TestExecutor {
     /// Run a compiled test in the given project directory.
     /// Returns (passed, output).
-    fn execute_test(
-        &self,
-        project_dir: &Path,
-        test_name: &str,
-    ) -> Result<(bool, String), TestError>;
+    fn execute_test(&self, project_dir: &Path, test_name: &str) -> Result<(bool, String), TestError>;
 }
 
 // ============================================================================
@@ -130,8 +126,7 @@ impl HarnessGenerator for DefaultHarnessGenerator {
         use crate::backend::{IrCodegen, ProjectGenerator};
         use crate::frontend::{lexer, parser};
 
-        let tokens =
-            lexer::lex(&input.source_code).map_err(|e| TestError::Lexer(format!("{:?}", e)))?;
+        let tokens = lexer::lex(&input.source_code).map_err(|e| TestError::Lexer(format!("{:?}", e)))?;
 
         let ast = parser::parse(&tokens).map_err(|e| TestError::Parser(format!("{:?}", e)))?;
 
@@ -162,21 +157,11 @@ impl HarnessGenerator for DefaultHarnessGenerator {
 pub struct DefaultTestExecutor;
 
 impl TestExecutor for DefaultTestExecutor {
-    fn execute_test(
-        &self,
-        project_dir: &Path,
-        _test_name: &str,
-    ) -> Result<(bool, String), TestError> {
+    fn execute_test(&self, project_dir: &Path, _test_name: &str) -> Result<(bool, String), TestError> {
         let output = std::process::Command::new("cargo")
             .arg("test")
             .arg("--")
             .arg("--nocapture")
-            // Ensure we don't inherit a broken CA bundle path from the parent env.
-            .env_remove("SSL_CERT_FILE")
-            .env_remove("SSL_CERT_DIR")
-            .env_remove("CURL_CA_BUNDLE")
-            .env_remove("REQUESTS_CA_BUNDLE")
-            .env_remove("CARGO_HTTP_CAINFO")
             .current_dir(project_dir)
             .output()
             .map_err(|e| TestError::Execution(format!("Failed to run cargo test: {}", e)))?;

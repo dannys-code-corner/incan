@@ -150,10 +150,7 @@ impl CompilationPlan {
 
     /// Get the expected path to the built binary.
     pub fn binary_path(&self) -> PathBuf {
-        self.output_dir
-            .join("target")
-            .join("release")
-            .join(&self.project_name)
+        self.output_dir.join("target").join("release").join(&self.project_name)
     }
 }
 
@@ -325,13 +322,10 @@ impl ProjectGenerator {
         let version = match crate_name {
             "serde" => Some(r#"{ version = "1.0", features = ["derive"] }"#.to_string()),
             "serde_json" => Some(r#""1.0""#.to_string()),
-            "tokio" => Some(
-                r#"{ version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }"#
-                    .to_string(),
-            ),
-            "time" => {
-                Some(r#"{ version = "0.3", features = ["formatting", "macros"] }"#.to_string())
+            "tokio" => {
+                Some(r#"{ version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }"#.to_string())
             }
+            "time" => Some(r#"{ version = "0.3", features = ["formatting", "macros"] }"#.to_string()),
             "chrono" => Some(r#"{ version = "0.4", features = ["serde"] }"#.to_string()),
             "reqwest" => Some(r#"{ version = "0.11", features = ["json"] }"#.to_string()),
             "uuid" => Some(r#"{ version = "1.0", features = ["v4", "serde"] }"#.to_string()),
@@ -343,10 +337,7 @@ impl ProjectGenerator {
             "clap" => Some(r#"{ version = "4.0", features = ["derive"] }"#.to_string()),
             "log" => Some(r#""0.4""#.to_string()),
             "env_logger" => Some(r#""0.10""#.to_string()),
-            "sqlx" => Some(
-                r#"{ version = "0.7", features = ["runtime-tokio-native-tls", "postgres"] }"#
-                    .to_string(),
-            ),
+            "sqlx" => Some(r#"{ version = "0.7", features = ["runtime-tokio-native-tls", "postgres"] }"#.to_string()),
             "futures" => Some(r#""0.3""#.to_string()),
             "bytes" => Some(r#""1.0""#.to_string()),
             "itertools" => Some(r#""0.12""#.to_string()),
@@ -388,11 +379,7 @@ impl ProjectGenerator {
     /// # Arguments
     /// * `main_code` - The main.rs code (without mod declarations, they will be prepended)
     /// * `modules` - HashMap of module name to module code (e.g., "models" -> "pub struct User { ... }")
-    pub fn generate_multi(
-        &self,
-        main_code: &str,
-        modules: &HashMap<String, String>,
-    ) -> io::Result<()> {
+    pub fn generate_multi(&self, main_code: &str, modules: &HashMap<String, String>) -> io::Result<()> {
         // Create directories
         let src_dir = self.output_dir.join("src");
         fs::create_dir_all(&src_dir)?;
@@ -417,10 +404,7 @@ impl ProjectGenerator {
             // Add mod declarations for each module (sorted for deterministic output)
             let mut module_names: Vec<_> = modules.keys().collect();
             module_names.sort();
-            let mods: String = module_names
-                .iter()
-                .map(|m| format!("mod {};\n", m))
-                .collect();
+            let mods: String = module_names.iter().map(|m| format!("mod {};\n", m)).collect();
 
             // Insert right after the crate-level allow attribute line (if present),
             // otherwise prepend (best-effort).
@@ -456,11 +440,7 @@ impl ProjectGenerator {
     /// # Arguments
     /// * `main_code` - The main.rs code (without mod declarations, they will be prepended)
     /// * `modules` - HashMap of path segments to module code (e.g., ["db", "models"] -> "pub struct User { ... }")
-    pub fn generate_nested(
-        &self,
-        main_code: &str,
-        modules: &HashMap<Vec<String>, String>,
-    ) -> io::Result<()> {
+    pub fn generate_nested(&self, main_code: &str, modules: &HashMap<Vec<String>, String>) -> io::Result<()> {
         let src_dir = self.output_dir.join("src");
         fs::create_dir_all(&src_dir)?;
 
@@ -474,8 +454,7 @@ impl ProjectGenerator {
         //   - src/db/mod.rs with "pub mod models;"
         //   - src/db/models.rs with the code
         let mut dir_submodules: HashMap<Vec<String>, Vec<String>> = HashMap::new();
-        let mut top_level_modules: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut top_level_modules: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for path_segments in modules.keys() {
             if !path_segments.is_empty() {
@@ -486,10 +465,7 @@ impl ProjectGenerator {
             for i in 0..path_segments.len() {
                 let dir_path: Vec<String> = path_segments[..i].to_vec();
                 let submodule = &path_segments[i];
-                dir_submodules
-                    .entry(dir_path)
-                    .or_default()
-                    .push(submodule.clone());
+                dir_submodules.entry(dir_path).or_default().push(submodule.clone());
             }
         }
 
@@ -613,11 +589,16 @@ path = "src/lib.rs""#
         if self.needs_axum {
             // Axum needs tokio with net feature and full features for web serving
             deps.push(r#"axum = "0.7""#.to_string());
-            deps.push(r#"tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }"#.to_string());
+            deps.push(
+                r#"tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }"#
+                    .to_string(),
+            );
             added_crates.insert("axum");
             added_crates.insert("tokio");
         } else if self.needs_tokio {
-            deps.push(r#"tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }"#.to_string());
+            deps.push(
+                r#"tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }"#.to_string(),
+            );
             added_crates.insert("tokio");
         }
 
@@ -721,10 +702,7 @@ edition = "2021"
 
     /// Get the path to the built binary
     pub fn binary_path(&self) -> PathBuf {
-        self.output_dir
-            .join("target")
-            .join("release")
-            .join(&self.name)
+        self.output_dir.join("target").join("release").join(&self.name)
     }
 }
 
@@ -767,10 +745,7 @@ mod tests {
         let generator = ProjectGenerator::new(&temp_dir, "test_multi", true);
 
         let mut modules = HashMap::new();
-        modules.insert(
-            "models".to_string(),
-            "pub struct User { pub name: String }".to_string(),
-        );
+        modules.insert("models".to_string(), "pub struct User { pub name: String }".to_string());
         modules.insert(
             "utils".to_string(),
             "pub fn greet() -> String { \"hello\".to_string() }".to_string(),

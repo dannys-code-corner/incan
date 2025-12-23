@@ -35,14 +35,11 @@ impl TypeChecker {
         let inner_ty = self.check_expr(inner);
 
         if !inner_ty.is_result() {
-            self.errors
-                .push(errors::try_on_non_result(&inner_ty.to_string(), span));
+            self.errors.push(errors::try_on_non_result(&inner_ty.to_string(), span));
             return ResolvedType::Unknown;
         }
 
-        if let (Some(inner_err), Some(expected_err)) =
-            (inner_ty.result_err_type(), &self.current_return_error_type)
-        {
+        if let (Some(inner_err), Some(expected_err)) = (inner_ty.result_err_type(), &self.current_return_error_type) {
             if !self.types_compatible(inner_err, expected_err) {
                 self.errors.push(errors::incompatible_error_type(
                     &expected_err.to_string(),
@@ -52,10 +49,7 @@ impl TypeChecker {
             }
         }
 
-        inner_ty
-            .result_ok_type()
-            .cloned()
-            .unwrap_or(ResolvedType::Unknown)
+        inner_ty.result_ok_type().cloned().unwrap_or(ResolvedType::Unknown)
     }
 
     pub(in crate::frontend::typechecker::check_expr) fn check_if_expr(
@@ -99,11 +93,8 @@ impl TypeChecker {
         let end_ty = self.check_expr(end);
 
         if start_ty != ResolvedType::Int {
-            self.errors.push(errors::type_mismatch(
-                "int",
-                &start_ty.to_string(),
-                start.span,
-            ));
+            self.errors
+                .push(errors::type_mismatch("int", &start_ty.to_string(), start.span));
         }
         if end_ty != ResolvedType::Int {
             self.errors

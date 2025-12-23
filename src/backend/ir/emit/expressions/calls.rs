@@ -86,9 +86,7 @@ impl<'a> IrEmitter<'a> {
                     ConversionContext::IncanFunctionArg
                 };
 
-                let target_ty = function_sig
-                    .and_then(|sig| sig.params.get(idx))
-                    .map(|param| &param.ty);
+                let target_ty = function_sig.and_then(|sig| sig.params.get(idx)).map(|param| &param.ty);
 
                 let conversion = determine_conversion(a, target_ty, context);
                 Ok(conversion.apply(emitted))
@@ -105,6 +103,13 @@ impl<'a> IrEmitter<'a> {
         left: &TypedExpr,
         right: &TypedExpr,
     ) -> Result<TokenStream, EmitError> {
+        // Special-case: const-fold string additions using literals/known consts
+        if matches!(op, BinOp::Add) {
+            if let Some(tokens) = self.try_emit_static_str_add(left, right)? {
+                return Ok(tokens);
+            }
+        }
+
         let l = self.emit_expr(left)?;
         let r = self.emit_expr(right)?;
 

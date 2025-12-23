@@ -19,10 +19,7 @@ impl TypeChecker {
     }
 
     /// Type-check a list literal.
-    pub(in crate::frontend::typechecker::check_expr) fn check_list(
-        &mut self,
-        elems: &[Spanned<Expr>],
-    ) -> ResolvedType {
+    pub(in crate::frontend::typechecker::check_expr) fn check_list(&mut self, elems: &[Spanned<Expr>]) -> ResolvedType {
         let elem_ty = if let Some(first) = elems.first() {
             self.check_expr(first)
         } else {
@@ -56,10 +53,7 @@ impl TypeChecker {
     }
 
     /// Type-check a set literal.
-    pub(in crate::frontend::typechecker::check_expr) fn check_set(
-        &mut self,
-        elems: &[Spanned<Expr>],
-    ) -> ResolvedType {
+    pub(in crate::frontend::typechecker::check_expr) fn check_set(&mut self, elems: &[Spanned<Expr>]) -> ResolvedType {
         let elem_ty = if let Some(first) = elems.first() {
             self.check_expr(first)
         } else {

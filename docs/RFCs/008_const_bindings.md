@@ -1,7 +1,8 @@
 # RFC 008: Const Bindings
 
-**Status:** Draft  
+**Status:** Implemented  
 **Created:** 2025-12-10  
+**Implemented:** 2025-12-23  
 
 ## Summary
 
@@ -103,9 +104,9 @@ const STEP = 1 + x                # depends on non-const symbol
 
 ## Checklist
 
-- [ ] Lexer/parser support for `const` binding declarations.
-- [ ] AST node for const bindings (module scope).
-- [ ] Typechecker: const-eval rules and errors for non-const expressions.
-- [ ] Codegen: emit Rust `const`; error on non-representable expressions.
-- [ ] Docs: guide section + examples.
-- [ ] Tests: parser/typechecker/codegen coverage.
+- [x] Lexer/parser support for `const` binding declarations.
+- [x] AST node for const bindings (module scope).
+- [x] Typechecker: const-eval rules and errors for non-const expressions.
+- [x] Codegen: emit Rust `const`; error on non-representable expressions.
+- [x] Docs: guide section + examples.
+- [x] Tests: parser/typechecker/codegen coverage.

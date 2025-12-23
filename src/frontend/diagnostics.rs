@@ -121,11 +121,7 @@ pub fn format_error(file_name: &str, source: &str, error: &CompileError) -> Stri
 
     // Source line with line number
     let line_num_width = format!("{}", line_num).len();
-    out.push_str(&format!(
-        "  {cyan}{:>width$} |{reset}\n",
-        "",
-        width = line_num_width
-    ));
+    out.push_str(&format!("  {cyan}{:>width$} |{reset}\n", "", width = line_num_width));
     out.push_str(&format!(
         "  {cyan}{:>width$} |{reset} {}\n",
         line_num,
@@ -223,11 +219,7 @@ pub mod errors {
     }
 
     /// Add smart hints based on the expected and found types
-    fn add_type_mismatch_hints(
-        mut error: CompileError,
-        expected: &str,
-        found: &str,
-    ) -> CompileError {
+    fn add_type_mismatch_hints(mut error: CompileError, expected: &str, found: &str) -> CompileError {
         // Result/Option unwrapping hints
         if expected.starts_with("Result[") && !found.starts_with("Result[") {
             error = error.with_hint("Wrap the value with Ok(...) to return success");
@@ -237,8 +229,7 @@ pub mod errors {
 
         if found.starts_with("Result[") && !expected.starts_with("Result[") {
             error = error.with_hint("Use the ? operator to unwrap: value?");
-            error =
-                error.with_hint("Or handle with match: match result: Ok(v) => ..., Err(e) => ...");
+            error = error.with_hint("Or handle with match: match result: Ok(v) => ..., Err(e) => ...");
             error = error.with_note("Result must be explicitly unwrapped before use");
         }
 
@@ -248,8 +239,7 @@ pub mod errors {
 
         if found.starts_with("Option[") && !expected.starts_with("Option[") {
             error = error.with_hint("Use .unwrap() if you're certain the value exists");
-            error = error
-                .with_hint("Or handle None with match: match opt: Some(v) => ..., None => ...");
+            error = error.with_hint("Or handle None with match: match opt: Some(v) => ..., None => ...");
         }
 
         // None vs Option hint
@@ -298,12 +288,9 @@ pub mod errors {
     }
 
     pub fn unknown_derive(name: &str, span: Span) -> CompileError {
-        CompileError::type_error(
-            format!("Unknown derive '{}'", name),
-            span,
-        )
-        .with_hint("Valid derives: Debug, Display, Eq, Ord, Hash, Clone, Copy, Default, Serialize, Deserialize")
-        .with_hint("Hint: Use 'with TraitName' syntax for custom trait implementations")
+        CompileError::type_error(format!("Unknown derive '{}'", name), span)
+            .with_hint("Valid derives: Debug, Display, Eq, Ord, Hash, Clone, Copy, Default, Serialize, Deserialize")
+            .with_hint("Hint: Use 'with TraitName' syntax for custom trait implementations")
     }
 
     pub fn derive_wrong_kind(name: &str, kind: &str, span: Span) -> CompileError {
@@ -312,10 +299,7 @@ pub mod errors {
             span,
         )
         .with_hint("@derive() only works with traits like Debug, Eq, Clone".to_string())
-        .with_hint(format!(
-            "Did you mean: `with {}` to implement a trait?",
-            name
-        ))
+        .with_hint(format!("Did you mean: `with {}` to implement a trait?", name))
     }
 
     pub fn missing_return_type(span: Span) -> CompileError {
@@ -344,39 +328,24 @@ pub mod errors {
     }
 
     pub fn mutation_without_mut(name: &str, span: Span) -> CompileError {
-        CompileError::type_error(
-            format!("Cannot mutate '{}' - variable is immutable", name),
-            span,
-        )
-        .with_hint(format!(
-            "Declare with 'mut' to allow mutation: mut {} = ...",
-            name
-        ))
-        .with_note("In Incan, variables are immutable by default for safety")
-        .with_note("This prevents accidental modifications and makes code easier to reason about")
+        CompileError::type_error(format!("Cannot mutate '{}' - variable is immutable", name), span)
+            .with_hint(format!("Declare with 'mut' to allow mutation: mut {} = ...", name))
+            .with_note("In Incan, variables are immutable by default for safety")
+            .with_note("This prevents accidental modifications and makes code easier to reason about")
     }
 
     pub fn self_mutation_without_mut(span: Span) -> CompileError {
-        CompileError::type_error(
-            "Cannot mutate self - method takes immutable self".to_string(),
-            span,
-        )
-        .with_hint("Change the method signature to use 'mut self':")
-        .with_hint("  def method(mut self) -> ReturnType:")
-        .with_note("Methods that modify self must explicitly declare 'mut self'")
+        CompileError::type_error("Cannot mutate self - method takes immutable self".to_string(), span)
+            .with_hint("Change the method signature to use 'mut self':")
+            .with_hint("  def method(mut self) -> ReturnType:")
+            .with_note("Methods that modify self must explicitly declare 'mut self'")
     }
 
     pub fn reassignment_without_mut(name: &str, span: Span) -> CompileError {
-        CompileError::type_error(
-            format!("Cannot reassign '{}' - variable is immutable", name),
-            span,
-        )
-        .with_hint(format!(
-            "Declare with 'mut' to allow reassignment: mut {} = ...",
-            name
-        ))
-        .with_hint("Or use a new variable name with 'let'")
-        .with_note("Reassignment requires the variable to be declared as mutable")
+        CompileError::type_error(format!("Cannot reassign '{}' - variable is immutable", name), span)
+            .with_hint(format!("Declare with 'mut' to allow reassignment: mut {} = ...", name))
+            .with_hint("Or use a new variable name with 'let'")
+            .with_note("Reassignment requires the variable to be declared as mutable")
     }
 
     pub fn try_on_non_result(found: &str, span: Span) -> CompileError {
@@ -409,23 +378,18 @@ pub mod errors {
     }
 
     pub fn missing_field(type_name: &str, field: &str, span: Span) -> CompileError {
-        CompileError::type_error(
-            format!("Type '{}' has no field '{}'", type_name, field),
-            span,
-        )
+        CompileError::type_error(format!("Type '{}' has no field '{}'", type_name, field), span)
     }
 
-    pub fn field_type_mismatch(
-        field: &str,
-        expected: &str,
-        found: &str,
-        span: Span,
-    ) -> CompileError {
+    pub fn missing_method(type_name: &str, method: &str, span: Span) -> CompileError {
+        CompileError::type_error(format!("Type '{}' has no method '{}(...)'", type_name, method), span)
+            .with_hint("Check the method name spelling and receiver type")
+            .with_hint("If this is your type, implement the method on the class/model/newtype")
+    }
+
+    pub fn field_type_mismatch(field: &str, expected: &str, found: &str, span: Span) -> CompileError {
         CompileError::type_error(
-            format!(
-                "Cannot assign '{}' to field '{}' of type '{}'",
-                found, field, expected
-            ),
+            format!("Cannot assign '{}' to field '{}' of type '{}'", found, field, expected),
             span,
         )
         .with_hint(format!(
@@ -439,12 +403,25 @@ pub mod errors {
             .with_hint("Only List, Dict, str, and Tuple types support indexing")
     }
 
+    pub fn tuple_index_requires_int_literal(span: Span) -> CompileError {
+        CompileError::type_error(
+            "Tuple indices must be an integer literal (e.g. t[0], t[-1])".to_string(),
+            span,
+        )
+        .with_hint("Use a literal index so the compiler can validate bounds")
+    }
+
+    pub fn tuple_index_out_of_bounds(idx: i64, len: usize, span: Span) -> CompileError {
+        CompileError::type_error(
+            format!("Tuple index {} is out of bounds for tuple of length {}", idx, len),
+            span,
+        )
+        .with_hint("Tuple indices are checked at compile time")
+    }
+
     pub fn index_type_mismatch(expected: &str, found: &str, span: Span) -> CompileError {
         CompileError::type_error(
-            format!(
-                "Index type mismatch: expected '{}', found '{}'",
-                expected, found
-            ),
+            format!("Index type mismatch: expected '{}', found '{}'", expected, found),
             span,
         )
         .with_hint(format!("Use '{}' as the index type", expected))
@@ -452,10 +429,7 @@ pub mod errors {
 
     pub fn index_value_type_mismatch(expected: &str, found: &str, span: Span) -> CompileError {
         CompileError::type_error(
-            format!(
-                "Cannot assign '{}' to collection element of type '{}'",
-                found, expected
-            ),
+            format!("Cannot assign '{}' to collection element of type '{}'", found, expected),
             span,
         )
         .with_hint(format!(
@@ -473,19 +447,13 @@ pub mod errors {
     }
 
     pub fn tuple_field_assignment(span: Span) -> CompileError {
-        CompileError::type_error(
-            "Cannot assign to tuple field - tuples are immutable".to_string(),
-            span,
-        )
-        .with_hint("Create a new tuple instead of modifying an existing one")
+        CompileError::type_error("Cannot assign to tuple field - tuples are immutable".to_string(), span)
+            .with_hint("Create a new tuple instead of modifying an existing one")
     }
 
     pub fn missing_trait_method(trait_name: &str, method: &str, span: Span) -> CompileError {
         CompileError::type_error(
-            format!(
-                "Trait '{}' requires method '{}' to be implemented",
-                trait_name, method
-            ),
+            format!("Trait '{}' requires method '{}' to be implemented", trait_name, method),
             span,
         )
         .with_hint(format!(
@@ -497,10 +465,7 @@ pub mod errors {
 
     pub fn trait_not_implemented(type_name: &str, trait_name: &str, span: Span) -> CompileError {
         let mut error = CompileError::type_error(
-            format!(
-                "Type '{}' does not implement trait '{}'",
-                type_name, trait_name
-            ),
+            format!("Type '{}' does not implement trait '{}'", type_name, trait_name),
             span,
         );
 
@@ -511,8 +476,7 @@ pub mod errors {
                 error = error.with_hint("Or implement __eq__ manually for custom comparison logic");
             }
             "Ord" => {
-                error = error
-                    .with_hint("Add @derive(Ord) to enable ordering comparison (<, >, <=, >=)");
+                error = error.with_hint("Add @derive(Ord) to enable ordering comparison (<, >, <=, >=)");
                 error = error.with_hint("Or implement __lt__ manually for custom ordering");
             }
             "Hash" => {
@@ -527,17 +491,13 @@ pub mod errors {
             }
             "Display" => {
                 error = error.with_hint("Implement __str__ method for string representation");
-                error =
-                    error.with_hint("Example: def __str__(self) -> str: return f\"{self.name}\"");
+                error = error.with_hint("Example: def __str__(self) -> str: return f\"{self.name}\"");
             }
             "Default" => {
                 error = error.with_hint("Add @derive(Default) to enable Type.default()");
             }
             "Serialize" | "Deserialize" => {
-                error = error.with_hint(format!(
-                    "Add @derive({}) for JSON/serialization support",
-                    trait_name
-                ));
+                error = error.with_hint(format!("Add @derive({}) for JSON/serialization support", trait_name));
             }
             "Error" => {
                 error = error.with_hint("Implement the Error trait with a message() method");
@@ -599,10 +559,7 @@ pub mod errors {
     }
 
     pub fn invalid_receiver(span: Span) -> CompileError {
-        CompileError::syntax(
-            "Invalid receiver - expected 'self' or 'mut self'".to_string(),
-            span,
-        )
+        CompileError::syntax("Invalid receiver - expected 'self' or 'mut self'".to_string(), span)
     }
 
     pub fn duplicate_definition(name: &str, span: Span) -> CompileError {
@@ -639,8 +596,7 @@ pub mod lints {
 
     pub fn wildcard_match(span: Span) -> CompileError {
         CompileError {
-            message: "Using wildcard '_' in match - consider handling all cases explicitly"
-                .to_string(),
+            message: "Using wildcard '_' in match - consider handling all cases explicitly".to_string(),
             span,
             kind: ErrorKind::Lint,
             notes: vec![],
@@ -757,8 +713,7 @@ impl IncanDiagnostic {
 
     /// Add a related span (for multi-location errors)
     pub fn with_related(mut self, message: impl Into<String>, start: usize, len: usize) -> Self {
-        self.related
-            .push(LabeledSpan::new(Some(message.into()), start, len));
+        self.related.push(LabeledSpan::new(Some(message.into()), start, len));
         self
     }
 }

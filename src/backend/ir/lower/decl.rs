@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 
 use super::super::decl::{
-    EnumVariant, FunctionParam, IrDecl, IrDeclKind, IrEnum, IrFunction, IrImpl, IrStruct, IrTrait,
-    StructField, VariantFields, Visibility,
+    EnumVariant, FunctionParam, IrDecl, IrDeclKind, IrEnum, IrFunction, IrImpl, IrStruct, IrTrait, StructField,
+    VariantFields, Visibility,
 };
 use super::super::types::IrType;
 use super::super::{IrSpan, Mutability};
@@ -29,28 +29,43 @@ impl AstLowering {
     /// # Errors
     ///
     /// Returns `LoweringError` if the declaration cannot be lowered.
-    pub(super) fn lower_declaration(
-        &mut self,
-        decl: &ast::Declaration,
-    ) -> Result<IrDecl, LoweringError> {
+    pub(super) fn lower_declaration(&mut self, decl: &ast::Declaration) -> Result<IrDecl, LoweringError> {
         let kind = match decl {
             ast::Declaration::Function(f) => IrDeclKind::Function(self.lower_function(f)?),
+            ast::Declaration::Const(c) => {
+                let value = self.lower_expr_spanned(&c.value)?;
+                // RFC 008: In const context, annotations imply frozen/static types.
+                // Prefer frozen annotation if present; otherwise use the initializer type.
+                let ty = if let Some(ann) = &c.ty {
+                    self.lower_const_annotation_type(&ann.node)
+                } else if !matches!(value.ty, IrType::Unknown) {
+                    value.ty.clone()
+                } else {
+                    IrType::Unknown
+                };
+                let visibility = match c.visibility {
+                    ast::Visibility::Public => Visibility::Public,
+                    ast::Visibility::Private => Visibility::Private,
+                };
+                IrDeclKind::Const {
+                    visibility,
+                    name: c.name.clone(),
+                    ty,
+                    value,
+                }
+            }
             ast::Declaration::Model(m) => {
                 let struct_ir = self.lower_model(m)?;
                 // Register struct name for constructor detection
-                self.struct_names.insert(
-                    struct_ir.name.clone(),
-                    IrType::Struct(struct_ir.name.clone()),
-                );
+                self.struct_names
+                    .insert(struct_ir.name.clone(), IrType::Struct(struct_ir.name.clone()));
                 IrDeclKind::Struct(struct_ir)
             }
             ast::Declaration::Class(c) => {
                 let struct_ir = self.lower_class(c)?;
                 // Register struct name for constructor detection
-                self.struct_names.insert(
-                    struct_ir.name.clone(),
-                    IrType::Struct(struct_ir.name.clone()),
-                );
+                self.struct_names
+                    .insert(struct_ir.name.clone(), IrType::Struct(struct_ir.name.clone()));
                 IrDeclKind::Struct(struct_ir)
             }
             ast::Declaration::Enum(e) => {
@@ -63,10 +78,8 @@ impl AstLowering {
             ast::Declaration::Newtype(n) => {
                 let struct_ir = self.lower_newtype(n)?;
                 // Register struct name for constructor detection
-                self.struct_names.insert(
-                    struct_ir.name.clone(),
-                    IrType::Struct(struct_ir.name.clone()),
-                );
+                self.struct_names
+                    .insert(struct_ir.name.clone(), IrType::Struct(struct_ir.name.clone()));
                 IrDeclKind::Struct(struct_ir)
             }
             ast::Declaration::Import(i) => self.lower_import(i),
@@ -91,10 +104,7 @@ impl AstLowering {
     /// # Returns
     ///
     /// The corresponding IR function.
-    pub(super) fn lower_function(
-        &mut self,
-        f: &ast::FunctionDecl,
-    ) -> Result<IrFunction, LoweringError> {
+    pub(super) fn lower_function(&mut self, f: &ast::FunctionDecl) -> Result<IrFunction, LoweringError> {
         self.scopes.push(HashMap::new());
 
         let params: Vec<FunctionParam> = f
@@ -318,10 +328,7 @@ impl AstLowering {
     }
 
     /// Lower a newtype declaration to tuple struct.
-    pub(super) fn lower_newtype(
-        &mut self,
-        n: &ast::NewtypeDecl,
-    ) -> Result<IrStruct, LoweringError> {
+    pub(super) fn lower_newtype(&mut self, n: &ast::NewtypeDecl) -> Result<IrStruct, LoweringError> {
         // Newtype compiles to a tuple struct: struct UserId(i64);
         // Use "0" as the field name to trigger tuple struct emission
         let underlying_ty = self.lower_type(&n.underlying.node);
@@ -455,10 +462,7 @@ impl AstLowering {
         type_name: &str,
         methods: &[Spanned<ast::MethodDecl>],
     ) -> Result<IrImpl, LoweringError> {
-        let lowered_methods: Vec<IrFunction> = methods
-            .iter()
-            .filter_map(|m| self.lower_method(&m.node).ok())
-            .collect();
+        let lowered_methods: Vec<IrFunction> = methods.iter().filter_map(|m| self.lower_method(&m.node).ok()).collect();
 
         Ok(IrImpl {
             target_type: type_name.to_string(),
@@ -468,10 +472,7 @@ impl AstLowering {
     }
 
     /// Lower a method declaration into a function.
-    pub(super) fn lower_method(
-        &mut self,
-        m: &ast::MethodDecl,
-    ) -> Result<IrFunction, LoweringError> {
+    pub(super) fn lower_method(&mut self, m: &ast::MethodDecl) -> Result<IrFunction, LoweringError> {
         self.scopes.push(HashMap::new());
 
         let mut params: Vec<FunctionParam> = Vec::new();
@@ -628,13 +629,7 @@ impl AstLowering {
                 let fields = if v.node.fields.is_empty() {
                     VariantFields::Unit
                 } else {
-                    VariantFields::Tuple(
-                        v.node
-                            .fields
-                            .iter()
-                            .map(|t| self.lower_type(&t.node))
-                            .collect(),
-                    )
+                    VariantFields::Tuple(v.node.fields.iter().map(|t| self.lower_type(&t.node)).collect())
                 };
                 EnumVariant {
                     name: v.node.name.clone(),
@@ -644,11 +639,7 @@ impl AstLowering {
             .collect();
 
         // Enums always get Debug, Clone, PartialEq by default
-        let derives = vec![
-            "Debug".to_string(),
-            "Clone".to_string(),
-            "PartialEq".to_string(),
-        ];
+        let derives = vec!["Debug".to_string(), "Clone".to_string(), "PartialEq".to_string()];
 
         Ok(IrEnum {
             name: e.name.clone(),

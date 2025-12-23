@@ -61,6 +61,7 @@ impl Formatter {
     fn format_declaration(&mut self, decl: &Declaration) {
         match decl {
             Declaration::Import(import) => self.format_import(import),
+            Declaration::Const(konst) => self.format_const(konst),
             Declaration::Model(model) => self.format_model(model),
             Declaration::Class(class) => self.format_class(class),
             Declaration::Trait(tr) => self.format_trait(tr),
@@ -69,6 +70,21 @@ impl Formatter {
             Declaration::Function(func) => self.format_function(func),
             Declaration::Docstring(doc) => self.format_docstring(doc),
         }
+    }
+
+    fn format_const(&mut self, konst: &ConstDecl) {
+        if matches!(konst.visibility, crate::frontend::ast::Visibility::Public) {
+            self.writer.write("pub ");
+        }
+        self.writer.write("const ");
+        self.writer.write(&konst.name);
+        if let Some(ty) = &konst.ty {
+            self.writer.write(": ");
+            self.format_type(&ty.node);
+        }
+        self.writer.write(" = ");
+        self.format_expr(&konst.value.node);
+        self.writer.newline();
     }
 
     fn format_docstring(&mut self, doc: &str) {
@@ -945,11 +961,7 @@ impl Formatter {
                     self.format_expr(&inner.node);
                 }
             }
-            Expr::Range {
-                start,
-                end,
-                inclusive,
-            } => {
+            Expr::Range { start, end, inclusive } => {
                 self.format_expr(&start.node);
                 if *inclusive {
                     self.writer.write("..=");

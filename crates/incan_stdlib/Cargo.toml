@@ -1,9 +1,9 @@
 [package]
 name = "incan_stdlib"
-version = "0.1.0"
+version = "0.1.0-alpha.2"
 edition = "2021"
-license = "Apache-2.0"
 description = "Standard library for Incan-generated Rust code"
+license = "Apache-2.0"
 
 [dependencies]
 incan_derive = { path = "../incan_derive" }

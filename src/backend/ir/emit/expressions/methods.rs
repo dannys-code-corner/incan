@@ -12,16 +12,43 @@ use super::super::super::types::IrType;
 use super::super::{EmitError, IrEmitter};
 
 impl<'a> IrEmitter<'a> {
+    /// Check whether a variable name looks like a Rust type name (TitleCase).
+    ///
+    /// This heuristic is used to decide whether `Type.method(...)` should be emitted as an associated function call
+    /// `Type::method(...)` in Rust.
+    ///
+    /// ## Parameters
+    ///
+    /// - `name`: Identifier text from IR (not yet escaped).
+    ///
+    /// ## Returns
+    ///
+    /// - `true`: if `name` looks like `TitleCase` (first char uppercase and contains at least one lowercase char).
+    /// - `false`: otherwise.
+    ///
+    /// ## Notes
+    ///
+    /// - This is intentionally conservative: it avoids rewriting ALLCAPS constants as types.
+    /// - When we have stronger information (e.g. enum variant registries), prefer that over
+    ///   heuristics.
+    fn is_title_case_type_name(name: &str) -> bool {
+        let has_upper = name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false);
+        let has_lower = name.chars().any(|c| c.is_ascii_lowercase());
+        has_upper && has_lower
+    }
+
     /// Emit a known method call using enum-based dispatch.
     ///
     /// This handles calls that have been lowered to `IrExprKind::KnownMethodCall`.
     ///
     /// ## Parameters
+    ///
     /// - `receiver`: The receiver expression
     /// - `kind`: The method kind enum variant
     /// - `args`: The method call arguments
     ///
     /// ## Returns
+    ///
     /// - A Rust `TokenStream` for the method call
     pub(in super::super) fn emit_known_method_call(
         &self,
@@ -29,7 +56,13 @@ impl<'a> IrEmitter<'a> {
         kind: &MethodKind,
         args: &[TypedExpr],
     ) -> Result<TokenStream, EmitError> {
-        let r = self.emit_expr(receiver)?;
+        let r0 = self.emit_expr(receiver)?;
+        let receiver_is_frozen_str = matches!(&receiver.ty, IrType::Struct(n) if n == "FrozenStr");
+        let r = if receiver_is_frozen_str {
+            quote! { #r0.as_str() }
+        } else {
+            r0
+        };
 
         match kind {
             // ---- String methods ----
@@ -83,6 +116,7 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     match &receiver.ty {
+                        IrType::Struct(n) if n == "FrozenStr" => Ok(quote! { #r.contains(#a) }),
                         IrType::String => Ok(quote! { #r.contains(#a) }),
                         IrType::List(_) | IrType::Set(_) => Ok(quote! { #r.contains(&#a) }),
                         IrType::Dict(_, _) => Ok(quote! { #r.contains_key(&#a) }),
@@ -128,22 +162,9 @@ impl<'a> IrEmitter<'a> {
                 }
             }
             MethodKind::Pop => {
-                if matches!(&receiver.ty, IrType::Struct(_)) {
-                    Ok(quote! { #r.pop() })
-                } else {
-                    let default = if let IrType::List(elem_ty) = &receiver.ty {
-                        match elem_ty.as_ref() {
-                            IrType::Int => quote! { 0 },
-                            IrType::Float => quote! { 0.0 },
-                            IrType::Bool => quote! { false },
-                            IrType::String => quote! { String::new() },
-                            _ => quote! { Default::default() },
-                        }
-                    } else {
-                        quote! { Default::default() }
-                    };
-                    Ok(quote! { #r.pop().unwrap_or(#default) })
-                }
+                // Snapshot-stable behavior: always default the popped value.
+                // (This is used in both Vec::pop and user-defined `pop()` methods in generated code.)
+                Ok(quote! { #r.pop().unwrap_or_default() })
             }
             MethodKind::Swap => {
                 if args.len() >= 2 {
@@ -198,7 +219,13 @@ impl<'a> IrEmitter<'a> {
         method: &str,
         args: &[TypedExpr],
     ) -> Result<TokenStream, EmitError> {
-        let r = self.emit_expr(receiver)?;
+        let r0 = self.emit_expr(receiver)?;
+        let receiver_is_frozen_str = matches!(&receiver.ty, IrType::Struct(n) if n == "FrozenStr");
+        let r = if receiver_is_frozen_str {
+            quote! { #r0.as_str() }
+        } else {
+            r0
+        };
 
         // Handle special methods (legacy string-based dispatch)
         match method {
@@ -271,21 +298,8 @@ impl<'a> IrEmitter<'a> {
                 }
             }
             "pop" => {
-                if matches!(&receiver.ty, IrType::Struct(_)) {
-                    return Ok(quote! { #r.pop() });
-                }
-                let default = if let IrType::List(elem_ty) = &receiver.ty {
-                    match elem_ty.as_ref() {
-                        IrType::Int => quote! { 0 },
-                        IrType::Float => quote! { 0.0 },
-                        IrType::Bool => quote! { false },
-                        IrType::String => quote! { String::new() },
-                        _ => quote! { Default::default() },
-                    }
-                } else {
-                    quote! { Default::default() }
-                };
-                return Ok(quote! { #r.pop().unwrap_or(#default) });
+                // Snapshot-stable behavior: always default the popped value.
+                return Ok(quote! { #r.pop().unwrap_or_default() });
             }
             "get" => {
                 if let Some(arg) = args.first() {
@@ -325,24 +339,33 @@ impl<'a> IrEmitter<'a> {
             _ => {}
         }
 
-        // Check if this is an enum variant construction
+        // Check if this is an enum variant construction.
+        //
+        // Important: do NOT treat any uppercase variable as a type name. Only rewrite when we actually know this
+        // (Type, Variant) pair exists in the enum variant registry.
         if let IrExprKind::Var { name, .. } = &receiver.kind {
-            if name
-                .chars()
-                .next()
-                .map(|c| c.is_uppercase())
-                .unwrap_or(false)
-            {
+            let key = (name.to_string(), method.to_string());
+            if self.enum_variant_fields.contains_key(&key) {
                 return self.emit_enum_variant_call(name, method, args);
+            }
+        }
+
+        // Associated function call on a type: `Type.method(...)` → `Type::method(...)`
+        //
+        // This is needed for external Rust types like `Uuid`, `Instant`, `HashMap`, and also for
+        // Incan-generated impl methods called in a "static" style (e.g. `User.from_json(...)`).
+        if let IrExprKind::Var { name, .. } = &receiver.kind {
+            if Self::is_title_case_type_name(name) {
+                let type_ident = format_ident!("{}", name);
+                let m = format_ident!("{}", method);
+                let arg_tokens: Vec<TokenStream> = args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?;
+                return Ok(quote! { #type_ident::#m(#(#arg_tokens),*) });
             }
         }
 
         // Regular method call
         let m = format_ident!("{}", method);
-        let arg_tokens: Vec<TokenStream> = args
-            .iter()
-            .map(|a| self.emit_expr(a))
-            .collect::<Result<_, _>>()?;
+        let arg_tokens: Vec<TokenStream> = args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?;
         Ok(quote! { #r.#m(#(#arg_tokens),*) })
     }
 
@@ -354,9 +377,7 @@ impl<'a> IrEmitter<'a> {
         args: &[TypedExpr],
     ) -> Result<TokenStream, EmitError> {
         let variant_key = (type_name.to_string(), variant.to_string());
-        let arg_tokens: Vec<TokenStream> = if let Some(fields) =
-            self.enum_variant_fields.get(&variant_key)
-        {
+        let arg_tokens: Vec<TokenStream> = if let Some(fields) = self.enum_variant_fields.get(&variant_key) {
             match fields {
                 super::super::super::decl::VariantFields::Unit => Vec::new(),
                 super::super::super::decl::VariantFields::Tuple(field_tys) => args
@@ -364,8 +385,7 @@ impl<'a> IrEmitter<'a> {
                     .zip(field_tys.iter())
                     .map(|(a, ty)| {
                         let emitted = self.emit_expr(a)?;
-                        let conv =
-                            determine_conversion(a, Some(ty), ConversionContext::IncanFunctionArg);
+                        let conv = determine_conversion(a, Some(ty), ConversionContext::IncanFunctionArg);
                         Ok(conv.apply(emitted))
                     })
                     .collect::<Result<_, _>>()?,
@@ -373,8 +393,7 @@ impl<'a> IrEmitter<'a> {
                     .iter()
                     .map(|a| {
                         let emitted = self.emit_expr(a)?;
-                        let conv =
-                            determine_conversion(a, None, ConversionContext::IncanFunctionArg);
+                        let conv = determine_conversion(a, None, ConversionContext::IncanFunctionArg);
                         Ok(conv.apply(emitted))
                     })
                     .collect::<Result<_, _>>()?,
@@ -383,11 +402,7 @@ impl<'a> IrEmitter<'a> {
             args.iter()
                 .map(|a| {
                     let emitted = self.emit_expr(a)?;
-                    let conv = determine_conversion(
-                        a,
-                        Some(&IrType::String),
-                        ConversionContext::IncanFunctionArg,
-                    );
+                    let conv = determine_conversion(a, Some(&IrType::String), ConversionContext::IncanFunctionArg);
                     Ok(conv.apply(emitted))
                 })
                 .collect::<Result<_, _>>()?

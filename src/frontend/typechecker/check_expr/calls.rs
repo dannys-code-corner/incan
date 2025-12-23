@@ -19,10 +19,7 @@ impl TypeChecker {
     }
 
     /// Type-check all call arguments (positional and named).
-    pub(in crate::frontend::typechecker::check_expr) fn check_call_args(
-        &mut self,
-        args: &[CallArg],
-    ) {
+    pub(in crate::frontend::typechecker::check_expr) fn check_call_args(&mut self, args: &[CallArg]) {
         for arg in args {
             self.check_expr(Self::call_arg_expr(arg));
         }
@@ -51,10 +48,7 @@ impl TypeChecker {
                         arg_types.first().cloned().unwrap_or(ResolvedType::Unknown),
                     )
                 };
-                Some(ResolvedType::Generic(
-                    "Result".to_string(),
-                    vec![ok_ty, err_ty],
-                ))
+                Some(ResolvedType::Generic("Result".to_string(), vec![ok_ty, err_ty]))
             }
             "Some" => {
                 let arg_types = self.check_call_arg_types(args);
@@ -77,10 +71,7 @@ impl TypeChecker {
             }
             "range" => {
                 self.check_call_args(args);
-                Some(ResolvedType::Generic(
-                    "List".to_string(),
-                    vec![ResolvedType::Int],
-                ))
+                Some(ResolvedType::Generic("List".to_string(), vec![ResolvedType::Int]))
             }
 
             // Time / async-ish helpers
@@ -89,11 +80,8 @@ impl TypeChecker {
                     let arg_expr = Self::call_arg_expr(arg);
                     let arg_ty = self.check_expr(arg_expr);
                     if !self.types_compatible(&arg_ty, &ResolvedType::Float) {
-                        self.errors.push(errors::type_mismatch(
-                            "float",
-                            &arg_ty.to_string(),
-                            arg_expr.span,
-                        ));
+                        self.errors
+                            .push(errors::type_mismatch("float", &arg_ty.to_string(), arg_expr.span));
                     }
                 }
                 Some(ResolvedType::Unit)
@@ -103,11 +91,8 @@ impl TypeChecker {
                     let arg_expr = Self::call_arg_expr(arg);
                     let arg_ty = self.check_expr(arg_expr);
                     if !self.types_compatible(&arg_ty, &ResolvedType::Int) {
-                        self.errors.push(errors::type_mismatch(
-                            "int",
-                            &arg_ty.to_string(),
-                            arg_expr.span,
-                        ));
+                        self.errors
+                            .push(errors::type_mismatch("int", &arg_ty.to_string(), arg_expr.span));
                     }
                 }
                 Some(ResolvedType::Unit)
@@ -117,11 +102,8 @@ impl TypeChecker {
                     let arg_expr = Self::call_arg_expr(arg);
                     let arg_ty = self.check_expr(arg_expr);
                     if !self.types_compatible(&arg_ty, &ResolvedType::Float) {
-                        self.errors.push(errors::type_mismatch(
-                            "float",
-                            &arg_ty.to_string(),
-                            arg_expr.span,
-                        ));
+                        self.errors
+                            .push(errors::type_mismatch("float", &arg_ty.to_string(), arg_expr.span));
                     }
                 }
                 if args.len() >= 2 {
@@ -135,11 +117,8 @@ impl TypeChecker {
                     let arg_expr = Self::call_arg_expr(arg);
                     let arg_ty = self.check_expr(arg_expr);
                     if !self.types_compatible(&arg_ty, &ResolvedType::Int) {
-                        self.errors.push(errors::type_mismatch(
-                            "int",
-                            &arg_ty.to_string(),
-                            arg_expr.span,
-                        ));
+                        self.errors
+                            .push(errors::type_mismatch("int", &arg_ty.to_string(), arg_expr.span));
                     }
                 }
                 if args.len() >= 2 {
@@ -155,9 +134,7 @@ impl TypeChecker {
                     let arg_expr = Self::call_arg_expr(arg);
                     let arg_ty = self.check_expr(arg_expr);
                     match &arg_ty {
-                        ResolvedType::Generic(name, type_args)
-                            if name == "Dict" && type_args.len() >= 2 =>
-                        {
+                        ResolvedType::Generic(name, type_args) if name == "Dict" && type_args.len() >= 2 => {
                             (type_args[0].clone(), type_args[1].clone())
                         }
                         _ => (ResolvedType::Unknown, ResolvedType::Unknown),
@@ -165,10 +142,7 @@ impl TypeChecker {
                 } else {
                     (ResolvedType::Unknown, ResolvedType::Unknown)
                 };
-                Some(ResolvedType::Generic(
-                    "Dict".to_string(),
-                    vec![key_ty, val_ty],
-                ))
+                Some(ResolvedType::Generic("Dict".to_string(), vec![key_ty, val_ty]))
             }
             "list" => {
                 let elem_ty = if let Some(arg) = args.first() {
@@ -176,8 +150,7 @@ impl TypeChecker {
                     let arg_ty = self.check_expr(arg_expr);
                     match &arg_ty {
                         ResolvedType::Generic(name, type_args)
-                            if (name == "List" || name == "Vec" || name == "Set")
-                                && !type_args.is_empty() =>
+                            if (name == "List" || name == "Vec" || name == "Set") && !type_args.is_empty() =>
                         {
                             type_args[0].clone()
                         }
@@ -195,8 +168,7 @@ impl TypeChecker {
                     let arg_ty = self.check_expr(arg_expr);
                     match &arg_ty {
                         ResolvedType::Generic(name, type_args)
-                            if (name == "List" || name == "Vec" || name == "Set")
-                                && !type_args.is_empty() =>
+                            if (name == "List" || name == "Vec" || name == "Set") && !type_args.is_empty() =>
                         {
                             type_args[0].clone()
                         }
@@ -351,15 +323,35 @@ impl TypeChecker {
         args: &[CallArg],
         _span: Span,
     ) -> ResolvedType {
+        // Special-case: Enum variant constructor syntax `Enum.Variant(...)`.
+        // If callee is a field access where the base resolves to a known enum type
+        // and the field name matches a variant, treat this as a constructor and
+        // return the enum type.
+        if let Expr::Field(base, variant_name) = &callee.node {
+            let base_ty = self.check_expr(base);
+            if let ResolvedType::Named(enum_name) = &base_ty {
+                if let Some(id) = self.symbols.lookup(enum_name) {
+                    if let Some(sym) = self.symbols.get(id) {
+                        if let SymbolKind::Type(TypeInfo::Enum(enum_info)) = &sym.kind {
+                            if enum_info.variants.iter().any(|v| v == variant_name) {
+                                // Validate arguments but do not attempt strict arity/type checking here.
+                                self.check_call_args(args);
+                                return ResolvedType::Named(enum_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Handle math module function calls (math.sqrt, math.sin, etc.)
         if let Expr::Field(base, method) = &callee.node {
             if let Expr::Ident(module) = &base.node {
                 if module == "math" {
                     self.check_call_args(args);
                     match method.as_str() {
-                        "sqrt" | "sin" | "cos" | "tan" | "abs" | "floor" | "ceil" | "pow"
-                        | "log" | "log10" | "exp" | "asin" | "acos" | "atan" | "sinh" | "cosh"
-                        | "tanh" => return ResolvedType::Float,
+                        "sqrt" | "sin" | "cos" | "tan" | "abs" | "floor" | "ceil" | "pow" | "log" | "log10" | "exp"
+                        | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" => return ResolvedType::Float,
                         _ => {}
                     }
                 }
@@ -387,9 +379,7 @@ impl TypeChecker {
                     if let Some(sym) = self.symbols.get(id) {
                         match &sym.kind {
                             SymbolKind::Type(_) => ResolvedType::Named(name),
-                            SymbolKind::Variant(info) => {
-                                ResolvedType::Named(info.enum_name.clone())
-                            }
+                            SymbolKind::Variant(info) => ResolvedType::Named(info.enum_name.clone()),
                             _ => ResolvedType::Unknown,
                         }
                     } else {

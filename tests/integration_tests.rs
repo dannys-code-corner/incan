@@ -9,14 +9,11 @@ use incan::frontend::{lexer, parser, typechecker};
 fn compile_file(path: &Path) -> Result<(), Vec<String>> {
     let source = fs::read_to_string(path).map_err(|e| vec![e.to_string()])?;
 
-    let tokens = lexer::lex(&source)
-        .map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
+    let tokens = lexer::lex(&source).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
-    let ast = parser::parse(&tokens)
-        .map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
+    let ast = parser::parse(&tokens).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
-    typechecker::check(&ast)
-        .map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
+    typechecker::check(&ast).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
     Ok(())
 }
@@ -149,10 +146,7 @@ mod codegen_tests {
 
     fn rustc_compile_ok(source: &str) -> Result<(), String> {
         let mut dir = std::env::temp_dir();
-        let uniq = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let uniq = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         dir.push(format!("incan_bench_smoke_{}", uniq));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
@@ -191,18 +185,15 @@ mod codegen_tests {
         // Verify the generated code contains expected elements
         assert!(rust_code.contains("fn main()"), "Should have main function");
         assert!(rust_code.contains("println!"), "Should have println macro");
-        assert!(
-            rust_code.contains("Hello from Incan!"),
-            "Should have the message"
-        );
+        assert!(rust_code.contains("Hello from Incan!"), "Should have the message");
     }
 
     #[test]
     fn test_run_c_import_this() {
         let output = Command::new("target/debug/incan")
             .args(["run", "-c", "import this"])
-            // This test should not require network access. We expect the workspace
-            // dependencies to already be available (the test suite built them).
+            // This test should not require network access. We expect the workspace dependencies to already be available
+            // (the test suite built them)
             .env("CARGO_NET_OFFLINE", "true")
             .output()
             .expect("failed to run incan");
@@ -255,13 +246,61 @@ mod codegen_tests {
 
         // Note: This test uses standalone rustc compilation, which can't access incan_stdlib/incan_derive.
         // Skip the compilation check if stdlib imports are present (models/classes with derives).
-        if rust_code.contains("use incan_stdlib::prelude") || rust_code.contains("use incan_derive")
-        {
+        if rust_code.contains("use incan_stdlib::prelude") || rust_code.contains("use incan_derive") {
             // Skip rustc compilation test for code that requires stdlib crates
             return;
         }
 
         rustc_compile_ok(&rust_code).expect("generated quicksort Rust failed to compile");
+    }
+
+    #[test]
+    fn test_const_declarations_compile_and_run() {
+        let output = Command::new("target/debug/incan")
+            .args([
+                "run",
+                "-c",
+                r#"
+const PI: float = 3.14159
+const APP_NAME: str = "Incan"
+const MAGIC: int = 42
+const ENABLED: bool = true
+const RAW_DATA: bytes = b"\x00\x01\x02\x03"
+const FROZEN_TEXT: FrozenStr = "frozen"
+const NUMBERS: FrozenList[int] = [1, 2, 3, 4, 5]
+const GREETING: str = "Hello World"
+
+def main() -> None:
+    print(PI)
+    print(APP_NAME)
+    print(MAGIC)
+    print(ENABLED)
+    print(RAW_DATA.len())
+    print(FROZEN_TEXT.len())
+    print(NUMBERS.len())
+    print(GREETING)
+"#,
+            ])
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+            .expect("failed to run incan");
+
+        assert!(
+            output.status.success(),
+            "const declarations test failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("3.14159"), "PI const not emitted correctly");
+        assert!(stdout.contains("Incan"), "APP_NAME const not emitted correctly");
+        assert!(stdout.contains("42"), "MAGIC const not emitted correctly");
+        assert!(stdout.contains("true"), "ENABLED const not emitted correctly");
+        assert!(stdout.contains("4"), "RAW_DATA length incorrect");
+        assert!(stdout.contains("6"), "FROZEN_TEXT length incorrect");
+        assert!(stdout.contains("5"), "NUMBERS length incorrect");
+        assert!(stdout.contains("Hello World"), "GREETING concat not working");
     }
 }
 

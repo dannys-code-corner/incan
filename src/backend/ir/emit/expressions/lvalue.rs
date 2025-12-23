@@ -32,10 +32,7 @@ impl<'a> IrEmitter<'a> {
     /// ## Notes
     /// - Unlike [`Self::emit_expr`], this path avoids inserting `.clone()` for index operations when the expression
     ///   appears on the assignment LHS.
-    pub(in super::super) fn emit_lvalue_expr(
-        &self,
-        expr: &TypedExpr,
-    ) -> Result<TokenStream, EmitError> {
+    pub(in super::super) fn emit_lvalue_expr(&self, expr: &TypedExpr) -> Result<TokenStream, EmitError> {
         match &expr.kind {
             IrExprKind::Var { name, access: _ } => {
                 let n = format_ident!("{}", Self::escape_keyword(name));
@@ -71,10 +68,7 @@ impl<'a> IrEmitter<'a> {
     ///
     /// ## Notes
     /// - Negative indices are translated into `len() - offset` (Python-style indexing).
-    pub(in super::super) fn emit_assign_target(
-        &self,
-        target: &AssignTarget,
-    ) -> Result<TokenStream, EmitError> {
+    pub(in super::super) fn emit_assign_target(&self, target: &AssignTarget) -> Result<TokenStream, EmitError> {
         match target {
             AssignTarget::Var(name) => {
                 let n = format_ident!("{}", Self::escape_keyword(name));

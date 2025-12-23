@@ -21,6 +21,11 @@ pub struct DocumentState {
     pub source: String,
     pub ast: Option<Program>,
     pub version: i32,
+    /// Resolved const types from the typechecker (post “const-freezing”).
+    ///
+    /// This is used to make hover text reflect the actual type of a const binding, even if the
+    /// user annotated `str`/`List[T]` and the compiler froze it to `FrozenStr`/`FrozenList[T]`.
+    pub const_types: HashMap<String, String>,
 }
 
 /// Incan Language Server
@@ -73,15 +78,27 @@ impl IncanLanguageServer {
 
         // Step 3: Type check (with multi-file import resolution)
         let mut checker = typechecker::TypeChecker::new();
-        let deps = self.collect_dependency_modules(uri, &ast).await;
-        let dep_refs: Vec<(&str, &Program)> = deps
-            .iter()
-            .map(|(name, program)| (name.as_str(), program))
-            .collect();
+        let (deps, mut dep_summary_diags) = self.collect_dependency_modules(uri, &ast, source, version).await;
+        let dep_refs: Vec<(&str, &Program)> = deps.iter().map(|(name, program)| (name.as_str(), program)).collect();
 
         if let Err(errors) = checker.check_with_imports(&ast, &dep_refs) {
             for error in &errors {
                 diagnostics.push(compile_error_to_diagnostic(error, source, uri));
+            }
+        }
+        diagnostics.append(&mut dep_summary_diags);
+
+        // Collect resolved const types for hover display (post-const-freezing).
+        let mut const_types: HashMap<String, String> = HashMap::new();
+        for decl in &ast.declarations {
+            if let Declaration::Const(konst) = &decl.node {
+                if let Some(id) = checker.symbols.lookup(&konst.name) {
+                    if let Some(sym) = checker.symbols.get(id) {
+                        if let crate::frontend::symbols::SymbolKind::Variable(var) = &sym.kind {
+                            const_types.insert(konst.name.clone(), var.ty.to_string());
+                        }
+                    }
+                }
             }
         }
 
@@ -94,6 +111,7 @@ impl IncanLanguageServer {
                     source: source.to_string(),
                     ast: Some(ast),
                     version,
+                    const_types,
                 },
             );
         }
@@ -108,29 +126,36 @@ impl IncanLanguageServer {
     ///
     /// - Uses the on-disk file system for dependency sources
     /// - If a dependency is currently open in the editor, uses its in-memory contents
-    async fn collect_dependency_modules(&self, uri: &Url, ast: &Program) -> Vec<(String, Program)> {
+    async fn collect_dependency_modules(
+        &self,
+        uri: &Url,
+        ast: &Program,
+        entry_source: &str,
+        _entry_version: i32,
+    ) -> (Vec<(String, Program)>, Vec<Diagnostic>) {
         let Ok(entry_path) = uri.to_file_path() else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
         let entry_base = entry_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
         let docs = self.documents.read().await;
 
         let mut result: Vec<(String, Program)> = Vec::new();
+        let mut entry_diags: Vec<Diagnostic> = Vec::new();
         let mut seen: HashSet<PathBuf> = HashSet::new();
-        let mut stack: Vec<(PathBuf, PathBuf)> = Vec::new(); // (module_path, base_dir_for_that_module)
+        let mut stack: Vec<(PathBuf, PathBuf, Span)> = Vec::new(); // (module_path, base_dir_for_that_module, import_span_in_entry)
 
         // Seed stack with direct imports from the entry AST
         for decl in &ast.declarations {
             if let Declaration::Import(import) = &decl.node {
                 if let Some(dep_path) = resolve_import_path(&entry_base, import) {
                     let base = dep_path.parent().unwrap_or(&entry_base).to_path_buf();
-                    stack.push((dep_path, base));
+                    stack.push((dep_path, base, decl.span));
                 }
             }
         }
 
-        while let Some((path, base_dir)) = stack.pop() {
+        while let Some((path, base_dir, import_span)) = stack.pop() {
             let canonical = path.canonicalize().unwrap_or(path.clone());
             if !seen.insert(canonical.clone()) {
                 continue;
@@ -138,9 +163,8 @@ impl IncanLanguageServer {
 
             // Prefer in-memory source if this file is open.
             let dep_uri = Url::from_file_path(&canonical).ok();
-            let dep_source = dep_uri
-                .as_ref()
-                .and_then(|u| docs.get(u))
+            let dep_doc = dep_uri.as_ref().and_then(|u| docs.get(u));
+            let dep_source = dep_doc
                 .map(|d| d.source.clone())
                 .or_else(|| fs::read_to_string(&canonical).ok());
 
@@ -151,19 +175,80 @@ impl IncanLanguageServer {
 
             let dep_tokens = match lexer::lex(&dep_source) {
                 Ok(t) => t,
-                Err(_) => continue,
+                Err(errors) => {
+                    // Guardrail: surface dependency lex errors.
+                    if let Some(u) = dep_uri.clone() {
+                        let mut diags = Vec::new();
+                        for e in &errors {
+                            diags.push(compile_error_to_diagnostic(e, &dep_source, &u));
+                        }
+                        let ver = dep_doc.map(|d| d.version);
+                        self.client.publish_diagnostics(u.clone(), diags, ver).await;
+                    }
+
+                    // Summarize in the entry file.
+                    let range = span_to_range(entry_source, import_span.start, import_span.end);
+                    entry_diags.push(Diagnostic {
+                        range,
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: None,
+                        code_description: None,
+                        source: Some("incan".to_string()),
+                        message: format!(
+                            "Failed to lex dependency '{}'; open that file for details",
+                            canonical.display()
+                        ),
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                    });
+                    continue;
+                }
             };
             let dep_ast = match parser::parse(&dep_tokens) {
                 Ok(a) => a,
-                Err(_) => continue,
+                Err(errors) => {
+                    // Guardrail: surface dependency parse errors.
+                    if let Some(u) = dep_uri.clone() {
+                        let mut diags = Vec::new();
+                        for e in &errors {
+                            diags.push(compile_error_to_diagnostic(e, &dep_source, &u));
+                        }
+                        let ver = dep_doc.map(|d| d.version);
+                        self.client.publish_diagnostics(u.clone(), diags, ver).await;
+                    }
+
+                    let range = span_to_range(entry_source, import_span.start, import_span.end);
+                    entry_diags.push(Diagnostic {
+                        range,
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: None,
+                        code_description: None,
+                        source: Some("incan".to_string()),
+                        message: format!(
+                            "Failed to parse dependency '{}'; open that file for details",
+                            canonical.display()
+                        ),
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                    });
+                    continue;
+                }
             };
+
+            // Dependency parsed successfully: clear old dependency diagnostics if any.
+            if let Some(u) = dep_uri.clone() {
+                let ver = dep_doc.map(|d| d.version);
+                self.client.publish_diagnostics(u.clone(), vec![], ver).await;
+            }
 
             // Queue nested dependencies
             for decl in &dep_ast.declarations {
                 if let Declaration::Import(import) = &decl.node {
                     if let Some(nested_path) = resolve_import_path(&base_dir, import) {
                         let nested_base = nested_path.parent().unwrap_or(&base_dir).to_path_buf();
-                        stack.push((nested_path, nested_base));
+                        stack.push((nested_path, nested_base, Span::default()));
                     }
                 }
             }
@@ -176,16 +261,11 @@ impl IncanLanguageServer {
             result.push((module_name, dep_ast));
         }
 
-        result
+        (result, entry_diags)
     }
 
     /// Find the symbol at a position in the AST
-    fn find_symbol_at_position(
-        &self,
-        ast: &Program,
-        source: &str,
-        position: Position,
-    ) -> Option<SymbolInfo> {
+    fn find_symbol_at_position(&self, ast: &Program, source: &str, position: Position) -> Option<SymbolInfo> {
         let offset = position_to_offset(source, position)?;
 
         for decl in &ast.declarations {
@@ -197,13 +277,22 @@ impl IncanLanguageServer {
         None
     }
 
-    fn find_in_declaration(
-        &self,
-        decl: &Declaration,
-        span: Span,
-        offset: usize,
-    ) -> Option<SymbolInfo> {
+    fn find_in_declaration(&self, decl: &Declaration, span: Span, offset: usize) -> Option<SymbolInfo> {
         match decl {
+            Declaration::Const(konst) => {
+                if span.start <= offset && offset < span.end {
+                    return Some(SymbolInfo {
+                        name: konst.name.clone(),
+                        kind: "const".to_string(),
+                        detail: if let Some(ty) = &konst.ty {
+                            format!("const {}: {}", konst.name, format_type(&ty.node))
+                        } else {
+                            format!("const {}", konst.name)
+                        },
+                        span,
+                    });
+                }
+            }
             Declaration::Function(func) => {
                 if span.start <= offset && offset < span.end {
                     // Check if cursor is on function name
@@ -261,11 +350,7 @@ impl IncanLanguageServer {
                     return Some(SymbolInfo {
                         name: nt.name.clone(),
                         kind: "newtype".to_string(),
-                        detail: format!(
-                            "newtype {} = {}",
-                            nt.name,
-                            format_type(&nt.underlying.node)
-                        ),
+                        detail: format!("newtype {} = {}", nt.name, format_type(&nt.underlying.node)),
                         span,
                     });
                 }
@@ -280,6 +365,9 @@ impl IncanLanguageServer {
     fn find_definition(&self, ast: &Program, name: &str) -> Option<Span> {
         for decl in &ast.declarations {
             match &decl.node {
+                Declaration::Const(konst) if konst.name == name => {
+                    return Some(decl.span);
+                }
                 Declaration::Function(func) if func.name == name => {
                     return Some(decl.span);
                 }
@@ -368,9 +456,7 @@ impl LanguageServer for IncanLanguageServer {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 // Real-time diagnostics via text sync
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
-                )),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
                 // Hover support
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 // Go-to-definition
@@ -444,7 +530,18 @@ impl LanguageServer for IncanLanguageServer {
         };
 
         if let Some(info) = self.find_symbol_at_position(ast, &doc.source, position) {
-            let markdown = format!("```incan\n{}\n```\n\n*{}*", info.detail, info.kind);
+            let detail = if info.kind == "const" {
+                if let Some(resolved) = doc.const_types.get(&info.name) {
+                    // Prefer resolved typechecker type, since `const` may freeze annotations.
+                    format!("const {}: {}", info.name, resolved)
+                } else {
+                    info.detail.clone()
+                }
+            } else {
+                info.detail.clone()
+            };
+
+            let markdown = format!("```incan\n{}\n```\n\n*{}*", detail, info.kind);
 
             return Ok(Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
@@ -458,10 +555,7 @@ impl LanguageServer for IncanLanguageServer {
         Ok(None)
     }
 
-    async fn goto_definition(
-        &self,
-        params: GotoDefinitionParams,
-    ) -> Result<Option<GotoDefinitionResponse>> {
+    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
@@ -504,10 +598,9 @@ impl LanguageServer for IncanLanguageServer {
 
         // Add keywords
         let keywords = [
-            "def", "async", "await", "return", "if", "elif", "else", "match", "case", "for", "in",
-            "while", "let", "mut", "model", "class", "trait", "enum", "newtype", "import", "from",
-            "as", "with", "extends", "pub", "True", "False", "None", "Ok", "Err", "Some", "Result",
-            "Option",
+            "def", "async", "await", "return", "if", "elif", "else", "match", "case", "for", "in", "while", "let",
+            "mut", "model", "class", "trait", "enum", "newtype", "import", "from", "as", "with", "extends", "pub",
+            "const", "True", "False", "None", "Ok", "Err", "Some", "Result", "Option",
         ];
 
         for kw in keywords {
@@ -522,6 +615,18 @@ impl LanguageServer for IncanLanguageServer {
         if let Some(ast) = &doc.ast {
             for decl in &ast.declarations {
                 match &decl.node {
+                    Declaration::Const(konst) => {
+                        items.push(CompletionItem {
+                            label: konst.name.clone(),
+                            kind: Some(CompletionItemKind::CONSTANT),
+                            detail: Some(if let Some(ty) = &konst.ty {
+                                format!("const {}: {}", konst.name, format_type(&ty.node))
+                            } else {
+                                format!("const {}", konst.name)
+                            }),
+                            ..Default::default()
+                        });
+                    }
                     Declaration::Function(func) => {
                         items.push(CompletionItem {
                             label: func.name.clone(),

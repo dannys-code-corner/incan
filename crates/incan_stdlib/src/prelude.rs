@@ -7,6 +7,8 @@
 
 // Re-export runtime traits
 pub use crate::reflection::FieldInfo;
+// frozen runtime types for consts (RFC 008)
+pub use crate::frozen::{FrozenBytes, FrozenDict, FrozenList, FrozenSet, FrozenStr};
 
 #[cfg(feature = "json")]
 pub use crate::json::{FromJson, ToJson};

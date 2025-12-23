@@ -37,6 +37,8 @@ pub enum IrType {
     String,
     /// &'static str (for compile-time string constants)
     StaticStr,
+    /// &'static [u8] (for compile-time byte string constants)
+    StaticBytes,
     /// &str (borrowed string slice)
     StrRef,
 
@@ -54,6 +56,13 @@ pub enum IrType {
     Struct(String),
     Enum(String),
     Trait(String),
+
+    /// Represent a named generic instantiation (e.g. `FrozenList<i64>` or `Box<T>`).
+    ///
+    /// ## Notes
+    /// - This is used for generic types that are not encoded as dedicated IR variants.
+    /// - Codegen emits this as `Name<Arg0, Arg1, ...>`.
+    NamedGeneric(String, Vec<IrType>),
 
     // Function type
     Function {
@@ -89,6 +98,7 @@ impl IrType {
                 | IrType::Int
                 | IrType::Float
                 | IrType::StaticStr
+                | IrType::StaticBytes
                 | IrType::StrRef
                 | IrType::Ref(_)
                 | IrType::RefMut(_)
@@ -109,13 +119,10 @@ impl IrType {
             IrType::Float => "f64".to_string(),
             IrType::String => "String".to_string(),
             IrType::StaticStr => "&'static str".to_string(),
+            IrType::StaticBytes => "&'static [u8]".to_string(),
             IrType::StrRef => "&str".to_string(),
             IrType::List(elem) => format!("Vec<{}>", elem.rust_name()),
-            IrType::Dict(k, v) => format!(
-                "std::collections::HashMap<{}, {}>",
-                k.rust_name(),
-                v.rust_name()
-            ),
+            IrType::Dict(k, v) => format!("std::collections::HashMap<{}, {}>", k.rust_name(), v.rust_name()),
             IrType::Set(elem) => format!("std::collections::HashSet<{}>", elem.rust_name()),
             IrType::Tuple(elems) => {
                 let inner: Vec<_> = elems.iter().map(|e| e.rust_name()).collect();
@@ -125,6 +132,10 @@ impl IrType {
             IrType::Result(ok, err) => format!("Result<{}, {}>", ok.rust_name(), err.rust_name()),
             IrType::Struct(name) | IrType::Enum(name) => name.clone(),
             IrType::Trait(name) => format!("dyn {}", name),
+            IrType::NamedGeneric(name, args) => {
+                let inner: Vec<_> = args.iter().map(|a| a.rust_name()).collect();
+                format!("{}<{}>", name, inner.join(", "))
+            }
             IrType::Function { params, ret } => {
                 let params: Vec<_> = params.iter().map(|p| p.rust_name()).collect();
                 format!("fn({}) -> {}", params.join(", "), ret.rust_name())
@@ -182,6 +193,11 @@ mod tests {
         assert_eq!(IrType::StaticStr.rust_name(), "&'static str");
     }
 
+    #[test]
+    fn test_simple_static_bytes_rust_name() {
+        assert_eq!(IrType::StaticBytes.rust_name(), "&'static [u8]");
+    }
+
     // ============================================================================
     // CATEGORY 2: Generic Types (8 tests)
     // ============================================================================
@@ -209,10 +225,7 @@ mod tests {
 
     #[test]
     fn test_generic_option_int() {
-        assert_eq!(
-            IrType::Option(Box::new(IrType::Int)).rust_name(),
-            "Option<i64>"
-        );
+        assert_eq!(IrType::Option(Box::new(IrType::Int)).rust_name(), "Option<i64>");
     }
 
     #[test]
@@ -241,10 +254,7 @@ mod tests {
     fn test_generic_dict_string_list_int() {
         let list = IrType::List(Box::new(IrType::Int));
         let dict = IrType::Dict(Box::new(IrType::String), Box::new(list));
-        assert_eq!(
-            dict.rust_name(),
-            "std::collections::HashMap<String, Vec<i64>>"
-        );
+        assert_eq!(dict.rust_name(), "std::collections::HashMap<String, Vec<i64>>");
     }
 
     // ============================================================================
@@ -353,10 +363,7 @@ mod tests {
 
     #[test]
     fn test_refmut_int() {
-        assert_eq!(
-            IrType::RefMut(Box::new(IrType::Int)).rust_name(),
-            "&mut i64"
-        );
+        assert_eq!(IrType::RefMut(Box::new(IrType::Int)).rust_name(), "&mut i64");
     }
 
     #[test]
@@ -380,10 +387,7 @@ mod tests {
     fn test_nested_list_of_dict() {
         let dict = IrType::Dict(Box::new(IrType::String), Box::new(IrType::Int));
         let list = IrType::List(Box::new(dict));
-        assert_eq!(
-            list.rust_name(),
-            "Vec<std::collections::HashMap<String, i64>>"
-        );
+        assert_eq!(list.rust_name(), "Vec<std::collections::HashMap<String, i64>>");
     }
 
     #[test]

@@ -33,8 +33,24 @@ impl SymbolTable {
     fn add_builtins(&mut self) {
         // Builtin types
         let builtin_types = [
-            "int", "float", "bool", "str", "bytes", "List", "Dict", "Set", "Tuple", "Option",
-            "Result", "Unit",
+            "int",
+            "float",
+            "bool",
+            "str",
+            "bytes",
+            "List",
+            "Dict",
+            "Set",
+            "Tuple",
+            "Option",
+            "Result",
+            "Unit",
+            // RFC 008 frozen const types
+            "FrozenStr",
+            "FrozenBytes",
+            "FrozenList",
+            "FrozenSet",
+            "FrozenDict",
         ];
 
         for name in builtin_types {
@@ -270,9 +286,7 @@ impl SymbolTable {
     pub fn define(&mut self, mut symbol: Symbol) -> SymbolId {
         symbol.scope = self.current_scope;
         let id = self.symbols.len();
-        self.scopes[self.current_scope]
-            .symbols
-            .insert(symbol.name.clone(), id);
+        self.scopes[self.current_scope].symbols.insert(symbol.name.clone(), id);
         self.symbols.push(symbol);
         id
     }
@@ -557,9 +571,7 @@ impl ResolvedType {
     /// Get the Ok type from Result[T, E]
     pub fn result_ok_type(&self) -> Option<&ResolvedType> {
         match self {
-            ResolvedType::Generic(name, args) if name == "Result" && !args.is_empty() => {
-                Some(&args[0])
-            }
+            ResolvedType::Generic(name, args) if name == "Result" && !args.is_empty() => Some(&args[0]),
             _ => None,
         }
     }
@@ -567,9 +579,7 @@ impl ResolvedType {
     /// Get the Err type from Result[T, E]
     pub fn result_err_type(&self) -> Option<&ResolvedType> {
         match self {
-            ResolvedType::Generic(name, args) if name == "Result" && args.len() >= 2 => {
-                Some(&args[1])
-            }
+            ResolvedType::Generic(name, args) if name == "Result" && args.len() >= 2 => Some(&args[1]),
             _ => None,
         }
     }
@@ -577,9 +587,7 @@ impl ResolvedType {
     /// Get the inner type from Option[T]
     pub fn option_inner_type(&self) -> Option<&ResolvedType> {
         match self {
-            ResolvedType::Generic(name, args) if name == "Option" && !args.is_empty() => {
-                Some(&args[0])
-            }
+            ResolvedType::Generic(name, args) if name == "Option" && !args.is_empty() => Some(&args[0]),
             _ => None,
         }
     }
@@ -668,28 +676,19 @@ pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
             }
         },
         Type::Generic(name, args) => {
-            let resolved_args: Vec<_> = args
-                .iter()
-                .map(|a| resolve_type(&a.node, symbols))
-                .collect();
+            let resolved_args: Vec<_> = args.iter().map(|a| resolve_type(&a.node, symbols)).collect();
             // Normalize type name for built-in generics (list → List, dict → Dict, etc.)
             let normalized_name = normalize_type_name(name);
             ResolvedType::Generic(normalized_name, resolved_args)
         }
         Type::Function(params, ret) => {
-            let resolved_params: Vec<_> = params
-                .iter()
-                .map(|p| resolve_type(&p.node, symbols))
-                .collect();
+            let resolved_params: Vec<_> = params.iter().map(|p| resolve_type(&p.node, symbols)).collect();
             let resolved_ret = resolve_type(&ret.node, symbols);
             ResolvedType::Function(resolved_params, Box::new(resolved_ret))
         }
         Type::Unit => ResolvedType::Unit,
         Type::Tuple(elems) => {
-            let resolved_elems: Vec<_> = elems
-                .iter()
-                .map(|e| resolve_type(&e.node, symbols))
-                .collect();
+            let resolved_elems: Vec<_> = elems.iter().map(|e| resolve_type(&e.node, symbols)).collect();
             ResolvedType::Tuple(resolved_elems)
         }
         Type::SelfType => ResolvedType::SelfType,
@@ -748,10 +747,7 @@ mod tests {
     fn test_result_type_helpers() {
         let result_type = ResolvedType::Generic(
             "Result".to_string(),
-            vec![
-                ResolvedType::Int,
-                ResolvedType::Named("AppError".to_string()),
-            ],
+            vec![ResolvedType::Int, ResolvedType::Named("AppError".to_string())],
         );
 
         assert!(result_type.is_result());

@@ -90,19 +90,69 @@ mod proptest_strategies {
         "[a-z][a-z0-9_]*".prop_filter("Not a keyword", |s| {
             !matches!(
                 s.as_str(),
-                "def" | "class" | "if" | "else" | "return" | "import"
+                "def"
+                    | "class"
+                    | "if"
+                    | "else"
+                    | "return"
+                    | "import"
+                    | "is"
+                    | "in"
+                    | "not"
+                    | "and"
+                    | "or"
+                    | "for"
+                    | "while"
+                    | "match"
+                    | "case"
+                    | "model"
+                    | "trait"
+                    | "enum"
+                    | "mut"
+                    | "const"
+                    | "async"
+                    | "await"
+                    | "try"
+                    | "except"
+                    | "finally"
+                    | "raise"
+                    | "with"
+                    | "as"
+                    | "from"
+                    | "pass"
+                    | "break"
+                    | "continue"
+                    | "yield"
+                    | "lambda"
+                    | "global"
+                    | "nonlocal"
+                    | "assert"
+                    | "del"
+                    | "elif"
+                    | "true"
+                    | "false"
+                    | "none"
+                    | "self"
+                    | "super"
+                    | "type"
+                    | "where"
+                    | "impl"
+                    | "pub"
+                    | "use"
+                    | "mod"
+                    | "fn"
+                    | "let"
+                    | "static"
+                    | "struct"
+                    | "newtype"
             )
         })
     }
 
     // Strategy for generating simple function definitions
     fn simple_function_strategy() -> impl Strategy<Value = String> {
-        (ident_strategy(), "[a-z]").prop_map(|(name, param)| {
-            format!(
-                "def {}({}: int) -> int:\n    return {}\n",
-                name, param, param
-            )
-        })
+        (ident_strategy(), "[a-z]")
+            .prop_map(|(name, param)| format!("def {}({}: int) -> int:\n    return {}\n", name, param, param))
     }
 
     proptest! {

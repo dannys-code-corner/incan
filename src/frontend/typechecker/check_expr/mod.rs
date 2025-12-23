@@ -32,7 +32,7 @@ impl TypeChecker {
     /// and accumulates errors. Returns [`ResolvedType::Unknown`] when the expression is
     /// invalid so checking can continue.
     pub(crate) fn check_expr(&mut self, expr: &Spanned<Expr>) -> ResolvedType {
-        match &expr.node {
+        let ty = match &expr.node {
             Expr::Ident(name) => self.check_ident(name, expr.span),
             Expr::Literal(lit) => self.check_literal(lit),
             Expr::SelfExpr => self.check_self(expr.span),
@@ -42,9 +42,7 @@ impl TypeChecker {
             Expr::Index(base, index) => self.check_index(base, index, expr.span),
             Expr::Slice(base, slice) => self.check_slice(base, slice, expr.span),
             Expr::Field(base, field) => self.check_field(base, field, expr.span),
-            Expr::MethodCall(base, method, args) => {
-                self.check_method_call(base, method, args, expr.span)
-            }
+            Expr::MethodCall(base, method, args) => self.check_method_call(base, method, args, expr.span),
             Expr::Await(inner) => self.check_await(inner, expr.span),
             Expr::Try(inner) => self.check_try(inner, expr.span),
             Expr::Match(subject, arms) => self.check_match(subject, arms, expr.span),
@@ -79,6 +77,10 @@ impl TypeChecker {
                 end,
                 inclusive: _,
             } => self.check_range_expr(start, end),
-        }
+        };
+
+        // Record for downstream stages (lowering/codegen).
+        self.record_expr_type(expr.span, ty.clone());
+        ty
     }
 }

@@ -122,14 +122,8 @@ mod tests {
         assert_eq!(new_config.line_length, default_config.line_length);
         assert_eq!(new_config.quote_style, default_config.quote_style);
         assert_eq!(new_config.trailing_commas, default_config.trailing_commas);
-        assert_eq!(
-            new_config.blank_lines_top_level,
-            default_config.blank_lines_top_level
-        );
-        assert_eq!(
-            new_config.blank_lines_methods,
-            default_config.blank_lines_methods
-        );
+        assert_eq!(new_config.blank_lines_top_level, default_config.blank_lines_top_level);
+        assert_eq!(new_config.blank_lines_methods, default_config.blank_lines_methods);
     }
 
     // ========================================
@@ -212,13 +206,9 @@ mod tests {
 
     #[test]
     fn test_builder_chain_order_independence() {
-        let config1 = FormatConfig::new()
-            .with_indent_width(2)
-            .with_line_length(80);
+        let config1 = FormatConfig::new().with_indent_width(2).with_line_length(80);
 
-        let config2 = FormatConfig::new()
-            .with_line_length(80)
-            .with_indent_width(2);
+        let config2 = FormatConfig::new().with_line_length(80).with_indent_width(2);
 
         assert_eq!(config1.indent_width, config2.indent_width);
         assert_eq!(config1.line_length, config2.line_length);
@@ -226,9 +216,7 @@ mod tests {
 
     #[test]
     fn test_builder_override() {
-        let config = FormatConfig::new()
-            .with_indent_width(2)
-            .with_indent_width(8);
+        let config = FormatConfig::new().with_indent_width(2).with_indent_width(8);
 
         assert_eq!(config.indent_width, 8); // Last value wins
     }
@@ -290,9 +278,7 @@ mod tests {
 
     #[test]
     fn test_format_config_clone() {
-        let config = FormatConfig::new()
-            .with_indent_width(2)
-            .with_line_length(80);
+        let config = FormatConfig::new().with_indent_width(2).with_line_length(80);
 
         let cloned = config.clone();
         assert_eq!(config.indent_width, cloned.indent_width);

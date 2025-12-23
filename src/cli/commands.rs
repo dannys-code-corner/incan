@@ -47,31 +47,21 @@ fn prepare_project(file_path: &str, output_dir: Option<&str>) -> CliResult<Prepa
     };
 
     let dep_modules = &modules[..modules.len() - 1];
-    let deps: Vec<(&str, &Program)> = dep_modules
-        .iter()
-        .map(|m| (m.name.as_str(), &m.ast))
-        .collect();
+    let deps: Vec<(&str, &Program)> = dep_modules.iter().map(|m| (m.name.as_str(), &m.ast)).collect();
 
     // Type check
     let mut checker = typechecker::TypeChecker::new();
     if let Err(errs) = checker.check_with_imports(&main_module.ast, &deps) {
         let mut msg = String::new();
         for err in &errs {
-            msg.push_str(&diagnostics::format_error(
-                file_path,
-                &main_module.source,
-                err,
-            ));
+            msg.push_str(&diagnostics::format_error(file_path, &main_module.source, err));
         }
         return Err(CliError::failure(msg.trim_end()));
     }
 
     // Derive project name from file path
     let path = Path::new(file_path);
-    let project_name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("incan_project");
+    let project_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("incan_project");
 
     let out_dir = output_dir
         .map(|s| s.to_string())
@@ -108,10 +98,7 @@ fn prepare_project(file_path: &str, output_dir: Option<&str>) -> CliResult<Prepa
     // Generate Rust project files
     let has_deps = !dep_modules.is_empty();
     if has_deps {
-        let module_paths: Vec<Vec<String>> = dep_modules
-            .iter()
-            .map(|m| m.path_segments.clone())
-            .collect();
+        let module_paths: Vec<Vec<String>> = dep_modules.iter().map(|m| m.path_segments.clone()).collect();
         let (main_code, rust_modules) = codegen
             .try_generate_multi_file_nested(&main_module.ast, &module_paths)
             .map_err(|e| CliError::failure(format!("Code generation error: {}", e)))?;
@@ -176,8 +163,8 @@ fn validate_output_dir(out_dir: &str) -> CliResult<()> {
 /// - The file exceeds `MAX_SOURCE_SIZE` (100 MB)
 pub fn read_source(file_path: &str) -> CliResult<String> {
     // Check file size before reading
-    let metadata = fs::metadata(file_path)
-        .map_err(|e| CliError::failure(format!("Cannot access file '{}': {}", file_path, e)))?;
+    let metadata =
+        fs::metadata(file_path).map_err(|e| CliError::failure(format!("Cannot access file '{}': {}", file_path, e)))?;
 
     if metadata.len() > MAX_SOURCE_SIZE {
         return Err(CliError::failure(format!(
@@ -188,8 +175,7 @@ pub fn read_source(file_path: &str) -> CliResult<String> {
         )));
     }
 
-    fs::read_to_string(file_path)
-        .map_err(|e| CliError::failure(format!("Error reading file '{}': {}", file_path, e)))
+    fs::read_to_string(file_path).map_err(|e| CliError::failure(format!("Error reading file '{}': {}", file_path, e)))
 }
 
 /// Collect and parse the entry file and all its dependencies.
@@ -209,11 +195,8 @@ pub fn collect_modules(entry_path: &str) -> CliResult<Vec<ParsedModule>> {
     let mut modules = Vec::new();
     let mut processed = HashSet::new();
     // (file_path, module_name, path_segments)
-    let mut to_process: Vec<(String, String, Vec<String>)> = vec![(
-        entry_path.to_string(),
-        "main".to_string(),
-        vec!["main".to_string()],
-    )];
+    let mut to_process: Vec<(String, String, Vec<String>)> =
+        vec![(entry_path.to_string(), "main".to_string(), vec!["main".to_string()])];
 
     while let Some((file_path, module_name, path_segments)) = to_process.pop() {
         if processed.contains(&file_path) {
@@ -250,20 +233,15 @@ pub fn collect_modules(entry_path: &str) -> CliResult<Vec<ParsedModule>> {
         for decl in &ast.declarations {
             if let crate::frontend::ast::Declaration::Import(import) = &decl.node {
                 let import_path = match &import.kind {
-                    crate::frontend::ast::ImportKind::Module(path) if !path.segments.is_empty() => {
-                        Some(path)
-                    }
-                    crate::frontend::ast::ImportKind::From { module, .. }
-                        if !module.segments.is_empty() =>
-                    {
+                    crate::frontend::ast::ImportKind::Module(path) if !path.segments.is_empty() => Some(path),
+                    crate::frontend::ast::ImportKind::From { module, .. } if !module.segments.is_empty() => {
                         Some(module)
                     }
                     _ => None,
                 };
 
                 if let Some(path) = import_path {
-                    if path.segments.is_empty() || path.segments.first() == Some(&"std".to_string())
-                    {
+                    if path.segments.is_empty() || path.segments.first() == Some(&"std".to_string()) {
                         continue;
                     }
 
@@ -271,9 +249,7 @@ pub fn collect_modules(entry_path: &str) -> CliResult<Vec<ParsedModule>> {
 
                     if path.is_absolute {
                         let mut project_root = base_dir.to_path_buf();
-                        while !project_root.join("Cargo.toml").exists()
-                            && !project_root.join("src").exists()
-                        {
+                        while !project_root.join("Cargo.toml").exists() && !project_root.join("src").exists() {
                             if let Some(parent) = project_root.parent() {
                                 project_root = parent.to_path_buf();
                             } else {
@@ -287,17 +263,12 @@ pub fn collect_modules(entry_path: &str) -> CliResult<Vec<ParsedModule>> {
                         }
                     } else {
                         for _ in 0..path.parent_levels {
-                            target_dir = target_dir
-                                .parent()
-                                .map(|p| p.to_path_buf())
-                                .unwrap_or(target_dir);
+                            target_dir = target_dir.parent().map(|p| p.to_path_buf()).unwrap_or(target_dir);
                         }
                     }
 
                     let module_segments = match &import.kind {
-                        crate::frontend::ast::ImportKind::From { module, .. } => {
-                            module.segments.clone()
-                        }
+                        crate::frontend::ast::ImportKind::From { module, .. } => module.segments.clone(),
                         crate::frontend::ast::ImportKind::Module(p) => {
                             if p.segments.len() > 1 {
                                 p.segments[..p.segments.len() - 1].to_vec()
@@ -423,11 +394,7 @@ pub fn check_file(file_path: &str) -> CliResult<ExitCode> {
         Err(errs) => {
             let mut msg = String::new();
             for err in &errs {
-                msg.push_str(&diagnostics::format_error(
-                    file_path,
-                    &main_module.source,
-                    err,
-                ));
+                msg.push_str(&diagnostics::format_error(file_path, &main_module.source, err));
             }
             Err(CliError::failure(msg.trim_end()))
         }
@@ -460,7 +427,7 @@ pub fn emit_rust(file_path: &str, strict: bool) -> CliResult<ExitCode> {
     let output = if strict {
         rust_code.replace(
             "#![allow(unused_imports, unused_parens, dead_code, unused_variables, unused_mut, unused_assignments)]",
-            "#![deny(unused_imports, unused_variables)]"
+            "#![deny(unused_imports, unused_variables)]",
         )
     } else {
         rust_code
@@ -484,10 +451,7 @@ pub fn build_file(file_path: &str, output_dir: Option<&String>) -> CliResult<Exi
                 println!("Binary: {}", prepared.generator.binary_path().display());
                 Ok(ExitCode::SUCCESS)
             } else {
-                Err(CliError::failure(format!(
-                    "Build failed:\n{}",
-                    result.stderr
-                )))
+                Err(CliError::failure(format!("Build failed:\n{}", result.stderr)))
             }
         }
         Err(e) => Err(CliError::failure(format!("Error running cargo: {}", e))),
@@ -581,19 +545,12 @@ pub fn format_files(path: &str, check_mode: bool, diff_mode: bool) -> CliResult<
             } else {
                 "would be reformatted"
             };
-            return Err(CliError::failure(format!(
-                "\n{} file(s) {}",
-                files.len(),
-                msg
-            )));
+            return Err(CliError::failure(format!("\n{} file(s) {}", files.len(), msg)));
         } else {
             println!("✓ {} file(s) already formatted", files.len());
         }
     } else {
-        println!(
-            "\n✓ {} file(s) formatted, {} error(s)",
-            formatted_count, error_count
-        );
+        println!("\n✓ {} file(s) formatted, {} error(s)", formatted_count, error_count);
     }
 
     if error_count > 0 {
@@ -615,10 +572,7 @@ fn collect_incn_files(path: &Path) -> Vec<PathBuf> {
             for entry in entries.flatten() {
                 let entry_path = entry.path();
                 if entry_path.is_dir() {
-                    let name = entry_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("");
+                    let name = entry_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     if !name.starts_with('.') && name != "target" && name != "node_modules" {
                         files.extend(collect_incn_files(&entry_path));
                     }

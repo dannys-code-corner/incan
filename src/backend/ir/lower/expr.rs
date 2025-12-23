@@ -4,15 +4,27 @@
 //! binary/unary operations, function calls, method calls, comprehensions, etc.
 
 use super::super::TypedExpr;
-use super::super::expr::{
-    BuiltinFn, IrExpr, IrExprKind, MatchArm, MethodKind, Pattern, UnaryOp, VarAccess,
-};
+use super::super::expr::{BuiltinFn, IrExpr, IrExprKind, MatchArm, MethodKind, Pattern, UnaryOp, VarAccess};
 use super::super::types::IrType;
 use super::AstLowering;
 use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
 
 impl AstLowering {
+    /// Lower an expression using the available typechecker output (if present).
+    ///
+    /// This wraps [`lower_expr`] and then overrides the inferred IR type using the typechecker
+    /// span->type map. This is a stepping stone toward fully typed lowering.
+    pub fn lower_expr_spanned(&mut self, expr: &Spanned<ast::Expr>) -> Result<TypedExpr, LoweringError> {
+        let mut lowered = self.lower_expr(&expr.node)?;
+        if let Some(info) = &self.type_info {
+            if let Some(res_ty) = info.expr_type(expr.span) {
+                lowered.ty = self.lower_resolved_type(res_ty);
+            }
+        }
+        Ok(lowered)
+    }
+
     /// Lower an expression to IR.
     ///
     /// Handles all expression types including:
@@ -41,11 +53,7 @@ impl AstLowering {
         let (kind, ty) = match expr {
             ast::Expr::Ident(name) => {
                 let ty = self.lookup_var(name);
-                let access = if ty.is_copy() {
-                    VarAccess::Copy
-                } else {
-                    VarAccess::Move
-                };
+                let access = if ty.is_copy() { VarAccess::Copy } else { VarAccess::Move };
                 (
                     IrExprKind::Var {
                         name: name.clone(),
@@ -59,9 +67,9 @@ impl AstLowering {
                 ast::Literal::Int(n) => (IrExprKind::Int(*n), IrType::Int),
                 ast::Literal::Float(n) => (IrExprKind::Float(*n), IrType::Float),
                 ast::Literal::String(s) => (IrExprKind::String(s.clone()), IrType::String),
+                ast::Literal::Bytes(bytes) => (IrExprKind::Bytes(bytes.clone()), IrType::Unknown),
                 ast::Literal::Bool(b) => (IrExprKind::Bool(*b), IrType::Bool),
                 ast::Literal::None => (IrExprKind::Unit, IrType::Unit),
-                ast::Literal::Bytes(_) => (IrExprKind::Unit, IrType::Unknown),
             },
 
             ast::Expr::SelfExpr => (
@@ -139,19 +147,11 @@ impl AstLowering {
                     // 1. Known struct from current file (in struct_names map)
                     // 2. Uppercase identifier heuristic (works cross-file like old codegen)
                     let is_known_struct = self.struct_names.contains_key(name);
-                    let is_uppercase = name
-                        .chars()
-                        .next()
-                        .map(|c| c.is_uppercase())
-                        .unwrap_or(false);
+                    let is_uppercase = name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
 
                     if is_known_struct || is_uppercase {
                         // Get type if known, otherwise Unknown (will be inferred at emit time)
-                        let struct_ty = self
-                            .struct_names
-                            .get(name)
-                            .cloned()
-                            .unwrap_or(IrType::Unknown);
+                        let struct_ty = self.struct_names.get(name).cloned().unwrap_or(IrType::Unknown);
                         // This is a constructor call - lower as struct instantiation
                         let fields: Vec<(String, TypedExpr)> = args
                             .iter()
@@ -282,10 +282,7 @@ impl AstLowering {
             ast::Expr::Match(s, arms) => {
                 let scrutinee = self.lower_expr(&s.node)?;
                 let arms_ir = self.lower_match_arms(arms)?;
-                let ty = arms_ir
-                    .first()
-                    .map(|a| a.body.ty.clone())
-                    .unwrap_or(IrType::Unknown);
+                let ty = arms_ir.first().map(|a| a.body.ty.clone()).unwrap_or(IrType::Unknown);
                 (
                     IrExprKind::Match {
                         scrutinee: Box::new(scrutinee),
@@ -309,9 +306,8 @@ impl AstLowering {
                     .else_body
                     .as_ref()
                     .map(|b| {
-                        self.lower_statements(b).map(|stmts| {
-                            TypedExpr::new(IrExprKind::Block { stmts, value: None }, IrType::Unit)
-                        })
+                        self.lower_statements(b)
+                            .map(|stmts| TypedExpr::new(IrExprKind::Block { stmts, value: None }, IrType::Unit))
                     })
                     .transpose()?;
                 (
@@ -359,10 +355,7 @@ impl AstLowering {
                     .iter()
                     .map(|i| self.lower_expr(&i.node))
                     .collect::<Result<_, _>>()?;
-                let elem = items_ir
-                    .first()
-                    .map(|i| i.ty.clone())
-                    .unwrap_or(IrType::Unknown);
+                let elem = items_ir.first().map(|i| i.ty.clone()).unwrap_or(IrType::Unknown);
                 (IrExprKind::List(items_ir), IrType::List(Box::new(elem)))
             }
 
@@ -375,10 +368,7 @@ impl AstLowering {
                     .first()
                     .map(|(k, v)| (k.ty.clone(), v.ty.clone()))
                     .unwrap_or((IrType::Unknown, IrType::Unknown));
-                (
-                    IrExprKind::Dict(pairs_ir),
-                    IrType::Dict(Box::new(k), Box::new(v)),
-                )
+                (IrExprKind::Dict(pairs_ir), IrType::Dict(Box::new(k), Box::new(v)))
             }
 
             ast::Expr::Set(items) => {
@@ -386,10 +376,7 @@ impl AstLowering {
                     .iter()
                     .map(|i| self.lower_expr(&i.node))
                     .collect::<Result<_, _>>()?;
-                let elem = items_ir
-                    .first()
-                    .map(|i| i.ty.clone())
-                    .unwrap_or(IrType::Unknown);
+                let elem = items_ir.first().map(|i| i.ty.clone()).unwrap_or(IrType::Unknown);
                 (IrExprKind::Set(items_ir), IrType::Set(Box::new(elem)))
             }
 
@@ -400,9 +387,7 @@ impl AstLowering {
                     .iter()
                     .map(|arg| match arg {
                         ast::CallArg::Named(n, e) => Ok((n.clone(), self.lower_expr(&e.node)?)),
-                        ast::CallArg::Positional(e) => {
-                            Ok((String::new(), self.lower_expr(&e.node)?))
-                        }
+                        ast::CallArg::Positional(e) => Ok((String::new(), self.lower_expr(&e.node)?)),
                     })
                     .collect::<Result<_, LoweringError>>()?;
                 (
@@ -414,11 +399,7 @@ impl AstLowering {
                 )
             }
 
-            ast::Expr::Range {
-                start,
-                end,
-                inclusive,
-            } => {
+            ast::Expr::Range { start, end, inclusive } => {
                 let s = self.lower_expr(&start.node)?;
                 let e = self.lower_expr(&end.node)?;
                 (
@@ -436,9 +417,7 @@ impl AstLowering {
                 let ir_parts: Vec<super::super::expr::FormatPart> = parts
                     .iter()
                     .map(|part| match part {
-                        ast::FStringPart::Literal(s) => {
-                            Ok(super::super::expr::FormatPart::Literal(s.clone()))
-                        }
+                        ast::FStringPart::Literal(s) => Ok(super::super::expr::FormatPart::Literal(s.clone())),
                         ast::FStringPart::Expr(e) => {
                             let lowered = self.lower_expr(&e.node)?;
                             Ok(super::super::expr::FormatPart::Expr(lowered))
@@ -553,10 +532,7 @@ impl AstLowering {
     /// # Returns
     ///
     /// A vector of typed IR expressions.
-    pub(super) fn lower_call_args(
-        &mut self,
-        args: &[ast::CallArg],
-    ) -> Result<Vec<TypedExpr>, LoweringError> {
+    pub(super) fn lower_call_args(&mut self, args: &[ast::CallArg]) -> Result<Vec<TypedExpr>, LoweringError> {
         args.iter()
             .map(|a| match a {
                 ast::CallArg::Positional(e) | ast::CallArg::Named(_, e) => self.lower_expr(&e.node),
@@ -573,19 +549,11 @@ impl AstLowering {
     /// # Returns
     ///
     /// A vector of IR match arms.
-    pub(super) fn lower_match_arms(
-        &mut self,
-        arms: &[Spanned<ast::MatchArm>],
-    ) -> Result<Vec<MatchArm>, LoweringError> {
+    pub(super) fn lower_match_arms(&mut self, arms: &[Spanned<ast::MatchArm>]) -> Result<Vec<MatchArm>, LoweringError> {
         arms.iter()
             .map(|a| {
                 let pattern = self.lower_pattern(&a.node.pattern.node);
-                let guard = a
-                    .node
-                    .guard
-                    .as_ref()
-                    .map(|g| self.lower_expr(&g.node))
-                    .transpose()?;
+                let guard = a.node.guard.as_ref().map(|g| self.lower_expr(&g.node)).transpose()?;
                 let body = match &a.node.body {
                     ast::MatchBody::Expr(e) => self.lower_expr(&e.node)?,
                     ast::MatchBody::Block(stmts) => {
@@ -599,11 +567,7 @@ impl AstLowering {
                         )
                     }
                 };
-                Ok(MatchArm {
-                    pattern,
-                    guard,
-                    body,
-                })
+                Ok(MatchArm { pattern, guard, body })
             })
             .collect()
     }
@@ -635,9 +599,7 @@ impl AstLowering {
                 variant: name.clone(),
                 fields: args.iter().map(|a| self.lower_pattern(&a.node)).collect(),
             },
-            ast::Pattern::Tuple(items) => {
-                Pattern::Tuple(items.iter().map(|i| self.lower_pattern(&i.node)).collect())
-            }
+            ast::Pattern::Tuple(items) => Pattern::Tuple(items.iter().map(|i| self.lower_pattern(&i.node)).collect()),
         }
     }
 }

@@ -22,6 +22,7 @@ impl<'a> IrEmitter<'a> {
             IrType::Float => quote! { f64 },
             IrType::String => quote! { String },
             IrType::StaticStr => quote! { &'static str },
+            IrType::StaticBytes => quote! { &'static [u8] },
             IrType::StrRef => quote! { &str },
             IrType::List(elem) => {
                 let e = self.emit_type(elem);
@@ -52,6 +53,11 @@ impl<'a> IrEmitter<'a> {
             IrType::Struct(name) | IrType::Enum(name) | IrType::Trait(name) => {
                 let n = format_ident!("{}", Self::escape_keyword(name));
                 quote! { #n }
+            }
+            IrType::NamedGeneric(name, args) => {
+                let n = format_ident!("{}", Self::escape_keyword(name));
+                let ts: Vec<_> = args.iter().map(|t| self.emit_type(t)).collect();
+                quote! { #n < #(#ts),* > }
             }
             IrType::SelfType => {
                 quote! { Self }

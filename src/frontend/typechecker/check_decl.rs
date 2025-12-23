@@ -18,6 +18,7 @@ impl TypeChecker {
     pub(crate) fn check_declaration(&mut self, decl: &Spanned<Declaration>) {
         match &decl.node {
             Declaration::Import(_) => {} // Already handled
+            Declaration::Const(konst) => self.check_const(konst, decl.span),
             Declaration::Model(model) => self.check_model(model),
             Declaration::Class(class) => self.check_class(class),
             Declaration::Trait(tr) => self.check_trait(tr),
@@ -26,6 +27,11 @@ impl TypeChecker {
             Declaration::Function(func) => self.check_function(func),
             Declaration::Docstring(_) => {} // Docstrings don't need checking
         }
+    }
+
+    fn check_const(&mut self, konst: &ConstDecl, span: Span) {
+        // RFC 008: const-eval (with cycle detection + category classification).
+        self.check_and_resolve_const(konst, span);
     }
 
     fn check_model(&mut self, model: &ModelDecl) {
@@ -88,8 +94,7 @@ impl TypeChecker {
         // Check base class exists
         if let Some(base) = &class.extends {
             if self.symbols.lookup(base).is_none() {
-                self.errors
-                    .push(errors::unknown_symbol(base, Span::default()));
+                self.errors.push(errors::unknown_symbol(base, Span::default()));
             }
         }
 
@@ -102,8 +107,7 @@ impl TypeChecker {
                     }
                 }
             } else {
-                self.errors
-                    .push(errors::unknown_symbol(trait_name, Span::default()));
+                self.errors.push(errors::unknown_symbol(trait_name, Span::default()));
             }
         }
 
@@ -141,21 +145,13 @@ impl TypeChecker {
         self.symbols.exit_scope();
     }
 
-    fn check_trait_conformance(
-        &mut self,
-        class: &ClassDecl,
-        trait_info: TraitInfo,
-        trait_name: &str,
-    ) {
+    fn check_trait_conformance(&mut self, class: &ClassDecl, trait_info: TraitInfo, trait_name: &str) {
         // Check required fields
         for (field_name, _field_ty) in &trait_info.requires {
             let found = class.fields.iter().any(|f| &f.node.name == field_name);
             if !found {
-                self.errors.push(errors::missing_field(
-                    &class.name,
-                    field_name,
-                    Span::default(),
-                ));
+                self.errors
+                    .push(errors::missing_field(&class.name, field_name, Span::default()));
             }
         }
 
@@ -164,11 +160,8 @@ impl TypeChecker {
             if !method_info.has_body {
                 let found = class.methods.iter().any(|m| &m.node.name == method_name);
                 if !found {
-                    self.errors.push(errors::missing_trait_method(
-                        trait_name,
-                        method_name,
-                        Span::default(),
-                    ));
+                    self.errors
+                        .push(errors::missing_trait_method(trait_name, method_name, Span::default()));
                 }
             }
         }
@@ -239,10 +232,8 @@ impl TypeChecker {
             for field_ty in &variant.node.fields {
                 let resolved = resolve_type(&field_ty.node, &self.symbols);
                 if matches!(resolved, ResolvedType::Unknown) {
-                    self.errors.push(errors::unknown_symbol(
-                        &format!("{:?}", field_ty.node),
-                        field_ty.span,
-                    ));
+                    self.errors
+                        .push(errors::unknown_symbol(&format!("{:?}", field_ty.node), field_ty.span));
                 }
             }
         }

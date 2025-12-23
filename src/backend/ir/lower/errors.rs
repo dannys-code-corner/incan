@@ -75,11 +75,7 @@ impl LoweringErrors {
     ///
     /// `Some(LoweringErrors)` if the vector is non-empty, `None` otherwise.
     pub fn from_vec(errors: Vec<LoweringError>) -> Option<Self> {
-        if errors.is_empty() {
-            None
-        } else {
-            Some(Self(errors))
-        }
+        if errors.is_empty() { None } else { Some(Self(errors)) }
     }
 
     /// Number of errors in this collection.

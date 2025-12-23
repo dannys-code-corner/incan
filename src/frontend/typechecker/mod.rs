@@ -46,15 +46,51 @@ mod check_decl;
 mod check_expr;
 mod check_stmt;
 mod collect;
+mod const_eval;
 
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::CompileError;
 use crate::frontend::symbols::*;
+
+/// Capture reusable typechecking output for later compiler stages.
+///
+/// This struct is the bridge that lets backend lowering/codegen **consume the typechecker’s view**
+/// of the program, rather than re-deriving types and semantics from the AST.
+///
+/// ## Notes
+/// - Expression types are keyed by `(span.start, span.end)` so downstream code can look them up
+///   without holding AST node identities.
+/// - Const classification is recorded to support RFC 008 “Rust-native vs Frozen” const emission.
+///
+/// ## Examples
+/// ```ignore
+/// use incan::frontend::{lexer, parser, typechecker};
+///
+/// let tokens = lexer::lex("def foo() -> int: return 1").unwrap();
+/// let ast = parser::parse(&tokens).unwrap();
+/// let mut tc = typechecker::TypeChecker::new();
+/// tc.check_program(&ast).unwrap();
+/// let info = tc.type_info();
+/// // info.expr_type(...) can now be queried by spans.
+/// ```
+#[derive(Debug, Default, Clone)]
+pub struct TypeCheckInfo {
+    /// Map from expression span (start,end) -> resolved type.
+    pub expr_types: HashMap<(usize, usize), ResolvedType>,
+    /// Const category classification (RFC 008): const name -> kind.
+    pub const_kinds: HashMap<String, const_eval::ConstKind>,
+}
+
+impl TypeCheckInfo {
+    pub fn expr_type(&self, span: Span) -> Option<&ResolvedType> {
+        self.expr_types.get(&(span.start, span.end))
+    }
+}
 
 /// Valid derive names that can be used with @derive(...)
 pub(crate) const VALID_DERIVES: &[&str] = &[
@@ -88,6 +124,14 @@ pub struct TypeChecker {
     pub(crate) mutable_bindings: HashSet<String>,
     /// Current function's error type for `?` operator compatibility.
     pub(crate) current_return_error_type: Option<ResolvedType>,
+    /// Collected module-level const declarations (for rich const-eval + cycle detection).
+    pub(crate) const_decls: HashMap<String, (ConstDecl, Span)>,
+    /// Const evaluation state machine.
+    pub(crate) const_eval_state: HashMap<String, const_eval::ConstEvalState>,
+    /// Cached const evaluation results.
+    pub(crate) const_eval_cache: HashMap<String, const_eval::ConstEvalResult>,
+    /// Reusable typechecker output for downstream stages.
+    pub(crate) type_info: TypeCheckInfo,
 }
 
 impl TypeChecker {
@@ -97,7 +141,20 @@ impl TypeChecker {
             errors: Vec::new(),
             mutable_bindings: HashSet::new(),
             current_return_error_type: None,
+            const_decls: HashMap::new(),
+            const_eval_state: HashMap::new(),
+            const_eval_cache: HashMap::new(),
+            type_info: TypeCheckInfo::default(),
         }
+    }
+
+    /// Return accumulated type information for reuse by later stages (lowering/codegen).
+    pub fn type_info(&self) -> &TypeCheckInfo {
+        &self.type_info
+    }
+
+    pub(crate) fn record_expr_type(&mut self, span: Span, ty: ResolvedType) {
+        self.type_info.expr_types.insert((span.start, span.end), ty);
     }
 
     /// Check a program and return errors if any.
@@ -120,14 +177,27 @@ impl TypeChecker {
     /// For multi-module projects, call [`import_module`](Self::import_module) first to populate dependency symbols,
     /// or use [`check_with_imports`](Self::check_with_imports) to import dependencies first.
     pub fn check_program(&mut self, program: &Program) -> Result<(), Vec<CompileError>> {
+        // Reset per-run caches.
+        self.const_decls.clear();
+        self.const_eval_state.clear();
+        self.const_eval_cache.clear();
+        self.type_info = TypeCheckInfo::default();
+
         // First pass: collect type declarations
         for decl in &program.declarations {
             self.collect_declaration(decl);
         }
 
-        // Second pass: check declarations
+        // Second pass: check consts first so their resolved types are available to later checks.
         for decl in &program.declarations {
-            self.check_declaration(decl);
+            if matches!(decl.node, Declaration::Const(_)) {
+                self.check_declaration(decl);
+            }
+        }
+        for decl in &program.declarations {
+            if !matches!(decl.node, Declaration::Const(_)) {
+                self.check_declaration(decl);
+            }
         }
 
         if self.errors.is_empty() {
@@ -200,28 +270,42 @@ impl TypeChecker {
         match (actual, expected) {
             (ResolvedType::Unknown, _) | (_, ResolvedType::Unknown) => true,
             (ResolvedType::TypeVar(_), _) | (_, ResolvedType::TypeVar(_)) => true,
+            // `FrozenStr` is a read-only string wrapper; allow it where `str` is expected.
+            (ResolvedType::Named(name), ResolvedType::Str) if name == "FrozenStr" => true,
+            // Allow `FrozenBytes` where `bytes` is expected.
+            (ResolvedType::Named(name), ResolvedType::Bytes) if name == "FrozenBytes" => true,
+            // Treat `Tuple` as both:
+            // - a concrete tuple type: `Tuple[T1, T2, ...]`
+            // - a supertype for any tuple when used without args: `Tuple`
+            //
+            // This matches snapshot tests that use `tuple[int, str]` and `Tuple` as "any tuple".
+            (ResolvedType::Tuple(_), ResolvedType::Named(name)) if name == "Tuple" => true,
+            (ResolvedType::Tuple(elems), ResolvedType::Generic(name, args)) if name == "Tuple" => {
+                elems.len() == args.len()
+                    && elems
+                        .iter()
+                        .zip(args.iter())
+                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+            }
+            (ResolvedType::Generic(name, args), ResolvedType::Tuple(elems)) if name == "Tuple" => {
+                elems.len() == args.len()
+                    && elems
+                        .iter()
+                        .zip(args.iter())
+                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+            }
             (ResolvedType::Generic(n1, a1), ResolvedType::Generic(n2, a2)) => {
                 n1 == n2
                     && a1.len() == a2.len()
-                    && a1
-                        .iter()
-                        .zip(a2.iter())
-                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+                    && a1.iter().zip(a2.iter()).all(|(t1, t2)| self.types_compatible(t1, t2))
             }
             (ResolvedType::Function(p1, r1), ResolvedType::Function(p2, r2)) => {
                 p1.len() == p2.len()
-                    && p1
-                        .iter()
-                        .zip(p2.iter())
-                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+                    && p1.iter().zip(p2.iter()).all(|(t1, t2)| self.types_compatible(t1, t2))
                     && self.types_compatible(r1, r2)
             }
             (ResolvedType::Tuple(e1), ResolvedType::Tuple(e2)) => {
-                e1.len() == e2.len()
-                    && e1
-                        .iter()
-                        .zip(e2.iter())
-                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+                e1.len() == e2.len() && e1.iter().zip(e2.iter()).all(|(t1, t2)| self.types_compatible(t1, t2))
             }
             _ => false,
         }

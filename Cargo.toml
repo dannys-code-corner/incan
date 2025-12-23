@@ -6,7 +6,7 @@ resolver = "2"
 [package]
 name = "incan"
 description = "The Incan programming language compiler"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 license = "Apache-2.0"
 readme = "README.md"
 edition = "2024"  # Rust 2024 edition
@@ -38,7 +38,6 @@ miette = { version = "7.0", features = ["fancy"] }
 syn = { version = "2.0", features = ["full", "parsing", "printing"] }
 quote = "1.0"
 proc-macro2 = "1.0"
-
 # Code formatting for generated Rust
 prettyplease = "0.2"
 tracing = "0.1"

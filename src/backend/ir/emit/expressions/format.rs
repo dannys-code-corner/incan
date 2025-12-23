@@ -18,10 +18,7 @@ impl<'a> IrEmitter<'a> {
     /// ## Examples
     /// - `f"Hello {name}"` → `format!("Hello {}", name)`
     /// - `f"Value: {x + 1}"` → `format!("Value: {}", x + 1)`
-    pub(in super::super) fn emit_format_expr(
-        &self,
-        parts: &[FormatPart],
-    ) -> Result<TokenStream, EmitError> {
+    pub(in super::super) fn emit_format_expr(&self, parts: &[FormatPart]) -> Result<TokenStream, EmitError> {
         let mut fmt_string = String::new();
         let mut fmt_args: Vec<TokenStream> = Vec::new();
 

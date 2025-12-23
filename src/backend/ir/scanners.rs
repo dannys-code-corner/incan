@@ -95,17 +95,12 @@ fn stmt_uses_async(stmt: &Statement) -> bool {
         Statement::If(if_stmt) => {
             expr_uses_async(&if_stmt.condition.node)
                 || body_uses_async(&if_stmt.then_body)
-                || if_stmt
-                    .else_body
-                    .as_ref()
-                    .is_some_and(|b| body_uses_async(b))
+                || if_stmt.else_body.as_ref().is_some_and(|b| body_uses_async(b))
         }
         Statement::While(while_stmt) => {
             expr_uses_async(&while_stmt.condition.node) || body_uses_async(&while_stmt.body)
         }
-        Statement::For(for_stmt) => {
-            expr_uses_async(&for_stmt.iter.node) || body_uses_async(&for_stmt.body)
-        }
+        Statement::For(for_stmt) => expr_uses_async(&for_stmt.iter.node) || body_uses_async(&for_stmt.body),
         _ => false,
     }
 }
@@ -126,23 +121,17 @@ fn expr_uses_async(expr: &Expr) -> bool {
         }
         Expr::Binary(left, _, right) => expr_uses_async(&left.node) || expr_uses_async(&right.node),
         Expr::Unary(_, expr) => expr_uses_async(&expr.node),
-        Expr::MethodCall(receiver, _, args) => {
-            expr_uses_async(&receiver.node) || args.iter().any(call_arg_uses_async)
-        }
+        Expr::MethodCall(receiver, _, args) => expr_uses_async(&receiver.node) || args.iter().any(call_arg_uses_async),
         Expr::Field(base, _) => expr_uses_async(&base.node),
         Expr::Index(base, index) => expr_uses_async(&base.node) || expr_uses_async(&index.node),
         Expr::Slice(base, _) => expr_uses_async(&base.node),
         Expr::If(if_expr) => {
             expr_uses_async(&if_expr.condition.node)
                 || body_uses_async(&if_expr.then_body)
-                || if_expr
-                    .else_body
-                    .as_ref()
-                    .is_some_and(|b| body_uses_async(b))
+                || if_expr.else_body.as_ref().is_some_and(|b| body_uses_async(b))
         }
         Expr::Match(expr, arms) => {
-            expr_uses_async(&expr.node)
-                || arms.iter().any(|arm| match_body_uses_async(&arm.node.body))
+            expr_uses_async(&expr.node) || arms.iter().any(|arm| match_body_uses_async(&arm.node.body))
         }
         Expr::Closure(_, body) => expr_uses_async(&body.node),
         Expr::List(items) | Expr::Tuple(items) | Expr::Set(items) => {
@@ -157,19 +146,13 @@ fn expr_uses_async(expr: &Expr) -> bool {
         Expr::ListComp(comp) => {
             expr_uses_async(&comp.expr.node)
                 || expr_uses_async(&comp.iter.node)
-                || comp
-                    .filter
-                    .as_ref()
-                    .is_some_and(|c| expr_uses_async(&c.node))
+                || comp.filter.as_ref().is_some_and(|c| expr_uses_async(&c.node))
         }
         Expr::DictComp(comp) => {
             expr_uses_async(&comp.key.node)
                 || expr_uses_async(&comp.value.node)
                 || expr_uses_async(&comp.iter.node)
-                || comp
-                    .filter
-                    .as_ref()
-                    .is_some_and(|c| expr_uses_async(&c.node))
+                || comp.filter.as_ref().is_some_and(|c| expr_uses_async(&c.node))
         }
         Expr::Constructor(_, args) => args.iter().any(call_arg_uses_async),
         Expr::Try(inner) => expr_uses_async(&inner.node),
@@ -269,10 +252,7 @@ fn stmt_uses_list_helpers(stmt: &Statement) -> bool {
         Statement::Return(Some(expr)) => expr_uses_list_helpers(&expr.node),
         Statement::If(if_stmt) => {
             body_uses_list_helpers(&if_stmt.then_body)
-                || if_stmt
-                    .else_body
-                    .as_ref()
-                    .is_some_and(|b| body_uses_list_helpers(b))
+                || if_stmt.else_body.as_ref().is_some_and(|b| body_uses_list_helpers(b))
         }
         Statement::While(while_stmt) => body_uses_list_helpers(&while_stmt.body),
         Statement::For(for_stmt) => body_uses_list_helpers(&for_stmt.body),
@@ -288,24 +268,17 @@ fn expr_uses_list_helpers(expr: &Expr) -> bool {
         Expr::Call(function, args) => {
             expr_uses_list_helpers(&function.node)
                 || args.iter().any(|arg| match arg {
-                    CallArg::Positional(e) | CallArg::Named(_, e) => {
-                        expr_uses_list_helpers(&e.node)
-                    }
+                    CallArg::Positional(e) | CallArg::Named(_, e) => expr_uses_list_helpers(&e.node),
                 })
         }
-        Expr::Binary(left, _, right) => {
-            expr_uses_list_helpers(&left.node) || expr_uses_list_helpers(&right.node)
-        }
+        Expr::Binary(left, _, right) => expr_uses_list_helpers(&left.node) || expr_uses_list_helpers(&right.node),
         Expr::Unary(_, expr) => expr_uses_list_helpers(&expr.node),
         Expr::List(items) | Expr::Tuple(items) | Expr::Set(items) => {
             items.iter().any(|item| expr_uses_list_helpers(&item.node))
         }
         Expr::If(if_expr) => {
             body_uses_list_helpers(&if_expr.then_body)
-                || if_expr
-                    .else_body
-                    .as_ref()
-                    .is_some_and(|b| body_uses_list_helpers(b))
+                || if_expr.else_body.as_ref().is_some_and(|b| body_uses_list_helpers(b))
         }
         _ => false,
     }
@@ -336,9 +309,7 @@ pub fn collect_routes(program: &Program) -> Vec<(String, String, Vec<String>, bo
                                             methods = items
                                                 .iter()
                                                 .filter_map(|item| {
-                                                    if let Expr::Literal(Literal::String(s)) =
-                                                        &item.node
-                                                    {
+                                                    if let Expr::Literal(Literal::String(s)) = &item.node {
                                                         Some(s.clone())
                                                     } else {
                                                         None

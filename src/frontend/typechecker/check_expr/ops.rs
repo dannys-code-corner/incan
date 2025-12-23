@@ -22,12 +22,7 @@ impl TypeChecker {
         let right_ty = self.check_expr(right);
 
         match op {
-            BinaryOp::Add
-            | BinaryOp::Sub
-            | BinaryOp::Mul
-            | BinaryOp::Div
-            | BinaryOp::Mod
-            | BinaryOp::Pow => {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
                 // Numeric operations
                 if self.types_compatible(&left_ty, &ResolvedType::Int)
                     && self.types_compatible(&right_ty, &ResolvedType::Int)
@@ -37,9 +32,7 @@ impl TypeChecker {
                     || self.types_compatible(&right_ty, &ResolvedType::Float)
                 {
                     ResolvedType::Float
-                } else if matches!(op, BinaryOp::Add)
-                    && self.types_compatible(&left_ty, &ResolvedType::Str)
-                {
+                } else if matches!(op, BinaryOp::Add) && self.types_compatible(&left_ty, &ResolvedType::Str) {
                     ResolvedType::Str
                 } else {
                     self.errors.push(errors::type_mismatch(
@@ -73,11 +66,8 @@ impl TypeChecker {
                 } else if self.types_compatible(&operand_ty, &ResolvedType::Float) {
                     ResolvedType::Float
                 } else {
-                    self.errors.push(errors::type_mismatch(
-                        "numeric",
-                        &operand_ty.to_string(),
-                        span,
-                    ));
+                    self.errors
+                        .push(errors::type_mismatch("numeric", &operand_ty.to_string(), span));
                     ResolvedType::Unknown
                 }
             }
