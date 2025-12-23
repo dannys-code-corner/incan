@@ -19,12 +19,8 @@ impl TypeChecker {
     pub(crate) fn check_statement(&mut self, stmt: &Spanned<Statement>) {
         match &stmt.node {
             Statement::Assignment(assign) => self.check_assignment(assign, stmt.span),
-            Statement::FieldAssignment(field_assign) => {
-                self.check_field_assignment(field_assign, stmt.span)
-            }
-            Statement::IndexAssignment(index_assign) => {
-                self.check_index_assignment(index_assign, stmt.span)
-            }
+            Statement::FieldAssignment(field_assign) => self.check_field_assignment(field_assign, stmt.span),
+            Statement::IndexAssignment(index_assign) => self.check_index_assignment(index_assign, stmt.span),
             Statement::Return(expr) => self.check_return(expr.as_ref(), stmt.span),
             Statement::If(if_stmt) => self.check_if_stmt(if_stmt),
             Statement::While(while_stmt) => self.check_while_stmt(while_stmt),
@@ -65,8 +61,7 @@ impl TypeChecker {
                         ));
                     }
                 } else {
-                    self.errors
-                        .push(errors::unknown_symbol(&compound.name, stmt.span));
+                    self.errors.push(errors::unknown_symbol(&compound.name, stmt.span));
                 }
             }
             Statement::TupleUnpack(unpack) => {
@@ -97,10 +92,7 @@ impl TypeChecker {
                 // Define each variable with its corresponding type
                 let is_mutable = matches!(unpack.binding, BindingKind::Mutable);
                 for (i, name) in unpack.names.iter().enumerate() {
-                    let ty = element_types
-                        .get(i)
-                        .cloned()
-                        .unwrap_or(ResolvedType::Unknown);
+                    let ty = element_types.get(i).cloned().unwrap_or(ResolvedType::Unknown);
                     self.symbols.define(Symbol {
                         name: name.clone(),
                         kind: SymbolKind::Variable(VariableInfo {
@@ -144,10 +136,7 @@ impl TypeChecker {
                 // Check each target expression - must be a valid lvalue
                 for (i, target) in assign.targets.iter().enumerate() {
                     let target_ty = self.check_expr(target);
-                    let expected_ty = element_types
-                        .get(i)
-                        .cloned()
-                        .unwrap_or(ResolvedType::Unknown);
+                    let expected_ty = element_types.get(i).cloned().unwrap_or(ResolvedType::Unknown);
 
                     // Check that target is a valid lvalue
                     match &target.node {
@@ -158,10 +147,7 @@ impl TypeChecker {
                                 if let Some(sym) = self.symbols.get(id) {
                                     if let SymbolKind::Variable(var_info) = &sym.kind {
                                         if !var_info.is_mutable {
-                                            self.errors.push(errors::mutation_without_mut(
-                                                name,
-                                                target.span,
-                                            ));
+                                            self.errors.push(errors::mutation_without_mut(name, target.span));
                                         }
                                     }
                                 }
@@ -235,12 +221,8 @@ impl TypeChecker {
                     if let Some(sym) = self.symbols.get(id) {
                         if let SymbolKind::Type(type_info) = &sym.kind {
                             let field_type = match type_info {
-                                TypeInfo::Model(model) => {
-                                    model.fields.get(field).map(|f| f.ty.clone())
-                                }
-                                TypeInfo::Class(class) => {
-                                    class.fields.get(field).map(|f| f.ty.clone())
-                                }
+                                TypeInfo::Model(model) => model.fields.get(field).map(|f| f.ty.clone()),
+                                TypeInfo::Class(class) => class.fields.get(field).map(|f| f.ty.clone()),
                                 _ => None,
                             };
 
@@ -258,8 +240,7 @@ impl TypeChecker {
                                 }
                                 None => {
                                     // Field doesn't exist
-                                    self.errors
-                                        .push(errors::missing_field(type_name, field, span));
+                                    self.errors.push(errors::missing_field(type_name, field, span));
                                 }
                             }
                         }
@@ -330,8 +311,7 @@ impl TypeChecker {
                     }
                 }
                 _ => {
-                    self.errors
-                        .push(errors::not_indexable(&obj_ty.to_string(), span));
+                    self.errors.push(errors::not_indexable(&obj_ty.to_string(), span));
                 }
             },
             ResolvedType::Tuple(_) => {
@@ -349,8 +329,7 @@ impl TypeChecker {
                 // Don't report additional errors on unknown types
             }
             _ => {
-                self.errors
-                    .push(errors::not_indexable(&obj_ty.to_string(), span));
+                self.errors.push(errors::not_indexable(&obj_ty.to_string(), span));
             }
         }
     }
@@ -365,8 +344,7 @@ impl TypeChecker {
             if let Some(sym) = self.symbols.get(id) {
                 if let SymbolKind::Variable(var_info) = &sym.kind {
                     if !var_info.is_mutable {
-                        self.errors
-                            .push(errors::mutation_without_mut(&assign.name, span));
+                        self.errors.push(errors::mutation_without_mut(&assign.name, span));
                     }
                     // Type check
                     if !self.types_compatible(&value_ty, &var_info.ty) {

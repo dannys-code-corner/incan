@@ -122,11 +122,7 @@ impl IrType {
             IrType::StaticBytes => "&'static [u8]".to_string(),
             IrType::StrRef => "&str".to_string(),
             IrType::List(elem) => format!("Vec<{}>", elem.rust_name()),
-            IrType::Dict(k, v) => format!(
-                "std::collections::HashMap<{}, {}>",
-                k.rust_name(),
-                v.rust_name()
-            ),
+            IrType::Dict(k, v) => format!("std::collections::HashMap<{}, {}>", k.rust_name(), v.rust_name()),
             IrType::Set(elem) => format!("std::collections::HashSet<{}>", elem.rust_name()),
             IrType::Tuple(elems) => {
                 let inner: Vec<_> = elems.iter().map(|e| e.rust_name()).collect();
@@ -229,10 +225,7 @@ mod tests {
 
     #[test]
     fn test_generic_option_int() {
-        assert_eq!(
-            IrType::Option(Box::new(IrType::Int)).rust_name(),
-            "Option<i64>"
-        );
+        assert_eq!(IrType::Option(Box::new(IrType::Int)).rust_name(), "Option<i64>");
     }
 
     #[test]
@@ -261,10 +254,7 @@ mod tests {
     fn test_generic_dict_string_list_int() {
         let list = IrType::List(Box::new(IrType::Int));
         let dict = IrType::Dict(Box::new(IrType::String), Box::new(list));
-        assert_eq!(
-            dict.rust_name(),
-            "std::collections::HashMap<String, Vec<i64>>"
-        );
+        assert_eq!(dict.rust_name(), "std::collections::HashMap<String, Vec<i64>>");
     }
 
     // ============================================================================
@@ -373,10 +363,7 @@ mod tests {
 
     #[test]
     fn test_refmut_int() {
-        assert_eq!(
-            IrType::RefMut(Box::new(IrType::Int)).rust_name(),
-            "&mut i64"
-        );
+        assert_eq!(IrType::RefMut(Box::new(IrType::Int)).rust_name(), "&mut i64");
     }
 
     #[test]
@@ -400,10 +387,7 @@ mod tests {
     fn test_nested_list_of_dict() {
         let dict = IrType::Dict(Box::new(IrType::String), Box::new(IrType::Int));
         let list = IrType::List(Box::new(dict));
-        assert_eq!(
-            list.rust_name(),
-            "Vec<std::collections::HashMap<String, i64>>"
-        );
+        assert_eq!(list.rust_name(), "Vec<std::collections::HashMap<String, i64>>");
     }
 
     #[test]

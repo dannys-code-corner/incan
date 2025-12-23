@@ -31,11 +31,8 @@ impl<'a> IrEmitter<'a> {
                 .map(|(fname, fval)| {
                     let fn_ident = format_ident!("{}", fname);
                     let emitted = self.emit_expr(fval)?;
-                    let target_type = self
-                        .struct_field_types
-                        .get(&(name.to_string(), fname.clone()));
-                    let conversion =
-                        determine_conversion(fval, target_type, ConversionContext::StructField);
+                    let target_type = self.struct_field_types.get(&(name.to_string(), fname.clone()));
+                    let conversion = determine_conversion(fval, target_type, ConversionContext::StructField);
                     let fv = conversion.apply(emitted);
                     Ok(quote! { #fn_ident: #fv })
                 })
@@ -50,8 +47,7 @@ impl<'a> IrEmitter<'a> {
                 .iter()
                 .map(|(_, fval)| {
                     let emitted = self.emit_expr(fval)?;
-                    let conversion =
-                        determine_conversion(fval, None, ConversionContext::IncanFunctionArg);
+                    let conversion = determine_conversion(fval, None, ConversionContext::IncanFunctionArg);
                     Ok(conversion.apply(emitted))
                 })
                 .collect::<Result<_, EmitError>>()?;

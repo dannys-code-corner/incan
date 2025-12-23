@@ -151,12 +151,8 @@ mod proptest_strategies {
 
     // Strategy for generating simple function definitions
     fn simple_function_strategy() -> impl Strategy<Value = String> {
-        (ident_strategy(), "[a-z]").prop_map(|(name, param)| {
-            format!(
-                "def {}({}: int) -> int:\n    return {}\n",
-                name, param, param
-            )
-        })
+        (ident_strategy(), "[a-z]")
+            .prop_map(|(name, param)| format!("def {}({}: int) -> int:\n    return {}\n", name, param, param))
     }
 
     proptest! {

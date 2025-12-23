@@ -42,9 +42,7 @@ impl TypeChecker {
             Expr::Index(base, index) => self.check_index(base, index, expr.span),
             Expr::Slice(base, slice) => self.check_slice(base, slice, expr.span),
             Expr::Field(base, field) => self.check_field(base, field, expr.span),
-            Expr::MethodCall(base, method, args) => {
-                self.check_method_call(base, method, args, expr.span)
-            }
+            Expr::MethodCall(base, method, args) => self.check_method_call(base, method, args, expr.span),
             Expr::Await(inner) => self.check_await(inner, expr.span),
             Expr::Try(inner) => self.check_try(inner, expr.span),
             Expr::Match(subject, arms) => self.check_match(subject, arms, expr.span),

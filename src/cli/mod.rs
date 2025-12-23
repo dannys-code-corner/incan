@@ -209,9 +209,7 @@ fn get_logo() -> &'static str {
 /// implementations return `CliResult` and errors are handled here.
 pub fn run() {
     // Print colored logo before clap runs
-    if env::args().len() == 1
-        || env::args().any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V")
-    {
+    if env::args().len() == 1 || env::args().any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V") {
         print_logo();
     }
 
@@ -255,22 +253,14 @@ fn execute(cli: Cli) -> CliResult<ExitCode> {
             commands::build_file(&file.to_string_lossy(), out.as_ref())
         }
         Some(Command::Run { file, command }) => execute_run(file, command),
-        Some(Command::Fmt { path, check, diff }) => {
-            commands::format_files(&path.to_string_lossy(), check, diff)
-        }
+        Some(Command::Fmt { path, check, diff }) => commands::format_files(&path.to_string_lossy(), check, diff),
         Some(Command::Test {
             path,
             verbose,
             stop_on_fail,
             slow,
             filter,
-        }) => test_runner::run_tests(
-            &path.to_string_lossy(),
-            verbose,
-            stop_on_fail,
-            slow,
-            filter.as_deref(),
-        ),
+        }) => test_runner::run_tests(&path.to_string_lossy(), verbose, stop_on_fail, slow, filter.as_deref()),
         None => {
             // Default: type check the file if provided
             if let Some(file) = cli.file {
@@ -288,9 +278,7 @@ fn execute_run(file: Option<PathBuf>, code: Option<String>) -> CliResult<ExitCod
     if let Some(code) = code {
         // Run inline code
         if code.is_empty() {
-            return Err(CliError::failure(
-                "Error: -c/--command requires source code string",
-            ));
+            return Err(CliError::failure("Error: -c/--command requires source code string"));
         }
         // If the snippet already declares a main, leave as-is; otherwise, append a stub main.
         let wrapped = if code.contains("def main") {
@@ -307,9 +295,8 @@ fn execute_run(file: Option<PathBuf>, code: Option<String>) -> CliResult<ExitCod
                 .map(|d| d.as_millis())
                 .unwrap_or(0)
         ));
-        fs::write(&tmp_path, wrapped).map_err(|e| {
-            CliError::failure(format!("Error writing temporary command file: {}", e))
-        })?;
+        fs::write(&tmp_path, wrapped)
+            .map_err(|e| CliError::failure(format!("Error writing temporary command file: {}", e)))?;
 
         let result = commands::run_file(&tmp_path.to_string_lossy());
         let _ = fs::remove_file(&tmp_path);
@@ -317,9 +304,7 @@ fn execute_run(file: Option<PathBuf>, code: Option<String>) -> CliResult<ExitCod
     } else if let Some(file) = file {
         commands::run_file(&file.to_string_lossy())
     } else {
-        Err(CliError::failure(
-            "Error: run requires a file path or -c \"code\"",
-        ))
+        Err(CliError::failure("Error: run requires a file path or -c \"code\""))
     }
 }
 

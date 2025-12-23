@@ -35,30 +35,16 @@ impl<'a> IrEmitter<'a> {
     /// - FrozenList/Set/Dict with allowed element types (emitted via `FrozenX::new(&[..])`)
     ///
     /// Everything else is rejected with an actionable error.
-    pub(super) fn validate_const_emittable(
-        &self,
-        name: &str,
-        ty: &IrType,
-        value: &TypedExpr,
-    ) -> Result<(), EmitError> {
+    pub(super) fn validate_const_emittable(&self, name: &str, ty: &IrType, value: &TypedExpr) -> Result<(), EmitError> {
         fn ok_ty(ty: &IrType) -> bool {
             match ty {
-                IrType::Int
-                | IrType::Float
-                | IrType::Bool
-                | IrType::StaticStr
-                | IrType::StaticBytes => true,
+                IrType::Int | IrType::Float | IrType::Bool | IrType::StaticStr | IrType::StaticBytes => true,
                 IrType::Struct(name) if name == "FrozenStr" || name == "FrozenBytes" => true,
                 IrType::Tuple(items) => items.iter().all(ok_ty),
-                IrType::NamedGeneric(name, args) if name == "FrozenList" => {
-                    args.first().map(ok_ty).unwrap_or(false)
-                }
-                IrType::NamedGeneric(name, args) if name == "FrozenSet" => {
-                    args.first().map(ok_ty).unwrap_or(false)
-                }
+                IrType::NamedGeneric(name, args) if name == "FrozenList" => args.first().map(ok_ty).unwrap_or(false),
+                IrType::NamedGeneric(name, args) if name == "FrozenSet" => args.first().map(ok_ty).unwrap_or(false),
                 IrType::NamedGeneric(name, args) if name == "FrozenDict" => {
-                    args.first().map(ok_ty).unwrap_or(false)
-                        && args.get(1).map(ok_ty).unwrap_or(false)
+                    args.first().map(ok_ty).unwrap_or(false) && args.get(1).map(ok_ty).unwrap_or(false)
                 }
                 _ => false,
             }
@@ -74,7 +60,7 @@ impl<'a> IrEmitter<'a> {
             )));
         }
 
-        self.validate_const_expr_kind(&value.kind)
+        Self::validate_const_expr_kind(&value.kind)
     }
 
     /// RFC 008 const expression shape check (defensive backend guard).
@@ -82,41 +68,35 @@ impl<'a> IrEmitter<'a> {
     /// Frontend const-eval should already reject non-const expressions, but this
     /// backend guard prevents emitting invalid consts when typechecker info is
     /// missing and lowering falls back to heuristic typing.
-    fn validate_const_expr_kind(&self, kind: &IrExprKind) -> Result<(), EmitError> {
+    fn validate_const_expr_kind(kind: &IrExprKind) -> Result<(), EmitError> {
         use IrExprKind as K;
 
         match kind {
             // Primitives and static literals
-            K::Unit
-            | K::None
-            | K::Bool(_)
-            | K::Int(_)
-            | K::Float(_)
-            | K::String(_)
-            | K::Bytes(_) => Ok(()),
+            K::Unit | K::None | K::Bool(_) | K::Int(_) | K::Float(_) | K::String(_) | K::Bytes(_) => Ok(()),
             K::Literal(IrLiteral::StaticStr(_)) => Ok(()),
 
             // Const-to-const references
             K::Var { .. } => Ok(()),
 
             // Unary / binary operations (operands must be const-safe)
-            K::UnaryOp { operand, .. } => self.validate_const_expr_kind(&operand.kind),
+            K::UnaryOp { operand, .. } => Self::validate_const_expr_kind(&operand.kind),
             K::BinOp { left, right, .. } => {
-                self.validate_const_expr_kind(&left.kind)?;
-                self.validate_const_expr_kind(&right.kind)
+                Self::validate_const_expr_kind(&left.kind)?;
+                Self::validate_const_expr_kind(&right.kind)
             }
 
             // Collections: validate elements (and key/value pairs)
             K::Tuple(items) | K::List(items) | K::Set(items) => {
                 for item in items {
-                    self.validate_const_expr_kind(&item.kind)?;
+                    Self::validate_const_expr_kind(&item.kind)?;
                 }
                 Ok(())
             }
             K::Dict(pairs) => {
                 for (k, v) in pairs {
-                    self.validate_const_expr_kind(&k.kind)?;
-                    self.validate_const_expr_kind(&v.kind)?;
+                    Self::validate_const_expr_kind(&k.kind)?;
+                    Self::validate_const_expr_kind(&v.kind)?;
                 }
                 Ok(())
             }
@@ -171,9 +151,7 @@ impl<'a> IrEmitter<'a> {
         match &expr.kind {
             IrExprKind::String(s) => Some(s.clone()),
             IrExprKind::Literal(IrLiteral::StaticStr(s)) => Some(s.clone()),
-            IrExprKind::Var { name, .. } => {
-                Self::resolve_static_str_const(name, const_exprs, visiting, cache)
-            }
+            IrExprKind::Var { name, .. } => Self::resolve_static_str_const(name, const_exprs, visiting, cache),
             IrExprKind::BinOp {
                 op: BinOp::Add,
                 left,

@@ -140,12 +140,7 @@ impl TypeChecker {
     /// For enums, `Result`, and `Option`, verifies every variant is handled. Wildcards
     /// (`_`) satisfy all remaining cases. Emits a [`non_exhaustive_match`](errors::non_exhaustive_match)
     /// error if patterns are missing.
-    fn check_match_exhaustiveness(
-        &mut self,
-        subject_ty: &ResolvedType,
-        arms: &[Spanned<MatchArm>],
-        span: Span,
-    ) {
+    fn check_match_exhaustiveness(&mut self, subject_ty: &ResolvedType, arms: &[Spanned<MatchArm>], span: Span) {
         let variants = if let ResolvedType::Named(name) = subject_ty {
             if let Some(id) = self.symbols.lookup(name) {
                 if let Some(sym) = self.symbols.get(id) {
@@ -192,15 +187,10 @@ impl TypeChecker {
             }
 
             if !has_wildcard {
-                let missing: Vec<String> = all_variants
-                    .iter()
-                    .filter(|v| !covered.contains(*v))
-                    .cloned()
-                    .collect();
+                let missing: Vec<String> = all_variants.iter().filter(|v| !covered.contains(*v)).cloned().collect();
 
                 if !missing.is_empty() {
-                    self.errors
-                        .push(errors::non_exhaustive_match(&missing, span));
+                    self.errors.push(errors::non_exhaustive_match(&missing, span));
                 }
             }
         }

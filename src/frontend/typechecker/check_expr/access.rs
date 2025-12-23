@@ -23,14 +23,9 @@ impl TypeChecker {
         match base_ty {
             ResolvedType::Generic(name, args) => match name.as_str() {
                 "List" if !args.is_empty() => {
-                    if !matches!(index_ty, ResolvedType::Int)
-                        && !matches!(index_ty, ResolvedType::Unknown)
-                    {
-                        self.errors.push(errors::index_type_mismatch(
-                            "int",
-                            &index_ty.to_string(),
-                            index.span,
-                        ));
+                    if !matches!(index_ty, ResolvedType::Int) && !matches!(index_ty, ResolvedType::Unknown) {
+                        self.errors
+                            .push(errors::index_type_mismatch("int", &index_ty.to_string(), index.span));
                     }
                     args[0].clone()
                 }
@@ -49,8 +44,7 @@ impl TypeChecker {
                     // `Tuple[T1, ...]` (and `tuple[...]` normalized) behaves like a tuple.
                     let elems = args;
                     let Expr::Literal(Literal::Int(raw_idx)) = &index.node else {
-                        self.errors
-                            .push(errors::tuple_index_requires_int_literal(index.span));
+                        self.errors.push(errors::tuple_index_requires_int_literal(index.span));
                         return ResolvedType::Unknown;
                     };
                     let len = elems.len() as i64;
@@ -59,17 +53,11 @@ impl TypeChecker {
                         idx += len;
                     }
                     if idx < 0 || idx >= len {
-                        self.errors.push(errors::tuple_index_out_of_bounds(
-                            *raw_idx,
-                            elems.len(),
-                            span,
-                        ));
+                        self.errors
+                            .push(errors::tuple_index_out_of_bounds(*raw_idx, elems.len(), span));
                         return ResolvedType::Unknown;
                     }
-                    elems
-                        .get(idx as usize)
-                        .cloned()
-                        .unwrap_or(ResolvedType::Unknown)
+                    elems.get(idx as usize).cloned().unwrap_or(ResolvedType::Unknown)
                 }
                 _ => ResolvedType::Unknown,
             },
@@ -77,8 +65,7 @@ impl TypeChecker {
             ResolvedType::Tuple(elems) => {
                 // Guardrail: tuple indexing must be an integer literal so we can bounds-check.
                 let Expr::Literal(Literal::Int(raw_idx)) = &index.node else {
-                    self.errors
-                        .push(errors::tuple_index_requires_int_literal(index.span));
+                    self.errors.push(errors::tuple_index_requires_int_literal(index.span));
                     return ResolvedType::Unknown;
                 };
                 let len = elems.len() as i64;
@@ -87,17 +74,11 @@ impl TypeChecker {
                     idx += len;
                 }
                 if idx < 0 || idx >= len {
-                    self.errors.push(errors::tuple_index_out_of_bounds(
-                        *raw_idx,
-                        elems.len(),
-                        span,
-                    ));
+                    self.errors
+                        .push(errors::tuple_index_out_of_bounds(*raw_idx, elems.len(), span));
                     return ResolvedType::Unknown;
                 }
-                elems
-                    .get(idx as usize)
-                    .cloned()
-                    .unwrap_or(ResolvedType::Unknown)
+                elems.get(idx as usize).cloned().unwrap_or(ResolvedType::Unknown)
             }
             _ => ResolvedType::Unknown,
         }
@@ -197,8 +178,7 @@ impl TypeChecker {
                         }
                     }
                 }
-                self.errors
-                    .push(errors::missing_field(type_name, field, span));
+                self.errors.push(errors::missing_field(type_name, field, span));
                 ResolvedType::Unknown
             }
             _ => {
@@ -260,8 +240,8 @@ impl TypeChecker {
         if matches!(base_ty, ResolvedType::Float) {
             match method {
                 // Math functions available on f64 in Rust
-                "sqrt" | "abs" | "floor" | "ceil" | "round" | "sin" | "cos" | "tan" | "exp"
-                | "ln" | "log2" | "log10" => return ResolvedType::Float,
+                "sqrt" | "abs" | "floor" | "ceil" | "round" | "sin" | "cos" | "tan" | "exp" | "ln" | "log2"
+                | "log10" => return ResolvedType::Float,
                 "is_nan" | "is_infinite" | "is_finite" => return ResolvedType::Bool,
                 "powi" => return ResolvedType::Float, // float.powi(int) -> float
                 "powf" => return ResolvedType::Float, // float.powf(float) -> float
@@ -319,11 +299,8 @@ impl TypeChecker {
                     "append" => {
                         if let Some(arg0) = arg_types.first() {
                             if !self.types_compatible(arg0, &elem) {
-                                self.errors.push(errors::type_mismatch(
-                                    &elem.to_string(),
-                                    &arg0.to_string(),
-                                    span,
-                                ));
+                                self.errors
+                                    .push(errors::type_mismatch(&elem.to_string(), &arg0.to_string(), span));
                             }
                         }
                         return ResolvedType::Unit;
@@ -419,9 +396,7 @@ impl TypeChecker {
                                     if let Some(tid) = self.symbols.lookup(trait_name) {
                                         if let Some(tsym) = self.symbols.get(tid) {
                                             if let SymbolKind::Trait(trait_info) = &tsym.kind {
-                                                if let Some(method_info) =
-                                                    trait_info.methods.get(method)
-                                                {
+                                                if let Some(method_info) = trait_info.methods.get(method) {
                                                     return method_info.return_type.clone();
                                                 }
                                             }
@@ -457,8 +432,8 @@ impl TypeChecker {
         // the checker, be permissive and do not error on unknown methods.
         if let ResolvedType::Generic(name, _args) = &base_ty {
             match name.as_str() {
-                "Mutex" | "RwLock" | "Semaphore" | "Barrier" | "Result" | "Option" | "HashMap"
-                | "Vec" | "List" | "Tuple" => {
+                "Mutex" | "RwLock" | "Semaphore" | "Barrier" | "Result" | "Option" | "HashMap" | "Vec" | "List"
+                | "Tuple" => {
                     return ResolvedType::Unknown;
                 }
                 _ => {}
@@ -468,10 +443,8 @@ impl TypeChecker {
         // Guardrail: don't silently return Unknown for missing methods on known user types.
         // For unknown/external types we returned Unknown above without error.
         let base_name_str = base_ty.to_string();
-        let skip_error_for_known_runtime = matches!(
-            base_name_str.as_str(),
-            "Mutex" | "RwLock" | "Semaphore" | "Barrier"
-        );
+        let skip_error_for_known_runtime =
+            matches!(base_name_str.as_str(), "Mutex" | "RwLock" | "Semaphore" | "Barrier");
         if !(matches!(base_ty, ResolvedType::Named(ref n) if self.symbols.lookup(n).is_none())
             || skip_error_for_known_runtime)
         {

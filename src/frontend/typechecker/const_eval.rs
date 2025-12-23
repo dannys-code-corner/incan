@@ -59,9 +59,7 @@ impl TypeChecker {
         };
 
         // Publish classification for downstream stages.
-        self.type_info
-            .const_kinds
-            .insert(konst.name.clone(), result.kind);
+        self.type_info.const_kinds.insert(konst.name.clone(), result.kind);
         // Record the root initializer type so lowering/codegen can use it.
         self.record_expr_type(konst.value.span, result.ty.clone());
 
@@ -95,11 +93,7 @@ impl TypeChecker {
         }
     }
 
-    fn eval_const_by_name(
-        &mut self,
-        name: &str,
-        stack: &mut Vec<String>,
-    ) -> Option<ConstEvalResult> {
+    fn eval_const_by_name(&mut self, name: &str, stack: &mut Vec<String>) -> Option<ConstEvalResult> {
         if let Some(res) = self.const_eval_cache.get(name).cloned() {
             return Some(res);
         }
@@ -116,11 +110,7 @@ impl TypeChecker {
                 let mut cycle = stack.clone();
                 cycle.push(name.to_string());
                 let cycle_str = cycle.join(" -> ");
-                let span = self
-                    .const_decls
-                    .get(name)
-                    .map(|(_, s)| *s)
-                    .unwrap_or_default();
+                let span = self.const_decls.get(name).map(|(_, s)| *s).unwrap_or_default();
                 self.errors.push(CompileError::type_error(
                     format!("Const dependency cycle detected: {}", cycle_str),
                     span,
@@ -131,8 +121,7 @@ impl TypeChecker {
         }
 
         let Some((decl, decl_span)) = self.const_decls.get(name).cloned() else {
-            self.errors
-                .push(errors::unknown_symbol(name, Span::default()));
+            self.errors.push(errors::unknown_symbol(name, Span::default()));
             return None;
         };
 
@@ -140,16 +129,12 @@ impl TypeChecker {
             .insert(name.to_string(), ConstEvalState::InProgress);
         stack.push(name.to_string());
 
-        let expected = decl
-            .ty
-            .as_ref()
-            .map(|t| resolve_type(&t.node, &self.symbols));
+        let expected = decl.ty.as_ref().map(|t| resolve_type(&t.node, &self.symbols));
         let expected = expected.map(|t| self.freeze_const_annotation(t));
         let result = self.eval_const_expr(&decl.value, expected.as_ref(), stack, decl_span);
 
         stack.pop();
-        self.const_eval_state
-            .insert(name.to_string(), ConstEvalState::Done);
+        self.const_eval_state.insert(name.to_string(), ConstEvalState::Done);
 
         if let Some(res) = &result {
             self.const_eval_cache.insert(name.to_string(), res.clone());
@@ -166,17 +151,12 @@ impl TypeChecker {
         decl_span: Span,
     ) -> Option<ConstEvalResult> {
         match &expr.node {
-            Expr::Literal(lit) => {
-                Some(self.eval_const_literal(lit, expected, expr.span, decl_span))
-            }
+            Expr::Literal(lit) => Some(self.eval_const_literal(lit, expected, expr.span, decl_span)),
             Expr::Ident(name) => {
                 // Only other consts are allowed in const initializers.
                 if !self.const_decls.contains_key(name) {
                     self.errors.push(CompileError::type_error(
-                        format!(
-                            "Non-const name '{}' is not allowed in a const initializer",
-                            name
-                        ),
+                        format!("Non-const name '{}' is not allowed in a const initializer", name),
                         expr.span,
                     ));
                     return None;
@@ -203,10 +183,7 @@ impl TypeChecker {
                 match op {
                     UnaryOp::Neg => {
                         if matches!(r.ty, ResolvedType::Int | ResolvedType::Float) {
-                            Some(ConstEvalResult {
-                                ty: r.ty,
-                                kind: r.kind,
-                            })
+                            Some(ConstEvalResult { ty: r.ty, kind: r.kind })
                         } else {
                             self.errors.push(CompileError::type_error(
                                 format!("Unary '-' is not supported for type '{}'", r.ty),
@@ -237,21 +214,13 @@ impl TypeChecker {
 
                 let (result_ty, result_kind) = match op {
                     // Numeric ops
-                    BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::Div
-                    | BinaryOp::Mod
-                    | BinaryOp::Pow => {
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
                         // Special-case string concatenation for frozen strings
                         if matches!(op, BinaryOp::Add)
                             && matches!(l.ty, ResolvedType::Named(ref n) if n == "FrozenStr")
                             && matches!(r.ty, ResolvedType::Named(ref n) if n == "FrozenStr")
                         {
-                            (
-                                ResolvedType::Named("FrozenStr".to_string()),
-                                ConstKind::Frozen,
-                            )
+                            (ResolvedType::Named("FrozenStr".to_string()), ConstKind::Frozen)
                         } else if matches!(l.ty, ResolvedType::Int | ResolvedType::Float)
                             && self.types_compatible(&r.ty, &l.ty)
                         {
@@ -268,15 +237,11 @@ impl TypeChecker {
                         }
                     }
                     // Comparisons always yield bool
-                    BinaryOp::Eq
-                    | BinaryOp::NotEq
-                    | BinaryOp::Lt
-                    | BinaryOp::Gt
-                    | BinaryOp::LtEq
-                    | BinaryOp::GtEq => (ResolvedType::Bool, ConstKind::RustNative),
+                    BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => {
+                        (ResolvedType::Bool, ConstKind::RustNative)
+                    }
                     BinaryOp::And | BinaryOp::Or => {
-                        if matches!(l.ty, ResolvedType::Bool) && matches!(r.ty, ResolvedType::Bool)
-                        {
+                        if matches!(l.ty, ResolvedType::Bool) && matches!(r.ty, ResolvedType::Bool) {
                             (ResolvedType::Bool, ConstKind::RustNative)
                         } else {
                             self.errors.push(CompileError::type_error(
@@ -291,10 +256,7 @@ impl TypeChecker {
                     }
                     BinaryOp::In | BinaryOp::NotIn | BinaryOp::Is => {
                         self.errors.push(CompileError::type_error(
-                            format!(
-                                "Operator '{}' is not allowed inside const initializers (phase 1)",
-                                op
-                            ),
+                            format!("Operator '{}' is not allowed inside const initializers (phase 1)", op),
                             expr.span,
                         ));
                         return None;
@@ -308,11 +270,7 @@ impl TypeChecker {
             }
             Expr::List(items) => {
                 let elem_expected = expected.and_then(|t| match t {
-                    ResolvedType::Generic(name, args)
-                        if name == "FrozenList" && !args.is_empty() =>
-                    {
-                        Some(&args[0])
-                    }
+                    ResolvedType::Generic(name, args) if name == "FrozenList" && !args.is_empty() => Some(&args[0]),
                     _ => None,
                 });
 
@@ -329,8 +287,7 @@ impl TypeChecker {
 
                 if items.is_empty() && matches!(elem_ty, ResolvedType::Unknown) {
                     self.errors.push(CompileError::type_error(
-                        "Cannot infer type for empty const list; annotate as FrozenList[T]"
-                            .to_string(),
+                        "Cannot infer type for empty const list; annotate as FrozenList[T]".to_string(),
                         expr.span,
                     ));
                 }
@@ -342,11 +299,7 @@ impl TypeChecker {
             }
             Expr::Set(items) => {
                 let elem_expected = expected.and_then(|t| match t {
-                    ResolvedType::Generic(name, args)
-                        if name == "FrozenSet" && !args.is_empty() =>
-                    {
-                        Some(&args[0])
-                    }
+                    ResolvedType::Generic(name, args) if name == "FrozenSet" && !args.is_empty() => Some(&args[0]),
                     _ => None,
                 });
 
@@ -362,8 +315,7 @@ impl TypeChecker {
 
                 if items.is_empty() && matches!(elem_ty, ResolvedType::Unknown) {
                     self.errors.push(CompileError::type_error(
-                        "Cannot infer type for empty const set; annotate as FrozenSet[T]"
-                            .to_string(),
+                        "Cannot infer type for empty const set; annotate as FrozenSet[T]".to_string(),
                         expr.span,
                     ));
                 }
@@ -375,9 +327,7 @@ impl TypeChecker {
             }
             Expr::Dict(pairs) => {
                 let (k_expected, v_expected) = match expected {
-                    Some(ResolvedType::Generic(name, args))
-                        if name == "FrozenDict" && args.len() >= 2 =>
-                    {
+                    Some(ResolvedType::Generic(name, args)) if name == "FrozenDict" && args.len() >= 2 => {
                         (Some(&args[0]), Some(&args[1]))
                     }
                     _ => (None, None),
@@ -400,12 +350,10 @@ impl TypeChecker {
                 };
 
                 if pairs.is_empty()
-                    && (matches!(key_ty, ResolvedType::Unknown)
-                        || matches!(val_ty, ResolvedType::Unknown))
+                    && (matches!(key_ty, ResolvedType::Unknown) || matches!(val_ty, ResolvedType::Unknown))
                 {
                     self.errors.push(CompileError::type_error(
-                        "Cannot infer type for empty const dict; annotate as FrozenDict[K, V]"
-                            .to_string(),
+                        "Cannot infer type for empty const dict; annotate as FrozenDict[K, V]".to_string(),
                         expr.span,
                     ));
                 }
@@ -483,8 +431,7 @@ impl TypeChecker {
                 let ty = expected.cloned().unwrap_or(ResolvedType::Unknown);
                 if matches!(ty, ResolvedType::Unknown) {
                     self.errors.push(CompileError::type_error(
-                        "Cannot infer type for None in const initializer; add an explicit type annotation"
-                            .to_string(),
+                        "Cannot infer type for None in const initializer; add an explicit type annotation".to_string(),
                         span,
                     ));
                 }

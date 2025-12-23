@@ -60,10 +60,7 @@ impl AstLowering {
                         .collect(),
                 ),
                 // Other generics fall back to regular lowering
-                _ => IrType::NamedGeneric(
-                    base.clone(),
-                    params.iter().map(|p| self.lower_type(&p.node)).collect(),
-                ),
+                _ => IrType::NamedGeneric(base.clone(), params.iter().map(|p| self.lower_type(&p.node)).collect()),
             },
             // Delegate function/tuple/unit/self handling to regular lowering
             other => self.lower_type(other),
@@ -127,23 +124,18 @@ impl AstLowering {
                             .unwrap_or(IrType::Unknown),
                     ),
                 ),
-                "Tuple" | "tuple" => {
-                    IrType::Tuple(args.iter().map(|t| self.lower_resolved_type(t)).collect())
-                }
+                "Tuple" | "tuple" => IrType::Tuple(args.iter().map(|t| self.lower_resolved_type(t)).collect()),
                 // RFC 008 frozen types (generic).
-                "FrozenList" | "FrozenSet" | "FrozenDict" => IrType::NamedGeneric(
-                    name.clone(),
-                    args.iter().map(|t| self.lower_resolved_type(t)).collect(),
-                ),
+                "FrozenList" | "FrozenSet" | "FrozenDict" => {
+                    IrType::NamedGeneric(name.clone(), args.iter().map(|t| self.lower_resolved_type(t)).collect())
+                }
                 _ => IrType::Struct(name.clone()),
             },
             ResolvedType::Function(params, ret) => IrType::Function {
                 params: params.iter().map(|p| self.lower_resolved_type(p)).collect(),
                 ret: Box::new(self.lower_resolved_type(ret)),
             },
-            ResolvedType::Tuple(items) => {
-                IrType::Tuple(items.iter().map(|t| self.lower_resolved_type(t)).collect())
-            }
+            ResolvedType::Tuple(items) => IrType::Tuple(items.iter().map(|t| self.lower_resolved_type(t)).collect()),
             ResolvedType::TypeVar(name) => IrType::Generic(name.clone()),
             ResolvedType::SelfType => IrType::Unknown,
             ResolvedType::Unknown => IrType::Unknown,
@@ -224,22 +216,15 @@ impl AstLowering {
                             .unwrap_or(IrType::Unknown),
                     ),
                 ),
-                "Tuple" | "tuple" => {
-                    IrType::Tuple(params.iter().map(|p| self.lower_type(&p.node)).collect())
-                }
-                _ => IrType::NamedGeneric(
-                    base.clone(),
-                    params.iter().map(|p| self.lower_type(&p.node)).collect(),
-                ),
+                "Tuple" | "tuple" => IrType::Tuple(params.iter().map(|p| self.lower_type(&p.node)).collect()),
+                _ => IrType::NamedGeneric(base.clone(), params.iter().map(|p| self.lower_type(&p.node)).collect()),
             },
             ast::Type::Function(params, ret) => IrType::Function {
                 params: params.iter().map(|p| self.lower_type(&p.node)).collect(),
                 ret: Box::new(self.lower_type(&ret.node)),
             },
             ast::Type::Unit => IrType::Unit,
-            ast::Type::Tuple(items) => {
-                IrType::Tuple(items.iter().map(|t| self.lower_type(&t.node)).collect())
-            }
+            ast::Type::Tuple(items) => IrType::Tuple(items.iter().map(|t| self.lower_type(&t.node)).collect()),
             ast::Type::SelfType => IrType::Unknown,
         }
     }

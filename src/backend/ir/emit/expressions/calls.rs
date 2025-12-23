@@ -86,9 +86,7 @@ impl<'a> IrEmitter<'a> {
                     ConversionContext::IncanFunctionArg
                 };
 
-                let target_ty = function_sig
-                    .and_then(|sig| sig.params.get(idx))
-                    .map(|param| &param.ty);
+                let target_ty = function_sig.and_then(|sig| sig.params.get(idx)).map(|param| &param.ty);
 
                 let conversion = determine_conversion(a, target_ty, context);
                 Ok(conversion.apply(emitted))

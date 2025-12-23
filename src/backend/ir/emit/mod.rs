@@ -122,12 +122,11 @@ impl<'a> IrEmitter<'a> {
         match name {
             "self" | "Self" => name.to_string(),
             // Strict + reserved keywords
-            "as" | "break" | "const" | "continue" | "crate" | "else" | "enum" | "extern"
-            | "false" | "fn" | "for" | "if" | "impl" | "in" | "let" | "loop" | "match" | "mod"
-            | "move" | "mut" | "pub" | "ref" | "return" | "static" | "struct" | "super"
-            | "trait" | "true" | "type" | "unsafe" | "use" | "where" | "while" | "async"
-            | "await" | "dyn" | "abstract" | "become" | "box" | "do" | "final" | "macro"
-            | "override" | "priv" | "typeof" | "unsized" | "virtual" | "yield" | "try" => {
+            "as" | "break" | "const" | "continue" | "crate" | "else" | "enum" | "extern" | "false" | "fn" | "for"
+            | "if" | "impl" | "in" | "let" | "loop" | "match" | "mod" | "move" | "mut" | "pub" | "ref" | "return"
+            | "static" | "struct" | "super" | "trait" | "true" | "type" | "unsafe" | "use" | "where" | "while"
+            | "async" | "await" | "dyn" | "abstract" | "become" | "box" | "do" | "final" | "macro" | "override"
+            | "priv" | "typeof" | "unsized" | "virtual" | "yield" | "try" => {
                 format!("r#{}", name)
             }
             _ => name.to_string(),

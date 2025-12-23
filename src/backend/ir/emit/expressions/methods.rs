@@ -32,11 +32,7 @@ impl<'a> IrEmitter<'a> {
     /// - When we have stronger information (e.g. enum variant registries), prefer that over
     ///   heuristics.
     fn is_title_case_type_name(name: &str) -> bool {
-        let has_upper = name
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_uppercase())
-            .unwrap_or(false);
+        let has_upper = name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false);
         let has_lower = name.chars().any(|c| c.is_ascii_lowercase());
         has_upper && has_lower
     }
@@ -362,20 +358,14 @@ impl<'a> IrEmitter<'a> {
             if Self::is_title_case_type_name(name) {
                 let type_ident = format_ident!("{}", name);
                 let m = format_ident!("{}", method);
-                let arg_tokens: Vec<TokenStream> = args
-                    .iter()
-                    .map(|a| self.emit_expr(a))
-                    .collect::<Result<_, _>>()?;
+                let arg_tokens: Vec<TokenStream> = args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?;
                 return Ok(quote! { #type_ident::#m(#(#arg_tokens),*) });
             }
         }
 
         // Regular method call
         let m = format_ident!("{}", method);
-        let arg_tokens: Vec<TokenStream> = args
-            .iter()
-            .map(|a| self.emit_expr(a))
-            .collect::<Result<_, _>>()?;
+        let arg_tokens: Vec<TokenStream> = args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?;
         Ok(quote! { #r.#m(#(#arg_tokens),*) })
     }
 
@@ -387,9 +377,7 @@ impl<'a> IrEmitter<'a> {
         args: &[TypedExpr],
     ) -> Result<TokenStream, EmitError> {
         let variant_key = (type_name.to_string(), variant.to_string());
-        let arg_tokens: Vec<TokenStream> = if let Some(fields) =
-            self.enum_variant_fields.get(&variant_key)
-        {
+        let arg_tokens: Vec<TokenStream> = if let Some(fields) = self.enum_variant_fields.get(&variant_key) {
             match fields {
                 super::super::super::decl::VariantFields::Unit => Vec::new(),
                 super::super::super::decl::VariantFields::Tuple(field_tys) => args
@@ -397,8 +385,7 @@ impl<'a> IrEmitter<'a> {
                     .zip(field_tys.iter())
                     .map(|(a, ty)| {
                         let emitted = self.emit_expr(a)?;
-                        let conv =
-                            determine_conversion(a, Some(ty), ConversionContext::IncanFunctionArg);
+                        let conv = determine_conversion(a, Some(ty), ConversionContext::IncanFunctionArg);
                         Ok(conv.apply(emitted))
                     })
                     .collect::<Result<_, _>>()?,
@@ -406,8 +393,7 @@ impl<'a> IrEmitter<'a> {
                     .iter()
                     .map(|a| {
                         let emitted = self.emit_expr(a)?;
-                        let conv =
-                            determine_conversion(a, None, ConversionContext::IncanFunctionArg);
+                        let conv = determine_conversion(a, None, ConversionContext::IncanFunctionArg);
                         Ok(conv.apply(emitted))
                     })
                     .collect::<Result<_, _>>()?,
@@ -416,11 +402,7 @@ impl<'a> IrEmitter<'a> {
             args.iter()
                 .map(|a| {
                     let emitted = self.emit_expr(a)?;
-                    let conv = determine_conversion(
-                        a,
-                        Some(&IrType::String),
-                        ConversionContext::IncanFunctionArg,
-                    );
+                    let conv = determine_conversion(a, Some(&IrType::String), ConversionContext::IncanFunctionArg);
                     Ok(conv.apply(emitted))
                 })
                 .collect::<Result<_, _>>()?

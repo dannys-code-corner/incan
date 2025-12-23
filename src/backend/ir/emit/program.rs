@@ -81,9 +81,7 @@ impl ImportTracker {
                     }
                 }
             }
-            IrStmtKind::While {
-                condition, body, ..
-            } => {
+            IrStmtKind::While { condition, body, .. } => {
                 self.scan_expr(condition);
                 for s in body {
                     self.scan_stmt(s);
@@ -188,8 +186,7 @@ impl<'a> IrEmitter<'a> {
         for decl in &program.declarations {
             if let IrDeclKind::Struct(s) = &decl.kind {
                 if !s.derives.is_empty() {
-                    self.struct_derives
-                        .insert(s.name.clone(), s.derives.clone());
+                    self.struct_derives.insert(s.name.clone(), s.derives.clone());
                 }
                 for field in &s.fields {
                     self.struct_field_types
@@ -203,10 +200,7 @@ impl<'a> IrEmitter<'a> {
                 }
             }
             // Collect static-str const initializer expressions for later resolution.
-            if let IrDeclKind::Const {
-                name, ty, value, ..
-            } = &decl.kind
-            {
+            if let IrDeclKind::Const { name, ty, value, .. } = &decl.kind {
                 if matches!(ty, IrType::StaticStr) {
                     static_str_const_exprs.insert(name.clone(), value.clone());
                 }
@@ -218,12 +212,7 @@ impl<'a> IrEmitter<'a> {
             let mut visiting: HashSet<String> = HashSet::new();
             let mut cache: HashMap<String, String> = HashMap::new();
             for name in static_str_const_exprs.keys() {
-                let _ = Self::resolve_static_str_const(
-                    name,
-                    &static_str_const_exprs,
-                    &mut visiting,
-                    &mut cache,
-                );
+                let _ = Self::resolve_static_str_const(name, &static_str_const_exprs, &mut visiting, &mut cache);
             }
             self.const_string_literals.extend(cache);
         }

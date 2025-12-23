@@ -46,9 +46,7 @@ impl ModuleCollector {
 
     /// Load the entry file and all its dependencies
     pub fn collect(&mut self, entry_file: &Path) -> Result<Vec<ResolvedModule>, Vec<CompileError>> {
-        let canonical = entry_file
-            .canonicalize()
-            .unwrap_or_else(|_| entry_file.to_path_buf());
+        let canonical = entry_file.canonicalize().unwrap_or_else(|_| entry_file.to_path_buf());
 
         self.load_module(&canonical)?;
 
@@ -138,14 +136,10 @@ impl ModuleCollector {
 /// This is used by both the CLI and the LSP to typecheck multi-file projects.
 pub fn resolve_import_path(base_dir: &Path, import: &ImportDecl) -> Option<PathBuf> {
     let (path, is_absolute, parent_levels) = match &import.kind {
-        ImportKind::Module(p) if !p.segments.is_empty() => {
-            (p.segments.clone(), p.is_absolute, p.parent_levels)
+        ImportKind::Module(p) if !p.segments.is_empty() => (p.segments.clone(), p.is_absolute, p.parent_levels),
+        ImportKind::From { module, .. } if !module.segments.is_empty() => {
+            (module.segments.clone(), module.is_absolute, module.parent_levels)
         }
-        ImportKind::From { module, .. } if !module.segments.is_empty() => (
-            module.segments.clone(),
-            module.is_absolute,
-            module.parent_levels,
-        ),
         // Rust crate imports don't resolve to Incan files
         ImportKind::RustCrate { .. } | ImportKind::RustFrom { .. } => return None,
         ImportKind::Python(_) | ImportKind::Module(_) | ImportKind::From { .. } => return None,
@@ -268,19 +262,15 @@ pub enum ExportedSymbol {
     Trait(String),
     Function(String),
     Const(String),
-    Variant {
-        enum_name: String,
-        variant_name: String,
-    },
+    Variant { enum_name: String, variant_name: String },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::frontend::ast::{
-        ClassDecl, ConstDecl, Declaration, EnumDecl, Expr, FunctionDecl, ImportDecl, ImportKind,
-        ImportPath, Literal, ModelDecl, NewtypeDecl, Program, Span, Spanned, TraitDecl, Type,
-        VariantDecl,
+        ClassDecl, ConstDecl, Declaration, EnumDecl, Expr, FunctionDecl, ImportDecl, ImportKind, ImportPath, Literal,
+        ModelDecl, NewtypeDecl, Program, Span, Spanned, TraitDecl, Type, VariantDecl,
     };
 
     fn make_spanned<T>(node: T) -> Spanned<T> {
@@ -316,9 +306,7 @@ mod tests {
 
     #[test]
     fn test_exported_symbols_empty_program() {
-        let program = Program {
-            declarations: vec![],
-        };
+        let program = Program { declarations: vec![] };
         let exports = exported_symbols(&program);
         assert!(exports.is_empty());
     }
@@ -490,9 +478,7 @@ mod tests {
     #[test]
     fn test_exported_symbols_ignores_docstrings() {
         let program = Program {
-            declarations: vec![make_spanned(Declaration::Docstring(
-                "Module documentation".to_string(),
-            ))],
+            declarations: vec![make_spanned(Declaration::Docstring("Module documentation".to_string()))],
         };
         let exports = exported_symbols(&program);
         assert!(exports.is_empty());
@@ -602,9 +588,7 @@ mod tests {
         let module = ResolvedModule {
             path: std::path::PathBuf::from("/test/module.incn"),
             source: "fn main(): ()".to_string(),
-            ast: Program {
-                declarations: vec![],
-            },
+            ast: Program { declarations: vec![] },
         };
         let debug_str = format!("{:?}", module);
         assert!(debug_str.contains("ResolvedModule"));

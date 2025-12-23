@@ -39,10 +39,7 @@ fn positional_idents(args: &[DecoratorArg]) -> impl Iterator<Item = (&str, Span)
 // ============================================================================
 
 /// Collect methods from method declarations into a HashMap.
-fn collect_methods(
-    methods: &[Spanned<MethodDecl>],
-    symbols: &SymbolTable,
-) -> HashMap<String, MethodInfo> {
+fn collect_methods(methods: &[Spanned<MethodDecl>], symbols: &SymbolTable) -> HashMap<String, MethodInfo> {
     methods
         .iter()
         .map(|m| {
@@ -68,10 +65,7 @@ fn collect_methods(
 }
 
 /// Collect fields from field declarations into a HashMap.
-fn collect_fields(
-    fields: &[Spanned<FieldDecl>],
-    symbols: &SymbolTable,
-) -> HashMap<String, FieldInfo> {
+fn collect_fields(fields: &[Spanned<FieldDecl>], symbols: &SymbolTable) -> HashMap<String, FieldInfo> {
     fields
         .iter()
         .map(|f| {
@@ -87,11 +81,7 @@ fn collect_fields(
 }
 
 /// Inject to_json/from_json methods based on Serialize/Deserialize derives.
-fn inject_json_methods(
-    methods: &mut HashMap<String, MethodInfo>,
-    type_name: &str,
-    derives: &[String],
-) {
+fn inject_json_methods(methods: &mut HashMap<String, MethodInfo>, type_name: &str, derives: &[String]) {
     if derives.iter().any(|d| d == "Serialize") {
         methods.insert(
             "to_json".to_string(),
@@ -112,10 +102,7 @@ fn inject_json_methods(
                 params: vec![("json_str".to_string(), ResolvedType::Str)],
                 return_type: ResolvedType::Generic(
                     "Result".to_string(),
-                    vec![
-                        ResolvedType::Named(type_name.to_string()),
-                        ResolvedType::Str,
-                    ],
+                    vec![ResolvedType::Named(type_name.to_string()), ResolvedType::Str],
                 ),
                 is_async: false,
                 has_body: true,
@@ -153,8 +140,7 @@ impl TypeChecker {
     /// Note: the initializer is validated in the second pass.
     fn collect_const(&mut self, konst: &ConstDecl, span: Span) {
         // Remember for const-eval (cycle detection / evaluation).
-        self.const_decls
-            .insert(konst.name.clone(), (konst.clone(), span));
+        self.const_decls.insert(konst.name.clone(), (konst.clone(), span));
 
         // Best-effort type from annotation; refined during const-eval in second pass.
         let ty = konst
@@ -194,12 +180,10 @@ impl TypeChecker {
     fn collect_import(&mut self, import: &ImportDecl, span: Span) {
         match &import.kind {
             ImportKind::Module(path) => {
-                let name = import.alias.clone().unwrap_or_else(|| {
-                    path.segments
-                        .last()
-                        .cloned()
-                        .unwrap_or_else(|| "module".to_string())
-                });
+                let name = import
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| path.segments.last().cloned().unwrap_or_else(|| "module".to_string()));
                 self.define_import_symbol(name, path.segments.clone(), false, span);
             }
             ImportKind::From { module, items } => {
@@ -245,20 +229,11 @@ impl TypeChecker {
     }
 
     /// Define a symbol for a Rust crate import, skipping if a real definition exists.
-    fn define_rust_import_symbol(
-        &mut self,
-        name: Ident,
-        crate_name: String,
-        path: Vec<Ident>,
-        span: Span,
-    ) {
+    fn define_rust_import_symbol(&mut self, name: Ident, crate_name: String, path: Vec<Ident>, span: Span) {
         if let Some(id) = self.symbols.lookup(&name) {
             if let Some(sym) = self.symbols.get(id) {
                 match &sym.kind {
-                    SymbolKind::Type(_)
-                    | SymbolKind::Function(_)
-                    | SymbolKind::Trait(_)
-                    | SymbolKind::Variant(_) => {
+                    SymbolKind::Type(_) | SymbolKind::Function(_) | SymbolKind::Trait(_) | SymbolKind::Variant(_) => {
                         return;
                     }
                     _ => {}
@@ -282,10 +257,7 @@ impl TypeChecker {
         if let Some(id) = self.symbols.lookup(&name) {
             if let Some(sym) = self.symbols.get(id) {
                 match &sym.kind {
-                    SymbolKind::Type(_)
-                    | SymbolKind::Function(_)
-                    | SymbolKind::Trait(_)
-                    | SymbolKind::Variant(_) => {
+                    SymbolKind::Type(_) | SymbolKind::Function(_) | SymbolKind::Trait(_) | SymbolKind::Variant(_) => {
                         // Already have a real definition, don't overwrite with Module placeholder
                         return;
                     }
@@ -430,8 +402,7 @@ impl TypeChecker {
 
         // Check if the name refers to a type/function (wrong usage)
         if let Some(kind_name) = self.lookup_symbol_kind(name) {
-            self.errors
-                .push(errors::derive_wrong_kind(name, kind_name, span));
+            self.errors.push(errors::derive_wrong_kind(name, kind_name, span));
         } else {
             self.errors.push(errors::unknown_derive(name, span));
         }
@@ -481,10 +452,7 @@ impl TypeChecker {
 
         self.symbols.define(Symbol {
             name: nt.name.clone(),
-            kind: SymbolKind::Type(TypeInfo::Newtype(NewtypeInfo {
-                underlying,
-                methods,
-            })),
+            kind: SymbolKind::Type(TypeInfo::Newtype(NewtypeInfo { underlying, methods })),
             span,
             scope: 0,
         });
@@ -529,12 +497,7 @@ impl TypeChecker {
         let params: Vec<_> = func
             .params
             .iter()
-            .map(|p| {
-                (
-                    p.node.name.clone(),
-                    resolve_type(&p.node.ty.node, &self.symbols),
-                )
-            })
+            .map(|p| (p.node.name.clone(), resolve_type(&p.node.ty.node, &self.symbols)))
             .collect();
         let return_type = resolve_type(&func.return_type.node, &self.symbols);
 

@@ -27,10 +27,7 @@ impl AstLowering {
     /// # Errors
     ///
     /// Returns `LoweringError` if any statement cannot be lowered.
-    pub(super) fn lower_statements(
-        &mut self,
-        stmts: &[Spanned<ast::Statement>],
-    ) -> Result<Vec<IrStmt>, LoweringError> {
+    pub(super) fn lower_statements(&mut self, stmts: &[Spanned<ast::Statement>]) -> Result<Vec<IrStmt>, LoweringError> {
         let mut result = Vec::new();
         for s in stmts {
             let stmt = self.lower_statement(&s.node)?;
@@ -62,10 +59,7 @@ impl AstLowering {
     /// # Errors
     ///
     /// Returns `LoweringError` if the statement cannot be lowered.
-    pub(super) fn lower_statement(
-        &mut self,
-        stmt: &ast::Statement,
-    ) -> Result<IrStmt, LoweringError> {
+    pub(super) fn lower_statement(&mut self, stmt: &ast::Statement) -> Result<IrStmt, LoweringError> {
         let kind = match stmt {
             ast::Statement::Expr(e) => IrStmtKind::Expr(self.lower_expr_spanned(e)?),
 
@@ -86,8 +80,7 @@ impl AstLowering {
                     ast::BindingKind::Inferred => {
                         // Check if the variable exists in ANY scope (innermost to outermost).
                         // This allows reassignment of outer scope variables from nested scopes.
-                        let var_exists_in_scope =
-                            self.scopes.iter().rev().any(|s| s.contains_key(&a.name));
+                        let var_exists_in_scope = self.scopes.iter().rev().any(|s| s.contains_key(&a.name));
 
                         if var_exists_in_scope {
                             let is_mut = self.mutable_vars.get(&a.name).copied().unwrap_or(false);
@@ -98,10 +91,7 @@ impl AstLowering {
                                 }));
                             } else {
                                 return Err(LoweringError {
-                                    message: format!(
-                                        "Cannot reassign immutable variable '{}'",
-                                        a.name
-                                    ),
+                                    message: format!("Cannot reassign immutable variable '{}'", a.name),
                                     span: IrSpan::default(),
                                 });
                             }
@@ -161,11 +151,9 @@ impl AstLowering {
                 value: self.lower_expr_spanned(&ia.value)?,
             },
 
-            ast::Statement::Return(opt) => IrStmtKind::Return(
-                opt.as_ref()
-                    .map(|e| self.lower_expr_spanned(e))
-                    .transpose()?,
-            ),
+            ast::Statement::Return(opt) => {
+                IrStmtKind::Return(opt.as_ref().map(|e| self.lower_expr_spanned(e)).transpose()?)
+            }
 
             ast::Statement::If(i) => {
                 // Lower elif branches as nested if-else in the else branch
@@ -248,9 +236,7 @@ impl AstLowering {
                 }
             }
 
-            ast::Statement::Pass => {
-                IrStmtKind::Expr(TypedExpr::new(IrExprKind::Unit, IrType::Unit))
-            }
+            ast::Statement::Pass => IrStmtKind::Expr(TypedExpr::new(IrExprKind::Unit, IrType::Unit)),
             ast::Statement::Break => IrStmtKind::Break(None),
             ast::Statement::Continue => IrStmtKind::Continue(None),
 
@@ -327,11 +313,7 @@ impl AstLowering {
                     let source_expr = TypedExpr::new(
                         IrExprKind::Var {
                             name: source.clone(),
-                            access: if ty.is_copy() {
-                                VarAccess::Copy
-                            } else {
-                                VarAccess::Move
-                            },
+                            access: if ty.is_copy() { VarAccess::Copy } else { VarAccess::Move },
                         },
                         ty.clone(),
                     );

@@ -93,11 +93,7 @@ impl<'a> IrEmitter<'a> {
     /// - Enum variant access (`Type.Variant` → `Type::Variant`)
     /// - Tuple field access (`tuple.0` → `tuple.0`)
     /// - Regular struct field access (`obj.field` → `obj.field`)
-    pub(in super::super) fn emit_field_expr(
-        &self,
-        object: &TypedExpr,
-        field: &str,
-    ) -> Result<TokenStream, EmitError> {
+    pub(in super::super) fn emit_field_expr(&self, object: &TypedExpr, field: &str) -> Result<TokenStream, EmitError> {
         let o = self.emit_expr(object)?;
 
         // Check if this is an enum variant access using the actual enum registry, not capitalization heuristics

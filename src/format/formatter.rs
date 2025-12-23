@@ -961,11 +961,7 @@ impl Formatter {
                     self.format_expr(&inner.node);
                 }
             }
-            Expr::Range {
-                start,
-                end,
-                inclusive,
-            } => {
+            Expr::Range { start, end, inclusive } => {
                 self.format_expr(&start.node);
                 if *inclusive {
                     self.writer.write("..=");

@@ -297,25 +297,15 @@ impl TypeChecker {
             (ResolvedType::Generic(n1, a1), ResolvedType::Generic(n2, a2)) => {
                 n1 == n2
                     && a1.len() == a2.len()
-                    && a1
-                        .iter()
-                        .zip(a2.iter())
-                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+                    && a1.iter().zip(a2.iter()).all(|(t1, t2)| self.types_compatible(t1, t2))
             }
             (ResolvedType::Function(p1, r1), ResolvedType::Function(p2, r2)) => {
                 p1.len() == p2.len()
-                    && p1
-                        .iter()
-                        .zip(p2.iter())
-                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+                    && p1.iter().zip(p2.iter()).all(|(t1, t2)| self.types_compatible(t1, t2))
                     && self.types_compatible(r1, r2)
             }
             (ResolvedType::Tuple(e1), ResolvedType::Tuple(e2)) => {
-                e1.len() == e2.len()
-                    && e1
-                        .iter()
-                        .zip(e2.iter())
-                        .all(|(t1, t2)| self.types_compatible(t1, t2))
+                e1.len() == e2.len() && e1.iter().zip(e2.iter()).all(|(t1, t2)| self.types_compatible(t1, t2))
             }
             _ => false,
         }

@@ -239,11 +239,7 @@ impl Conversion {
 /// ## Returns
 ///
 /// A [`Conversion`] strategy indicating what transformation (if any) to apply
-pub fn determine_conversion(
-    expr: &IrExpr,
-    target_ty: Option<&IrType>,
-    context: ConversionContext,
-) -> Conversion {
+pub fn determine_conversion(expr: &IrExpr, target_ty: Option<&IrType>, context: ConversionContext) -> Conversion {
     match context {
         ConversionContext::IncanFunctionArg => {
             // Incan functions expect owned values
@@ -264,18 +260,14 @@ pub fn determine_conversion(
                 }
 
                 // String variable to String param → .to_string() (might be &str)
-                (IrExprKind::Var { .. }, Some(IrType::String))
-                    if matches!(expr.ty, IrType::String) =>
-                {
+                (IrExprKind::Var { .. }, Some(IrType::String)) if matches!(expr.ty, IrType::String) => {
                     Conversion::ToString
                 }
                 // Variable with non-Copy type (List, Dict, custom structs) → .clone()
                 // This prevents move-after-use errors when the variable is needed later
                 (IrExprKind::Var { .. }, _) if !expr.ty.is_copy() => Conversion::Clone,
                 // Field access with String type → .clone() to avoid moving from struct
-                (IrExprKind::Field { .. }, _) if matches!(expr.ty, IrType::String) => {
-                    Conversion::Clone
-                }
+                (IrExprKind::Field { .. }, _) if matches!(expr.ty, IrType::String) => Conversion::Clone,
                 // Field access with non-Copy type (List, Dict, structs) → .clone()
                 (IrExprKind::Field { .. }, _) if !expr.ty.is_copy() => Conversion::Clone,
                 // Everything else passes as-is
@@ -291,9 +283,7 @@ pub fn determine_conversion(
                 (IrExprKind::String(_), _) => Conversion::ToString,
 
                 // String variable to String param → .to_string() (might be &str)
-                (IrExprKind::Var { .. }, Some(IrType::String))
-                    if matches!(expr.ty, IrType::String) =>
-                {
+                (IrExprKind::Var { .. }, Some(IrType::String)) if matches!(expr.ty, IrType::String) => {
                     Conversion::ToString
                 }
 

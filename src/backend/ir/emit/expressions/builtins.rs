@@ -131,9 +131,7 @@ impl<'a> IrEmitter<'a> {
                     let path = self.emit_expr(arg)?;
                     Ok(quote! { std::fs::read_to_string(#path) })
                 } else {
-                    Ok(
-                        quote! { Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "no path")) },
-                    )
+                    Ok(quote! { Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "no path")) })
                 }
             }
             BuiltinFn::WriteFile => {
@@ -142,9 +140,7 @@ impl<'a> IrEmitter<'a> {
                     let content = self.emit_expr(&args[1])?;
                     Ok(quote! { std::fs::write(#path, #content).map(|_| ()) })
                 } else {
-                    Ok(
-                        quote! { Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing args")) },
-                    )
+                    Ok(quote! { Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing args")) })
                 }
             }
             BuiltinFn::JsonStringify => {
@@ -158,9 +154,7 @@ impl<'a> IrEmitter<'a> {
             BuiltinFn::Sleep => {
                 if let Some(arg) = args.first() {
                     let duration_arg = self.emit_expr(arg)?;
-                    Ok(
-                        quote! { tokio::time::sleep(tokio::time::Duration::from_secs_f64(#duration_arg)) },
-                    )
+                    Ok(quote! { tokio::time::sleep(tokio::time::Duration::from_secs_f64(#duration_arg)) })
                 } else {
                     Ok(quote! { tokio::time::sleep(tokio::time::Duration::from_secs(0)) })
                 }
@@ -315,17 +309,9 @@ impl<'a> IrEmitter<'a> {
     }
 
     /// Emit a range() function call.
-    pub(in super::super) fn emit_range_call(
-        &self,
-        args: &[TypedExpr],
-    ) -> Result<Option<TokenStream>, EmitError> {
+    pub(in super::super) fn emit_range_call(&self, args: &[TypedExpr]) -> Result<Option<TokenStream>, EmitError> {
         if args.len() == 1 {
-            if let IrExprKind::Range {
-                start,
-                end,
-                inclusive,
-            } = &args[0].kind
-            {
+            if let IrExprKind::Range { start, end, inclusive } = &args[0].kind {
                 match (start, end, inclusive) {
                     (Some(s), Some(e), false) => {
                         let ss = self.emit_expr(s)?;

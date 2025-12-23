@@ -78,13 +78,8 @@ impl IncanLanguageServer {
 
         // Step 3: Type check (with multi-file import resolution)
         let mut checker = typechecker::TypeChecker::new();
-        let (deps, mut dep_summary_diags) = self
-            .collect_dependency_modules(uri, &ast, source, version)
-            .await;
-        let dep_refs: Vec<(&str, &Program)> = deps
-            .iter()
-            .map(|(name, program)| (name.as_str(), program))
-            .collect();
+        let (deps, mut dep_summary_diags) = self.collect_dependency_modules(uri, &ast, source, version).await;
+        let dep_refs: Vec<(&str, &Program)> = deps.iter().map(|(name, program)| (name.as_str(), program)).collect();
 
         if let Err(errors) = checker.check_with_imports(&ast, &dep_refs) {
             for error in &errors {
@@ -245,9 +240,7 @@ impl IncanLanguageServer {
             // Dependency parsed successfully: clear old dependency diagnostics if any.
             if let Some(u) = dep_uri.clone() {
                 let ver = dep_doc.map(|d| d.version);
-                self.client
-                    .publish_diagnostics(u.clone(), vec![], ver)
-                    .await;
+                self.client.publish_diagnostics(u.clone(), vec![], ver).await;
             }
 
             // Queue nested dependencies
@@ -272,12 +265,7 @@ impl IncanLanguageServer {
     }
 
     /// Find the symbol at a position in the AST
-    fn find_symbol_at_position(
-        &self,
-        ast: &Program,
-        source: &str,
-        position: Position,
-    ) -> Option<SymbolInfo> {
+    fn find_symbol_at_position(&self, ast: &Program, source: &str, position: Position) -> Option<SymbolInfo> {
         let offset = position_to_offset(source, position)?;
 
         for decl in &ast.declarations {
@@ -289,12 +277,7 @@ impl IncanLanguageServer {
         None
     }
 
-    fn find_in_declaration(
-        &self,
-        decl: &Declaration,
-        span: Span,
-        offset: usize,
-    ) -> Option<SymbolInfo> {
+    fn find_in_declaration(&self, decl: &Declaration, span: Span, offset: usize) -> Option<SymbolInfo> {
         match decl {
             Declaration::Const(konst) => {
                 if span.start <= offset && offset < span.end {
@@ -367,11 +350,7 @@ impl IncanLanguageServer {
                     return Some(SymbolInfo {
                         name: nt.name.clone(),
                         kind: "newtype".to_string(),
-                        detail: format!(
-                            "newtype {} = {}",
-                            nt.name,
-                            format_type(&nt.underlying.node)
-                        ),
+                        detail: format!("newtype {} = {}", nt.name, format_type(&nt.underlying.node)),
                         span,
                     });
                 }
@@ -477,9 +456,7 @@ impl LanguageServer for IncanLanguageServer {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 // Real-time diagnostics via text sync
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
-                )),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
                 // Hover support
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 // Go-to-definition
@@ -578,10 +555,7 @@ impl LanguageServer for IncanLanguageServer {
         Ok(None)
     }
 
-    async fn goto_definition(
-        &self,
-        params: GotoDefinitionParams,
-    ) -> Result<Option<GotoDefinitionResponse>> {
+    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
@@ -624,10 +598,9 @@ impl LanguageServer for IncanLanguageServer {
 
         // Add keywords
         let keywords = [
-            "def", "async", "await", "return", "if", "elif", "else", "match", "case", "for", "in",
-            "while", "let", "mut", "model", "class", "trait", "enum", "newtype", "import", "from",
-            "as", "with", "extends", "pub", "const", "True", "False", "None", "Ok", "Err", "Some",
-            "Result", "Option",
+            "def", "async", "await", "return", "if", "elif", "else", "match", "case", "for", "in", "while", "let",
+            "mut", "model", "class", "trait", "enum", "newtype", "import", "from", "as", "with", "extends", "pub",
+            "const", "True", "False", "None", "Ok", "Err", "Some", "Result", "Option",
         ];
 
         for kw in keywords {

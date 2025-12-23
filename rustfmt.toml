@@ -1,6 +1,7 @@
 # Incan Rustfmt Configuration
 # Using stable-only features for compatibility
 edition = "2024"
+max_width = 120
 
 # Note: The following features require nightly and are commented out:
 # group_imports = "StdExternalCrate"

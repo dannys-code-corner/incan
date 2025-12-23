@@ -49,8 +49,8 @@ pub use ir::{GenerationError, IrCodegen};
 
 // Project generation (public API)
 pub use project::{
-    CargoCommand, CompilationPlan, ExecutionResult, Executor, PlannedDirectory, PlannedFile,
-    ProjectGenerator, UnknownCrateError,
+    CargoCommand, CompilationPlan, ExecutionResult, Executor, PlannedDirectory, PlannedFile, ProjectGenerator,
+    UnknownCrateError,
 };
 
 // For tests that need to verify lowering behavior

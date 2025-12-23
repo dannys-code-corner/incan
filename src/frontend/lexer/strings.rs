@@ -162,10 +162,8 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        self.tokens.push(Token::new(
-            TokenKind::String(value),
-            Span::new(start, self.current_pos),
-        ));
+        self.tokens
+            .push(Token::new(TokenKind::String(value), Span::new(start, self.current_pos)));
     }
 
     pub(super) fn scan_byte_string(&mut self, start: usize, quote: char) {
@@ -229,10 +227,8 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        self.tokens.push(Token::new(
-            TokenKind::Bytes(value),
-            Span::new(start, self.current_pos),
-        ));
+        self.tokens
+            .push(Token::new(TokenKind::Bytes(value), Span::new(start, self.current_pos)));
     }
 
     pub(super) fn scan_fstring(&mut self, start: usize, quote: char) {

@@ -9,14 +9,11 @@ use incan::frontend::{lexer, parser, typechecker};
 fn compile_file(path: &Path) -> Result<(), Vec<String>> {
     let source = fs::read_to_string(path).map_err(|e| vec![e.to_string()])?;
 
-    let tokens = lexer::lex(&source)
-        .map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
+    let tokens = lexer::lex(&source).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
-    let ast = parser::parse(&tokens)
-        .map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
+    let ast = parser::parse(&tokens).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
-    typechecker::check(&ast)
-        .map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
+    typechecker::check(&ast).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
     Ok(())
 }
@@ -149,10 +146,7 @@ mod codegen_tests {
 
     fn rustc_compile_ok(source: &str) -> Result<(), String> {
         let mut dir = std::env::temp_dir();
-        let uniq = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let uniq = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         dir.push(format!("incan_bench_smoke_{}", uniq));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
@@ -191,10 +185,7 @@ mod codegen_tests {
         // Verify the generated code contains expected elements
         assert!(rust_code.contains("fn main()"), "Should have main function");
         assert!(rust_code.contains("println!"), "Should have println macro");
-        assert!(
-            rust_code.contains("Hello from Incan!"),
-            "Should have the message"
-        );
+        assert!(rust_code.contains("Hello from Incan!"), "Should have the message");
     }
 
     #[test]
@@ -255,8 +246,7 @@ mod codegen_tests {
 
         // Note: This test uses standalone rustc compilation, which can't access incan_stdlib/incan_derive.
         // Skip the compilation check if stdlib imports are present (models/classes with derives).
-        if rust_code.contains("use incan_stdlib::prelude") || rust_code.contains("use incan_derive")
-        {
+        if rust_code.contains("use incan_stdlib::prelude") || rust_code.contains("use incan_derive") {
             // Skip rustc compilation test for code that requires stdlib crates
             return;
         }
@@ -304,22 +294,13 @@ def main() -> None:
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("3.14159"), "PI const not emitted correctly");
-        assert!(
-            stdout.contains("Incan"),
-            "APP_NAME const not emitted correctly"
-        );
+        assert!(stdout.contains("Incan"), "APP_NAME const not emitted correctly");
         assert!(stdout.contains("42"), "MAGIC const not emitted correctly");
-        assert!(
-            stdout.contains("true"),
-            "ENABLED const not emitted correctly"
-        );
+        assert!(stdout.contains("true"), "ENABLED const not emitted correctly");
         assert!(stdout.contains("4"), "RAW_DATA length incorrect");
         assert!(stdout.contains("6"), "FROZEN_TEXT length incorrect");
         assert!(stdout.contains("5"), "NUMBERS length incorrect");
-        assert!(
-            stdout.contains("Hello World"),
-            "GREETING concat not working"
-        );
+        assert!(stdout.contains("Hello World"), "GREETING concat not working");
     }
 }
 

@@ -43,11 +43,7 @@ pub struct PreludeError {
 
 impl fmt::Display for PreludeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Error loading prelude file '{}': {}",
-            self.file, self.message
-        )
+        write!(f, "Error loading prelude file '{}': {}", self.file, self.message)
     }
 }
 
@@ -101,10 +97,7 @@ pub fn find_stdlib_dir() -> Option<PathBuf> {
 ///
 /// Returns `Ok(None)` if the file doesn't exist (optional file).
 /// Returns `Err` if the file exists but fails to parse (this is an error).
-pub fn parse_prelude_file(
-    stdlib_dir: &Path,
-    relative_path: &str,
-) -> Result<Option<ParsedModule>, PreludeError> {
+pub fn parse_prelude_file(stdlib_dir: &Path, relative_path: &str) -> Result<Option<ParsedModule>, PreludeError> {
     let path = stdlib_dir.join(relative_path);
     let path_display = path.display().to_string();
 

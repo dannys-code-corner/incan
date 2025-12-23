@@ -131,8 +131,7 @@ impl AstLowering {
                 self.class_decls.insert(c.name.clone(), c.clone());
             }
             if let ast::Declaration::Trait(ref t) = decl.node {
-                let method_names: Vec<String> =
-                    t.methods.iter().map(|m| m.node.name.clone()).collect();
+                let method_names: Vec<String> = t.methods.iter().map(|m| m.node.name.clone()).collect();
                 self.trait_methods.insert(t.name.clone(), method_names);
             }
         }
@@ -188,10 +187,8 @@ impl AstLowering {
                     // Generate struct
                     match self.lower_model(m) {
                         Ok(struct_ir) => {
-                            self.struct_names.insert(
-                                struct_ir.name.clone(),
-                                IrType::Struct(struct_ir.name.clone()),
-                            );
+                            self.struct_names
+                                .insert(struct_ir.name.clone(), IrType::Struct(struct_ir.name.clone()));
                             ir_program
                                 .declarations
                                 .push(IrDecl::new(IrDeclKind::Struct(struct_ir.clone())));
@@ -199,9 +196,7 @@ impl AstLowering {
                             // Generate impl block (may be empty if no methods, serde methods added during emission)
                             match self.lower_model_methods(&struct_ir.name, &m.methods) {
                                 Ok(impl_ir) => {
-                                    ir_program
-                                        .declarations
-                                        .push(IrDecl::new(IrDeclKind::Impl(impl_ir)));
+                                    ir_program.declarations.push(IrDecl::new(IrDeclKind::Impl(impl_ir)));
                                 }
                                 Err(e) => errors.push(e),
                             }
@@ -217,19 +212,15 @@ impl AstLowering {
                     // Generate struct
                     match self.lower_class(c) {
                         Ok(struct_ir) => {
-                            self.struct_names.insert(
-                                struct_ir.name.clone(),
-                                IrType::Struct(struct_ir.name.clone()),
-                            );
+                            self.struct_names
+                                .insert(struct_ir.name.clone(), IrType::Struct(struct_ir.name.clone()));
                             ir_program
                                 .declarations
                                 .push(IrDecl::new(IrDeclKind::Struct(struct_ir.clone())));
 
                             // Collect methods from this class and all parent classes
                             let mut all_methods = Vec::new();
-                            if let Err(e) =
-                                self.collect_inherited_methods(&c.name, &mut all_methods)
-                            {
+                            if let Err(e) = self.collect_inherited_methods(&c.name, &mut all_methods) {
                                 errors.push(e);
                             }
 
@@ -237,9 +228,7 @@ impl AstLowering {
                             if !all_methods.is_empty() {
                                 match self.lower_class_methods(&struct_ir.name, &all_methods) {
                                     Ok(impl_ir) => {
-                                        ir_program
-                                            .declarations
-                                            .push(IrDecl::new(IrDeclKind::Impl(impl_ir)));
+                                        ir_program.declarations.push(IrDecl::new(IrDeclKind::Impl(impl_ir)));
                                     }
                                     Err(e) => errors.push(e),
                                 }
@@ -247,12 +236,9 @@ impl AstLowering {
 
                             // Generate trait impls for each trait this class implements
                             for trait_name in &c.traits {
-                                match self.lower_trait_impl(&struct_ir.name, trait_name, &c.methods)
-                                {
+                                match self.lower_trait_impl(&struct_ir.name, trait_name, &c.methods) {
                                     Ok(trait_impl) => {
-                                        ir_program
-                                            .declarations
-                                            .push(IrDecl::new(IrDeclKind::Impl(trait_impl)));
+                                        ir_program.declarations.push(IrDecl::new(IrDeclKind::Impl(trait_impl)));
                                     }
                                     Err(e) => errors.push(e),
                                 }

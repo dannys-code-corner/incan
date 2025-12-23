@@ -73,10 +73,7 @@ pub enum IrStmtKind {
     },
 
     /// Loop (infinite loop)
-    Loop {
-        label: Option<String>,
-        body: Vec<IrStmt>,
-    },
+    Loop { label: Option<String>, body: Vec<IrStmt> },
 
     /// If statement (no value)
     If {
@@ -103,8 +100,5 @@ pub enum AssignTarget {
     /// Field access (obj.field)
     Field { object: Box<IrExpr>, field: String },
     /// Index access (list[i])
-    Index {
-        object: Box<IrExpr>,
-        index: Box<IrExpr>,
-    },
+    Index { object: Box<IrExpr>, index: Box<IrExpr> },
 }

@@ -67,10 +67,7 @@ pub fn format_source(source: &str) -> Result<String, FormatError> {
 /// let formatted = format_source_with_config(source, config).unwrap();
 /// assert!(formatted.contains("def greet"));
 /// ```
-pub fn format_source_with_config(
-    source: &str,
-    config: FormatConfig,
-) -> Result<String, FormatError> {
+pub fn format_source_with_config(source: &str, config: FormatConfig) -> Result<String, FormatError> {
     // Parse the source - formatter requires valid syntax
     let tokens = lexer::lex(source).map_err(|errs| {
         let mut msg = String::new();

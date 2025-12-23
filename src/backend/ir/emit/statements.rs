@@ -50,9 +50,7 @@ fn for_body_needs_mut_iteration(pattern: &Pattern, body: &[IrStmt]) -> bool {
         match &expr.kind {
             IrExprKind::Block { stmts, value } => {
                 stmts.iter().any(|s| stmt_mutates_var(s, var))
-                    || value
-                        .as_ref()
-                        .is_some_and(|v| expr_contains_mutation(v, var))
+                    || value.as_ref().is_some_and(|v| expr_contains_mutation(v, var))
             }
             _ => false,
         }
@@ -77,9 +75,7 @@ fn for_body_needs_mut_iteration(pattern: &Pattern, body: &[IrStmt]) -> bool {
             IrStmtKind::For { body, .. } => body.iter().any(|s| stmt_mutates_var(s, var)),
             IrStmtKind::Loop { body, .. } => body.iter().any(|s| stmt_mutates_var(s, var)),
             IrStmtKind::Block(stmts) => stmts.iter().any(|s| stmt_mutates_var(s, var)),
-            IrStmtKind::Match { arms, .. } => arms
-                .iter()
-                .any(|arm| expr_contains_mutation(&arm.body, var)),
+            IrStmtKind::Match { arms, .. } => arms.iter().any(|arm| expr_contains_mutation(&arm.body, var)),
             _ => false,
         }
     }
@@ -105,8 +101,7 @@ impl<'a> IrEmitter<'a> {
                 let v = self.emit_expr(value)?;
 
                 // Apply conversion if needed based on variable type
-                let conversion =
-                    determine_conversion(value, Some(ty), ConversionContext::Assignment);
+                let conversion = determine_conversion(value, Some(ty), ConversionContext::Assignment);
                 let converted_v = conversion.apply(v);
 
                 if matches!(mutability, Mutability::Mutable) {
@@ -160,14 +155,8 @@ impl<'a> IrEmitter<'a> {
                 *self.in_return_context.borrow_mut() = false;
 
                 // Apply conversion if needed based on function return type
-                let converted = if let Some(return_type) =
-                    self.current_function_return_type.borrow().as_ref()
-                {
-                    let conversion = determine_conversion(
-                        expr,
-                        Some(return_type),
-                        ConversionContext::ReturnValue,
-                    );
+                let converted = if let Some(return_type) = self.current_function_return_type.borrow().as_ref() {
+                    let conversion = determine_conversion(expr, Some(return_type), ConversionContext::ReturnValue);
                     conversion.apply(e)
                 } else {
                     e
@@ -178,8 +167,7 @@ impl<'a> IrEmitter<'a> {
             IrStmtKind::Return(None) => Ok(quote! { return; }),
             IrStmtKind::Break(label) => {
                 if let Some(l) = label {
-                    let label_lifetime =
-                        syn::Lifetime::new(&format!("'{}", l), proc_macro2::Span::call_site());
+                    let label_lifetime = syn::Lifetime::new(&format!("'{}", l), proc_macro2::Span::call_site());
                     Ok(quote! { break #label_lifetime; })
                 } else {
                     Ok(quote! { break; })
@@ -187,8 +175,7 @@ impl<'a> IrEmitter<'a> {
             }
             IrStmtKind::Continue(label) => {
                 if let Some(l) = label {
-                    let label_lifetime =
-                        syn::Lifetime::new(&format!("'{}", l), proc_macro2::Span::call_site());
+                    let label_lifetime = syn::Lifetime::new(&format!("'{}", l), proc_macro2::Span::call_site());
                     Ok(quote! { continue #label_lifetime; })
                 } else {
                     Ok(quote! { continue; })
@@ -200,10 +187,7 @@ impl<'a> IrEmitter<'a> {
                 body,
             } => {
                 let cond = self.emit_expr(condition)?;
-                let body_stmts: Vec<TokenStream> = body
-                    .iter()
-                    .map(|s| self.emit_stmt(s))
-                    .collect::<Result<_, _>>()?;
+                let body_stmts: Vec<TokenStream> = body.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
                 Ok(quote! {
                     while #cond {
                         #(#body_stmts)*
@@ -218,10 +202,7 @@ impl<'a> IrEmitter<'a> {
             } => {
                 let pat = self.emit_pattern(pattern);
                 let iter = self.emit_expr(iterable)?;
-                let body_stmts: Vec<TokenStream> = body
-                    .iter()
-                    .map(|s| self.emit_stmt(s))
-                    .collect::<Result<_, _>>()?;
+                let body_stmts: Vec<TokenStream> = body.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
                 // For non-copy collections, iterate by reference to avoid move
                 // This handles the common case where a collection is used multiple times
                 // For primitive element types, use .iter().copied() to get values instead of references
@@ -296,10 +277,7 @@ impl<'a> IrEmitter<'a> {
                 })
             }
             IrStmtKind::Loop { label: _, body } => {
-                let body_stmts: Vec<TokenStream> = body
-                    .iter()
-                    .map(|s| self.emit_stmt(s))
-                    .collect::<Result<_, _>>()?;
+                let body_stmts: Vec<TokenStream> = body.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
                 Ok(quote! {
                     loop {
                         #(#body_stmts)*
@@ -317,10 +295,8 @@ impl<'a> IrEmitter<'a> {
                     .map(|s| self.emit_stmt(s))
                     .collect::<Result<_, _>>()?;
                 if let Some(else_stmts) = else_branch {
-                    let else_tokens: Vec<TokenStream> = else_stmts
-                        .iter()
-                        .map(|s| self.emit_stmt(s))
-                        .collect::<Result<_, _>>()?;
+                    let else_tokens: Vec<TokenStream> =
+                        else_stmts.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
                     Ok(quote! {
                         if #cond {
                             #(#then_stmts)*
@@ -358,10 +334,7 @@ impl<'a> IrEmitter<'a> {
                 })
             }
             IrStmtKind::Block(stmts) => {
-                let inner: Vec<TokenStream> = stmts
-                    .iter()
-                    .map(|s| self.emit_stmt(s))
-                    .collect::<Result<_, _>>()?;
+                let inner: Vec<TokenStream> = stmts.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
                 Ok(quote! {
                     {
                         #(#inner)*

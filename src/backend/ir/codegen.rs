@@ -34,8 +34,8 @@ use crate::frontend::ast::Program;
 
 use super::scanners::{
     check_for_this_import as scan_check_for_this_import, collect_routes as scan_collect_routes,
-    collect_rust_crates as scan_collect_rust_crates, detect_async_usage, detect_list_helpers_usage,
-    detect_serde_usage, detect_web_usage,
+    collect_rust_crates as scan_collect_rust_crates, detect_async_usage, detect_list_helpers_usage, detect_serde_usage,
+    detect_web_usage,
 };
 use super::{AstLowering, EmitError, EmitService, IrEmitter, LoweringErrors};
 
@@ -167,8 +167,7 @@ impl<'a> IrCodegen<'a> {
 
     /// Register a fixture for test code generation
     pub fn add_fixture(&mut self, name: &str, has_teardown: bool, dependencies: Vec<String>) {
-        self.fixtures
-            .insert(name.to_string(), (has_teardown, dependencies));
+        self.fixtures.insert(name.to_string(), (has_teardown, dependencies));
     }
 
     /// Enable test mode (emit #[test] attributes)
@@ -221,9 +220,7 @@ impl<'a> IrCodegen<'a> {
                     }
                     // Legacy: from rust::crate import items (parsed as From with rust:: module)
                     ImportKind::From { module, items } => {
-                        if !module.segments.is_empty()
-                            && module.segments.first() == Some(&"rust".to_string())
-                        {
+                        if !module.segments.is_empty() && module.segments.first() == Some(&"rust".to_string()) {
                             for item in items {
                                 let func_name = item.alias.as_ref().unwrap_or(&item.name);
                                 self.external_rust_functions.insert(func_name.clone());
@@ -452,11 +449,7 @@ impl<'a> IrCodegen<'a> {
     ///
     /// Returns `GenerationError::Lowering` if AST lowering fails, or
     /// `GenerationError::Emission` if IR emission fails.
-    pub fn try_generate_module(
-        &mut self,
-        _module_name: &str,
-        program: &Program,
-    ) -> Result<String, GenerationError> {
+    pub fn try_generate_module(&mut self, _module_name: &str, program: &Program) -> Result<String, GenerationError> {
         // Use the IR pipeline for module generation too
         let mut lowering = AstLowering::new();
         let ir_program = lowering.lower_program(program)?;
@@ -620,8 +613,7 @@ impl<'a> IrCodegen<'a> {
                 if path_name == *name {
                     let mut lowering = AstLowering::new();
                     let ir = lowering.lower_program(ast)?;
-                    let use_emit_service =
-                        env::var("INCAN_EMIT_SERVICE").ok().as_deref() == Some("1");
+                    let use_emit_service = env::var("INCAN_EMIT_SERVICE").ok().as_deref() == Some("1");
                     let module_code = if use_emit_service {
                         let mut svc = EmitService::new_from_program(&ir);
                         svc.emit_program(&ir)?

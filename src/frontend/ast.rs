@@ -98,10 +98,7 @@ pub enum ImportKind {
     /// `import foo::bar::baz` or `import crate::config` - Rust-style module path
     Module(ImportPath),
     /// `from module import item1, item2` or `from ..utils import x` - Python-style multi-import
-    From {
-        module: ImportPath,
-        items: Vec<ImportItem>,
-    },
+    From { module: ImportPath, items: Vec<ImportItem> },
     /// `import python "module"` - Python interop  FIXME: this doesn't actually work yet
     Python(String),
     /// `import rust::serde_json` - Rust crate import (direct crate usage)

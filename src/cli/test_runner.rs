@@ -26,8 +26,8 @@ use crate::frontend::{lexer, parser};
 
 #[allow(unused_imports)]
 use super::test_interfaces::{
-    DefaultHarnessGenerator, DefaultTestDiscovery, DefaultTestExecutor, HarnessGenerator,
-    HarnessInput, HarnessOutput, TestDiscovery, TestExecutor,
+    DefaultHarnessGenerator, DefaultTestDiscovery, DefaultTestExecutor, HarnessGenerator, HarnessInput, HarnessOutput,
+    TestDiscovery, TestExecutor,
 };
 use super::{CliError, CliResult, ExitCode};
 
@@ -266,11 +266,7 @@ pub fn run_tests(
             };
             let autouse_str = if fixture.autouse { " (autouse)" } else { "" };
             let async_str = if fixture.is_async { " async" } else { "" };
-            let teardown_str = if fixture.has_teardown {
-                " (with teardown)"
-            } else {
-                ""
-            };
+            let teardown_str = if fixture.has_teardown { " (with teardown)" } else { "" };
             println!(
                 "  - {}: scope={}{}{}{}",
                 name, scope_str, autouse_str, async_str, teardown_str
@@ -325,11 +321,7 @@ pub fn run_tests(
     let mut xpassed = 0;
 
     for test in filtered_tests {
-        if let Some(TestMarker::Skip(reason)) = test
-            .markers
-            .iter()
-            .find(|m| matches!(m, TestMarker::Skip(_)))
-        {
+        if let Some(TestMarker::Skip(reason)) = test.markers.iter().find(|m| matches!(m, TestMarker::Skip(_))) {
             let result = TestResult::Skipped(reason.clone());
             print_test_result(&test, &result, verbose);
             skipped += 1;
@@ -337,10 +329,7 @@ pub fn run_tests(
             continue;
         }
 
-        let is_xfail = test
-            .markers
-            .iter()
-            .any(|m| matches!(m, TestMarker::XFail(_)));
+        let is_xfail = test.markers.iter().any(|m| matches!(m, TestMarker::XFail(_)));
 
         let result = run_single_test(&test);
 
@@ -396,10 +385,7 @@ pub fn run_tests(
         println!("\x1b[1;31m=================== FAILURES ===================\x1b[0m");
         for (test, result) in failures {
             println!();
-            println!(
-                "\x1b[1m___________ {} ___________\x1b[0m",
-                test.function_name
-            );
+            println!("\x1b[1m___________ {} ___________\x1b[0m", test.function_name);
             if let TestResult::Failed(_, msg) = result {
                 println!();
                 println!("    {}", msg);
@@ -450,11 +436,7 @@ pub fn run_tests(
 }
 
 fn print_test_result(test: &TestInfo, result: &TestResult, verbose: bool) {
-    let file_stem = test
-        .file_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
+    let file_stem = test.file_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
 
     let status = match result {
         TestResult::Passed(d) => {
@@ -505,21 +487,13 @@ pub fn discover_test_files(path: &Path) -> Vec<PathBuf> {
             for entry in entries.flatten() {
                 let entry_path = entry.path();
                 if entry_path.is_dir() {
-                    let name = entry_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("");
+                    let name = entry_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     if !name.starts_with('.') && name != "target" && name != "node_modules" {
                         files.extend(discover_test_files(&entry_path));
                     }
                 } else {
-                    let name = entry_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("");
-                    if (name.starts_with("test_") || name.ends_with("_test.incn"))
-                        && name.ends_with(".incn")
-                    {
+                    let name = entry_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if (name.starts_with("test_") || name.ends_with("_test.incn")) && name.ends_with(".incn") {
                         files.push(entry_path);
                     }
                 }
@@ -533,8 +507,7 @@ pub fn discover_test_files(path: &Path) -> Vec<PathBuf> {
 
 /// Discover both tests and fixtures in a file
 pub fn discover_tests_and_fixtures(file_path: &Path) -> Result<DiscoveryResult, String> {
-    let source =
-        fs::read_to_string(file_path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let source = fs::read_to_string(file_path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let tokens = lexer::lex(&source).map_err(|e| format!("Lexer error: {:?}", e))?;
 
@@ -589,9 +562,7 @@ pub fn discover_tests_and_fixtures(file_path: &Path) -> Result<DiscoveryResult, 
     Ok(DiscoveryResult { tests, fixtures })
 }
 
-fn has_fixture_decorator(
-    decorators: &[crate::frontend::ast::Spanned<crate::frontend::ast::Decorator>],
-) -> bool {
+fn has_fixture_decorator(decorators: &[crate::frontend::ast::Spanned<crate::frontend::ast::Decorator>]) -> bool {
     decorators.iter().any(|d| d.node.name == "fixture")
 }
 
@@ -607,9 +578,8 @@ fn extract_fixture_args(
                 if let crate::frontend::ast::DecoratorArg::Named(name, value) = arg {
                     if name == "scope" {
                         if let crate::frontend::ast::DecoratorArgValue::Expr(expr) = value {
-                            if let crate::frontend::ast::Expr::Literal(
-                                crate::frontend::ast::Literal::String(s),
-                            ) = &expr.node
+                            if let crate::frontend::ast::Expr::Literal(crate::frontend::ast::Literal::String(s)) =
+                                &expr.node
                             {
                                 scope = match s.as_str() {
                                     "function" => FixtureScope::Function,
@@ -621,9 +591,8 @@ fn extract_fixture_args(
                         }
                     } else if name == "autouse" {
                         if let crate::frontend::ast::DecoratorArgValue::Expr(expr) = value {
-                            if let crate::frontend::ast::Expr::Literal(
-                                crate::frontend::ast::Literal::Bool(b),
-                            ) = &expr.node
+                            if let crate::frontend::ast::Expr::Literal(crate::frontend::ast::Literal::Bool(b)) =
+                                &expr.node
                             {
                                 autouse = *b;
                             }
@@ -648,9 +617,7 @@ fn extract_fixture_dependencies(
         .collect()
 }
 
-fn function_has_yield(
-    body: &[crate::frontend::ast::Spanned<crate::frontend::ast::Statement>],
-) -> bool {
+fn function_has_yield(body: &[crate::frontend::ast::Spanned<crate::frontend::ast::Statement>]) -> bool {
     for stmt in body {
         if statement_has_yield(&stmt.node) {
             return true;
@@ -664,10 +631,7 @@ fn statement_has_yield(stmt: &crate::frontend::ast::Statement) -> bool {
         crate::frontend::ast::Statement::Expr(expr) => expr_has_yield(&expr.node),
         crate::frontend::ast::Statement::Return(Some(expr)) => expr_has_yield(&expr.node),
         crate::frontend::ast::Statement::If(if_stmt) => {
-            if_stmt
-                .then_body
-                .iter()
-                .any(|s| statement_has_yield(&s.node))
+            if_stmt.then_body.iter().any(|s| statement_has_yield(&s.node))
                 || if_stmt
                     .else_body
                     .as_ref()
@@ -676,9 +640,7 @@ fn statement_has_yield(stmt: &crate::frontend::ast::Statement) -> bool {
         crate::frontend::ast::Statement::While(while_stmt) => {
             while_stmt.body.iter().any(|s| statement_has_yield(&s.node))
         }
-        crate::frontend::ast::Statement::For(for_stmt) => {
-            for_stmt.body.iter().any(|s| statement_has_yield(&s.node))
-        }
+        crate::frontend::ast::Statement::For(for_stmt) => for_stmt.body.iter().any(|s| statement_has_yield(&s.node)),
         _ => false,
     }
 }
@@ -686,9 +648,7 @@ fn statement_has_yield(stmt: &crate::frontend::ast::Statement) -> bool {
 fn expr_has_yield(expr: &crate::frontend::ast::Expr) -> bool {
     match expr {
         crate::frontend::ast::Expr::Yield(_) => true,
-        crate::frontend::ast::Expr::Binary(left, _, right) => {
-            expr_has_yield(&left.node) || expr_has_yield(&right.node)
-        }
+        crate::frontend::ast::Expr::Binary(left, _, right) => expr_has_yield(&left.node) || expr_has_yield(&right.node),
         crate::frontend::ast::Expr::Unary(_, operand) => expr_has_yield(&operand.node),
         crate::frontend::ast::Expr::Call(callee, args) => {
             expr_has_yield(&callee.node)
@@ -702,10 +662,7 @@ fn expr_has_yield(expr: &crate::frontend::ast::Expr) -> bool {
     }
 }
 
-fn get_autouse_fixtures(
-    fixtures: &HashMap<String, FixtureInfo>,
-    scope: FixtureScope,
-) -> Vec<String> {
+fn get_autouse_fixtures(fixtures: &HashMap<String, FixtureInfo>, scope: FixtureScope) -> Vec<String> {
     fixtures
         .values()
         .filter(|f| f.autouse && f.scope == scope)
@@ -743,9 +700,7 @@ fn extract_test_markers(
 
 fn extract_string_arg(args: &[crate::frontend::ast::DecoratorArg]) -> Option<String> {
     if let Some(crate::frontend::ast::DecoratorArg::Positional(expr)) = args.first() {
-        if let crate::frontend::ast::Expr::Literal(crate::frontend::ast::Literal::String(s)) =
-            &expr.node
-        {
+        if let crate::frontend::ast::Expr::Literal(crate::frontend::ast::Literal::String(s)) = &expr.node {
             return Some(s.clone());
         }
     }
@@ -787,10 +742,7 @@ fn run_single_test(test: &TestInfo) -> TestResult {
     let generator = ProjectGenerator::new(&temp_dir, "test_runner", true);
 
     if let Err(e) = generator.generate(&rust_code) {
-        return TestResult::Failed(
-            start.elapsed(),
-            format!("Failed to generate project: {}", e),
-        );
+        return TestResult::Failed(start.elapsed(), format!("Failed to generate project: {}", e));
     }
 
     let output = std::process::Command::new("cargo")
@@ -849,9 +801,5 @@ fn extract_panic_message(stdout: &str) -> String {
         }
     }
 
-    if msg.is_empty() {
-        stdout.to_string()
-    } else {
-        msg
-    }
+    if msg.is_empty() { stdout.to_string() } else { msg }
 }

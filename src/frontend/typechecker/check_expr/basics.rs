@@ -11,11 +11,7 @@ use super::TypeChecker;
 
 impl TypeChecker {
     /// Resolve an identifier to its type.
-    pub(in crate::frontend::typechecker::check_expr) fn check_ident(
-        &mut self,
-        name: &str,
-        span: Span,
-    ) -> ResolvedType {
+    pub(in crate::frontend::typechecker::check_expr) fn check_ident(&mut self, name: &str, span: Span) -> ResolvedType {
         // Note: `math` module requires `import math` (like Python).
         // When imported, it's registered as a Module symbol and found via normal lookup.
 
@@ -47,27 +43,19 @@ impl TypeChecker {
     }
 
     /// Resolve a literal value to its type.
-    pub(in crate::frontend::typechecker::check_expr) fn check_literal(
-        &self,
-        lit: &Literal,
-    ) -> ResolvedType {
+    pub(in crate::frontend::typechecker::check_expr) fn check_literal(&self, lit: &Literal) -> ResolvedType {
         match lit {
             Literal::Int(_) => ResolvedType::Int,
             Literal::Float(_) => ResolvedType::Float,
             Literal::String(_) => ResolvedType::Str,
             Literal::Bytes(_) => ResolvedType::Bytes,
             Literal::Bool(_) => ResolvedType::Bool,
-            Literal::None => {
-                ResolvedType::Generic("Option".to_string(), vec![ResolvedType::Unknown])
-            }
+            Literal::None => ResolvedType::Generic("Option".to_string(), vec![ResolvedType::Unknown]),
         }
     }
 
     /// Resolve the `self` expression inside a method body.
-    pub(in crate::frontend::typechecker::check_expr) fn check_self(
-        &mut self,
-        span: Span,
-    ) -> ResolvedType {
+    pub(in crate::frontend::typechecker::check_expr) fn check_self(&mut self, span: Span) -> ResolvedType {
         if let Some(id) = self.symbols.lookup("self") {
             if let Some(sym) = self.symbols.get(id) {
                 if let SymbolKind::Variable(info) = &sym.kind {

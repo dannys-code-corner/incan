@@ -407,9 +407,7 @@ mod tests {
 
     #[test]
     fn test_would_exceed_with_indent() {
-        let config = FormatConfig::new()
-            .with_indent_width(4)
-            .with_line_length(10);
+        let config = FormatConfig::new().with_indent_width(4).with_line_length(10);
         let mut writer = FormatWriter::new(config);
         writer.indent(); // Will add 4 spaces when we write
         // At line start with indent, we have 4 (indent) + additional
@@ -434,9 +432,7 @@ mod tests {
 
     #[test]
     fn test_remaining_line_space_with_indent() {
-        let config = FormatConfig::new()
-            .with_indent_width(4)
-            .with_line_length(80);
+        let config = FormatConfig::new().with_indent_width(4).with_line_length(80);
         let mut writer = FormatWriter::new(config);
         writer.indent();
         // At line start, remaining should account for indent

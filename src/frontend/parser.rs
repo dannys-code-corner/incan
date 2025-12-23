@@ -204,17 +204,13 @@ impl<'a> Parser<'a> {
             // Skip optional newline after docstring
             self.match_token(&TokenKind::Newline);
             let end = self.tokens[self.pos.saturating_sub(1)].span.end;
-            return Ok(Spanned::new(
-                Declaration::Docstring(doc),
-                Span::new(start, end),
-            ));
+            return Ok(Spanned::new(Declaration::Docstring(doc), Span::new(start, end)));
         }
 
         // Collect decorators
         let decorators = self.decorators()?;
 
-        let decl = if self.check_keyword(&TokenKind::Import) || self.check_keyword(&TokenKind::From)
-        {
+        let decl = if self.check_keyword(&TokenKind::Import) || self.check_keyword(&TokenKind::From) {
             Declaration::Import(self.import_decl()?)
         } else if self.check_keyword(&TokenKind::Pub) {
             // Currently `pub` is only supported for module-level consts.
@@ -252,10 +248,7 @@ impl<'a> Parser<'a> {
         Ok(Spanned::new(decl, Span::new(start, end)))
     }
 
-    fn const_decl_with_visibility(
-        &mut self,
-        visibility: Visibility,
-    ) -> Result<ConstDecl, CompileError> {
+    fn const_decl_with_visibility(&mut self, visibility: Visibility) -> Result<ConstDecl, CompileError> {
         self.expect(&TokenKind::Const, "Expected 'const'")?;
         let name = self.identifier()?;
         let ty = if self.match_token(&TokenKind::Colon) {
@@ -286,10 +279,7 @@ impl<'a> Parser<'a> {
                 Vec::new()
             };
             let end = self.tokens[self.pos - 1].span.end;
-            decorators.push(Spanned::new(
-                Decorator { name, args },
-                Span::new(start, end),
-            ));
+            decorators.push(Spanned::new(Decorator { name, args }, Span::new(start, end)));
             self.skip_newlines();
         }
         Ok(decorators)
@@ -336,10 +326,7 @@ impl<'a> Parser<'a> {
             if self.match_token(&TokenKind::RustKw) {
                 self.expect(&TokenKind::ColonColon, "Expected '::' after 'rust'")?;
                 let (crate_name, path) = self.rust_crate_path()?;
-                self.expect(
-                    &TokenKind::Import,
-                    "Expected 'import' after rust crate path",
-                )?;
+                self.expect(&TokenKind::Import, "Expected 'import' after rust crate path")?;
 
                 // Parse import items
                 let mut items = Vec::new();
@@ -472,10 +459,7 @@ impl<'a> Parser<'a> {
             // Expect :: or . after super
             if !self.match_token(&TokenKind::ColonColon) && !self.match_token(&TokenKind::Dot) {
                 // Could be end of path if no more segments
-                if !self.check(&TokenKind::Import)
-                    && !self.check(&TokenKind::As)
-                    && !self.check(&TokenKind::Newline)
-                {
+                if !self.check(&TokenKind::Import) && !self.check(&TokenKind::As) && !self.check(&TokenKind::Newline) {
                     return Err(CompileError::syntax(
                         "Expected '::' or '.' after 'super'".to_string(),
                         self.current_span(),
@@ -506,10 +490,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn model_decl(
-        &mut self,
-        decorators: Vec<Spanned<Decorator>>,
-    ) -> Result<ModelDecl, CompileError> {
+    fn model_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<ModelDecl, CompileError> {
         self.expect(&TokenKind::Model, "Expected 'model'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -530,10 +511,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn class_decl(
-        &mut self,
-        decorators: Vec<Spanned<Decorator>>,
-    ) -> Result<ClassDecl, CompileError> {
+    fn class_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<ClassDecl, CompileError> {
         self.expect(&TokenKind::Class, "Expected 'class'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -569,10 +547,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn trait_decl(
-        &mut self,
-        decorators: Vec<Spanned<Decorator>>,
-    ) -> Result<TraitDecl, CompileError> {
+    fn trait_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<TraitDecl, CompileError> {
         self.expect(&TokenKind::Trait, "Expected 'trait'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -678,16 +653,10 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(
-            VariantDecl { name, fields },
-            Span::new(start, end),
-        ))
+        Ok(Spanned::new(VariantDecl { name, fields }, Span::new(start, end)))
     }
 
-    fn function_decl(
-        &mut self,
-        decorators: Vec<Spanned<Decorator>>,
-    ) -> Result<FunctionDecl, CompileError> {
+    fn function_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<FunctionDecl, CompileError> {
         let is_async = self.match_token(&TokenKind::Async);
         self.expect(&TokenKind::Def, "Expected 'def'")?;
         let name = self.identifier()?;
@@ -719,10 +688,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn method_decl(
-        &mut self,
-        decorators: Vec<Spanned<Decorator>>,
-    ) -> Result<Spanned<MethodDecl>, CompileError> {
+    fn method_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<Spanned<MethodDecl>, CompileError> {
         let start = self.current_span().start;
         let is_async = self.match_token(&TokenKind::Async);
         self.expect(&TokenKind::Def, "Expected 'def'")?;
@@ -773,9 +739,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn receiver_and_params(
-        &mut self,
-    ) -> Result<(Option<Receiver>, Vec<Spanned<Param>>), CompileError> {
+    fn receiver_and_params(&mut self) -> Result<(Option<Receiver>, Vec<Spanned<Param>>), CompileError> {
         // Check for receiver
         let receiver = if self.check_keyword(&TokenKind::Mut) {
             self.advance();
@@ -878,10 +842,7 @@ impl<'a> Parser<'a> {
             None
         };
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(
-            FieldDecl { name, ty, default },
-            Span::new(start, end),
-        ))
+        Ok(Spanned::new(FieldDecl { name, ty, default }, Span::new(start, end)))
     }
 
     // ========================================================================
@@ -963,10 +924,7 @@ impl<'a> Parser<'a> {
         // Handle None as a type (alias for unit/void)
         if self.match_token(&TokenKind::None) {
             let end = self.tokens[self.pos - 1].span.end;
-            return Ok(Spanned::new(
-                Type::Simple("None".to_string()),
-                Span::new(start, end),
-            ));
+            return Ok(Spanned::new(Type::Simple("None".to_string()), Span::new(start, end)));
         }
 
         // Named type
@@ -983,10 +941,7 @@ impl<'a> Parser<'a> {
             let args = self.type_list()?;
             self.expect(&TokenKind::RBracket, "Expected ']' after type arguments")?;
             let end = self.tokens[self.pos - 1].span.end;
-            Ok(Spanned::new(
-                Type::Generic(name, args),
-                Span::new(start, end),
-            ))
+            Ok(Spanned::new(Type::Generic(name, args), Span::new(start, end)))
         } else {
             let end = self.tokens[self.pos - 1].span.end;
             Ok(Spanned::new(Type::Simple(name), Span::new(start, end)))
@@ -1062,14 +1017,13 @@ impl<'a> Parser<'a> {
 
         let stmt = if self.check_keyword(&TokenKind::Return) {
             self.advance();
-            let expr = if !self.check(&TokenKind::Newline)
-                && !self.check(&TokenKind::Case)
-                && !self.check(&TokenKind::Dedent)
-            {
-                Some(self.expression()?)
-            } else {
-                None
-            };
+            let expr =
+                if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Case) && !self.check(&TokenKind::Dedent)
+                {
+                    Some(self.expression()?)
+                } else {
+                    None
+                };
             Statement::Return(expr)
         } else if self.check_keyword(&TokenKind::Pass) || self.check(&TokenKind::Ellipsis) {
             self.advance();
@@ -1181,11 +1135,7 @@ impl<'a> Parser<'a> {
             }
             self.expect(&TokenKind::Eq, "Expected '=' in tuple unpacking")?;
             let value = self.expression()?;
-            return Ok(Statement::TupleUnpack(TupleUnpackStmt {
-                binding,
-                names,
-                value,
-            }));
+            return Ok(Statement::TupleUnpack(TupleUnpackStmt { binding, names, value }));
         }
 
         let ty = if self.match_token(&TokenKind::Colon) {
@@ -1296,10 +1246,7 @@ impl<'a> Parser<'a> {
                     }));
                 }
                 _ => {
-                    return Err(CompileError::syntax(
-                        "Invalid assignment target".to_string(),
-                        expr.span,
-                    ));
+                    return Err(CompileError::syntax("Invalid assignment target".to_string(), expr.span));
                 }
             }
         }
@@ -1319,8 +1266,7 @@ impl<'a> Parser<'a> {
             match expr.node {
                 Expr::Field(object, field) => {
                     // Convert field += rhs to field = field + rhs
-                    let field_expr =
-                        Spanned::new(Expr::Field(object.clone(), field.clone()), expr.span);
+                    let field_expr = Spanned::new(Expr::Field(object.clone(), field.clone()), expr.span);
                     let bin_op = match op {
                         CompoundOp::Add => BinaryOp::Add,
                         CompoundOp::Sub => BinaryOp::Sub,
@@ -1328,10 +1274,7 @@ impl<'a> Parser<'a> {
                         CompoundOp::Div => BinaryOp::Div,
                         CompoundOp::Mod => BinaryOp::Mod,
                     };
-                    let new_value = Spanned::new(
-                        Expr::Binary(Box::new(field_expr), bin_op, Box::new(rhs)),
-                        expr.span,
-                    );
+                    let new_value = Spanned::new(Expr::Binary(Box::new(field_expr), bin_op, Box::new(rhs)), expr.span);
                     return Ok(Statement::FieldAssignment(FieldAssignmentStmt {
                         object: *object,
                         field,
@@ -1340,8 +1283,7 @@ impl<'a> Parser<'a> {
                 }
                 Expr::Index(object, index) => {
                     // Convert arr[i] += rhs to arr[i] = arr[i] + rhs
-                    let index_expr =
-                        Spanned::new(Expr::Index(object.clone(), index.clone()), expr.span);
+                    let index_expr = Spanned::new(Expr::Index(object.clone(), index.clone()), expr.span);
                     let bin_op = match op {
                         CompoundOp::Add => BinaryOp::Add,
                         CompoundOp::Sub => BinaryOp::Sub,
@@ -1349,10 +1291,7 @@ impl<'a> Parser<'a> {
                         CompoundOp::Div => BinaryOp::Div,
                         CompoundOp::Mod => BinaryOp::Mod,
                     };
-                    let new_value = Spanned::new(
-                        Expr::Binary(Box::new(index_expr), bin_op, Box::new(rhs)),
-                        expr.span,
-                    );
+                    let new_value = Spanned::new(Expr::Binary(Box::new(index_expr), bin_op, Box::new(rhs)), expr.span);
                     return Ok(Statement::IndexAssignment(IndexAssignmentStmt {
                         object: *object,
                         index: *index,
@@ -1393,10 +1332,7 @@ impl<'a> Parser<'a> {
         while self.match_token(&TokenKind::Or) {
             let right = self.and_expr()?;
             let span = left.span.merge(right.span);
-            left = Spanned::new(
-                Expr::Binary(Box::new(left), BinaryOp::Or, Box::new(right)),
-                span,
-            );
+            left = Spanned::new(Expr::Binary(Box::new(left), BinaryOp::Or, Box::new(right)), span);
         }
         Ok(left)
     }
@@ -1406,10 +1342,7 @@ impl<'a> Parser<'a> {
         while self.match_token(&TokenKind::And) {
             let right = self.not_expr()?;
             let span = left.span.merge(right.span);
-            left = Spanned::new(
-                Expr::Binary(Box::new(left), BinaryOp::And, Box::new(right)),
-                span,
-            );
+            left = Spanned::new(Expr::Binary(Box::new(left), BinaryOp::And, Box::new(right)), span);
         }
         Ok(left)
     }
@@ -1419,10 +1352,7 @@ impl<'a> Parser<'a> {
             let start = self.tokens[self.pos - 1].span.start;
             let expr = self.not_expr()?;
             let span = Span::new(start, expr.span.end);
-            Ok(Spanned::new(
-                Expr::Unary(UnaryOp::Not, Box::new(expr)),
-                span,
-            ))
+            Ok(Spanned::new(Expr::Unary(UnaryOp::Not, Box::new(expr)), span))
         } else {
             self.comparison()
         }
@@ -1446,8 +1376,7 @@ impl<'a> Parser<'a> {
                 BinaryOp::GtEq
             } else if self.match_token(&TokenKind::In) {
                 BinaryOp::In
-            } else if self.check_keyword(&TokenKind::Not) && self.peek_next().kind == TokenKind::In
-            {
+            } else if self.check_keyword(&TokenKind::Not) && self.peek_next().kind == TokenKind::In {
                 self.advance(); // not
                 self.advance(); // in
                 BinaryOp::NotIn
@@ -1540,10 +1469,7 @@ impl<'a> Parser<'a> {
         if self.match_token(&TokenKind::StarStar) {
             let right = self.power()?; // recursive for right-associativity
             let span = left.span.merge(right.span);
-            left = Spanned::new(
-                Expr::Binary(Box::new(left), BinaryOp::Pow, Box::new(right)),
-                span,
-            );
+            left = Spanned::new(Expr::Binary(Box::new(left), BinaryOp::Pow, Box::new(right)), span);
         }
 
         Ok(left)
@@ -1554,10 +1480,7 @@ impl<'a> Parser<'a> {
             let start = self.tokens[self.pos - 1].span.start;
             let expr = self.unary()?;
             let span = Span::new(start, expr.span.end);
-            Ok(Spanned::new(
-                Expr::Unary(UnaryOp::Neg, Box::new(expr)),
-                span,
-            ))
+            Ok(Spanned::new(Expr::Unary(UnaryOp::Neg, Box::new(expr)), span))
         } else if self.match_token(&TokenKind::Await) {
             let start = self.tokens[self.pos - 1].span.start;
             let expr = self.unary()?;
@@ -1603,12 +1526,8 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RBracket, "Expected ']' after index/slice")?;
                 let span = Span::new(expr.span.start, self.tokens[self.pos - 1].span.end);
                 expr = match result {
-                    IndexOrSlice::Index(index) => {
-                        Spanned::new(Expr::Index(Box::new(expr), Box::new(index)), span)
-                    }
-                    IndexOrSlice::Slice(slice) => {
-                        Spanned::new(Expr::Slice(Box::new(expr), slice), span)
-                    }
+                    IndexOrSlice::Index(index) => Spanned::new(Expr::Index(Box::new(expr), Box::new(index)), span),
+                    IndexOrSlice::Slice(slice) => Spanned::new(Expr::Slice(Box::new(expr), slice), span),
                 };
             } else if self.match_token(&TokenKind::LParen) {
                 let args = self.call_args()?;
@@ -1689,10 +1608,7 @@ impl<'a> Parser<'a> {
         if self.match_token(&TokenKind::Await) {
             let inner = self.expression()?;
             let end = inner.span.end;
-            return Ok(Spanned::new(
-                Expr::Await(Box::new(inner)),
-                Span::new(start, end),
-            ));
+            return Ok(Spanned::new(Expr::Await(Box::new(inner)), Span::new(start, end)));
         }
 
         // Yield expression (for fixtures/generators)
@@ -1702,10 +1618,7 @@ impl<'a> Parser<'a> {
             if self.is_at_expr_start() {
                 let inner = self.expression()?;
                 let end = inner.span.end;
-                return Ok(Spanned::new(
-                    Expr::Yield(Some(Box::new(inner))),
-                    Span::new(start, end),
-                ));
+                return Ok(Spanned::new(Expr::Yield(Some(Box::new(inner))), Span::new(start, end)));
             } else {
                 return Ok(Spanned::new(Expr::Yield(None), Span::new(start, end_span)));
             }
@@ -1813,11 +1726,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn convert_fstring_parts(
-        &self,
-        parts: &[LexFStringPart],
-        fstring_span: Span,
-    ) -> Vec<FStringPart> {
+    fn convert_fstring_parts(&self, parts: &[LexFStringPart], fstring_span: Span) -> Vec<FStringPart> {
         parts
             .iter()
             .map(|p| match p {
@@ -1839,8 +1748,7 @@ impl<'a> Parser<'a> {
         // Try to lex and parse the expression
         if let Ok(mut tokens) = lexer::lex(s) {
             // Ensure we have an EOF token at the end for the parser
-            if tokens.is_empty() || !matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof))
-            {
+            if tokens.is_empty() || !matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)) {
                 tokens.push(Token {
                     kind: TokenKind::Eof,
                     span: Span::default(),
@@ -1993,10 +1901,7 @@ impl<'a> Parser<'a> {
             }
             self.expect(&TokenKind::RParen, "Expected ')' after tuple pattern")?;
             let end = self.tokens[self.pos - 1].span.end;
-            return Ok(Spanned::new(
-                Pattern::Tuple(patterns),
-                Span::new(start, end),
-            ));
+            return Ok(Spanned::new(Pattern::Tuple(patterns), Span::new(start, end)));
         }
 
         // Identifier (binding) or constructor pattern
@@ -2050,10 +1955,7 @@ impl<'a> Parser<'a> {
             // Check if this is a unit variant (qualified without parens): Type.Variant
             if name.contains("::") {
                 let end = self.tokens[self.pos - 1].span.end;
-                return Ok(Spanned::new(
-                    Pattern::Constructor(name, vec![]),
-                    Span::new(start, end),
-                ));
+                return Ok(Spanned::new(Pattern::Constructor(name, vec![]), Span::new(start, end)));
             }
 
             // Just a binding
@@ -2314,18 +2216,12 @@ impl<'a> Parser<'a> {
         }
 
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(
-            Expr::Paren(Box::new(first)),
-            Span::new(start, end),
-        ))
+        Ok(Spanned::new(Expr::Paren(Box::new(first)), Span::new(start, end)))
     }
 
     /// Convert expressions to closure parameters
     /// Only identifiers are valid as closure params
-    fn exprs_to_params(
-        &self,
-        exprs: &[Spanned<Expr>],
-    ) -> Result<Vec<Spanned<Param>>, CompileError> {
+    fn exprs_to_params(&self, exprs: &[Spanned<Expr>]) -> Result<Vec<Spanned<Param>>, CompileError> {
         let mut params = Vec::new();
         for expr in exprs {
             match &expr.node {
@@ -2475,13 +2371,8 @@ mod tests {
         // We intentionally allow the lexer to emit INDENT/DEDENT tokens at the top-level.
         // The parser should produce a single clear error and avoid cascading failures.
         let source = "  x = 1\n";
-        let err =
-            parse_str(source).expect_err("Top-level indentation should be rejected by the parser");
-        assert_eq!(
-            err.len(),
-            1,
-            "Parser should return exactly one error (no cascade)"
-        );
+        let err = parse_str(source).expect_err("Top-level indentation should be rejected by the parser");
+        assert_eq!(err.len(), 1, "Parser should return exactly one error (no cascade)");
         assert!(
             err[0].message.contains("Expected declaration") && err[0].message.contains("Indent"),
             "Error message should clearly indicate the unexpected INDENT token; got: {}",
@@ -2533,10 +2424,7 @@ def add(a: int, b: int) -> int:
             Declaration::Import(i) => {
                 match &i.kind {
                     ImportKind::Module(path) => {
-                        assert_eq!(
-                            path.segments,
-                            vec!["polars".to_string(), "prelude".to_string()]
-                        );
+                        assert_eq!(path.segments, vec!["polars".to_string(), "prelude".to_string()]);
                         assert_eq!(path.parent_levels, 0);
                         assert!(!path.is_absolute);
                     }

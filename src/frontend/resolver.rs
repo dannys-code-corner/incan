@@ -60,11 +60,7 @@ impl fmt::Display for ResolveError {
             ResolveError::FileRead { path, error } => {
                 write!(f, "Error reading '{}': {}", path, error)
             }
-            ResolveError::Lexer {
-                file,
-                source,
-                errors,
-            } => {
+            ResolveError::Lexer { file, source, errors } => {
                 let mut msg = String::new();
                 for err in errors {
                     msg.push_str(&diagnostics::format_error(file, source, err));
@@ -72,11 +68,7 @@ impl fmt::Display for ResolveError {
                 }
                 write!(f, "{}", msg.trim_end())
             }
-            ResolveError::Parser {
-                file,
-                source,
-                errors,
-            } => {
+            ResolveError::Parser { file, source, errors } => {
                 let mut msg = String::new();
                 for err in errors {
                     msg.push_str(&diagnostics::format_error(file, source, err));
@@ -136,11 +128,8 @@ impl ModuleResolver {
 
         let mut modules = Vec::new();
         // (file_path, module_name, path_segments)
-        let mut to_process: Vec<(String, String, Vec<String>)> = vec![(
-            entry_path.to_string(),
-            "main".to_string(),
-            vec!["main".to_string()],
-        )];
+        let mut to_process: Vec<(String, String, Vec<String>)> =
+            vec![(entry_path.to_string(), "main".to_string(), vec!["main".to_string()])];
 
         while let Some((file_path, module_name, path_segments)) = to_process.pop() {
             if self.processed.contains(&file_path) {
@@ -190,11 +179,7 @@ impl ModuleResolver {
         })
     }
 
-    fn resolve_import(
-        &self,
-        kind: &ImportKind,
-        base_dir: &Path,
-    ) -> Option<(String, String, Vec<String>)> {
+    fn resolve_import(&self, kind: &ImportKind, base_dir: &Path) -> Option<(String, String, Vec<String>)> {
         let import_path = match kind {
             ImportKind::Module(path) if !path.segments.is_empty() => Some(path),
             ImportKind::From { module, .. } if !module.segments.is_empty() => Some(module),
@@ -225,10 +210,7 @@ impl ModuleResolver {
             }
         } else {
             for _ in 0..import_path.parent_levels {
-                target_dir = target_dir
-                    .parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or(target_dir);
+                target_dir = target_dir.parent().map(|p| p.to_path_buf()).unwrap_or(target_dir);
             }
         }
 
@@ -259,19 +241,10 @@ impl ModuleResolver {
         let found_path = self.find_module_file(&dep_path, &target_dir, &module_segments)?;
 
         let module_name = module_segments.join("_");
-        Some((
-            found_path.to_string_lossy().to_string(),
-            module_name,
-            module_segments,
-        ))
+        Some((found_path.to_string_lossy().to_string(), module_name, module_segments))
     }
 
-    fn find_module_file(
-        &self,
-        primary_path: &Path,
-        target_dir: &Path,
-        segments: &[String],
-    ) -> Option<PathBuf> {
+    fn find_module_file(&self, primary_path: &Path, target_dir: &Path, segments: &[String]) -> Option<PathBuf> {
         // Try primary path
         if primary_path.exists() {
             return Some(primary_path.to_path_buf());

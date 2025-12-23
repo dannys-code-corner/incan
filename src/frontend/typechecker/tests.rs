@@ -472,10 +472,10 @@ def foo(t: tuple[int, int]) -> int:
     let result = check_str(source);
     assert!(result.is_err());
     let errs = result.err().unwrap();
-    assert!(errs.iter().any(|e| {
-        e.message
-            .contains("Tuple indices must be an integer literal")
-    }));
+    assert!(
+        errs.iter()
+            .any(|e| { e.message.contains("Tuple indices must be an integer literal") })
+    );
 }
 
 #[test]
@@ -519,10 +519,7 @@ const B: int = A
     let result = check_str(source);
     assert!(result.is_err());
     let errs = result.err().unwrap();
-    assert!(
-        errs.iter()
-            .any(|e| e.message.contains("Const dependency cycle"))
-    );
+    assert!(errs.iter().any(|e| e.message.contains("Const dependency cycle")));
 }
 
 // ========================================
@@ -708,9 +705,10 @@ const EMPTY = []
     let result = check_str(source);
     assert!(result.is_err());
     let errs = result.err().unwrap();
-    assert!(errs.iter().any(|e| {
-        e.message.contains("Cannot infer type") || e.message.contains("empty const list")
-    }));
+    assert!(
+        errs.iter()
+            .any(|e| { e.message.contains("Cannot infer type") || e.message.contains("empty const list") })
+    );
 }
 
 #[test]

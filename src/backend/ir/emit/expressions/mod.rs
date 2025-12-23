@@ -116,16 +116,8 @@ impl<'a> IrEmitter<'a> {
 
             IrExprKind::Call { func, args } => self.emit_call_expr(func, args),
             IrExprKind::BuiltinCall { func, args } => self.emit_builtin_call(func, args),
-            IrExprKind::MethodCall {
-                receiver,
-                method,
-                args,
-            } => self.emit_method_call_expr(receiver, method, args),
-            IrExprKind::KnownMethodCall {
-                receiver,
-                kind,
-                args,
-            } => self.emit_known_method_call(receiver, kind, args),
+            IrExprKind::MethodCall { receiver, method, args } => self.emit_method_call_expr(receiver, method, args),
+            IrExprKind::KnownMethodCall { receiver, kind, args } => self.emit_known_method_call(receiver, kind, args),
 
             IrExprKind::Field { object, field } => self.emit_field_expr(object, field),
             IrExprKind::Index { object, index } => self.emit_index_expr(object, index),
@@ -146,10 +138,8 @@ impl<'a> IrEmitter<'a> {
             } => self.emit_dict_comp(key, value, variable, iterable, filter.as_deref()),
 
             IrExprKind::List(items) => {
-                let item_tokens: Vec<TokenStream> = items
-                    .iter()
-                    .map(|i| self.emit_expr(i))
-                    .collect::<Result<_, _>>()?;
+                let item_tokens: Vec<TokenStream> =
+                    items.iter().map(|i| self.emit_expr(i)).collect::<Result<_, _>>()?;
                 Ok(quote! { vec![#(#item_tokens),*] })
             }
 
@@ -173,19 +163,15 @@ impl<'a> IrEmitter<'a> {
                 if items.is_empty() {
                     Ok(quote! { HashSet::new() })
                 } else {
-                    let item_tokens: Vec<TokenStream> = items
-                        .iter()
-                        .map(|i| self.emit_expr(i))
-                        .collect::<Result<_, _>>()?;
+                    let item_tokens: Vec<TokenStream> =
+                        items.iter().map(|i| self.emit_expr(i)).collect::<Result<_, _>>()?;
                     Ok(quote! { [#(#item_tokens),*].into_iter().collect::<HashSet<_>>() })
                 }
             }
 
             IrExprKind::Tuple(items) => {
-                let item_tokens: Vec<TokenStream> = items
-                    .iter()
-                    .map(|i| self.emit_expr(i))
-                    .collect::<Result<_, _>>()?;
+                let item_tokens: Vec<TokenStream> =
+                    items.iter().map(|i| self.emit_expr(i)).collect::<Result<_, _>>()?;
                 Ok(quote! { (#(#item_tokens),*) })
             }
 
@@ -245,10 +231,8 @@ impl<'a> IrEmitter<'a> {
             }
 
             IrExprKind::Block { stmts, value } => {
-                let stmt_tokens: Vec<TokenStream> = stmts
-                    .iter()
-                    .map(|s| self.emit_stmt(s))
-                    .collect::<Result<_, _>>()?;
+                let stmt_tokens: Vec<TokenStream> =
+                    stmts.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
                 if let Some(v) = value {
                     let vv = self.emit_expr(v)?;
                     Ok(quote! {
@@ -276,11 +260,9 @@ impl<'a> IrEmitter<'a> {
                 Ok(quote! { #i? })
             }
 
-            IrExprKind::Range {
-                start,
-                end,
-                inclusive,
-            } => self.emit_range_expr(start.as_deref(), end.as_deref(), *inclusive),
+            IrExprKind::Range { start, end, inclusive } => {
+                self.emit_range_expr(start.as_deref(), end.as_deref(), *inclusive)
+            }
 
             IrExprKind::Cast { expr, to_type } => {
                 let e = self.emit_expr(expr)?;

@@ -50,25 +50,17 @@ impl<'a> IrEmitter<'a> {
                 // If this is a FrozenList/Set/Dict with literal initializer, emit via FrozenX::new(&[...]).
                 use super::super::types::IrType as T;
                 let specialized_tokens: Option<TokenStream> = match (ty, &value.kind) {
-                    (T::NamedGeneric(n, args), IrExprKind::List(items))
-                        if n == "FrozenList" && args.len() == 1 =>
-                    {
-                        let elems: Result<Vec<_>, EmitError> =
-                            items.iter().map(|i| self.emit_expr(i)).collect();
+                    (T::NamedGeneric(n, args), IrExprKind::List(items)) if n == "FrozenList" && args.len() == 1 => {
+                        let elems: Result<Vec<_>, EmitError> = items.iter().map(|i| self.emit_expr(i)).collect();
                         let elems = elems?;
                         Some(quote! { FrozenList::new(&[ #(#elems),* ]) })
                     }
-                    (T::NamedGeneric(n, args), IrExprKind::Set(items))
-                        if n == "FrozenSet" && args.len() == 1 =>
-                    {
-                        let elems: Result<Vec<_>, EmitError> =
-                            items.iter().map(|i| self.emit_expr(i)).collect();
+                    (T::NamedGeneric(n, args), IrExprKind::Set(items)) if n == "FrozenSet" && args.len() == 1 => {
+                        let elems: Result<Vec<_>, EmitError> = items.iter().map(|i| self.emit_expr(i)).collect();
                         let elems = elems?;
                         Some(quote! { FrozenSet::new(&[ #(#elems),* ]) })
                     }
-                    (T::NamedGeneric(n, args), IrExprKind::Dict(pairs))
-                        if n == "FrozenDict" && args.len() == 2 =>
-                    {
+                    (T::NamedGeneric(n, args), IrExprKind::Dict(pairs)) if n == "FrozenDict" && args.len() == 2 => {
                         let kvs: Result<Vec<_>, EmitError> = pairs
                             .iter()
                             .map(|(k, v)| {
@@ -151,10 +143,7 @@ impl<'a> IrEmitter<'a> {
         }
     }
 
-    fn emit_trait(
-        &self,
-        trait_decl: &super::super::decl::IrTrait,
-    ) -> Result<TokenStream, EmitError> {
+    fn emit_trait(&self, trait_decl: &super::super::decl::IrTrait) -> Result<TokenStream, EmitError> {
         let name = format_ident!("{}", &trait_decl.name);
         let methods: Vec<TokenStream> = trait_decl
             .methods
@@ -169,10 +158,7 @@ impl<'a> IrEmitter<'a> {
         })
     }
 
-    fn emit_trait_method(
-        &self,
-        func: &super::super::decl::IrFunction,
-    ) -> Result<TokenStream, EmitError> {
+    fn emit_trait_method(&self, func: &super::super::decl::IrFunction) -> Result<TokenStream, EmitError> {
         let name = format_ident!("{}", &func.name);
 
         let params: Vec<TokenStream> = func
@@ -206,11 +192,7 @@ impl<'a> IrEmitter<'a> {
             })
         } else {
             *self.current_function_return_type.borrow_mut() = Some(func.return_type.clone());
-            let body_stmts: Vec<TokenStream> = func
-                .body
-                .iter()
-                .map(|s| self.emit_stmt(s))
-                .collect::<Result<_, _>>()?;
+            let body_stmts: Vec<TokenStream> = func.body.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
             *self.current_function_return_type.borrow_mut() = None;
 
             Ok(quote! {
@@ -288,12 +270,7 @@ impl<'a> IrEmitter<'a> {
                 let trait_methods: Vec<TokenStream> = impl_block
                     .methods
                     .iter()
-                    .filter(|m| {
-                        !matches!(
-                            m.name.as_str(),
-                            "__eq__" | "__str__" | "__class_name__" | "__fields__"
-                        )
-                    })
+                    .filter(|m| !matches!(m.name.as_str(), "__eq__" | "__str__" | "__class_name__" | "__fields__"))
                     .map(|m| self.emit_trait_method(m))
                     .collect::<Result<_, _>>()?;
                 let trait_ident = format_ident!("{}", trait_name);
@@ -359,11 +336,7 @@ impl<'a> IrEmitter<'a> {
         };
 
         *self.current_function_return_type.borrow_mut() = Some(func.return_type.clone());
-        let body_stmts: Vec<TokenStream> = func
-            .body
-            .iter()
-            .map(|s| self.emit_stmt(s))
-            .collect::<Result<_, _>>()?;
+        let body_stmts: Vec<TokenStream> = func.body.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
         *self.current_function_return_type.borrow_mut() = None;
 
         Ok(quote! {
@@ -373,10 +346,7 @@ impl<'a> IrEmitter<'a> {
         })
     }
 
-    fn emit_function(
-        &self,
-        func: &super::super::decl::IrFunction,
-    ) -> Result<TokenStream, EmitError> {
+    fn emit_function(&self, func: &super::super::decl::IrFunction) -> Result<TokenStream, EmitError> {
         let name = format_ident!("{}", &func.name);
         let is_main = func.name == "main";
 
@@ -410,11 +380,7 @@ impl<'a> IrEmitter<'a> {
             .collect();
 
         *self.current_function_return_type.borrow_mut() = Some(func.return_type.clone());
-        let body_stmts: Vec<TokenStream> = func
-            .body
-            .iter()
-            .map(|s| self.emit_stmt(s))
-            .collect::<Result<_, _>>()?;
+        let body_stmts: Vec<TokenStream> = func.body.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
         *self.current_function_return_type.borrow_mut() = None;
 
         let async_kw = if func.is_async {
@@ -493,10 +459,8 @@ One obvious way.
             quote! { #[derive(#(#derives),*)] }
         };
 
-        let is_tuple_struct = !s.fields.is_empty()
-            && s.fields
-                .iter()
-                .all(|f| f.name.chars().all(|c| c.is_ascii_digit()));
+        let is_tuple_struct =
+            !s.fields.is_empty() && s.fields.iter().all(|f| f.name.chars().all(|c| c.is_ascii_digit()));
 
         if is_tuple_struct {
             let tuple_fields: Vec<TokenStream> = s
