@@ -26,11 +26,13 @@ Incan development is driven by RFCs (Request for Comments).
 
 - 🔄 Frontend/WASM (RFC 003): JSX wrapper, signals/runtime, wasm codegen, dev/prod tooling
 
-## Recently Completed
+## Completed
 
+- ✅ Incan initial setup (RFC 000) — core semantics, runtime, stdlib, tooling
 - ✅ Rust 2024 edition — enables `gen` blocks, async closures, improved RPIT lifetimes
 - ✅ Testing: fixtures/parametrize (RFCs 001, 002, 004) — parser (`yield`), runner discovery, codegen infrastructure
 - ✅ Rust interop (RFC 005): `rust::` imports, `use` codegen, auto Cargo.toml dependency injection
+- ✅ Const bindings (RFC 008) — `const NAME [: Type] = <const-expr>` with compile-time checks
 
 ## Status by Area
 
@@ -49,7 +51,7 @@ Incan development is driven by RFCs (Request for Comments).
 - ✅ Rust interop — `import rust::`, `from rust::`, auto deps with version mapping
 - 🟦 Generators (RFC 006) — Python-style `yield`, lazy iteration via Rust `gen` blocks
 - 🟦 Inline tests (RFC 007) — `@test` functions in source files, stripped from production
-- 🟦 Const bindings (RFC 008) — `const NAME [: Type] = <const-expr>` with compile-time checks
+- ✅ Const bindings (RFC 008) — `const NAME [: Type] = <const-expr>` with compile-time checks
 
 ## Upcoming (next)
 
@@ -77,6 +79,7 @@ Incan development is driven by RFCs (Request for Comments).
 - RFC 006: Python-style generators (`yield` → Rust `gen` blocks)
 - RFC 007: Inline tests (`@test` in source files)
 - RFC 008: Const bindings (compile-time constants)
+- RFC 015: Hatch-like tooling (project lifecycle CLI: init/new/version/test matrix)
 - Web framework guide: `docs/guide/web_framework.md`
 - Rust interop guide: `docs/guide/rust_interop.md`
 - Testing guide: `docs/tooling/testing.md`

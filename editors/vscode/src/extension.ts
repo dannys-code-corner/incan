@@ -8,6 +8,7 @@
  */
 
 import * as path from 'path';
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import {
     LanguageClient,
@@ -18,6 +19,29 @@ import {
 
 let client: LanguageClient | undefined;
 let outputChannel: vscode.OutputChannel;
+
+function findWorkspaceBinary(binaryName: string): string | undefined {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) {
+        return undefined;
+    }
+
+    // Prefer debug while developing; fall back to release.
+    const candidates = [
+        path.join('target', 'debug', binaryName),
+        path.join('target', 'release', binaryName),
+    ];
+
+    for (const folder of folders) {
+        for (const rel of candidates) {
+            const abs = path.join(folder.uri.fsPath, rel);
+            if (fs.existsSync(abs)) {
+                return abs;
+            }
+        }
+    }
+    return undefined;
+}
 
 function getCompilerPath(): string {
     const config = vscode.workspace.getConfiguration('incan');
@@ -106,8 +130,9 @@ export function activate(context: vscode.ExtensionContext) {
     // Get the path to incan-lsp
     let serverPath = config.get<string>('lsp.path', '');
     if (!serverPath) {
-        // Try to find incan-lsp in PATH or use a bundled version
-        serverPath = 'incan-lsp';
+        // When working inside the compiler repo, prefer the workspace-built binary so
+        // diagnostics match the checked-out language features (e.g. newly added syntax).
+        serverPath = findWorkspaceBinary('incan-lsp') ?? 'incan-lsp';
     }
 
     // Server options - run the LSP binary

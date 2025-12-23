@@ -13,6 +13,23 @@ use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
 
 impl AstLowering {
+    /// Lower an expression using the available typechecker output (if present).
+    ///
+    /// This wraps [`lower_expr`] and then overrides the inferred IR type using the typechecker
+    /// span->type map. This is a stepping stone toward fully typed lowering.
+    pub fn lower_expr_spanned(
+        &mut self,
+        expr: &Spanned<ast::Expr>,
+    ) -> Result<TypedExpr, LoweringError> {
+        let mut lowered = self.lower_expr(&expr.node)?;
+        if let Some(info) = &self.type_info {
+            if let Some(res_ty) = info.expr_type(expr.span) {
+                lowered.ty = self.lower_resolved_type(res_ty);
+            }
+        }
+        Ok(lowered)
+    }
+
     /// Lower an expression to IR.
     ///
     /// Handles all expression types including:
@@ -59,9 +76,9 @@ impl AstLowering {
                 ast::Literal::Int(n) => (IrExprKind::Int(*n), IrType::Int),
                 ast::Literal::Float(n) => (IrExprKind::Float(*n), IrType::Float),
                 ast::Literal::String(s) => (IrExprKind::String(s.clone()), IrType::String),
+                ast::Literal::Bytes(bytes) => (IrExprKind::Bytes(bytes.clone()), IrType::Unknown),
                 ast::Literal::Bool(b) => (IrExprKind::Bool(*b), IrType::Bool),
                 ast::Literal::None => (IrExprKind::Unit, IrType::Unit),
-                ast::Literal::Bytes(_) => (IrExprKind::Unit, IrType::Unknown),
             },
 
             ast::Expr::SelfExpr => (

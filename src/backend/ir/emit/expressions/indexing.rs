@@ -100,14 +100,10 @@ impl<'a> IrEmitter<'a> {
     ) -> Result<TokenStream, EmitError> {
         let o = self.emit_expr(object)?;
 
-        // Check if this is an enum variant access
+        // Check if this is an enum variant access using the actual enum registry, not capitalization heuristics
         if let IrExprKind::Var { name, .. } = &object.kind {
-            if name
-                .chars()
-                .next()
-                .map(|c| c.is_uppercase())
-                .unwrap_or(false)
-            {
+            let key = (name.to_string(), field.to_string());
+            if self.enum_variant_fields.contains_key(&key) {
                 let type_ident = format_ident!("{}", name);
                 let f = format_ident!("{}", field);
                 return Ok(quote! { #type_ident::#f });

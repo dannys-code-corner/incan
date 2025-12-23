@@ -415,6 +415,15 @@ pub mod errors {
         )
     }
 
+    pub fn missing_method(type_name: &str, method: &str, span: Span) -> CompileError {
+        CompileError::type_error(
+            format!("Type '{}' has no method '{}(...)'", type_name, method),
+            span,
+        )
+        .with_hint("Check the method name spelling and receiver type")
+        .with_hint("If this is your type, implement the method on the class/model/newtype")
+    }
+
     pub fn field_type_mismatch(
         field: &str,
         expected: &str,
@@ -437,6 +446,25 @@ pub mod errors {
     pub fn not_indexable(type_name: &str, span: Span) -> CompileError {
         CompileError::type_error(format!("Type '{}' is not indexable", type_name), span)
             .with_hint("Only List, Dict, str, and Tuple types support indexing")
+    }
+
+    pub fn tuple_index_requires_int_literal(span: Span) -> CompileError {
+        CompileError::type_error(
+            "Tuple indices must be an integer literal (e.g. t[0], t[-1])".to_string(),
+            span,
+        )
+        .with_hint("Use a literal index so the compiler can validate bounds")
+    }
+
+    pub fn tuple_index_out_of_bounds(idx: i64, len: usize, span: Span) -> CompileError {
+        CompileError::type_error(
+            format!(
+                "Tuple index {} is out of bounds for tuple of length {}",
+                idx, len
+            ),
+            span,
+        )
+        .with_hint("Tuple indices are checked at compile time")
     }
 
     pub fn index_type_mismatch(expected: &str, found: &str, span: Span) -> CompileError {

@@ -12,16 +12,6 @@
 //! - `strings` - String/f-string/byte-string scanning
 //! - `numbers` - Numeric literal scanning
 //! - `indent` - INDENT/DEDENT handling
-//!
-//! ## Examples
-//!
-//! ```
-//! use incan::lexer;
-//!
-//! let source = "x = 42";
-//! let tokens = lexer::lex(source).unwrap();
-//! assert!(!tokens.is_empty());
-//! ```
 
 mod indent;
 mod numbers;

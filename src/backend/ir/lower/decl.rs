@@ -35,6 +35,28 @@ impl AstLowering {
     ) -> Result<IrDecl, LoweringError> {
         let kind = match decl {
             ast::Declaration::Function(f) => IrDeclKind::Function(self.lower_function(f)?),
+            ast::Declaration::Const(c) => {
+                let value = self.lower_expr_spanned(&c.value)?;
+                // RFC 008: In const context, annotations imply frozen/static types.
+                // Prefer frozen annotation if present; otherwise use the initializer type.
+                let ty = if let Some(ann) = &c.ty {
+                    self.lower_const_annotation_type(&ann.node)
+                } else if !matches!(value.ty, IrType::Unknown) {
+                    value.ty.clone()
+                } else {
+                    IrType::Unknown
+                };
+                let visibility = match c.visibility {
+                    ast::Visibility::Public => Visibility::Public,
+                    ast::Visibility::Private => Visibility::Private,
+                };
+                IrDeclKind::Const {
+                    visibility,
+                    name: c.name.clone(),
+                    ty,
+                    value,
+                }
+            }
             ast::Declaration::Model(m) => {
                 let struct_ir = self.lower_model(m)?;
                 // Register struct name for constructor detection

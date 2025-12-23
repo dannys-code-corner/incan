@@ -1,11 +1,14 @@
-# RFC 009: Sized Integer Types
+# RFC 009: Sized Integer Types & Builtin Type Registry
 
 **Status:** Proposed  
-**Created:** 2024-12-11
+**Created:** 2024-12-11  
+**Updated:** 2024-12-23
 
 ## Summary
 
 Add explicit sized integer and float types to Incan, enabling precise control over numeric representation for FFI, binary protocols, and memory-sensitive applications.
+
+This RFC also introduces a **Builtin Type Registry** infrastructure (Phase 0) that allows the `incan_stdlib` crate to be the source of truth for builtin type methods, eliminating hardcoded method lookups scattered across the compiler.
 
 ## Motivation
 
@@ -200,6 +203,132 @@ def test_bit(value: u32, bit: u8) -> bool:
 
 ## Implementation Plan
 
+### Phase 0: Builtin Type Registry
+
+Before adding new types, establish infrastructure for the compiler to discover stdlib-defined types and their methods. This eliminates hardcoded method lookups scattered across the typechecker and emitter.
+
+#### Problem
+
+Currently, builtin type methods (e.g., `str.upper()`, `List.append()`, `FrozenStr.len()`) are hardcoded in multiple places:
+
+- `src/frontend/typechecker/check_expr/access.rs` — method return types
+- `src/backend/ir/emit/mod.rs` — code generation
+- `src/backend/ir/emit/expressions/methods.rs` — method emission
+
+This creates triple maintenance burden and prevents stdlib from being the source of truth.
+
+#### Solution
+
+1. **Interface declarations** in `incan_stdlib`:
+
+```rust
+// crates/incan_stdlib/src/builtins.rs
+
+/// Compiler-visible interface declarations for builtin types.
+/// These are parsed at build time to generate the type registry.
+
+#[incan_type(name = "str")]
+pub trait StrMethods {
+    fn len(&self) -> i64;
+    fn upper(&self) -> String;
+    fn lower(&self) -> String;
+    fn strip(&self) -> String;
+    fn contains(&self, pattern: &str) -> bool;
+    fn split(&self, sep: &str) -> Vec<String>;
+    // ...
+}
+
+#[incan_type(name = "FrozenStr")]
+pub trait FrozenStrMethods {
+    fn len(&self) -> i64;
+    fn is_empty(&self) -> bool;
+    fn upper(&self) -> String;
+    fn lower(&self) -> String;
+    // ...
+}
+
+#[incan_type(name = "FrozenBytes")]
+pub trait FrozenBytesMethods {
+    fn len(&self) -> i64;
+    fn is_empty(&self) -> bool;
+}
+
+#[incan_type(name = "i32")]
+pub trait I32Methods {
+    fn wrapping_add(&self, rhs: i32) -> i32;
+    fn saturating_add(&self, rhs: i32) -> i32;
+    fn checked_add(&self, rhs: i32) -> Option<i32>;
+    fn from_le_bytes(bytes: [u8; 4]) -> i32;
+    fn to_le_bytes(&self) -> [u8; 4];
+    // ...
+}
+```
+
+2. **Build-time registry generation** via `build.rs`:
+
+```rust
+// crates/incan_stdlib/build.rs
+
+fn main() {
+    // Parse #[incan_type] traits and generate:
+    // - JSON/binary registry file
+    // - Or inline Rust code for a BuiltinRegistry struct
+    generate_type_registry("src/builtins.rs", "generated/registry.json");
+}
+```
+
+3. **Typechecker loads registry**:
+
+```rust
+// src/frontend/typechecker/builtins.rs
+
+pub struct BuiltinRegistry {
+    types: HashMap<String, TypeInfo>,
+}
+
+impl BuiltinRegistry {
+    pub fn load() -> Self {
+        // Load from generated registry (embedded at compile time or read from file)
+        include!(concat!(env!("OUT_DIR"), "/builtin_registry.rs"))
+    }
+
+    pub fn method_return_type(&self, type_name: &str, method: &str) -> Option<ResolvedType> {
+        self.types.get(type_name)?.methods.get(method).cloned()
+    }
+}
+```
+
+4. **Typechecker uses registry** instead of hardcoded matches:
+
+```rust
+// src/frontend/typechecker/check_expr/access.rs
+
+fn check_method_call(&mut self, ...) -> ResolvedType {
+    // First, check the builtin registry
+    if let Some(return_ty) = self.builtin_registry.method_return_type(&base_ty_name, method) {
+        return return_ty;
+    }
+    
+    // Then fall back to user-defined types...
+}
+```
+
+#### Benefits
+
+- **Single source of truth**: stdlib defines types and methods
+- **No hardcoding**: typechecker and emitter read from registry
+- **Extensibility**: adding a method = adding it to stdlib trait
+- **Documentation**: traits serve as API documentation
+- **Testing**: can validate registry matches actual implementations
+
+#### Scope
+
+Phase 0 covers:
+
+- Registry infrastructure (parsing, generation, loading)
+- Migration of existing hardcoded types: `str`, `bytes`, `List`, `Dict`, `Set`, `FrozenStr`, `FrozenBytes`, `FrozenList`, `FrozenSet`, `FrozenDict`
+- Foundation for sized integer methods in Phase 5
+
 ### Phase 1: Lexer
 
 Add token recognition for:
@@ -217,18 +346,21 @@ Add token recognition for:
 - Add sized integer types to type system
 - Enforce explicit conversions (no implicit narrowing)
 - Type inference for unsuffixed literals
+- Use builtin registry (from Phase 0) for method lookups
 
 ### Phase 4: Codegen
 
 - Map types directly to Rust equivalents
 - Emit proper literal suffixes
 - Generate conversion code
+- Use builtin registry for method emission
 
 ### Phase 5: Standard Library
 
-- Add conversion methods (`try_from`, `from`, `as`)
-- Add byte conversion methods (`from_le_bytes`, `to_be_bytes`, etc.)
-- Add overflow-handling methods (`wrapping_add`, `saturating_sub`, etc.)
+- Add conversion methods (`try_from`, `from`, `as`) to registry
+- Add byte conversion methods (`from_le_bytes`, `to_be_bytes`, etc.) to registry
+- Add overflow-handling methods (`wrapping_add`, `saturating_sub`, etc.) to registry
+- Implement corresponding Rust methods in `incan_stdlib`
 
 ## Alternatives Considered
 
@@ -286,6 +418,25 @@ let y: unsigned int = 20  # u32
 
 ## Checklist
 
+### Phase 0: Builtin Type Registry
+
+- [ ] Design `#[incan_type]` attribute macro for trait declarations
+- [ ] Implement `build.rs` registry generator (parse traits → JSON/Rust)
+- [ ] Create `BuiltinRegistry` struct in typechecker
+- [ ] Migrate `str` methods from hardcoded to registry
+- [ ] Migrate `bytes` methods from hardcoded to registry
+- [ ] Migrate `List` methods from hardcoded to registry
+- [ ] Migrate `Dict` methods from hardcoded to registry
+- [ ] Migrate `Set` methods from hardcoded to registry
+- [ ] Migrate `FrozenStr` methods from hardcoded to registry
+- [ ] Migrate `FrozenBytes` methods from hardcoded to registry
+- [ ] Migrate `FrozenList`/`FrozenSet`/`FrozenDict` methods from hardcoded to registry
+- [ ] Update emitter to use registry for method emission
+- [ ] Remove hardcoded method matches from `check_expr/access.rs`
+- [ ] Remove hardcoded method matches from `emit/mod.rs`
+
+### Phase 1-4: Sized Types
+
 - [ ] Lexer: recognize sized type names
 - [ ] Lexer: parse literal suffixes (`42i32`, `3.14f32`)
 - [ ] Parser: sized type annotations
@@ -295,9 +446,16 @@ let y: unsigned int = 20  # u32
 - [ ] Codegen: emit proper Rust types
 - [ ] Codegen: emit literal suffixes
 - [ ] Codegen: auto-coerce `int` → `usize` for list indexing
-- [ ] Stdlib: conversion methods
-- [ ] Stdlib: byte conversion methods
-- [ ] Stdlib: overflow-handling methods
+
+### Phase 5: Standard Library Methods
+
+- [ ] Stdlib: add sized type interface traits (`I8Methods`, `U16Methods`, etc.)
+- [ ] Stdlib: conversion methods (`try_from`, `from`)
+- [ ] Stdlib: byte conversion methods (`from_le_bytes`, `to_be_bytes`, etc.)
+- [ ] Stdlib: overflow-handling methods (`wrapping_add`, `saturating_sub`, etc.)
+
+### Documentation
+
 - [ ] Documentation update
 - [ ] Examples
 

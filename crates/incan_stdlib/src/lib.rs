@@ -5,6 +5,7 @@
 
 #![deny(clippy::unwrap_used)]
 
+pub mod frozen;
 pub mod prelude;
 pub mod reflection;
 

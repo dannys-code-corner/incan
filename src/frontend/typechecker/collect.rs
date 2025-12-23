@@ -137,6 +137,7 @@ impl TypeChecker {
     pub(crate) fn collect_declaration(&mut self, decl: &Spanned<Declaration>) {
         match &decl.node {
             Declaration::Import(import) => self.collect_import(import, decl.span),
+            Declaration::Const(konst) => self.collect_const(konst, decl.span),
             Declaration::Model(model) => self.collect_model(model, decl.span),
             Declaration::Class(class) => self.collect_class(class, decl.span),
             Declaration::Trait(tr) => self.collect_trait(tr, decl.span),
@@ -145,6 +146,48 @@ impl TypeChecker {
             Declaration::Function(func) => self.collect_function(func, decl.span),
             Declaration::Docstring(_) => {} // Docstrings don't need collection
         }
+    }
+
+    /// Register a module-level const binding (first pass).
+    ///
+    /// Note: the initializer is validated in the second pass.
+    fn collect_const(&mut self, konst: &ConstDecl, span: Span) {
+        // Remember for const-eval (cycle detection / evaluation).
+        self.const_decls
+            .insert(konst.name.clone(), (konst.clone(), span));
+
+        // Best-effort type from annotation; refined during const-eval in second pass.
+        let ty = konst
+            .ty
+            .as_ref()
+            .map(|t| {
+                // `const` implies deep immutability; map common container annotations to frozen equivalents.
+                let resolved = resolve_type(&t.node, &self.symbols);
+                match resolved {
+                    ResolvedType::Str => ResolvedType::Named("FrozenStr".to_string()),
+                    ResolvedType::Bytes => ResolvedType::Named("FrozenBytes".to_string()),
+                    ResolvedType::Generic(name, args) => match name.as_str() {
+                        "List" => ResolvedType::Generic("FrozenList".to_string(), args),
+                        "Dict" => ResolvedType::Generic("FrozenDict".to_string(), args),
+                        "Set" => ResolvedType::Generic("FrozenSet".to_string(), args),
+                        _ => ResolvedType::Generic(name, args),
+                    },
+                    other => other,
+                }
+            })
+            .unwrap_or(ResolvedType::Unknown);
+
+        // Define as an immutable variable-like symbol for name resolution.
+        self.symbols.define(Symbol {
+            name: konst.name.clone(),
+            kind: SymbolKind::Variable(VariableInfo {
+                ty,
+                is_mutable: false,
+                is_used: false,
+            }),
+            span,
+            scope: 0,
+        });
     }
 
     /// Register an import declaration in the symbol table.

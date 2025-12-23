@@ -1,0 +1,33 @@
+"""Const bindings (module-level) example.
+
+This example demonstrates:
+- Rust-native constants (ints/bools)
+- Frozen constants (strings and frozen collections)
+- Const-to-const references
+"""
+
+
+# In `const` declarations, container/string annotations are frozen by default:
+# - `str` → `FrozenStr`
+# - `bytes` → `FrozenBytes`
+# - `List[T]` → `FrozenList[T]`
+# - `Dict[K, V]` → `FrozenDict[K, V]`
+# - `Set[T]` → `FrozenSet[T]`
+const MAX_RETRIES: int = 5
+const BASE: int = 10
+const LIMIT: int = BASE * 2
+const GREETING: str = "hello"
+const WELCOME: str = "hi " + "there"  # string concatenation is allowed in consts
+const NUMS: List[int] = [1, 2, 3]
+const HEADERS: Dict[str, str] = {"User-Agent": "incan"}
+const DATA: bytes = b"\x00\x01"
+const FULL_GREETING: str = GREETING + " world"
+
+def main() -> None:
+    print(MAX_RETRIES)
+    print(LIMIT)
+    print(GREETING)
+    print(WELCOME)
+    print(NUMS.len())
+    print(HEADERS.len())
+    print(DATA.len())

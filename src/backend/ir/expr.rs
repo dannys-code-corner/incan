@@ -62,6 +62,7 @@ pub enum IrExprKind {
     Int(i64),
     Float(f64),
     String(String),
+    Bytes(Vec<u8>),
 
     // Variable reference
     Var {

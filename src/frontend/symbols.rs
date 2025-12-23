@@ -33,8 +33,23 @@ impl SymbolTable {
     fn add_builtins(&mut self) {
         // Builtin types
         let builtin_types = [
-            "int", "float", "bool", "str", "bytes", "List", "Dict", "Set", "Tuple", "Option",
-            "Result", "Unit",
+            "int",
+            "float",
+            "bool",
+            "str",
+            "bytes",
+            "List",
+            "Dict",
+            "Set",
+            "Tuple",
+            "Option",
+            "Result",
+            "Unit",
+            // RFC 008 frozen const types
+            "FrozenStr",
+            "FrozenList",
+            "FrozenSet",
+            "FrozenDict",
         ];
 
         for name in builtin_types {

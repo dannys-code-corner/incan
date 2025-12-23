@@ -93,7 +93,7 @@ pub struct User {
 
 ## Version Compatibility
 
-This crate follows the Incan compiler version. When you compile with `incan v0.1.0-alpha.1`, the generated code depends on `incan_stdlib v0.1.0`.
+This crate follows the Incan compiler version. When you compile with `incan v0.1.0-alpha.2`, the generated code depends on `incan_stdlib v0.1.0`.
 
 ## License
 

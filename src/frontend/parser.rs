@@ -149,6 +149,7 @@ impl<'a> Parser<'a> {
                     | TokenKind::Trait
                     | TokenKind::Enum
                     | TokenKind::Type
+                    | TokenKind::Const
                     | TokenKind::Import
             ) {
                 return;
@@ -215,6 +216,19 @@ impl<'a> Parser<'a> {
         let decl = if self.check_keyword(&TokenKind::Import) || self.check_keyword(&TokenKind::From)
         {
             Declaration::Import(self.import_decl()?)
+        } else if self.check_keyword(&TokenKind::Pub) {
+            // Currently `pub` is only supported for module-level consts.
+            if self.peek_next().kind == TokenKind::Const {
+                self.expect(&TokenKind::Pub, "Expected 'pub'")?;
+                Declaration::Const(self.const_decl_with_visibility(Visibility::Public)?)
+            } else {
+                return Err(CompileError::syntax(
+                    "The 'pub' modifier is only supported for 'pub const' declarations".to_string(),
+                    self.current_span(),
+                ));
+            }
+        } else if self.check_keyword(&TokenKind::Const) {
+            Declaration::Const(self.const_decl_with_visibility(Visibility::Private)?)
         } else if self.check_keyword(&TokenKind::Model) {
             Declaration::Model(self.model_decl(decorators)?)
         } else if self.check_keyword(&TokenKind::Class) {
@@ -236,6 +250,27 @@ impl<'a> Parser<'a> {
 
         let end = self.tokens[self.pos.saturating_sub(1)].span.end;
         Ok(Spanned::new(decl, Span::new(start, end)))
+    }
+
+    fn const_decl_with_visibility(
+        &mut self,
+        visibility: Visibility,
+    ) -> Result<ConstDecl, CompileError> {
+        self.expect(&TokenKind::Const, "Expected 'const'")?;
+        let name = self.identifier()?;
+        let ty = if self.match_token(&TokenKind::Colon) {
+            Some(self.type_expr()?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::Eq, "Expected '=' after const name")?;
+        let value = self.expression()?;
+        Ok(ConstDecl {
+            visibility,
+            name,
+            ty,
+            value,
+        })
     }
 
     fn decorators(&mut self) -> Result<Vec<Spanned<Decorator>>, CompileError> {
@@ -2525,5 +2560,20 @@ def handle(opt: Option[int]) -> int:
 "#;
         let program = parse_str(source).unwrap();
         assert_eq!(program.declarations.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_const_decl() {
+        let source = r#"
+const ANSWER: int = 42
+"#;
+        let program = parse_str(source).unwrap();
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0].node {
+            Declaration::Const(c) => {
+                assert_eq!(c.name, "ANSWER");
+            }
+            _ => panic!("Expected const"),
+        }
     }
 }

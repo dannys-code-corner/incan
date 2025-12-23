@@ -55,12 +55,12 @@ impl<'a> IrEmitter<'a> {
                         },
                         _ => &IrType::Unknown,
                     };
-                    match elem_type {
-                        IrType::Bool => Ok(quote! {
-                            (#a.iter().map(|x| if *x { 1i64 } else { 0i64 }).sum::<i64>())
-                        }),
-                        _ => Ok(quote! { (#a.iter().sum::<i64>()) }),
-                    }
+                    let sum_tokens = if matches!(elem_type, IrType::Bool) {
+                        quote! { #a.iter().map(|v| if *v { 1i64 } else { 0i64 }).sum::<i64>() }
+                    } else {
+                        quote! { #a.iter().sum::<i64>() }
+                    };
+                    Ok(sum_tokens)
                 } else {
                     Ok(quote! { 0i64 })
                 }
@@ -206,12 +206,12 @@ impl<'a> IrEmitter<'a> {
                         _ => &IrType::Unknown,
                     };
 
-                    match elem_type {
-                        IrType::Bool => Ok(Some(quote! {
-                            (#a.iter().map(|x| if *x { 1i64 } else { 0i64 }).sum::<i64>())
-                        })),
-                        _ => Ok(Some(quote! { (#a.iter().sum::<i64>()) })),
-                    }
+                    let sum_tokens = if matches!(elem_type, IrType::Bool) {
+                        quote! { #a.iter().map(|v| if *v { 1i64 } else { 0i64 }).sum::<i64>() }
+                    } else {
+                        quote! { #a.iter().sum::<i64>() }
+                    };
+                    Ok(Some(sum_tokens))
                 } else {
                     Ok(None)
                 }

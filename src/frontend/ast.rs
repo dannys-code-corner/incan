@@ -51,6 +51,7 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Declaration {
     Import(ImportDecl),
+    Const(ConstDecl),
     Model(ModelDecl),
     Class(ClassDecl),
     Trait(TraitDecl),
@@ -58,6 +59,28 @@ pub enum Declaration {
     Enum(EnumDecl),
     Function(FunctionDecl),
     Docstring(String), // Module-level docstring
+}
+
+// ============================================================================
+// Const bindings (module-level)
+// ============================================================================
+
+/// Visibility modifier for module-level items.
+///
+/// This is intentionally minimal for now; only `pub` is supported for consts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Visibility {
+    #[default]
+    Private,
+    Public,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDecl {
+    pub visibility: Visibility,
+    pub name: Ident,
+    pub ty: Option<Spanned<Type>>,
+    pub value: Spanned<Expr>,
 }
 
 // ============================================================================
@@ -714,6 +737,7 @@ pub trait Visitor {
     fn visit_declaration(&mut self, decl: &Spanned<Declaration>) {
         match &decl.node {
             Declaration::Import(i) => self.visit_import(i),
+            Declaration::Const(c) => self.visit_const(c),
             Declaration::Model(m) => self.visit_model(m),
             Declaration::Class(c) => self.visit_class(c),
             Declaration::Trait(t) => self.visit_trait(t),
@@ -725,6 +749,7 @@ pub trait Visitor {
     }
 
     fn visit_import(&mut self, _import: &ImportDecl) {}
+    fn visit_const(&mut self, _const_decl: &ConstDecl) {}
     fn visit_docstring(&mut self, _doc: &str) {}
     fn visit_model(&mut self, _model: &ModelDecl) {}
     fn visit_class(&mut self, _class: &ClassDecl) {}

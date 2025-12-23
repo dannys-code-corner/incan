@@ -43,6 +43,7 @@ pub enum IrDeclKind {
 
     /// Constant
     Const {
+        visibility: Visibility, // pub or private
         name: String,
         ty: IrType,
         value: super::IrExpr,

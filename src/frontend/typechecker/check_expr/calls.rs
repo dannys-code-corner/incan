@@ -351,6 +351,27 @@ impl TypeChecker {
         args: &[CallArg],
         _span: Span,
     ) -> ResolvedType {
+        // Special-case: Enum variant constructor syntax `Enum.Variant(...)`.
+        // If callee is a field access where the base resolves to a known enum type
+        // and the field name matches a variant, treat this as a constructor and
+        // return the enum type.
+        if let Expr::Field(base, variant_name) = &callee.node {
+            let base_ty = self.check_expr(base);
+            if let ResolvedType::Named(enum_name) = &base_ty {
+                if let Some(id) = self.symbols.lookup(enum_name) {
+                    if let Some(sym) = self.symbols.get(id) {
+                        if let SymbolKind::Type(TypeInfo::Enum(enum_info)) = &sym.kind {
+                            if enum_info.variants.iter().any(|v| v == variant_name) {
+                                // Validate arguments but do not attempt strict arity/type checking here.
+                                self.check_call_args(args);
+                                return ResolvedType::Named(enum_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Handle math module function calls (math.sqrt, math.sin, etc.)
         if let Expr::Field(base, method) = &callee.node {
             if let Expr::Ident(module) = &base.node {

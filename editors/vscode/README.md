@@ -15,6 +15,10 @@ The extension includes support for the Incan Language Server, providing:
 
 **Requirements:** The `incan-lsp` binary must be installed and available in your PATH, or you can configure the path in settings.
 
+**Tip (development):** When your workspace is the Incan compiler repo, the extension will automatically prefer
+`target/debug/incan-lsp` (or `target/release/incan-lsp`) if present. This keeps diagnostics in sync with the
+syntax supported by your current checkout (e.g. `pub const`).
+
 ### Syntax Highlighting
 
 - **Function definitions** with parameters and return types

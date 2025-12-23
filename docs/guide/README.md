@@ -8,6 +8,7 @@ Learn how to write Incan code — from basics to advanced patterns.
 |-------|-------------|
 | [Models & Classes](models_and_classes.md) | When to use `model` vs `class` |
 | [Strings](strings.md) | String manipulation and comparison to Python/Rust |
+| [Const bindings](consts.md) | Module-level compile-time constants (`const`) |
 | [Error Handling](error_handling.md) | Result, Option, and the `?` operator |
 | [Error Messages](error_messages.md) | Understanding and fixing compiler errors |
 | [Imports & Modules](imports_and_modules.md) | Module system and built-in functions |

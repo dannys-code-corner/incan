@@ -192,7 +192,9 @@ impl<'a> IrEmitter<'a> {
                                 IrType::Int | IrType::Float | IrType::Bool => {
                                     quote! { #iter.iter().copied() }
                                 }
-                                _ => quote! { &#iter },
+                                // For non-Copy element types, iterate mutably to avoid moving the Vec
+                                // and to match the codegen behavior used throughout the project.
+                                _ => quote! { #iter.iter_mut() },
                             }
                         } else {
                             quote! { #iter }

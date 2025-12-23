@@ -227,6 +227,9 @@ pub fn exported_symbols(ast: &Program) -> Vec<ExportedSymbol> {
 
     for decl in &ast.declarations {
         match &decl.node {
+            Declaration::Const(c) => {
+                exports.push(ExportedSymbol::Const(c.name.clone()));
+            }
             Declaration::Model(m) => {
                 exports.push(ExportedSymbol::Type(m.name.clone()));
             }
@@ -264,6 +267,7 @@ pub enum ExportedSymbol {
     Type(String),
     Trait(String),
     Function(String),
+    Const(String),
     Variant {
         enum_name: String,
         variant_name: String,
@@ -274,8 +278,9 @@ pub enum ExportedSymbol {
 mod tests {
     use super::*;
     use crate::frontend::ast::{
-        ClassDecl, Declaration, EnumDecl, FunctionDecl, ImportDecl, ImportKind, ImportPath,
-        ModelDecl, NewtypeDecl, Program, Span, Spanned, TraitDecl, Type, VariantDecl,
+        ClassDecl, ConstDecl, Declaration, EnumDecl, Expr, FunctionDecl, ImportDecl, ImportKind,
+        ImportPath, Literal, ModelDecl, NewtypeDecl, Program, Span, Spanned, TraitDecl, Type,
+        VariantDecl,
     };
 
     fn make_spanned<T>(node: T) -> Spanned<T> {
@@ -491,6 +496,25 @@ mod tests {
         };
         let exports = exported_symbols(&program);
         assert!(exports.is_empty());
+    }
+
+    #[test]
+    fn test_exported_symbols_const() {
+        let konst = ConstDecl {
+            visibility: crate::frontend::ast::Visibility::Private,
+            name: "X".to_string(),
+            ty: Some(make_spanned(Type::Simple("int".to_string()))),
+            value: make_spanned(Expr::Literal(Literal::Int(1))),
+        };
+        let program = Program {
+            declarations: vec![make_spanned(Declaration::Const(konst))],
+        };
+        let exports = exported_symbols(&program);
+        assert_eq!(exports.len(), 1);
+        match &exports[0] {
+            ExportedSymbol::Const(name) => assert_eq!(name, "X"),
+            _ => panic!("Expected Const export"),
+        }
     }
 
     #[test]

@@ -797,12 +797,6 @@ fn run_single_test(test: &TestInfo) -> TestResult {
         .arg("test")
         .arg("--")
         .arg("--nocapture")
-        // Ensure we don't inherit a broken CA bundle path from the parent env.
-        .env_remove("SSL_CERT_FILE")
-        .env_remove("SSL_CERT_DIR")
-        .env_remove("CURL_CA_BUNDLE")
-        .env_remove("REQUESTS_CA_BUNDLE")
-        .env_remove("CARGO_HTTP_CAINFO")
         .current_dir(&temp_dir)
         .output();
 

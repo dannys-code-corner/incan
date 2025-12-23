@@ -455,12 +455,16 @@
           "match": "\\b(if|else|elif|while|for|in|match|case|return|yield|break|continue|pass)\\b"
         },
         {
+          "name": "keyword.control.const.incan",
+          "match": "\\bconst\\b"
+        },
+        {
           "name": "keyword.control.async.incan",
           "match": "\\b(async|await)\\b"
         },
         {
           "name": "keyword.declaration.incan",
-          "match": "\\b(def|class|model|trait|enum|newtype|type)\\b"
+          "match": "\\b(def|class|model|trait|enum|newtype|type|const)\\b"
         },
         {
           "name": "keyword.control.import.incan",

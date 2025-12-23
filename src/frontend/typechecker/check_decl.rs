@@ -18,6 +18,7 @@ impl TypeChecker {
     pub(crate) fn check_declaration(&mut self, decl: &Spanned<Declaration>) {
         match &decl.node {
             Declaration::Import(_) => {} // Already handled
+            Declaration::Const(konst) => self.check_const(konst, decl.span),
             Declaration::Model(model) => self.check_model(model),
             Declaration::Class(class) => self.check_class(class),
             Declaration::Trait(tr) => self.check_trait(tr),
@@ -26,6 +27,11 @@ impl TypeChecker {
             Declaration::Function(func) => self.check_function(func),
             Declaration::Docstring(_) => {} // Docstrings don't need checking
         }
+    }
+
+    fn check_const(&mut self, konst: &ConstDecl, span: Span) {
+        // RFC 008: const-eval (with cycle detection + category classification).
+        self.check_and_resolve_const(konst, span);
     }
 
     fn check_model(&mut self, model: &ModelDecl) {

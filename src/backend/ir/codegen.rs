@@ -375,13 +375,34 @@ impl<'a> IrCodegen<'a> {
 
     /// Generate code via the IR pipeline (fallible version)
     fn try_generate_via_ir(&self, program: &Program) -> Result<String, GenerationError> {
-        // Lower AST to IR
-        let mut lowering = AstLowering::new();
+        // Attempt to typecheck to obtain reusable type information for lowering.
+        // If typechecking fails (should be pre-validated by CLI), fall back gracefully.
+        let type_info_opt = {
+            use crate::frontend::typechecker::TypeChecker;
+            let mut tc = TypeChecker::new();
+            let deps: Vec<(&str, &Program)> = self
+                .dependency_modules
+                .iter()
+                .map(|(name, ast)| (*name, *ast))
+                .collect();
+            match tc.check_with_imports(program, &deps) {
+                Ok(()) => Some(tc.type_info().clone()),
+                Err(_errs) => None,
+            }
+        };
+
+        // Lower AST to IR using typechecker output when available
+        let mut lowering = match type_info_opt {
+            Some(info) => AstLowering::new_with_type_info(info),
+            None => AstLowering::new(),
+        };
         let ir_program = lowering.lower_program(program)?;
 
         // Build unified function registry including imported module functions
         let mut unified_registry = ir_program.function_registry.clone();
         for (_, dep_ast) in &self.dependency_modules {
+            // For dependencies, use best-effort lowering without type info to
+            // preserve prior behavior and avoid redundant typechecking.
             let mut dep_lowering = AstLowering::new();
             let dep_ir = dep_lowering.lower_program(dep_ast)?;
             unified_registry.merge(&dep_ir.function_registry);

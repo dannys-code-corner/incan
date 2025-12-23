@@ -91,6 +91,10 @@ impl<'a> IrEmitter<'a> {
             }
             IrExprKind::Float(n) => Ok(quote! { #n }),
             IrExprKind::String(s) => Ok(quote! { #s }),
+            IrExprKind::Bytes(bytes) => {
+                let lit = Literal::byte_string(bytes);
+                Ok(lit.to_token_stream())
+            }
 
             IrExprKind::Var { name, access: _ } => {
                 let n = format_ident!("{}", Self::escape_keyword(name));

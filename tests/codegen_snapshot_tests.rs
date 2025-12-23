@@ -202,6 +202,20 @@ fn test_builtins_codegen() {
 }
 
 #[test]
+fn test_pub_const_codegen() {
+    let source = load_test_file("pub_const");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("pub_const", rust_code);
+}
+
+#[test]
+fn test_const_str_chain_codegen() {
+    let source = load_test_file("const_str_chain");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("const_str_chain", rust_code);
+}
+
+#[test]
 fn test_inferred_reassign_codegen() {
     // Snapshot test to keep style consistent with this file.
     let source = load_test_file("inferred_reassign");

@@ -34,3 +34,6 @@ out/
 *.vsix
 .vscode-test/
 *.tsbuildinfo
+
+# Local AI agent instructions (may reference non-committed local research files)
+.github/copilot-instructions.md

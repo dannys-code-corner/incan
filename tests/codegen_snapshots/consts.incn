@@ -1,0 +1,15 @@
+"""Module-level consts (RFC 008)"""
+
+const A: int = 1 + 2 * 3
+const S: FrozenStr = "hello"
+const L: FrozenList[int] = [1, 2, 3]
+const D: FrozenDict[FrozenStr, int] = {"a": 1, "b": 2}
+const T = ("x", 42)
+
+def main() -> None:
+    # Just reference a few to keep them "used"
+    print(A)
+    print(S)
+    print(L.len())
+    print(D.len())
+    print(T)

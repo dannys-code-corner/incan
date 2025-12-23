@@ -67,10 +67,10 @@ impl AstLowering {
         stmt: &ast::Statement,
     ) -> Result<IrStmt, LoweringError> {
         let kind = match stmt {
-            ast::Statement::Expr(e) => IrStmtKind::Expr(self.lower_expr(&e.node)?),
+            ast::Statement::Expr(e) => IrStmtKind::Expr(self.lower_expr_spanned(e)?),
 
             ast::Statement::Assignment(a) => {
-                let value = self.lower_expr(&a.value.node)?;
+                let value = self.lower_expr_spanned(&a.value)?;
                 let ty =
                     a.ty.as_ref()
                         .map(|t| self.lower_type(&t.node))
@@ -147,23 +147,25 @@ impl AstLowering {
 
             ast::Statement::FieldAssignment(fa) => IrStmtKind::Assign {
                 target: AssignTarget::Field {
-                    object: Box::new(self.lower_expr(&fa.object.node)?),
+                    object: Box::new(self.lower_expr_spanned(&fa.object)?),
                     field: fa.field.clone(),
                 },
-                value: self.lower_expr(&fa.value.node)?,
+                value: self.lower_expr_spanned(&fa.value)?,
             },
 
             ast::Statement::IndexAssignment(ia) => IrStmtKind::Assign {
                 target: AssignTarget::Index {
-                    object: Box::new(self.lower_expr(&ia.object.node)?),
-                    index: Box::new(self.lower_expr(&ia.index.node)?),
+                    object: Box::new(self.lower_expr_spanned(&ia.object)?),
+                    index: Box::new(self.lower_expr_spanned(&ia.index)?),
                 },
-                value: self.lower_expr(&ia.value.node)?,
+                value: self.lower_expr_spanned(&ia.value)?,
             },
 
-            ast::Statement::Return(opt) => {
-                IrStmtKind::Return(opt.as_ref().map(|e| self.lower_expr(&e.node)).transpose()?)
-            }
+            ast::Statement::Return(opt) => IrStmtKind::Return(
+                opt.as_ref()
+                    .map(|e| self.lower_expr_spanned(e))
+                    .transpose()?,
+            ),
 
             ast::Statement::If(i) => {
                 // Lower elif branches as nested if-else in the else branch
@@ -185,14 +187,14 @@ impl AstLowering {
                     let elif_then = self.lower_statements(elif_body)?;
                     self.scopes.pop();
                     let elif_stmt = IrStmtKind::If {
-                        condition: self.lower_expr(&elif_cond.node)?,
+                        condition: self.lower_expr_spanned(elif_cond)?,
                         then_branch: elif_then,
                         else_branch,
                     };
                     else_branch = Some(vec![IrStmt::new(elif_stmt)]);
                 }
 
-                let condition = self.lower_expr(&i.condition.node)?;
+                let condition = self.lower_expr_spanned(&i.condition)?;
                 self.scopes.push(HashMap::new());
                 let then_branch = self.lower_statements(&i.then_body)?;
                 self.scopes.pop();
@@ -207,7 +209,7 @@ impl AstLowering {
             ast::Statement::While(w) => {
                 // Push a new scope for the while-loop body
                 self.scopes.push(HashMap::new());
-                let condition = self.lower_expr(&w.condition.node)?;
+                let condition = self.lower_expr_spanned(&w.condition)?;
                 let body = self.lower_statements(&w.body)?;
                 self.scopes.pop();
                 IrStmtKind::While {
@@ -219,7 +221,7 @@ impl AstLowering {
 
             ast::Statement::For(f) => {
                 // Lower iterable before entering loop scope
-                let iterable = self.lower_expr(&f.iter.node)?;
+                let iterable = self.lower_expr_spanned(&f.iter)?;
 
                 // Push a new scope for the for-loop body
                 self.scopes.push(HashMap::new());
@@ -255,11 +257,11 @@ impl AstLowering {
             ast::Statement::CompoundAssignment(ca) => IrStmtKind::CompoundAssign {
                 target: AssignTarget::Var(ca.name.clone()),
                 op: self.lower_compound_op(&ca.op),
-                value: self.lower_expr(&ca.value.node)?,
+                value: self.lower_expr_spanned(&ca.value)?,
             },
 
             ast::Statement::TupleUnpack(tu) => {
-                let value = self.lower_expr(&tu.value.node)?;
+                let value = self.lower_expr_spanned(&tu.value)?;
                 IrStmtKind::Let {
                     name: tu.names.join("_"),
                     ty: value.ty.clone(),
@@ -282,7 +284,7 @@ impl AstLowering {
                 // Lower chained assignment x = y = z = 5 into:
                 // let z = 5; let y = z; let x = y;
                 // We return a block expression that does all the assignments
-                let value = self.lower_expr(&ca.value.node)?;
+                let value = self.lower_expr_spanned(&ca.value)?;
                 let ty = value.ty.clone();
 
                 // Assign to last target first (rightmost)

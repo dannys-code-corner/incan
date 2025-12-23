@@ -21,6 +21,7 @@ pub enum TokenKind {
     Enum,     // enum
     Type,     // type definition
     Newtype,  // newtype definition
+    Const,    // const binding (module-level)
     Import,   // python-like import declaration
     RustKw,   // rust keyword (for rust:: imports)
     As,       // import alias keyword
@@ -143,6 +144,7 @@ pub static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "enum" => TokenKind::Enum,
     "type" => TokenKind::Type,
     "newtype" => TokenKind::Newtype,
+    "const" => TokenKind::Const,
     "import" => TokenKind::Import,
     "as" => TokenKind::As,
     "python" => TokenKind::Python,
