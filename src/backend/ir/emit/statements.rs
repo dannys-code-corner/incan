@@ -162,13 +162,22 @@ impl<'a> IrEmitter<'a> {
                 condition,
                 body,
             } => {
-                let cond = self.emit_expr(condition)?;
                 let body_stmts: Vec<TokenStream> = body.iter().map(|s| self.emit_stmt(s)).collect::<Result<_, _>>()?;
-                Ok(quote! {
-                    while #cond {
-                        #(#body_stmts)*
-                    }
-                })
+                let is_infinite = matches!(condition.kind, IrExprKind::Bool(true));
+                if is_infinite {
+                    Ok(quote! {
+                        loop {
+                            #(#body_stmts)*
+                        }
+                    })
+                } else {
+                    let cond = self.emit_expr(condition)?;
+                    Ok(quote! {
+                        while #cond {
+                            #(#body_stmts)*
+                        }
+                    })
+                }
             }
             IrStmtKind::For {
                 label: _,

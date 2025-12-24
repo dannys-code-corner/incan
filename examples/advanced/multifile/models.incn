@@ -1,16 +1,16 @@
 """User and Product models for the shop example."""
 
-model User:
+pub model User:
     name: str
     email: str
     age: int = 0
 
 
-model Product:
+pub model Product:
     name: str
     price: float
     quantity: int = 1
 
 
-def product_total(product: Product) -> float:
+pub def product_total(product: Product) -> float:
     return product.price * float(product.quantity)

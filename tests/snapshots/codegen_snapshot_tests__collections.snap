@@ -11,7 +11,7 @@ expression: rust_code
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
 use std::collections::HashMap;
-pub fn test_collections() {
+fn test_collections() {
     let empty_list = vec![];
     let empty_dict = HashMap::new();
     let numbers = vec![1, 2, 3, 4, 5];

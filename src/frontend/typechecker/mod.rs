@@ -55,6 +55,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::CompileError;
+use crate::frontend::module::{ExportedSymbol, exported_symbols};
 use crate::frontend::symbols::*;
 
 /// Capture reusable typechecking output for later compiler stages.
@@ -132,6 +133,8 @@ pub struct TypeChecker {
     pub(crate) const_eval_cache: HashMap<String, const_eval::ConstEvalResult>,
     /// Reusable typechecker output for downstream stages.
     pub(crate) type_info: TypeCheckInfo,
+    /// Public exports for imported dependency modules, keyed by module name.
+    pub(crate) dependency_exports: HashMap<String, Vec<ExportedSymbol>>,
 }
 
 impl TypeChecker {
@@ -145,6 +148,7 @@ impl TypeChecker {
             const_eval_state: HashMap::new(),
             const_eval_cache: HashMap::new(),
             type_info: TypeCheckInfo::default(),
+            dependency_exports: HashMap::new(),
         }
     }
 
@@ -217,9 +221,11 @@ impl TypeChecker {
     /// - `module_ast`: parsed AST of the dependency module.
     /// - `_module_name`: reserved for future namespacing (currently unused).
     pub fn import_module(&mut self, module_ast: &Program, _module_name: &str) {
-        // Collect all declarations from the imported module
+        // Collect only public declarations from the imported module.
         for decl in &module_ast.declarations {
-            self.collect_declaration(decl);
+            if is_public_decl(decl) {
+                self.collect_declaration(decl);
+            }
         }
     }
 
@@ -243,6 +249,11 @@ impl TypeChecker {
         program: &Program,
         dependencies: &[(&str, &Program)],
     ) -> Result<(), Vec<CompileError>> {
+        self.dependency_exports.clear();
+        for (name, dep_ast) in dependencies {
+            self.dependency_exports
+                .insert(name.to_string(), exported_symbols(dep_ast));
+        }
         // First: import all dependencies
         for (name, dep_ast) in dependencies {
             self.import_module(dep_ast, name);
@@ -315,6 +326,19 @@ impl TypeChecker {
 impl Default for TypeChecker {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn is_public_decl(decl: &Spanned<Declaration>) -> bool {
+    match &decl.node {
+        Declaration::Const(c) => matches!(c.visibility, Visibility::Public),
+        Declaration::Model(m) => matches!(m.visibility, Visibility::Public),
+        Declaration::Class(c) => matches!(c.visibility, Visibility::Public),
+        Declaration::Enum(e) => matches!(e.visibility, Visibility::Public),
+        Declaration::Newtype(n) => matches!(n.visibility, Visibility::Public),
+        Declaration::Trait(t) => matches!(t.visibility, Visibility::Public),
+        Declaration::Function(f) => matches!(f.visibility, Visibility::Public),
+        Declaration::Import(_) | Declaration::Docstring(_) => false,
     }
 }
 

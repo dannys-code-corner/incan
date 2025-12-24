@@ -23,28 +23,28 @@ pub trait Comparable {
     fn is_equal(&self, other: _) -> bool;
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Dog {
-    pub name: String,
+struct Dog {
+    name: String,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Dog(name: String) -> Dog {
+fn Dog(name: String) -> Dog {
     Dog { name }
 }
 impl Named for Dog {}
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Rectangle {
-    pub width: f64,
-    pub height: f64,
+struct Rectangle {
+    width: f64,
+    height: f64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Rectangle(width: f64, height: f64) -> Rectangle {
+fn Rectangle(width: f64, height: f64) -> Rectangle {
     Rectangle { width, height }
 }
 impl Rectangle {
-    pub fn area(&self) -> f64 {
+    fn area(&self) -> f64 {
         return self.width * self.height;
     }
-    pub fn perimeter(&self) -> f64 {
+    fn perimeter(&self) -> f64 {
         return 2f64 * self.width + self.height;
     }
 }
@@ -57,15 +57,15 @@ impl Shape for Rectangle {
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Circle {
-    pub radius: f64,
+struct Circle {
+    radius: f64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Circle(radius: f64) -> Circle {
+fn Circle(radius: f64) -> Circle {
     Circle { radius }
 }
 impl Circle {
-    pub fn draw(&self) -> String {
+    fn draw(&self) -> String {
         return format!("Circle with radius {}", self.radius);
     }
 }
@@ -75,21 +75,21 @@ impl Drawable for Circle {
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Square {
-    pub side: f64,
+struct Square {
+    side: f64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Square(side: f64) -> Square {
+fn Square(side: f64) -> Square {
     Square { side }
 }
 impl Square {
-    pub fn area(&self) -> f64 {
+    fn area(&self) -> f64 {
         return self.side * self.side;
     }
-    pub fn perimeter(&self) -> f64 {
+    fn perimeter(&self) -> f64 {
         return 4f64 * self.side;
     }
-    pub fn draw(&self) -> String {
+    fn draw(&self) -> String {
         return format!("Square with side {}", self.side);
     }
 }
@@ -110,22 +110,22 @@ pub trait Resizable {
     fn resize(&self, factor: f64);
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Carton {
-    pub width: f64,
-    pub height: f64,
-    pub depth: f64,
+struct Carton {
+    width: f64,
+    height: f64,
+    depth: f64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Carton(width: f64, height: f64, depth: f64) -> Carton {
+fn Carton(width: f64, height: f64, depth: f64) -> Carton {
     Carton { width, height, depth }
 }
 impl Carton {
-    pub fn resize(&self, factor: f64) {
+    fn resize(&self, factor: f64) {
         self.width = self.width * factor;
         self.height = self.height * factor;
         self.depth = self.depth * factor;
     }
-    pub fn volume(&self) -> f64 {
+    fn volume(&self) -> f64 {
         return self.width * self.height * self.depth;
     }
 }
@@ -143,19 +143,19 @@ pub trait Serializable {
     fn serialize(&self) -> String;
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Document {
-    pub title: String,
-    pub content: String,
+struct Document {
+    title: String,
+    content: String,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Document(title: String, content: String) -> Document {
+fn Document(title: String, content: String) -> Document {
     Document { title, content }
 }
 impl Document {
-    pub fn to_string(&self) -> String {
+    fn to_string(&self) -> String {
         return format!("{}: {}", self.title, self.content);
     }
-    pub fn serialize(&self) -> String {
+    fn serialize(&self) -> String {
         return format!("title={},content={}", self.title, self.content);
     }
 }
@@ -169,11 +169,11 @@ impl Serializable for Document {
         return format!("title={},content={}", self.title, self.content);
     }
 }
-pub fn draw_shape(shape: Drawable) {
+fn draw_shape(shape: Drawable) {
     let output = shape.draw();
     println!("{}", output);
 }
-pub fn calculate_area(shape: Shape) -> f64 {
+fn calculate_area(shape: Shape) -> f64 {
     return shape.area();
 }
 fn main() {

@@ -1,9 +1,10 @@
 //! First-pass collection: register types, functions, and imports into the symbol table.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::frontend::ast::*;
-use crate::frontend::diagnostics::errors;
+use crate::frontend::diagnostics::{CompileError, errors};
+use crate::frontend::module::ExportedSymbol;
 use crate::frontend::symbols::*;
 
 use super::{TypeChecker, VALID_DERIVES};
@@ -178,6 +179,7 @@ impl TypeChecker {
 
     /// Register an import declaration in the symbol table.
     fn collect_import(&mut self, import: &ImportDecl, span: Span) {
+        self.validate_import_visibility(import, span);
         match &import.kind {
             ImportKind::Module(path) => {
                 let name = import
@@ -224,6 +226,57 @@ impl TypeChecker {
                     full_path.push(item.name.clone());
                     self.define_rust_import_symbol(name, crate_name.clone(), full_path, span);
                 }
+            }
+        }
+    }
+
+    /// Ensure imported items are public in the dependency module.
+    fn validate_import_visibility(&mut self, import: &ImportDecl, span: Span) {
+        let ImportKind::From { module, items } = &import.kind else {
+            return;
+        };
+
+        // Only check modules that were pre-imported; skip std and unresolved ones.
+        let module_name = module.segments.join("_");
+        let Some(exports) = self.dependency_exports.get(&module_name) else {
+            return;
+        };
+
+        let mut exported_names: HashSet<String> = HashSet::new();
+        for sym in exports {
+            match sym {
+                ExportedSymbol::Const(name)
+                | ExportedSymbol::Type(name)
+                | ExportedSymbol::Trait(name)
+                | ExportedSymbol::Function(name) => {
+                    exported_names.insert(name.clone());
+                }
+                ExportedSymbol::Variant { variant_name, .. } => {
+                    exported_names.insert(variant_name.clone());
+                }
+            }
+        }
+
+        for item in items {
+            if !exported_names.contains(&item.name) {
+                let message = format!(
+                    "Cannot import `{}` from `{}`: it is private or not exported. Mark it `pub` in that module.",
+                    item.name,
+                    module.to_rust_path()
+                );
+                let hint = format!(
+                    "Public exports from `{}`: {}",
+                    module.to_rust_path(),
+                    if exported_names.is_empty() {
+                        "<none>".to_string()
+                    } else {
+                        let mut names: Vec<_> = exported_names.iter().cloned().collect();
+                        names.sort();
+                        names.join(", ")
+                    }
+                );
+
+                self.errors.push(CompileError::new(message, span).with_hint(hint));
             }
         }
     }

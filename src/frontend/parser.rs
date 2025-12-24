@@ -210,33 +210,34 @@ impl<'a> Parser<'a> {
         // Collect decorators
         let decorators = self.decorators()?;
 
+        let mut visibility = Visibility::Private;
+        if self.check_keyword(&TokenKind::Pub) {
+            self.expect(&TokenKind::Pub, "Expected 'pub'")?;
+            visibility = Visibility::Public;
+        }
+
         let decl = if self.check_keyword(&TokenKind::Import) || self.check_keyword(&TokenKind::From) {
-            Declaration::Import(self.import_decl()?)
-        } else if self.check_keyword(&TokenKind::Pub) {
-            // Currently `pub` is only supported for module-level consts.
-            if self.peek_next().kind == TokenKind::Const {
-                self.expect(&TokenKind::Pub, "Expected 'pub'")?;
-                Declaration::Const(self.const_decl_with_visibility(Visibility::Public)?)
-            } else {
+            if visibility == Visibility::Public {
                 return Err(CompileError::syntax(
-                    "The 'pub' modifier is only supported for 'pub const' declarations".to_string(),
+                    "The 'pub' modifier is not supported on imports".to_string(),
                     self.current_span(),
                 ));
             }
+            Declaration::Import(self.import_decl()?)
         } else if self.check_keyword(&TokenKind::Const) {
-            Declaration::Const(self.const_decl_with_visibility(Visibility::Private)?)
+            Declaration::Const(self.const_decl_with_visibility(visibility)?)
         } else if self.check_keyword(&TokenKind::Model) {
-            Declaration::Model(self.model_decl(decorators)?)
+            Declaration::Model(self.model_decl(decorators, visibility)?)
         } else if self.check_keyword(&TokenKind::Class) {
-            Declaration::Class(self.class_decl(decorators)?)
+            Declaration::Class(self.class_decl(decorators, visibility)?)
         } else if self.check_keyword(&TokenKind::Trait) {
-            Declaration::Trait(self.trait_decl(decorators)?)
+            Declaration::Trait(self.trait_decl(decorators, visibility)?)
         } else if self.check_keyword(&TokenKind::Type) || self.check_keyword(&TokenKind::Newtype) {
-            Declaration::Newtype(self.newtype_decl()?)
+            Declaration::Newtype(self.newtype_decl(visibility)?)
         } else if self.check_keyword(&TokenKind::Enum) {
-            Declaration::Enum(self.enum_decl()?)
+            Declaration::Enum(self.enum_decl(visibility)?)
         } else if self.check_keyword(&TokenKind::Def) || self.check_keyword(&TokenKind::Async) {
-            Declaration::Function(self.function_decl(decorators)?)
+            Declaration::Function(self.function_decl(decorators, visibility)?)
         } else {
             return Err(CompileError::syntax(
                 format!("Expected declaration, found {:?}", self.peek().kind),
@@ -490,7 +491,12 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn model_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<ModelDecl, CompileError> {
+    /// Parse a model declaration.
+    fn model_decl(
+        &mut self,
+        decorators: Vec<Spanned<Decorator>>,
+        visibility: Visibility,
+    ) -> Result<ModelDecl, CompileError> {
         self.expect(&TokenKind::Model, "Expected 'model'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -498,11 +504,19 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Newline, "Expected newline after ':'")?;
         self.expect(&TokenKind::Indent, "Expected indented block")?;
 
-        let (fields, methods) = self.fields_and_methods()?;
+        let (mut fields, methods) = self.fields_and_methods()?;
 
         self.expect(&TokenKind::Dedent, "Expected dedent after model body")?;
 
+        // If the model is public, promote all field visibilities to public.
+        if matches!(visibility, Visibility::Public) {
+            for f in &mut fields {
+                f.node.visibility = Visibility::Public;
+            }
+        }
+
         Ok(ModelDecl {
+            visibility,
             decorators,
             name,
             type_params,
@@ -511,7 +525,12 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn class_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<ClassDecl, CompileError> {
+    /// Parse a class declaration.
+    fn class_decl(
+        &mut self,
+        decorators: Vec<Spanned<Decorator>>,
+        visibility: Visibility,
+    ) -> Result<ClassDecl, CompileError> {
         self.expect(&TokenKind::Class, "Expected 'class'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -532,11 +551,19 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Newline, "Expected newline after ':'")?;
         self.expect(&TokenKind::Indent, "Expected indented block")?;
 
-        let (fields, methods) = self.fields_and_methods()?;
+        let (mut fields, methods) = self.fields_and_methods()?;
 
         self.expect(&TokenKind::Dedent, "Expected dedent after class body")?;
 
+        // If the class is public, promote all field visibilities to public.
+        if matches!(visibility, Visibility::Public) {
+            for f in &mut fields {
+                f.node.visibility = Visibility::Public;
+            }
+        }
+
         Ok(ClassDecl {
+            visibility,
             decorators,
             name,
             type_params,
@@ -547,7 +574,12 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn trait_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<TraitDecl, CompileError> {
+    /// Parse a trait declaration.
+    fn trait_decl(
+        &mut self,
+        decorators: Vec<Spanned<Decorator>>,
+        visibility: Visibility,
+    ) -> Result<TraitDecl, CompileError> {
         self.expect(&TokenKind::Trait, "Expected 'trait'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -572,6 +604,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Dedent, "Expected dedent after trait body")?;
 
         Ok(TraitDecl {
+            visibility,
             decorators,
             name,
             type_params,
@@ -579,7 +612,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn newtype_decl(&mut self) -> Result<NewtypeDecl, CompileError> {
+    /// Parse a newtype declaration.
+    fn newtype_decl(&mut self, visibility: Visibility) -> Result<NewtypeDecl, CompileError> {
         // Support both: "type X = newtype T" and "newtype X = T"
         if self.match_token(&TokenKind::Newtype) {
             // newtype X = T syntax
@@ -611,13 +645,15 @@ impl<'a> Parser<'a> {
         };
 
         Ok(NewtypeDecl {
+            visibility,
             name,
             underlying,
             methods,
         })
     }
 
-    fn enum_decl(&mut self) -> Result<EnumDecl, CompileError> {
+    /// Parse an enum declaration.
+    fn enum_decl(&mut self, visibility: Visibility) -> Result<EnumDecl, CompileError> {
         self.expect(&TokenKind::Enum, "Expected 'enum'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
@@ -635,12 +671,14 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Dedent, "Expected dedent after enum body")?;
 
         Ok(EnumDecl {
+            visibility,
             name,
             type_params,
             variants,
         })
     }
 
+    /// Parse a variant declaration.
     fn variant_decl(&mut self) -> Result<Spanned<VariantDecl>, CompileError> {
         let start = self.current_span().start;
         // Allow keywords like "None" as variant names (Rust allows this)
@@ -656,7 +694,12 @@ impl<'a> Parser<'a> {
         Ok(Spanned::new(VariantDecl { name, fields }, Span::new(start, end)))
     }
 
-    fn function_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<FunctionDecl, CompileError> {
+    /// Parse a function declaration.
+    fn function_decl(
+        &mut self,
+        decorators: Vec<Spanned<Decorator>>,
+        visibility: Visibility,
+    ) -> Result<FunctionDecl, CompileError> {
         let is_async = self.match_token(&TokenKind::Async);
         self.expect(&TokenKind::Def, "Expected 'def'")?;
         let name = self.identifier()?;
@@ -678,6 +721,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Dedent, "Expected dedent after function body")?;
 
         Ok(FunctionDecl {
+            visibility,
             decorators,
             is_async,
             name,
@@ -688,6 +732,7 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a method declaration.
     fn method_decl(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<Spanned<MethodDecl>, CompileError> {
         let start = self.current_span().start;
         let is_async = self.match_token(&TokenKind::Async);
@@ -739,6 +784,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    /// Parse a receiver and parameters.
     fn receiver_and_params(&mut self) -> Result<(Option<Receiver>, Vec<Spanned<Param>>), CompileError> {
         // Check for receiver
         let receiver = if self.check_keyword(&TokenKind::Mut) {
@@ -767,6 +813,7 @@ impl<'a> Parser<'a> {
         Ok((receiver, params))
     }
 
+    /// Parse parameters.
     fn params(&mut self) -> Result<Vec<Spanned<Param>>, CompileError> {
         let mut params = Vec::new();
         if !self.check(&TokenKind::RParen) {
@@ -780,6 +827,7 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
+    /// Parse a parameter.
     fn param(&mut self) -> Result<Spanned<Param>, CompileError> {
         let start = self.current_span().start;
         // Check for optional 'mut' keyword
@@ -804,6 +852,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    /// Parse fields and methods.
     fn fields_and_methods(&mut self) -> Result<FieldsAndMethods, CompileError> {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
@@ -831,8 +880,14 @@ impl<'a> Parser<'a> {
         Ok((fields, methods))
     }
 
+    /// Parse a field declaration.
     fn field_decl(&mut self) -> Result<Spanned<FieldDecl>, CompileError> {
         let start = self.current_span().start;
+        let visibility = if self.match_token(&TokenKind::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
         let name = self.identifier()?;
         self.expect(&TokenKind::Colon, "Expected ':' after field name")?;
         let ty = self.type_expr()?;
@@ -842,7 +897,15 @@ impl<'a> Parser<'a> {
             None
         };
         let end = self.tokens[self.pos - 1].span.end;
-        Ok(Spanned::new(FieldDecl { name, ty, default }, Span::new(start, end)))
+        Ok(Spanned::new(
+            FieldDecl {
+                visibility,
+                name,
+                ty,
+                default,
+            },
+            Span::new(start, end),
+        ))
     }
 
     // ========================================================================

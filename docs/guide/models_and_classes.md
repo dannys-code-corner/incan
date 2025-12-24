@@ -34,17 +34,30 @@ Incan uses `model` instead because:
 2. **Clearer semantics** — `model` says "this is data", not "this is a memory layout"
 3. **Tooling conventions** — ORMs, validators, serializers all use "model" terminology
 
-Under the hood, both `model` and `class` compile to Rust `struct`s:
+Under the hood, both `model` and `class` compile to Rust `struct`s.
+
+### Visibility (`pub`)
+
+Control whether declarations are importable from other modules.
+
+- Items are **private by default**, just like in Rust.
+- Prefix a declaration with `pub` (publicly visible) to make it importable from other modules.
+- For `model` and `class`, `pub` also makes fields public by default.
 
 ```incan
-model User:           # → pub struct User { ... }
+model User:           # private by default
     name: str
 
-class Service:        # → pub struct Service { ... } + impl Service { ... }
+pub model PublicUser: # public model, fields are public by default
+    name: str
+
+class Service:        # private by default
     repo: Repo
     def work(self):
         ...
 ```
+
+> Note: this is an example of how Incan is more rust-like than Python. In Python, all fields are public by default.
 
 ## Model: Data-First
 

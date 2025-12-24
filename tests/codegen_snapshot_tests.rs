@@ -205,6 +205,13 @@ fn test_patterns_codegen() {
 }
 
 #[test]
+fn test_param_mut_unused_codegen() {
+    let source = load_test_file("param_mut_unused");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("param_mut_unused", rust_code);
+}
+
+#[test]
 fn test_imports_codegen() {
     let source = load_test_file("imports");
     let rust_code = generate_rust(&source);

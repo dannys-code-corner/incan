@@ -1,16 +1,16 @@
 """Utility functions for formatting and validation."""
 
-def format_currency(amount: float) -> str:
+pub def format_currency(amount: float) -> str:
     "Format a float as currency string."
     return f"${amount}"
 
 
-def format_greeting(name: str) -> str:
+pub def format_greeting(name: str) -> str:
     "Create a friendly greeting."
     return f"Welcome, {name}!"
 
 
-def is_valid_email(email: str) -> bool:
+pub def is_valid_email(email: str) -> bool:
     "Basic email validation - checks for @ symbol."
     return "@" in email
 

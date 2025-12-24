@@ -2,10 +2,10 @@
 API handlers
 """
 
-def handle_request(path: str) -> str:
+pub def handle_request(path: str) -> str:
     """Handle an API request"""
     return f"[v1] Handled: {path}"
 
-def format_user_info(name: str, email: str) -> str:
+pub def format_user_info(name: str, email: str) -> str:
     """Format user info for API response"""
     return f"User: {name} <{email}>"

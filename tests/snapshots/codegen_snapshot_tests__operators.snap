@@ -10,7 +10,7 @@ expression: rust_code
 
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
-pub fn test_operators() {
+fn test_operators() {
     let add = 1 + 2;
     let sub = 5 - 3;
     let mul = 4 * 6;

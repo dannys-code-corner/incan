@@ -10,7 +10,7 @@ expression: rust_code
 
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
-pub fn test_literals() {
+fn test_literals() {
     let x = 42;
     let y = -10;
     let big = 1000000;

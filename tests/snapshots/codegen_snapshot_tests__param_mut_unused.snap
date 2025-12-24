@@ -10,10 +10,10 @@ expression: rust_code
 
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
-fn add(a: i64, b: i64) -> i64 {
-    return a + b;
-}
-fn main() {
-    let result = add(1, 2);
-    println!("{}", result);
+fn energy(bodies: Vec<i64>) -> i64 {
+    let mut total = 0;
+    for b in bodies.iter().copied() {
+        total = total + b;
+    }
+    return total;
 }
