@@ -174,6 +174,9 @@ impl TypeChecker {
                     Pattern::Wildcard | Pattern::Binding(_) => {
                         has_wildcard = true;
                     }
+                    Pattern::Literal(Literal::None) if subject_ty.is_option() => {
+                        covered.insert("None".to_string());
+                    }
                     Pattern::Constructor(name, _) => {
                         let variant_name = if name.contains("::") {
                             name.split("::").last().unwrap_or(name).to_string()
