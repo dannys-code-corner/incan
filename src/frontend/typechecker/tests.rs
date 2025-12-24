@@ -397,6 +397,19 @@ def foo() -> Option[int]:
 }
 
 #[test]
+fn test_option_match_exhaustive_some_none() {
+    let source = r#"
+def foo(value: Option[int]) -> int:
+  match value:
+    case Some(n):
+      return n
+    case None:
+      return 0
+"#;
+    assert!(check_str(source).is_ok());
+}
+
+#[test]
 fn test_result_ok() {
     let source = r#"
 def foo() -> Result[int, str]:
