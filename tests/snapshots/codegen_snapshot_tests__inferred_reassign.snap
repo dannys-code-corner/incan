@@ -10,12 +10,12 @@ expression: rust_code
 
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
-pub fn bump() -> i64 {
+fn bump() -> i64 {
     let mut x = 1;
     x = x + 1;
     return x;
 }
-pub fn collatz_inner(n: i64) -> i64 {
+fn collatz_inner(n: i64) -> i64 {
     let mut num = n;
     while num != 1 {
         if incan_stdlib::num::py_mod(num, 2) == 0 {
@@ -26,7 +26,7 @@ pub fn collatz_inner(n: i64) -> i64 {
     }
     return num;
 }
-pub fn reassign_in_if() -> i64 {
+fn reassign_in_if() -> i64 {
     let mut status = 0;
     if status == 0 {
         status = 1;

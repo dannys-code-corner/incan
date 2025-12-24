@@ -82,10 +82,10 @@ import super::common::Logger
 import super::super::shared::utils::format_date
 ```
 
-| Prefix | Meaning |
-|--------|---------|
-| `..` or `super::` | Parent directory (one level up) |
-| `...` or `super::super::` | Grandparent directory (two levels up) |
+| Prefix                    | Meaning                                    |
+| ------------------------- | ------------------------------------------ |
+| `..` or `super::`         | Parent directory (one level up)            |
+| `...` or `super::super::` | Grandparent directory (two levels up)      |
 
 ### Absolute Imports (Project Root)
 
@@ -101,34 +101,35 @@ The compiler finds the project root by looking for `Cargo.toml` or `src/` direct
 
 ### Path Summary
 
-| Incan Path | Meaning | Rust Equivalent |
-|------------|---------|-----------------|
-| `models` | Same directory | `models` |
-| `db.models` | Child `db/models.incn` | `db::models` |
-| `..common` | Parent's `common.incn` | `super::common` |
-| `super::utils` | Parent's `utils.incn` | `super::utils` |
-| `crate.config` | Root's `config.incn` | `crate::config` |
+| Incan Path      | Meaning                 | Rust Equivalent  |
+| --------------  | ----------------------  | ---------------  |
+| `models`        | Same directory          | `models`         |
+| `db.models`     | Child `db/models.incn`  | `db::models`     |
+| `..common`      | Parent's `common.incn`  | `super::common`  |
+| `super::utils`  | Parent's `utils.incn`   | `super::utils`   |
+| `crate.config`  | Root's `config.incn`    | `crate::config`  |
 
 ## The Prelude
 
-The **prelude** is a set of types and traits automatically available in every Incan file without explicit imports. This mirrors Rust's prelude concept.
+The **prelude** is a set of types and traits automatically available in every Incan file without explicit imports.
+This mirrors Rust's prelude concept.
 
 ### What's in the Incan Prelude
 
 These types are always available:
 
-| Incan Type | Rust Type | Description |
-|------------|-----------|-------------|
-| `int` | `i64` | 64-bit signed integer |
-| `float` | `f64` | 64-bit floating point |
-| `bool` | `bool` | Boolean (true/false) |
-| `str` | `String` | UTF-8 string |
-| `bytes` | `Vec<u8>` | Byte array |
-| `List[T]` | `Vec<T>` | Dynamic array |
-| `Dict[K, V]` | `HashMap<K, V>` | Hash map |
-| `Set[T]` | `HashSet<T>` | Hash set |
-| `Option[T]` | `Option<T>` | Optional value (Some/None) |
-| `Result[T, E]` | `Result<T, E>` | Success or error (Ok/Err) |
+| Incan Type      | Rust Type          | Description                    |
+| --------------  | -----------------  | -----------------------------  |
+| `int`           | `i64`              | 64-bit signed integer          |
+| `float`         | `f64`              | 64-bit floating point          |
+| `bool`          | `bool`             | Boolean (true/false)           |
+| `str`           | `String`           | UTF-8 string                   |
+| `bytes`         | `Vec<u8>`          | Byte array                     |
+| `List[T]`       | `Vec<T>`           | Dynamic array                  |
+| `Dict[K, V]`    | `HashMap<K, V>`    | Hash map                       |
+| `Set[T]`        | `HashSet<T>`       | Hash set                       |
+| `Option[T]`     | `Option<T>`        | Optional value (Some/None)     |
+| `Result[T, E]`  | `Result<T, E>`     | Success or error (Ok/Err)      |
 
 ### Built-in Functions (Always Available)
 
@@ -167,7 +168,8 @@ Choose whichever style you prefer; both are equivalent in Incan and compile to R
 
 ## Special import: `import this`
 
-`import this` is always available and prints the Incan "Zen" design principles when imported. It works in regular modules and inline snippets, e.g.:
+`import this` is always available and prints the Incan "Zen" design principles when imported.
+It works in regular modules and inline snippets, e.g.:
 
 ```bash
 incan run -c "import this"
@@ -175,7 +177,8 @@ incan run -c "import this"
 
 ## Standard Library: `math` Module
 
-Like Python, Incan provides a `math` module with common mathematical functions and constants. You must import it before use:
+Like Python, Incan provides a `math` module with common mathematical functions and constants.
+You must import it before use:
 
 ```incan
 import math
@@ -197,7 +200,7 @@ def main() -> None:
 ### Available Constants
 
 | Constant | Description |
-|----------|-------------|
+| --- | --- |
 | `math.pi` | π (3.14159...) |
 | `math.e` | Euler's number (2.71828...) |
 | `math.tau` | τ = 2π (6.28318...) |
@@ -207,7 +210,7 @@ def main() -> None:
 ### Available Functions
 
 | Function | Description |
-|----------|-------------|
+| --- | --- |
 | `math.sqrt(x)` | Square root |
 | `math.abs(x)` | Absolute value |
 | `math.floor(x)` | Largest integer ≤ x |
@@ -293,7 +296,14 @@ from models import User
 ```
 
 **Coming from Python?**  
-Incan doesn't need `__init__.py` files. In Python, every package directory requires an `__init__.py` to be importable. In Incan, directories are automatically recognized as modules — just create your `.incn` files and import. For directories that need a "main" file (like Python's `__init__.py`), use `mod.incn`.
+Incan doesn't need `__init__.py` files. In Python, every package directory requires an `__init__.py` to be importable.
+
+In Incan, directories are automatically recognized as modules — just create your `.incn` files and import.
+
+For directories that need a "main" file (like Python's `__init__.py`), use `mod.incn`.
+
+Also note that many common types and functions are available without any import via the prelude.
+See [The Prelude](#the-prelude) for details.
 
 ### Module Visibility
 
@@ -303,6 +313,7 @@ By default, items are private to their module. Use `pub` to export:
 # In models.incn
 
 # Public - can be imported by other modules
+# Note: `pub model` and `pub class` imply **public fields by default**.
 pub model User:
     name: str
     email: str
@@ -331,7 +342,8 @@ import std::path::Path   # Path manipulation
 import std::time         # Time operations
 ```
 
-However, using these requires understanding the underlying Rust types. The built-in functions (`read_file`, `write_file`, etc.) provide a more ergonomic interface for common operations.
+However, using these requires understanding the underlying Rust types.
+The built-in functions (`read_file`, `write_file`, etc.) provide a more ergonomic interface for common operations.
 
 ## Current Status
 

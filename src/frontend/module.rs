@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::ast::{Declaration, ImportDecl, ImportKind, Program, Span};
+use super::ast::{Declaration, ImportDecl, ImportKind, Program, Span, Visibility};
 use super::diagnostics::CompileError;
 use super::lexer;
 use super::parser;
@@ -215,39 +215,55 @@ pub fn resolve_import_path(base_dir: &Path, import: &ImportDecl) -> Option<PathB
     None
 }
 
-/// Extract what symbols a module exports
+/// Extract public symbols exported by a module.
+///
+/// Visibility is enforced here: only `pub` declarations are considered exports.
 pub fn exported_symbols(ast: &Program) -> Vec<ExportedSymbol> {
     let mut exports = Vec::new();
 
     for decl in &ast.declarations {
         match &decl.node {
             Declaration::Const(c) => {
-                exports.push(ExportedSymbol::Const(c.name.clone()));
+                if matches!(c.visibility, Visibility::Public) {
+                    exports.push(ExportedSymbol::Const(c.name.clone()));
+                }
             }
             Declaration::Model(m) => {
-                exports.push(ExportedSymbol::Type(m.name.clone()));
+                if matches!(m.visibility, Visibility::Public) {
+                    exports.push(ExportedSymbol::Type(m.name.clone()));
+                }
             }
             Declaration::Class(c) => {
-                exports.push(ExportedSymbol::Type(c.name.clone()));
+                if matches!(c.visibility, Visibility::Public) {
+                    exports.push(ExportedSymbol::Type(c.name.clone()));
+                }
             }
             Declaration::Enum(e) => {
-                exports.push(ExportedSymbol::Type(e.name.clone()));
-                // Also export variants
-                for variant in &e.variants {
-                    exports.push(ExportedSymbol::Variant {
-                        enum_name: e.name.clone(),
-                        variant_name: variant.node.name.clone(),
-                    });
+                if matches!(e.visibility, Visibility::Public) {
+                    exports.push(ExportedSymbol::Type(e.name.clone()));
+                    // Also export variants
+                    for variant in &e.variants {
+                        exports.push(ExportedSymbol::Variant {
+                            enum_name: e.name.clone(),
+                            variant_name: variant.node.name.clone(),
+                        });
+                    }
                 }
             }
             Declaration::Newtype(n) => {
-                exports.push(ExportedSymbol::Type(n.name.clone()));
+                if matches!(n.visibility, Visibility::Public) {
+                    exports.push(ExportedSymbol::Type(n.name.clone()));
+                }
             }
             Declaration::Trait(t) => {
-                exports.push(ExportedSymbol::Trait(t.name.clone()));
+                if matches!(t.visibility, Visibility::Public) {
+                    exports.push(ExportedSymbol::Trait(t.name.clone()));
+                }
             }
             Declaration::Function(f) => {
-                exports.push(ExportedSymbol::Function(f.name.clone()));
+                if matches!(f.visibility, Visibility::Public) {
+                    exports.push(ExportedSymbol::Function(f.name.clone()));
+                }
             }
             Declaration::Import(_) | Declaration::Docstring(_) => {}
         }
@@ -270,7 +286,7 @@ mod tests {
     use super::*;
     use crate::frontend::ast::{
         ClassDecl, ConstDecl, Declaration, EnumDecl, Expr, FunctionDecl, ImportDecl, ImportKind, ImportPath, Literal,
-        ModelDecl, NewtypeDecl, Program, Span, Spanned, TraitDecl, Type, VariantDecl,
+        ModelDecl, NewtypeDecl, Program, Span, Spanned, TraitDecl, Type, VariantDecl, Visibility,
     };
 
     fn make_spanned<T>(node: T) -> Spanned<T> {
@@ -314,6 +330,7 @@ mod tests {
     #[test]
     fn test_exported_symbols_model() {
         let model = ModelDecl {
+            visibility: Visibility::Public,
             decorators: vec![],
             name: "User".to_string(),
             type_params: vec![],
@@ -334,6 +351,7 @@ mod tests {
     #[test]
     fn test_exported_symbols_class() {
         let class = ClassDecl {
+            visibility: Visibility::Public,
             decorators: vec![],
             name: "MyClass".to_string(),
             type_params: vec![],
@@ -356,6 +374,7 @@ mod tests {
     #[test]
     fn test_exported_symbols_enum_with_variants() {
         let enum_decl = EnumDecl {
+            visibility: Visibility::Public,
             name: "Color".to_string(),
             type_params: vec![],
             variants: vec![
@@ -402,6 +421,7 @@ mod tests {
     #[test]
     fn test_exported_symbols_newtype() {
         let newtype = NewtypeDecl {
+            visibility: Visibility::Public,
             name: "UserId".to_string(),
             underlying: make_spanned(Type::Simple("i64".to_string())),
             methods: vec![],
@@ -420,6 +440,7 @@ mod tests {
     #[test]
     fn test_exported_symbols_trait() {
         let trait_decl = TraitDecl {
+            visibility: Visibility::Public,
             decorators: vec![],
             name: "Printable".to_string(),
             type_params: vec![],
@@ -439,6 +460,7 @@ mod tests {
     #[test]
     fn test_exported_symbols_function() {
         let func = FunctionDecl {
+            visibility: Visibility::Public,
             decorators: vec![],
             is_async: false,
             name: "calculate".to_string(),
@@ -487,7 +509,7 @@ mod tests {
     #[test]
     fn test_exported_symbols_const() {
         let konst = ConstDecl {
-            visibility: crate::frontend::ast::Visibility::Private,
+            visibility: crate::frontend::ast::Visibility::Public,
             name: "X".to_string(),
             ty: Some(make_spanned(Type::Simple("int".to_string()))),
             value: make_spanned(Expr::Literal(Literal::Int(1))),
@@ -506,6 +528,7 @@ mod tests {
     #[test]
     fn test_exported_symbols_multiple_declarations() {
         let model = ModelDecl {
+            visibility: Visibility::Public,
             decorators: vec![],
             name: "User".to_string(),
             type_params: vec![],
@@ -513,6 +536,7 @@ mod tests {
             methods: vec![],
         };
         let func = FunctionDecl {
+            visibility: Visibility::Public,
             decorators: vec![],
             is_async: false,
             name: "create_user".to_string(),
@@ -522,6 +546,7 @@ mod tests {
             body: vec![],
         };
         let trait_decl = TraitDecl {
+            visibility: Visibility::Public,
             decorators: vec![],
             name: "Serializable".to_string(),
             type_params: vec![],

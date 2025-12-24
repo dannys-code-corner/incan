@@ -11,7 +11,7 @@ expression: rust_code
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
 use std::collections::HashMap;
-pub fn test_basic_assignments() {
+fn test_basic_assignments() {
     let x = 42;
     let y = "hello".to_string();
     let z = true;
@@ -21,7 +21,7 @@ pub fn test_basic_assignments() {
     a = b;
     b = temp;
 }
-pub fn test_augmented_assignments() {
+fn test_augmented_assignments() {
     let mut x = 10;
     x = x + 5;
     x = x - 3;
@@ -31,7 +31,7 @@ pub fn test_augmented_assignments() {
     let mut s = "hello".to_string();
     s = s + " world";
 }
-pub fn test_collection_assignments() {
+fn test_collection_assignments() {
     let mut numbers = vec![1, 2, 3, 4];
     numbers[(0) as usize] = 10;
     numbers[numbers.len() - 1i64] = 40;
@@ -39,7 +39,7 @@ pub fn test_collection_assignments() {
     data.insert("b", 2);
     data.insert("a", 10);
 }
-pub fn test_multiple_targets() {
+fn test_multiple_targets() {
     let value = 5;
     let mut x = value;
     let mut y = value;

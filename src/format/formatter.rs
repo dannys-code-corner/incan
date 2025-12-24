@@ -211,6 +211,9 @@ impl Formatter {
         }
 
         // model Name[T]:
+        if matches!(model.visibility, crate::frontend::ast::Visibility::Public) {
+            self.writer.write("pub ");
+        }
         self.writer.write("model ");
         self.writer.write(&model.name);
         self.format_type_params(&model.type_params);
@@ -248,6 +251,9 @@ impl Formatter {
         }
 
         // class Name[T] extends Base with Trait1:
+        if matches!(class.visibility, crate::frontend::ast::Visibility::Public) {
+            self.writer.write("pub ");
+        }
         self.writer.write("class ");
         self.writer.write(&class.name);
         self.format_type_params(&class.type_params);
@@ -301,6 +307,9 @@ impl Formatter {
         }
 
         // trait Name[T]:
+        if matches!(tr.visibility, crate::frontend::ast::Visibility::Public) {
+            self.writer.write("pub ");
+        }
         self.writer.write("trait ");
         self.writer.write(&tr.name);
         self.format_type_params(&tr.type_params);
@@ -327,6 +336,9 @@ impl Formatter {
 
     fn format_enum(&mut self, en: &EnumDecl) {
         // enum Name[T]:
+        if matches!(en.visibility, crate::frontend::ast::Visibility::Public) {
+            self.writer.write("pub ");
+        }
         self.writer.write("enum ");
         self.writer.write(&en.name);
         self.format_type_params(&en.type_params);
@@ -361,6 +373,9 @@ impl Formatter {
 
     fn format_newtype(&mut self, nt: &NewtypeDecl) {
         // type Name = newtype underlying
+        if matches!(nt.visibility, crate::frontend::ast::Visibility::Public) {
+            self.writer.write("pub ");
+        }
         self.writer.write("type ");
         self.writer.write(&nt.name);
         self.writer.write(" = newtype ");
@@ -385,6 +400,9 @@ impl Formatter {
         }
 
         // async def name(params) -> ReturnType:
+        if matches!(func.visibility, crate::frontend::ast::Visibility::Public) {
+            self.writer.write("pub ");
+        }
         if func.is_async {
             self.writer.write("async ");
         }
@@ -491,6 +509,9 @@ impl Formatter {
     }
 
     fn format_field(&mut self, field: &FieldDecl) {
+        if matches!(field.visibility, crate::frontend::ast::Visibility::Public) {
+            self.writer.write("pub ");
+        }
         self.writer.write(&field.name);
         self.writer.write(": ");
         self.format_type(&field.ty.node);

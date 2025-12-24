@@ -10,7 +10,7 @@ expression: rust_code
 
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
-pub fn test_pattern_wildcard() {
+fn test_pattern_wildcard() {
     let x = 42;
     match x {
         _ => {
@@ -18,7 +18,7 @@ pub fn test_pattern_wildcard() {
         }
     };
 }
-pub fn test_pattern_literals() {
+fn test_pattern_literals() {
     let value = 5;
     match value {
         0 => {
@@ -35,7 +35,7 @@ pub fn test_pattern_literals() {
         }
     };
 }
-pub fn test_pattern_string_literal() {
+fn test_pattern_string_literal() {
     let name = "Alice".to_string();
     match name {
         "Alice" => {
@@ -49,7 +49,7 @@ pub fn test_pattern_string_literal() {
         }
     };
 }
-pub fn test_pattern_bool() {
+fn test_pattern_bool() {
     let flag = true;
     match flag {
         true => {
@@ -60,7 +60,7 @@ pub fn test_pattern_bool() {
         }
     };
 }
-pub fn test_pattern_option_some() {
+fn test_pattern_option_some() {
     let maybe = Some(42);
     match maybe {
         Some(n) => {
@@ -71,7 +71,7 @@ pub fn test_pattern_option_some() {
         }
     };
 }
-pub fn test_pattern_option_none() {
+fn test_pattern_option_none() {
     let maybe = ();
     match maybe {
         Some(n) => {
@@ -82,7 +82,7 @@ pub fn test_pattern_option_none() {
         }
     };
 }
-pub fn test_pattern_result_ok() {
+fn test_pattern_result_ok() {
     let result = Ok(42);
     match result {
         Ok(value) => {
@@ -93,7 +93,7 @@ pub fn test_pattern_result_ok() {
         }
     };
 }
-pub fn test_pattern_result_err() {
+fn test_pattern_result_err() {
     let result = Err("failed".to_string());
     match result {
         Ok(value) => {
@@ -104,7 +104,7 @@ pub fn test_pattern_result_err() {
         }
     };
 }
-pub fn test_pattern_nested_option() {
+fn test_pattern_nested_option() {
     let nested = Some(Some(42));
     match nested {
         Some(Some(n)) => {
@@ -118,7 +118,7 @@ pub fn test_pattern_nested_option() {
         }
     };
 }
-pub fn test_pattern_tuple() {
+fn test_pattern_tuple() {
     let pair = (42, "answer");
     match pair {
         (0, _) => {
@@ -132,7 +132,7 @@ pub fn test_pattern_tuple() {
         }
     };
 }
-pub fn test_pattern_multiple_bindings() {
+fn test_pattern_multiple_bindings() {
     let value = Some(10);
     match value {
         Some(x) if x > 5 => {

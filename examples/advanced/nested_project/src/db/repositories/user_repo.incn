@@ -5,11 +5,11 @@ Note: super:: imports work at parse-time but cross-module codegen
 is a work-in-progress. This module shows standalone functions.
 """
 
-def find_user_by_name(name: str) -> str:
+pub def find_user_by_name(name: str) -> str:
     """Find a user by name (mock - returns formatted string)"""
     email = f"{name.lower()}@example.com"
     return f"{name} <{email}>"
 
-def create_user(name: str, email: str) -> str:
+pub def create_user(name: str, email: str) -> str:
     """Create a new user (mock - returns formatted string)"""
     return f"Created: {name} <{email}>"

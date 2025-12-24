@@ -11,12 +11,12 @@ expression: rust_code
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct User {
-    pub name: String,
-    pub age: i64,
+struct User {
+    name: String,
+    age: i64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn User(name: String, age: i64) -> User {
+fn User(name: String, age: i64) -> User {
     User { name, age }
 }
 fn main() {

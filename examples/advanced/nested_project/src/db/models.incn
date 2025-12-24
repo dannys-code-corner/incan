@@ -2,11 +2,11 @@
 Database models
 """
 
-model User:
+pub model User:
     name: str
     email: str
 
 
-model Product:
+pub model Product:
     name: str
     price: float

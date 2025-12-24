@@ -16,6 +16,14 @@ use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
 
 impl AstLowering {
+    /// Map frontend visibility (`pub` / private) to IR visibility for Rust emission.
+    fn map_visibility(vis: crate::frontend::ast::Visibility) -> Visibility {
+        match vis {
+            crate::frontend::ast::Visibility::Private => Visibility::Private,
+            crate::frontend::ast::Visibility::Public => Visibility::Public,
+        }
+    }
+
     /// Lower a declaration to IR.
     ///
     /// # Parameters
@@ -148,7 +156,7 @@ impl AstLowering {
             return_type,
             body,
             is_async: f.is_async,
-            visibility: Visibility::Public,
+            visibility: Self::map_visibility(f.visibility),
             type_params: f.type_params.clone(),
         })
     }
@@ -203,7 +211,7 @@ impl AstLowering {
             .map(|f| StructField {
                 name: f.node.name.clone(),
                 ty: self.lower_type(&f.node.ty.node),
-                visibility: Visibility::Public,
+                visibility: Self::map_visibility(f.node.visibility),
             })
             .collect();
 
@@ -229,7 +237,7 @@ impl AstLowering {
             name: m.name.clone(),
             fields,
             derives,
-            visibility: Visibility::Public,
+            visibility: Self::map_visibility(m.visibility),
             type_params: m.type_params.clone(),
         })
     }
@@ -248,7 +256,7 @@ impl AstLowering {
             fields.push(StructField {
                 name: f.node.name.clone(),
                 ty: self.lower_type(&f.node.ty.node),
-                visibility: Visibility::Public,
+                visibility: Self::map_visibility(f.node.visibility),
             });
         }
 
@@ -274,7 +282,7 @@ impl AstLowering {
             name: c.name.clone(),
             fields,
             derives,
-            visibility: Visibility::Public,
+            visibility: Self::map_visibility(c.visibility),
             type_params: c.type_params.clone(),
         })
     }
@@ -296,7 +304,7 @@ impl AstLowering {
                 fields.push(StructField {
                     name: f.node.name.clone(),
                     ty: self.lower_type(&f.node.ty.node),
-                    visibility: Visibility::Public,
+                    visibility: Self::map_visibility(f.node.visibility),
                 });
             }
         }
@@ -335,7 +343,7 @@ impl AstLowering {
         let fields = vec![StructField {
             name: "0".to_string(),
             ty: underlying_ty.clone(),
-            visibility: Visibility::Public,
+            visibility: Visibility::Private,
         }];
         // Newtypes auto-derive Debug, Clone
         // Only add Copy if underlying type is Copy (int, float, bool)
@@ -347,7 +355,7 @@ impl AstLowering {
             name: n.name.clone(),
             fields,
             derives,
-            visibility: Visibility::Public,
+            visibility: Self::map_visibility(n.visibility),
             type_params: vec![],
         })
     }
@@ -443,7 +451,7 @@ impl AstLowering {
                     return_type,
                     body,
                     is_async: m.node.is_async,
-                    visibility: Visibility::Public,
+                    visibility: Visibility::Private,
                     type_params: vec![],
                 })
             })
@@ -544,7 +552,7 @@ impl AstLowering {
             return_type,
             body,
             is_async: m.is_async,
-            visibility: Visibility::Public,
+            visibility: Visibility::Private,
             type_params: vec![],
         })
     }
@@ -607,7 +615,7 @@ impl AstLowering {
                     return_type,
                     body,
                     is_async: m.node.is_async,
-                    visibility: Visibility::Public,
+                    visibility: Visibility::Private,
                     type_params: vec![],
                 })
             })
@@ -616,7 +624,7 @@ impl AstLowering {
         Ok(IrTrait {
             name: t.name.clone(),
             methods,
-            visibility: Visibility::Public,
+            visibility: Self::map_visibility(t.visibility),
         })
     }
 
@@ -645,7 +653,7 @@ impl AstLowering {
             name: e.name.clone(),
             variants,
             derives,
-            visibility: Visibility::Public,
+            visibility: Self::map_visibility(e.visibility),
             type_params: e.type_params.clone(),
         })
     }

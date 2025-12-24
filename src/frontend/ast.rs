@@ -191,6 +191,7 @@ pub struct ImportItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelDecl {
+    pub visibility: Visibility,
     pub decorators: Vec<Spanned<Decorator>>,
     pub name: Ident,
     pub type_params: Vec<Ident>,
@@ -200,6 +201,7 @@ pub struct ModelDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldDecl {
+    pub visibility: Visibility,
     pub name: Ident,
     pub ty: Spanned<Type>,
     pub default: Option<Spanned<Expr>>,
@@ -211,6 +213,7 @@ pub struct FieldDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassDecl {
+    pub visibility: Visibility,
     pub decorators: Vec<Spanned<Decorator>>,
     pub name: Ident,
     pub type_params: Vec<Ident>,
@@ -226,6 +229,7 @@ pub struct ClassDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitDecl {
+    pub visibility: Visibility,
     pub decorators: Vec<Spanned<Decorator>>,
     pub name: Ident,
     pub type_params: Vec<Ident>,
@@ -238,6 +242,7 @@ pub struct TraitDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewtypeDecl {
+    pub visibility: Visibility,
     pub name: Ident,
     pub underlying: Spanned<Type>,
     pub methods: Vec<Spanned<MethodDecl>>,
@@ -249,6 +254,7 @@ pub struct NewtypeDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDecl {
+    pub visibility: Visibility,
     pub name: Ident,
     pub type_params: Vec<Ident>,
     pub variants: Vec<Spanned<VariantDecl>>,
@@ -266,6 +272,7 @@ pub struct VariantDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDecl {
+    pub visibility: Visibility,
     pub decorators: Vec<Spanned<Decorator>>,
     pub is_async: bool,
     pub name: Ident,

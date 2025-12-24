@@ -11,130 +11,130 @@ expression: rust_code
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Point {
-    pub x: i64,
-    pub y: i64,
+struct Point {
+    x: i64,
+    y: i64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Point(x: i64, y: i64) -> Point {
+fn Point(x: i64, y: i64) -> Point {
     Point { x, y }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Rectangle {
-    pub width: i64,
-    pub height: i64,
+struct Rectangle {
+    width: i64,
+    height: i64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Rectangle(width: i64, height: i64) -> Rectangle {
+fn Rectangle(width: i64, height: i64) -> Rectangle {
     Rectangle { width, height }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Circle {
-    pub radius: f64,
+struct Circle {
+    radius: f64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Circle(radius: f64) -> Circle {
+fn Circle(radius: f64) -> Circle {
     Circle { radius }
 }
 impl Circle {
-    pub fn area(&self) -> f64 {
+    fn area(&self) -> f64 {
         return 3.14159f64 * self.radius * self.radius;
     }
-    pub fn circumference(&self) -> f64 {
+    fn circumference(&self) -> f64 {
         return 2f64 * 3.14159f64 * self.radius;
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Counter {
-    pub count: i64,
+struct Counter {
+    count: i64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Counter(count: i64) -> Counter {
+fn Counter(count: i64) -> Counter {
     Counter { count }
 }
 impl Counter {
-    pub fn increment(&mut self) {
+    fn increment(&mut self) {
         self.count = self.count + 1;
     }
-    pub fn decrement(&mut self) {
+    fn decrement(&mut self) {
         self.count = self.count - 1;
     }
-    pub fn get_count(&self) -> i64 {
+    fn get_count(&self) -> i64 {
         return self.count;
     }
-    pub fn reset(&mut self) {
+    fn reset(&mut self) {
         self.count = 0;
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Stack {
-    pub items: Vec<i64>,
+struct Stack {
+    items: Vec<i64>,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Stack(items: Vec<i64>) -> Stack {
+fn Stack(items: Vec<i64>) -> Stack {
     Stack { items }
 }
 impl Stack {
-    pub fn push(&mut self, item: i64) {
+    fn push(&mut self, item: i64) {
         self.items.push(item);
     }
-    pub fn pop(&self) -> i64 {
+    fn pop(&self) -> i64 {
         if self.items.len() as i64 > 0 {
             return self.items.pop().unwrap_or_default();
         }
         return -1;
     }
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         return self.items.len() as i64 == 0;
     }
-    pub fn size(&self) -> i64 {
+    fn size(&self) -> i64 {
         return self.items.len() as i64;
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Calculator {
-    pub name: String,
+struct Calculator {
+    name: String,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Calculator(name: String) -> Calculator {
+fn Calculator(name: String) -> Calculator {
     Calculator { name }
 }
 impl Calculator {
-    pub fn add(&self, a: i64, b: i64) -> i64 {
+    fn add(&self, a: i64, b: i64) -> i64 {
         return a + b;
     }
-    pub fn subtract(&self, a: i64, b: i64) -> i64 {
+    fn subtract(&self, a: i64, b: i64) -> i64 {
         return a - b;
     }
-    pub fn multiply(&self, a: i64, b: i64) -> i64 {
+    fn multiply(&self, a: i64, b: i64) -> i64 {
         return a * b;
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Person {
-    pub name: String,
-    pub age: i64,
+struct Person {
+    name: String,
+    age: i64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Person(name: String, age: i64) -> Person {
+fn Person(name: String, age: i64) -> Person {
     Person { name, age }
 }
 impl Person {
-    pub fn greet(&self) -> String {
+    fn greet(&self) -> String {
         return format!("Hello, I'm {}", self.name);
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Employee {
-    pub person: Person,
-    pub employee_id: i64,
+struct Employee {
+    person: Person,
+    employee_id: i64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Employee(person: Person, employee_id: i64) -> Employee {
+fn Employee(person: Person, employee_id: i64) -> Employee {
     Employee { person, employee_id }
 }
 impl Employee {
-    pub fn get_info(&self) -> String {
+    fn get_info(&self) -> String {
         let greeting = self.person.greet();
         return format!("{} (ID: {})", greeting, self.employee_id);
     }

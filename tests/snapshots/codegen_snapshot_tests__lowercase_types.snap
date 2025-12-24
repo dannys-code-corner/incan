@@ -11,7 +11,7 @@ expression: rust_code
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
 use std::collections::{HashMap, HashSet};
-pub fn test_lowercase_types() {
+fn test_lowercase_types() {
     let numbers = vec![1, 2, 3];
     let data = [("a", 1), ("b", 2)].into_iter().collect::<HashMap<_, _>>();
     let unique = [1, 2, 3].into_iter().collect::<HashSet<_>>();

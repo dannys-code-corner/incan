@@ -11,19 +11,19 @@ expression: rust_code
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
 use std::collections::HashMap;
-pub fn greet(name: String) -> String {
+fn greet(name: String) -> String {
     "Simple function for testing calls";
     return format!("Hello, {}!", name);
 }
-pub fn add(a: i64, b: i64) -> i64 {
+fn add(a: i64, b: i64) -> i64 {
     "Test positional arguments";
     return a + b;
 }
-pub fn greet_with_title(name: String, title: String) -> String {
+fn greet_with_title(name: String, title: String) -> String {
     "Test default arguments";
     return format!("Hello, {} {}!", title, name);
 }
-pub fn test_function_calls() {
+fn test_function_calls() {
     let message = greet("World".to_string());
     let sum = add(5, 3);
     let greeting1 = greet_with_title("Smith".to_string());

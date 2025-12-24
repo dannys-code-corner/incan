@@ -10,7 +10,7 @@ expression: rust_code
 
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
-pub fn test_match_simple() {
+fn test_match_simple() {
     let x = 42;
     match x {
         0 => {
@@ -24,7 +24,7 @@ pub fn test_match_simple() {
         }
     };
 }
-pub fn test_match_with_option() {
+fn test_match_with_option() {
     let value = Some(42);
     match value {
         Some(n) => {
@@ -35,7 +35,7 @@ pub fn test_match_with_option() {
         }
     };
 }
-pub fn test_match_multiple_patterns() {
+fn test_match_multiple_patterns() {
     let x = 5;
     match x {
         1 => {
@@ -52,7 +52,7 @@ pub fn test_match_multiple_patterns() {
         }
     };
 }
-pub fn test_match_with_guard() {
+fn test_match_with_guard() {
     let x = 15;
     match x {
         n if n < 10 => {

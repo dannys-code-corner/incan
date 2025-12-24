@@ -10,7 +10,7 @@ expression: rust_code
 
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
-pub fn test_if_statements() {
+fn test_if_statements() {
     let x = 10;
     if x > 5 {
         println!("{}", "x is greater than 5");
@@ -30,14 +30,14 @@ pub fn test_if_statements() {
         }
     }
 }
-pub fn test_while_loops() {
+fn test_while_loops() {
     let i = 0;
     while i < 5 {
         println!("{}", i);
         i = i + 1;
     }
     let j = 0;
-    while true {
+    loop {
         if j >= 3 {
             break;
         }
@@ -53,7 +53,7 @@ pub fn test_while_loops() {
         println!("{}", k);
     }
 }
-pub fn test_for_loops() {
+fn test_for_loops() {
     let numbers = vec![1, 2, 3, 4, 5];
     for num in numbers.iter().copied() {
         println!("{}", num);
@@ -74,7 +74,7 @@ pub fn test_for_loops() {
         println!("{}", i);
     }
 }
-pub fn test_nested_control_flow() {
+fn test_nested_control_flow() {
     for i in 0..3 {
         for j in 0..3 {
             if i == j {

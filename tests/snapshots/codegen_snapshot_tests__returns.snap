@@ -10,15 +10,15 @@ expression: rust_code
 
 use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
-pub fn simple_return() -> i64 {
+fn simple_return() -> i64 {
     return 42;
 }
-pub fn return_expression() -> i64 {
+fn return_expression() -> i64 {
     let x = 10;
     let y = 20;
     return x + y;
 }
-pub fn early_return(x: i64) -> String {
+fn early_return(x: i64) -> String {
     if x < 0 {
         return "negative".to_string();
     } else {
@@ -29,13 +29,13 @@ pub fn early_return(x: i64) -> String {
         }
     }
 }
-pub fn multiple_returns(x: i64) -> i64 {
+fn multiple_returns(x: i64) -> i64 {
     if x < 10 {
         return x * 2;
     }
     return x * 3;
 }
-pub fn return_from_loop(numbers: Vec<i64>) -> i64 {
+fn return_from_loop(numbers: Vec<i64>) -> i64 {
     for num in numbers.iter().copied() {
         if num > 10 {
             return num;
@@ -43,11 +43,11 @@ pub fn return_from_loop(numbers: Vec<i64>) -> i64 {
     }
     return -1;
 }
-pub fn void_return() {
+fn void_return() {
     println!("{}", "Hello");
     return;
 }
-pub fn implicit_void_return() {
+fn implicit_void_return() {
     let x = 5;
     if x > 0 {
         println!("{}", "positive");

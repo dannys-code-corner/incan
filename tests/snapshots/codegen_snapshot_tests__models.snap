@@ -13,43 +13,43 @@ use incan_derive::{FieldInfo, IncanClass};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct User {
-    pub name: String,
-    pub age: i64,
-    pub email: String,
+struct User {
+    name: String,
+    age: i64,
+    email: String,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn User(name: String, age: i64, email: String) -> User {
+fn User(name: String, age: i64, email: String) -> User {
     User { name, age, email }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Product {
-    pub id: i64,
-    pub name: String,
-    pub price: f64,
+struct Product {
+    id: i64,
+    name: String,
+    price: f64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Product(id: i64, name: String, price: f64) -> Product {
+fn Product(id: i64, name: String, price: f64) -> Product {
     Product { id, name, price }
 }
 #[derive(Clone, Debug, FieldInfo, IncanClass)]
-pub struct Config {
-    pub host: String,
-    pub port: i64,
-    pub timeout: i64,
+struct Config {
+    host: String,
+    port: i64,
+    timeout: i64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Config(host: String, port: i64, timeout: i64) -> Config {
+fn Config(host: String, port: i64, timeout: i64) -> Config {
     Config { host, port, timeout }
 }
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, FieldInfo, IncanClass)]
-pub struct ApiRequest {
-    pub endpoint: String,
-    pub method: String,
-    pub payload: String,
+struct ApiRequest {
+    endpoint: String,
+    method: String,
+    payload: String,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn ApiRequest(endpoint: String, method: String, payload: String) -> ApiRequest {
+fn ApiRequest(endpoint: String, method: String, payload: String) -> ApiRequest {
     ApiRequest {
         endpoint,
         method,
@@ -67,22 +67,22 @@ impl ApiRequest {
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Point {
-    pub x: i64,
-    pub y: i64,
+struct Point {
+    x: i64,
+    y: i64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Point(x: i64, y: i64) -> Point {
+fn Point(x: i64, y: i64) -> Point {
     Point { x, y }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct OptionalData {
-    pub required: String,
-    pub optional: Option<String>,
-    pub maybe_number: Option<i64>,
+struct OptionalData {
+    required: String,
+    optional: Option<String>,
+    maybe_number: Option<i64>,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn OptionalData(
+fn OptionalData(
     required: String,
     optional: Option<String>,
     maybe_number: Option<i64>,
@@ -94,13 +94,13 @@ pub fn OptionalData(
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct StudentData {
-    pub name: String,
-    pub grades: Vec<i64>,
-    pub metadata: std::collections::HashMap<String, String>,
+struct StudentData {
+    name: String,
+    grades: Vec<i64>,
+    metadata: std::collections::HashMap<String, String>,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn StudentData(
+fn StudentData(
     name: String,
     grades: Vec<i64>,
     metadata: std::collections::HashMap<String, String>,
@@ -112,14 +112,14 @@ pub fn StudentData(
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct ComplexModel {
-    pub ids: Vec<i64>,
-    pub mapping: std::collections::HashMap<String, i64>,
-    pub optional_list: Option<Vec<String>>,
-    pub nested_dict: std::collections::HashMap<String, Vec<i64>>,
+struct ComplexModel {
+    ids: Vec<i64>,
+    mapping: std::collections::HashMap<String, i64>,
+    optional_list: Option<Vec<String>>,
+    nested_dict: std::collections::HashMap<String, Vec<i64>>,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn ComplexModel(
+fn ComplexModel(
     ids: Vec<i64>,
     mapping: std::collections::HashMap<String, i64>,
     optional_list: Option<Vec<String>>,
@@ -133,41 +133,41 @@ pub fn ComplexModel(
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Address {
-    pub street: String,
-    pub city: String,
-    pub zipcode: String,
+struct Address {
+    street: String,
+    city: String,
+    zipcode: String,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Address(street: String, city: String, zipcode: String) -> Address {
+fn Address(street: String, city: String, zipcode: String) -> Address {
     Address { street, city, zipcode }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Contact {
-    pub name: String,
-    pub address: Address,
-    pub phone: String,
+struct Contact {
+    name: String,
+    address: Address,
+    phone: String,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Contact(name: String, address: Address, phone: String) -> Contact {
+fn Contact(name: String, address: Address, phone: String) -> Contact {
     Contact { name, address, phone }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
-pub struct Coordinate {
-    pub latitude: f64,
-    pub longitude: f64,
+struct Coordinate {
+    latitude: f64,
+    longitude: f64,
 }
 #[allow(non_snake_case, clippy::too_many_arguments)]
-pub fn Coordinate(latitude: f64, longitude: f64) -> Coordinate {
+fn Coordinate(latitude: f64, longitude: f64) -> Coordinate {
     Coordinate { latitude, longitude }
 }
-pub fn create_coordinate(lat: f64, lon: f64) -> Coordinate {
+fn create_coordinate(lat: f64, lon: f64) -> Coordinate {
     return Coordinate {
         latitude: lat,
         longitude: lon,
     };
 }
-pub fn distance_from_origin(coord: Coordinate) -> f64 {
+fn distance_from_origin(coord: Coordinate) -> f64 {
     let lat_sq = coord.latitude * coord.latitude;
     let lon_sq = coord.longitude * coord.longitude;
     return lat_sq + lon_sq.powf(0.5f64);
