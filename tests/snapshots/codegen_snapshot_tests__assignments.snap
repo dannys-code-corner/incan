@@ -29,7 +29,7 @@ fn test_augmented_assignments() {
     x = incan_stdlib::num::py_div((x) as f64, (4) as f64);
     x = incan_stdlib::num::py_mod(x, 4);
     let mut s = "hello".to_string();
-    s = s + " world";
+    s = incan_stdlib::strings::str_concat(s, " world");
 }
 fn test_collection_assignments() {
     let mut numbers = vec![1, 2, 3, 4];

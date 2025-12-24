@@ -8,6 +8,7 @@ use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::{ResolvedType, ScopeKind};
 
 use super::TypeChecker;
+use crate::frontend::typechecker::helpers::ensure_bool_condition;
 
 impl TypeChecker {
     /// Type-check an `await` expression.
@@ -58,13 +59,8 @@ impl TypeChecker {
         _span: Span,
     ) -> ResolvedType {
         let cond_ty = self.check_expr(&if_expr.condition);
-        if !self.types_compatible(&cond_ty, &ResolvedType::Bool) {
-            self.errors.push(errors::type_mismatch(
-                "bool",
-                &cond_ty.to_string(),
-                if_expr.condition.span,
-            ));
-        }
+        let is_compatible = self.types_compatible(&cond_ty, &ResolvedType::Bool);
+        ensure_bool_condition(&cond_ty, if_expr.condition.span, is_compatible, &mut self.errors);
 
         self.symbols.enter_scope(ScopeKind::Block);
         for stmt in &if_expr.then_body {

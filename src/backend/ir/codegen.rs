@@ -751,7 +751,8 @@ def greet(name: str) -> str:
   return f"Hello, {name}!"
 "#,
         );
-        assert!(code.contains(r#"format!("Hello, {}!", name)"#));
+        assert!(code.contains(r#"incan_stdlib::strings::fstring"#));
+        assert!(code.contains(r#"["Hello, ", "!"]"#));
     }
 
     #[test]

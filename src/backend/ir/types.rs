@@ -39,6 +39,10 @@ pub enum IrType {
     StaticStr,
     /// &'static [u8] (for compile-time byte string constants)
     StaticBytes,
+    /// FrozenStr wrapper (deeply immutable `'static` string)
+    FrozenStr,
+    /// FrozenBytes wrapper (deeply immutable `'static` byte slice)
+    FrozenBytes,
     /// &str (borrowed string slice)
     StrRef,
 
@@ -99,6 +103,8 @@ impl IrType {
                 | IrType::Float
                 | IrType::StaticStr
                 | IrType::StaticBytes
+                | IrType::FrozenStr
+                | IrType::FrozenBytes
                 | IrType::StrRef
                 | IrType::Ref(_)
                 | IrType::RefMut(_)
@@ -120,6 +126,8 @@ impl IrType {
             IrType::String => "String".to_string(),
             IrType::StaticStr => "&'static str".to_string(),
             IrType::StaticBytes => "&'static [u8]".to_string(),
+            IrType::FrozenStr => "FrozenStr".to_string(),
+            IrType::FrozenBytes => "FrozenBytes".to_string(),
             IrType::StrRef => "&str".to_string(),
             IrType::List(elem) => format!("Vec<{}>", elem.rust_name()),
             IrType::Dict(k, v) => format!("std::collections::HashMap<{}, {}>", k.rust_name(), v.rust_name()),

@@ -19,6 +19,10 @@ def test_string_replace() -> None:
     text: str = "hello world"
     replaced: str = text.replace("world", "python")
 
+def test_string_slice() -> None:
+    text: str = "héllo"
+    mid: str = text.__slice__(1, -1)
+
 def test_string_startswith_endswith() -> None:
     text: str = "hello.txt"
     starts: bool = text.startswith("hello")
@@ -40,6 +44,7 @@ def main() -> None:
     test_string_contains()
     test_string_split()
     test_string_replace()
+    test_string_slice()
     test_string_startswith_endswith()
     test_string_join()
     test_string_concatenation()

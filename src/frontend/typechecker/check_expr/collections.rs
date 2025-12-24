@@ -1,10 +1,11 @@
 //! Check collection literals (tuple, list, dict, and set).
 //!
-//! These helpers validate collection literal expressions and compute container element types using
-//! the current checker’s compatibility rules.
+//! These helpers validate collection literal expressions and compute container element types using the current
+//! checker's compatibility rules.
 
 use crate::frontend::ast::*;
 use crate::frontend::symbols::ResolvedType;
+use crate::frontend::typechecker::helpers::{SET_TY_NAME, dict_ty, list_ty};
 
 use super::TypeChecker;
 
@@ -30,7 +31,7 @@ impl TypeChecker {
             self.check_expr(elem);
         }
 
-        ResolvedType::Generic("List".to_string(), vec![elem_ty])
+        list_ty(elem_ty)
     }
 
     /// Type-check a dict literal.
@@ -49,7 +50,7 @@ impl TypeChecker {
             self.check_expr(v);
         }
 
-        ResolvedType::Generic("Dict".to_string(), vec![key_ty, val_ty])
+        dict_ty(key_ty, val_ty)
     }
 
     /// Type-check a set literal.
@@ -64,6 +65,6 @@ impl TypeChecker {
             self.check_expr(elem);
         }
 
-        ResolvedType::Generic("Set".to_string(), vec![elem_ty])
+        ResolvedType::Generic(SET_TY_NAME.to_string(), vec![elem_ty])
     }
 }

@@ -121,7 +121,11 @@ fn Person(name: String, age: i64) -> Person {
 }
 impl Person {
     fn greet(&self) -> String {
-        return format!("Hello, I'm {}", self.name);
+        return {
+            let __parts: [&str; 2usize] = ["Hello, I'm ", ""];
+            let __args: Vec<String> = vec![format!("{}", self.name)];
+            incan_stdlib::strings::fstring(&__parts, &__args)
+        };
     }
 }
 #[derive(Debug, Clone, FieldInfo, IncanClass)]
@@ -136,41 +140,79 @@ fn Employee(person: Person, employee_id: i64) -> Employee {
 impl Employee {
     fn get_info(&self) -> String {
         let greeting = self.person.greet();
-        return format!("{} (ID: {})", greeting, self.employee_id);
+        return {
+            let __parts: [&str; 3usize] = ["", " (ID: ", ")"];
+            let __args: Vec<String> = vec![
+                format!("{}", greeting), format!("{}", self.employee_id)
+            ];
+            incan_stdlib::strings::fstring(&__parts, &__args)
+        };
     }
 }
 fn main() {
     let mut p = Point { x: 0, y: 0 };
     p.x = 10;
     p.y = 20;
-    println!("{}", format!("Point: ({}, {})", p.x, p.y));
+    println!(
+        "{}", { let __parts : [& str; 3usize] = ["Point: (", ", ", ")"]; let __args : Vec
+        < String > = vec![format!("{}", p.x), format!("{}", p.y)];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
     let rect = Rectangle { width: 5, height: 10 };
-    println!("{}", format!("Rectangle: {}x{}", rect.width, rect.height));
+    println!(
+        "{}", { let __parts : [& str; 3usize] = ["Rectangle: ", "x", ""]; let __args :
+        Vec < String > = vec![format!("{}", rect.width), format!("{}", rect.height)];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
     let circle = Circle { radius: 5f64 };
     let area = circle.area();
     let circumference = circle.circumference();
-    println!("{}", format!("Circle area: {}, circumference: {}", area, circumference));
+    println!(
+        "{}", { let __parts : [& str; 3usize] = ["Circle area: ", ", circumference: ",
+        ""]; let __args : Vec < String > = vec![format!("{}", area), format!("{}",
+        circumference)]; incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
     let mut counter = Counter { count: 0 };
     counter.increment();
     counter.increment();
     counter.increment();
     let count = counter.get_count();
-    println!("{}", format!("Counter: {}", count));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Counter: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", count)]; incan_stdlib::strings::fstring(& __parts,
+        & __args) }
+    );
     counter.decrement();
-    println!("{}", format!("After decrement: {}", counter.get_count()));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["After decrement: ", ""]; let __args :
+        Vec < String > = vec![format!("{}", counter.get_count())];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
     let items_list = vec![];
     let mut stack = Stack { items: items_list };
     stack.push(10);
     stack.push(20);
     stack.push(30);
-    println!("{}", format!("Stack size: {}", stack.size()));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Stack size: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", stack.size())]; incan_stdlib::strings::fstring(&
+        __parts, & __args) }
+    );
     let top = stack.pop().unwrap_or_default();
-    println!("{}", format!("Popped: {}", top));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Popped: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", top)]; incan_stdlib::strings::fstring(& __parts, &
+        __args) }
+    );
     let calc = Calculator {
         name: "BasicCalc".to_string(),
     };
     let result = calc.add(5, 3);
-    println!("{}", format!("5 + 3 = {}", result));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["5 + 3 = ", ""]; let __args : Vec <
+        String > = vec![format!("{}", result)]; incan_stdlib::strings::fstring(& __parts,
+        & __args) }
+    );
     let alice = Person {
         name: "Alice".to_string(),
         age: 30,

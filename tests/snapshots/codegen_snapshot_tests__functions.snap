@@ -21,7 +21,13 @@ fn format_message(name: String, age: i64, is_active: bool) -> String {
     if is_active {
         status = "active";
     }
-    return format!("{} is {} years old and {}", name, age, status);
+    return {
+        let __parts: [&str; 4usize] = ["", " is ", " years old and ", ""];
+        let __args: Vec<String> = vec![
+            format!("{}", name), format!("{}", age), format!("{}", status)
+        ];
+        incan_stdlib::strings::fstring(&__parts, &__args)
+    };
 }
 fn multiply(x: i64, y: i64) -> i64 {
     let result = x * y;
@@ -73,7 +79,11 @@ fn classify_number(x: i64) -> String {
     return "large positive".to_string();
 }
 fn print_greeting(name: String) {
-    println!("{}", format!("Hello, {}!", name));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Hello, ", "!"]; let __args : Vec <
+        String > = vec![format!("{}", name)]; incan_stdlib::strings::fstring(& __parts, &
+        __args) }
+    );
 }
 fn get_coordinates() -> (i64, i64) {
     return (10, 20);
@@ -82,16 +92,36 @@ fn main() {
     let greeting = greet();
     println!("{}", greeting);
     let sum = add(5, 3);
-    println!("{}", format!("5 + 3 = {}", sum));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["5 + 3 = ", ""]; let __args : Vec <
+        String > = vec![format!("{}", sum)]; incan_stdlib::strings::fstring(& __parts, &
+        __args) }
+    );
     let result = quadruple(5);
-    println!("{}", format!("quadruple(5) = {}", result));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["quadruple(5) = ", ""]; let __args : Vec
+        < String > = vec![format!("{}", result)]; incan_stdlib::strings::fstring(&
+        __parts, & __args) }
+    );
     let fact = factorial(5);
-    println!("{}", format!("factorial(5) = {}", fact));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["factorial(5) = ", ""]; let __args : Vec
+        < String > = vec![format!("{}", fact)]; incan_stdlib::strings::fstring(& __parts,
+        & __args) }
+    );
     let fib = fibonacci(7);
-    println!("{}", format!("fibonacci(7) = {}", fib));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["fibonacci(7) = ", ""]; let __args : Vec
+        < String > = vec![format!("{}", fib)]; incan_stdlib::strings::fstring(& __parts,
+        & __args) }
+    );
     let test_nums = vec![1, 5, 3, 9, 2];
     let max_num = find_max(test_nums.clone());
-    println!("{}", format!("max = {}", max_num));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["max = ", ""]; let __args : Vec < String
+        > = vec![format!("{}", max_num)]; incan_stdlib::strings::fstring(& __parts, &
+        __args) }
+    );
     let mut nums = vec![5, 10, 15];
     double_values(&mut nums);
     println!("{}", "List incremented");

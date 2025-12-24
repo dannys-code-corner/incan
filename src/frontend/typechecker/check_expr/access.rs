@@ -6,6 +6,10 @@
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
+use crate::frontend::typechecker::helpers::{
+    DICT_TY_NAME, LIST_TY_NAME, SET_TY_NAME, is_frozen_bytes, is_frozen_str, is_intlike_for_index, list_ty, option_ty,
+    string_method_return,
+};
 
 use super::TypeChecker;
 
@@ -23,7 +27,7 @@ impl TypeChecker {
         match base_ty {
             ResolvedType::Generic(name, args) => match name.as_str() {
                 "List" if !args.is_empty() => {
-                    if !matches!(index_ty, ResolvedType::Int) && !matches!(index_ty, ResolvedType::Unknown) {
+                    if !is_intlike_for_index(&index_ty) {
                         self.errors
                             .push(errors::index_type_mismatch("int", &index_ty.to_string(), index.span));
                     }
@@ -61,7 +65,13 @@ impl TypeChecker {
                 }
                 _ => ResolvedType::Unknown,
             },
-            ResolvedType::Str => ResolvedType::Str,
+            ty if matches!(ty, ResolvedType::Str) || is_frozen_str(&ty) => {
+                if !is_intlike_for_index(&index_ty) {
+                    self.errors
+                        .push(errors::index_type_mismatch("int", &index_ty.to_string(), index.span));
+                }
+                ResolvedType::Str
+            }
             ResolvedType::Tuple(elems) => {
                 // Guardrail: tuple indexing must be an integer literal so we can bounds-check.
                 let Expr::Literal(Literal::Int(raw_idx)) = &index.node else {
@@ -93,22 +103,46 @@ impl TypeChecker {
     ) -> ResolvedType {
         let base_ty = self.check_expr(base);
 
-        if let Some(start) = &slice.start {
-            self.check_expr(start);
-        }
-        if let Some(end) = &slice.end {
-            self.check_expr(end);
-        }
-        if let Some(step) = &slice.step {
-            self.check_expr(step);
-        }
+        let start_ty = slice.start.as_ref().map(|s| self.check_expr(s));
+        let end_ty = slice.end.as_ref().map(|e| self.check_expr(e));
+        let step_ty = slice.step.as_ref().map(|st| self.check_expr(st));
+
+        // Helper: validate that an already-computed type is int-like (or Unknown during inference).
+        let check_intlike_ty = |ty: &ResolvedType, span: Span, errors: &mut Vec<_>| {
+            if !is_intlike_for_index(ty) {
+                errors.push(errors::index_type_mismatch("int", &ty.to_string(), span));
+            }
+        };
+        // Helper: if a slice component exists, validate its already-computed type using the component span.
+        let check_component = |ty_opt: Option<&ResolvedType>, expr_opt: Option<&Spanned<Expr>>, errors: &mut Vec<_>| {
+            if let (Some(ty), Some(expr)) = (ty_opt, expr_opt) {
+                check_intlike_ty(ty, expr.span, errors);
+            }
+        };
 
         match base_ty {
             ResolvedType::Generic(name, args) => match name.as_str() {
-                "List" => ResolvedType::Generic("List".to_string(), args),
+                LIST_TY_NAME => ResolvedType::Generic(LIST_TY_NAME.to_string(), args),
                 _ => ResolvedType::Unknown,
             },
-            ResolvedType::Str => ResolvedType::Str,
+            ResolvedType::Str => {
+                // We typecheck each slice component once (above) and reuse the computed types here.
+                // This avoids re-walking the same expression multiple times and keeps error reporting
+                // anchored to the original component spans.
+                check_component(start_ty.as_ref(), slice.start.as_deref(), &mut self.errors);
+                check_component(end_ty.as_ref(), slice.end.as_deref(), &mut self.errors);
+                check_component(step_ty.as_ref(), slice.step.as_deref(), &mut self.errors);
+                ResolvedType::Str
+            }
+            ty if is_frozen_str(&ty) => {
+                // `FrozenStr` is the const-eval / deeply-immutable string type, but for indexing/slicing
+                // it behaves like `str`: indices must be int-like (or Unknown during inference).
+                // Reuse the exact same helper as `str` (the only difference is the receiver type).
+                check_component(start_ty.as_ref(), slice.start.as_deref(), &mut self.errors);
+                check_component(end_ty.as_ref(), slice.end.as_deref(), &mut self.errors);
+                check_component(step_ty.as_ref(), slice.step.as_deref(), &mut self.errors);
+                ResolvedType::Str
+            }
             _ => ResolvedType::Unknown,
         }
     }
@@ -149,33 +183,29 @@ impl TypeChecker {
                 ResolvedType::Unknown
             }
             ResolvedType::Named(type_name) => {
-                if let Some(id) = self.symbols.lookup(type_name) {
-                    if let Some(sym) = self.symbols.get(id) {
-                        if let SymbolKind::Type(type_info) = &sym.kind {
-                            match type_info {
-                                TypeInfo::Model(model) => {
-                                    if let Some(field_info) = model.fields.get(field) {
-                                        return field_info.ty.clone();
-                                    }
-                                }
-                                TypeInfo::Class(class) => {
-                                    if let Some(field_info) = class.fields.get(field) {
-                                        return field_info.ty.clone();
-                                    }
-                                }
-                                TypeInfo::Enum(enum_info) => {
-                                    if enum_info.variants.contains(&field.to_string()) {
-                                        return ResolvedType::Named(type_name.clone());
-                                    }
-                                }
-                                TypeInfo::Newtype(nt) => {
-                                    if field == "0" {
-                                        return nt.underlying.clone();
-                                    }
-                                }
-                                _ => {}
+                if let Some(type_info) = self.lookup_type_info(type_name) {
+                    match type_info {
+                        TypeInfo::Model(model) => {
+                            if let Some(field_info) = model.fields.get(field) {
+                                return field_info.ty.clone();
                             }
                         }
+                        TypeInfo::Class(class) => {
+                            if let Some(field_info) = class.fields.get(field) {
+                                return field_info.ty.clone();
+                            }
+                        }
+                        TypeInfo::Enum(enum_info) => {
+                            if enum_info.variants.contains(&field.to_string()) {
+                                return ResolvedType::Named(type_name.clone());
+                            }
+                        }
+                        TypeInfo::Newtype(nt) => {
+                            if field == "0" {
+                                return nt.underlying.clone();
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 self.errors.push(errors::missing_field(type_name, field, span));
@@ -213,15 +243,11 @@ impl TypeChecker {
 
         // Treat Enum.Variant(...) method-style calls as variant constructors
         if let ResolvedType::Named(enum_name) = &base_ty {
-            if let Some(id) = self.symbols.lookup(enum_name) {
-                if let Some(sym) = self.symbols.get(id) {
-                    if let SymbolKind::Type(TypeInfo::Enum(enum_info)) = &sym.kind {
-                        if enum_info.variants.iter().any(|v| v == method) {
-                            // Args were checked above; no strict arity enforcement here.
-                            let _ = &arg_types; // keep for potential future validation
-                            return ResolvedType::Named(enum_name.clone());
-                        }
-                    }
+            if let Some(TypeInfo::Enum(enum_info)) = self.lookup_type_info(enum_name) {
+                if enum_info.variants.iter().any(|v| v == method) {
+                    // Args were checked above; no strict arity enforcement here.
+                    let _ = &arg_types; // keep for potential future validation
+                    return ResolvedType::Named(enum_name.clone());
                 }
             }
         }
@@ -250,50 +276,47 @@ impl TypeChecker {
         }
 
         if matches!(base_ty, ResolvedType::Str) {
+            if let Some(ret) = string_method_return(method, false) {
+                return ret;
+            }
+        }
+
+        if is_frozen_str(&base_ty) {
+            if let Some(ret) = string_method_return(method, true) {
+                return ret;
+            }
+        }
+        if is_frozen_bytes(&base_ty) {
             match method {
-                "upper" | "lower" | "strip" | "replace" | "join" => return ResolvedType::Str,
-                // Common string helpers used in examples/std interop
-                "split_whitespace" => {
-                    return ResolvedType::Generic("List".to_string(), vec![ResolvedType::Str]);
-                }
-                "to_string" => return ResolvedType::Str,
-                "contains" | "startswith" | "endswith" => return ResolvedType::Bool,
-                "split" => {
-                    return ResolvedType::Generic("List".to_string(), vec![ResolvedType::Str]);
-                }
+                "len" => return ResolvedType::Int,
+                "is_empty" => return ResolvedType::Bool,
                 _ => {}
             }
         }
 
-        if let ResolvedType::Named(name) = &base_ty {
-            if name == "FrozenStr" {
-                match method {
-                    "len" => return ResolvedType::Int,
-                    "is_empty" => return ResolvedType::Bool,
-                    // Treat FrozenStr like `str` for common string operations.
-                    "upper" | "lower" | "strip" | "replace" | "join" => return ResolvedType::Str,
-                    "split_whitespace" => {
-                        return ResolvedType::Generic("List".to_string(), vec![ResolvedType::Str]);
-                    }
-                    "to_string" => return ResolvedType::Str,
-                    "contains" | "startswith" | "endswith" => return ResolvedType::Bool,
-                    "split" => {
-                        return ResolvedType::Generic("List".to_string(), vec![ResolvedType::Str]);
-                    }
-                    _ => {}
-                }
-            }
-            if name == "FrozenBytes" {
-                match method {
-                    "len" => return ResolvedType::Int,
-                    "is_empty" => return ResolvedType::Bool,
-                    _ => {}
-                }
-            }
+        match &base_ty {
+            ResolvedType::FrozenList(_) => match method {
+                "len" => return ResolvedType::Int,
+                "is_empty" => return ResolvedType::Bool,
+                _ => {}
+            },
+            ResolvedType::FrozenSet(_) => match method {
+                "len" => return ResolvedType::Int,
+                "is_empty" => return ResolvedType::Bool,
+                "contains" => return ResolvedType::Bool,
+                _ => {}
+            },
+            ResolvedType::FrozenDict(_, _) => match method {
+                "len" => return ResolvedType::Int,
+                "is_empty" => return ResolvedType::Bool,
+                "contains_key" => return ResolvedType::Bool,
+                _ => {}
+            },
+            _ => {}
         }
 
         if let ResolvedType::Generic(name, type_args) = &base_ty {
-            if name == "List" {
+            if name == LIST_TY_NAME {
                 let elem = type_args.first().cloned().unwrap_or(ResolvedType::Unknown);
                 match method {
                     "append" => {
@@ -316,109 +339,67 @@ impl TypeChecker {
                     _ => {}
                 }
             }
-            if name == "Dict" {
+            if name == DICT_TY_NAME {
                 let key = type_args.first().cloned().unwrap_or(ResolvedType::Unknown);
                 let val = type_args.get(1).cloned().unwrap_or(ResolvedType::Unknown);
                 match method {
-                    "keys" => {
-                        return ResolvedType::Generic("List".to_string(), vec![key]);
-                    }
-                    "values" => {
-                        return ResolvedType::Generic("List".to_string(), vec![val]);
-                    }
+                    "keys" => return list_ty(key),
+                    "values" => return list_ty(val),
                     // Allow get/insert helpers to match examples; keep return types simple.
-                    "get" => {
-                        return ResolvedType::Generic("Option".to_string(), vec![val.clone()]);
-                    }
-                    "insert" => {
-                        return ResolvedType::Unit;
-                    }
+                    "get" => return option_ty(val.clone()),
+                    "insert" => return ResolvedType::Unit,
                     _ => {}
                 }
             }
-            if name == "Set" && method == "contains" {
+            if name == SET_TY_NAME && method == "contains" {
                 return ResolvedType::Bool;
-            }
-
-            // Frozen read-only APIs
-            if name == "FrozenList" {
-                match method {
-                    "len" => return ResolvedType::Int,
-                    "is_empty" => return ResolvedType::Bool,
-                    _ => {}
-                }
-            }
-            if name == "FrozenSet" {
-                match method {
-                    "len" => return ResolvedType::Int,
-                    "is_empty" => return ResolvedType::Bool,
-                    "contains" => return ResolvedType::Bool,
-                    _ => {}
-                }
-            }
-            if name == "FrozenDict" {
-                match method {
-                    "len" => return ResolvedType::Int,
-                    "is_empty" => return ResolvedType::Bool,
-                    "contains_key" => return ResolvedType::Bool,
-                    _ => {}
-                }
             }
         }
 
-        // FIXME: lots of nested ifs here, we should refactor this to be more readable.
+        // Named types: look up methods from the type definition.
+        // If the symbol doesn't exist or isn't a type (e.g., Module/RustModule placeholder),
+        // treat it as external and be permissive.
         if let ResolvedType::Named(type_name) = &base_ty {
-            // If we don't know this type at all (not in symbol table), treat it as an external
-            // type (e.g., Rust interop) and be permissive: return Unknown without error.
-            if self.symbols.lookup(type_name).is_none() {
-                return ResolvedType::Unknown;
-            }
-
-            if let Some(id) = self.symbols.lookup(type_name) {
-                if let Some(sym) = self.symbols.get(id) {
-                    // If the symbol isn't a Type (e.g., a Module/RustModule placeholder),
-                    // treat it as external and be permissive.
-                    if !matches!(sym.kind, SymbolKind::Type(_)) {
-                        return ResolvedType::Unknown;
+            match self.lookup_type_info(type_name) {
+                None => {
+                    // Symbol not found or not a Type - treat as external, be permissive.
+                    return ResolvedType::Unknown;
+                }
+                Some(type_info) => match type_info {
+                    TypeInfo::Model(model) => {
+                        if let Some(method_info) = model.methods.get(method) {
+                            return method_info.return_type.clone();
+                        }
                     }
-                    if let SymbolKind::Type(type_info) = &sym.kind {
-                        match type_info {
-                            TypeInfo::Model(model) => {
-                                if let Some(method_info) = model.methods.get(method) {
-                                    return method_info.return_type.clone();
-                                }
-                            }
-                            TypeInfo::Class(class) => {
-                                if let Some(method_info) = class.methods.get(method) {
-                                    return method_info.return_type.clone();
-                                }
-                                for trait_name in &class.traits {
-                                    if let Some(tid) = self.symbols.lookup(trait_name) {
-                                        if let Some(tsym) = self.symbols.get(tid) {
-                                            if let SymbolKind::Trait(trait_info) = &tsym.kind {
-                                                if let Some(method_info) = trait_info.methods.get(method) {
-                                                    return method_info.return_type.clone();
-                                                }
-                                            }
+                    TypeInfo::Class(class) => {
+                        if let Some(method_info) = class.methods.get(method) {
+                            return method_info.return_type.clone();
+                        }
+                        for trait_name in &class.traits {
+                            if let Some(tid) = self.symbols.lookup(trait_name) {
+                                if let Some(tsym) = self.symbols.get(tid) {
+                                    if let SymbolKind::Trait(trait_info) = &tsym.kind {
+                                        if let Some(method_info) = trait_info.methods.get(method) {
+                                            return method_info.return_type.clone();
                                         }
                                     }
                                 }
                             }
-                            TypeInfo::Enum(_enum_info) => {
-                                // Be permissive for common error/display helpers on enums
-                                if method == "message" {
-                                    return ResolvedType::Str;
-                                }
-                            }
-                            TypeInfo::Newtype(nt) => {
-                                if let Some(method_info) = nt.methods.get(method) {
-                                    return method_info.return_type.clone();
-                                }
-                            }
-                            _ => {}
                         }
                     }
-                }
+                    TypeInfo::Enum(_enum_info) => {
+                        // Be permissive for common error/display helpers on enums
+                        if method == "message" {
+                            return ResolvedType::Str;
+                        }
+                    }
+                    TypeInfo::Newtype(nt) => {
+                        if let Some(method_info) = nt.methods.get(method) {
+                            return method_info.return_type.clone();
+                        }
+                    }
+                    _ => {}
+                },
             }
         }
 

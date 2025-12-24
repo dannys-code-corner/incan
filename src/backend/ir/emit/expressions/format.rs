@@ -4,7 +4,8 @@
 //! - Format string expressions (f-strings): `f"Hello {name}"`
 //! - Range expressions: `start..end`, `start..=end`, `..end`, `start..`
 
-use proc_macro2::TokenStream;
+use incan_semantics::strings::escape_format_literal;
+use proc_macro2::{Literal as TokenLiteral, TokenStream};
 use quote::quote;
 
 use super::super::super::expr::{FormatPart, TypedExpr};
@@ -13,35 +14,56 @@ use super::super::{EmitError, IrEmitter};
 impl<'a> IrEmitter<'a> {
     /// Emit a format string expression.
     ///
-    /// Converts f-strings to Rust's `format!()` macro calls.
+    /// Converts an f-string into a call to `incan_stdlib::strings::fstring(...)`.
     ///
-    /// ## Examples
-    /// - `f"Hello {name}"` → `format!("Hello {}", name)`
-    /// - `f"Value: {x + 1}"` → `format!("Value: {}", x + 1)`
+    /// ## Parameters
+    ///
+    /// - `parts`: lowered format parts (literal segments + expression segments).
+    ///
+    /// ## Returns
+    ///
+    /// - A Rust `TokenStream` that evaluates to an owned `String`.
+    ///
+    /// ## Notes
+    ///
+    /// - Literal segments are brace-escaped via `incan_semantics::strings::escape_format_literal`.
+    /// - Expression segments are formatted via `format!("{}", expr)` before being passed to the
+    ///   semantic-core f-string join helper.
     pub(in super::super) fn emit_format_expr(&self, parts: &[FormatPart]) -> Result<TokenStream, EmitError> {
-        let mut fmt_string = String::new();
-        let mut fmt_args: Vec<TokenStream> = Vec::new();
+        // Build literal parts (length = args + 1) and a parallel list of formatted args.
+        let mut literal_parts: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let mut args: Vec<TokenStream> = Vec::new();
 
         for part in parts {
             match part {
                 FormatPart::Literal(s) => {
-                    // Escape braces in literal parts
-                    fmt_string.push_str(&s.replace('{', "{{").replace('}', "}}"));
+                    current.push_str(&escape_format_literal(s));
                 }
                 FormatPart::Expr(e) => {
-                    fmt_string.push_str("{}");
-                    if let Ok(arg) = self.emit_expr(e) {
-                        fmt_args.push(arg);
-                    }
+                    literal_parts.push(current.clone());
+                    current.clear();
+                    let arg_expr = self.emit_expr(e)?;
+                    args.push(quote! { format!("{}", #arg_expr) });
                 }
             }
         }
+        literal_parts.push(current);
 
-        if fmt_args.is_empty() {
-            Ok(quote! { #fmt_string.to_string() })
-        } else {
-            Ok(quote! { format!(#fmt_string, #(#fmt_args),*) })
-        }
+        let parts_tokens: Vec<TokenStream> = literal_parts
+            .iter()
+            .map(|s| {
+                let lit = TokenLiteral::string(s);
+                quote! { #lit }
+            })
+            .collect();
+        let parts_len = parts_tokens.len();
+
+        Ok(quote! {{
+            let __parts: [&str; #parts_len ] = [#(#parts_tokens),*];
+            let __args: Vec<String> = vec![#(#args),*];
+            incan_stdlib::strings::fstring(&__parts, &__args)
+        }})
     }
 
     /// Emit a range expression.

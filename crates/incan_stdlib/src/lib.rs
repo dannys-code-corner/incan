@@ -9,6 +9,7 @@ pub mod frozen;
 pub mod num;
 pub mod prelude;
 pub mod reflection;
+pub mod strings;
 
 #[cfg(feature = "json")]
 pub mod json;

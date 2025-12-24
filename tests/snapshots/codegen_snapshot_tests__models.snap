@@ -178,20 +178,32 @@ fn main() {
         age: 30,
         email: "alice@example.com".to_string(),
     };
-    println!("{}", format!("User: {}, Age: {}", user.name, user.age));
+    println!(
+        "{}", { let __parts : [& str; 3usize] = ["User: ", ", Age: ", ""]; let __args :
+        Vec < String > = vec![format!("{}", user.name), format!("{}", user.age)];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
     let product = Product {
         id: 123,
         name: "Laptop".to_string(),
         price: 999.99f64,
     };
-    println!("{}", format!("Product ID: {}", product.id));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Product ID: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", product.id)]; incan_stdlib::strings::fstring(&
+        __parts, & __args) }
+    );
     let config = Config {
         host: "localhost".to_string(),
         port: 8080,
         timeout: 30,
     };
     let config_copy = config.clone();
-    println!("{}", format!("Config port: {}", config_copy.port));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Config port: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", config_copy.port)];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
     let data1 = OptionalData {
         required: "must have".to_string(),
         optional: Some("optional value".to_string()),
@@ -209,10 +221,18 @@ fn main() {
             .into_iter()
             .collect::<HashMap<_, _>>(),
     };
-    println!("{}", format!("Student: {}", student.name));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Student: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", student.name)]; incan_stdlib::strings::fstring(&
+        __parts, & __args) }
+    );
     let coord = create_coordinate(3f64, 4f64);
     let dist = distance_from_origin(coord.clone());
-    println!("{}", format!("Distance: {}", dist));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Distance: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", dist)]; incan_stdlib::strings::fstring(& __parts, &
+        __args) }
+    );
     let address = Address {
         street: "123 Main St".to_string(),
         city: "Boston".to_string(),
@@ -223,5 +243,9 @@ fn main() {
         address: address,
         phone: "555-1234".to_string(),
     };
-    println!("{}", format!("Contact: {} in {}", contact.name, contact.address.city));
+    println!(
+        "{}", { let __parts : [& str; 3usize] = ["Contact: ", " in ", ""]; let __args :
+        Vec < String > = vec![format!("{}", contact.name), format!("{}", contact.address
+        .city)]; incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
 }

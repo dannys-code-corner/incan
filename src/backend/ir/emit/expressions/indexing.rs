@@ -30,13 +30,17 @@ impl<'a> IrEmitter<'a> {
         index: &TypedExpr,
     ) -> Result<TokenStream, EmitError> {
         let o = self.emit_expr(object)?;
-
         let index_expr = self.emit_index_with_negative_handling(object, index, &o)?;
-
         let obj_ty = match &object.ty {
             IrType::Ref(inner) | IrType::RefMut(inner) => inner.as_ref(),
             other => other,
         };
+
+        // Strings: delegate to stdlib helper (Unicode-scalar indexing with bounds/negative support).
+        if matches!(obj_ty, IrType::String | IrType::FrozenStr) {
+            let idx_tokens = self.emit_expr(index)?;
+            return Ok(quote! { incan_stdlib::strings::str_index(#o.as_str(), (#idx_tokens) as i64) });
+        }
 
         match obj_ty {
             IrType::Dict(_, v) => {
@@ -67,8 +71,44 @@ impl<'a> IrEmitter<'a> {
         target: &TypedExpr,
         start: &Option<Box<TypedExpr>>,
         end: &Option<Box<TypedExpr>>,
+        step: &Option<Box<TypedExpr>>,
     ) -> Result<TokenStream, EmitError> {
-        let t = self.emit_expr(target)?;
+        let t_raw = self.emit_expr(target)?;
+
+        // Distinguish string vs list slices to honor Unicode-scalar policy for strings.
+        let obj_ty = match &target.ty {
+            IrType::Ref(inner) | IrType::RefMut(inner) => inner.as_ref(),
+            other => other,
+        };
+
+        if matches!(obj_ty, IrType::String | IrType::FrozenStr) {
+            // Strings: delegate to stdlib, which calls into incan_semantics for policy/alignment.
+            let s_tokens = quote! { #t_raw };
+            let start_expr = if let Some(s) = start {
+                let s_tokens = self.emit_expr(s)?;
+                quote! { Some((#s_tokens) as i64) }
+            } else {
+                quote! { None }
+            };
+            let end_expr = if let Some(e) = end {
+                let e_tokens = self.emit_expr(e)?;
+                quote! { Some((#e_tokens) as i64) }
+            } else {
+                quote! { None }
+            };
+            let step_expr = if let Some(st) = step {
+                let st_tokens = self.emit_expr(st)?;
+                quote! { Some((#st_tokens) as i64) }
+            } else {
+                quote! { None }
+            };
+            return Ok(
+                quote! { incan_stdlib::strings::str_slice(#s_tokens.as_str(), #start_expr, #end_expr, #step_expr) },
+            );
+        }
+
+        // Lists/other: retain existing behavior.
+        let t = t_raw;
 
         let start_expr = if let Some(s) = start {
             let s_tokens = self.emit_expr(s)?;

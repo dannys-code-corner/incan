@@ -13,10 +13,11 @@
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::ResolvedType;
-use crate::numeric::{NumericTy, result_numeric_type};
 use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved, pow_exponent_kind_from_ast};
+use incan_semantics::{NumericTy, result_numeric_type};
 
 use super::TypeChecker;
+use crate::frontend::typechecker::helpers::is_str_like;
 
 impl TypeChecker {
     /// Type-check a binary operation and return its result type.
@@ -38,9 +39,21 @@ impl TypeChecker {
             | BinaryOp::FloorDiv
             | BinaryOp::Mod
             | BinaryOp::Pow => {
-                // String concatenation special case
-                if matches!(op, BinaryOp::Add) && self.types_compatible(&left_ty, &ResolvedType::Str) {
-                    return ResolvedType::Str;
+                // String concatenation special case (both sides must be str).
+                if matches!(op, BinaryOp::Add) {
+                    let lhs_is_str = is_str_like(&left_ty);
+                    let rhs_is_str = is_str_like(&right_ty);
+                    if lhs_is_str && rhs_is_str {
+                        return ResolvedType::Str;
+                    }
+                    if lhs_is_str || rhs_is_str {
+                        self.errors.push(errors::type_mismatch(
+                            "str",
+                            &format!("{} {} {}", left_ty, op, right_ty),
+                            span,
+                        ));
+                        return ResolvedType::Unknown;
+                    }
                 }
 
                 // Check both operands are numeric
@@ -61,6 +74,11 @@ impl TypeChecker {
                             NumericTy::Float => ResolvedType::Float,
                         }
                     }
+                    // Allow Unknown with numeric partner (treat as that numeric type)
+                    (Some(n), None) | (None, Some(n)) => match n {
+                        NumericTy::Int => ResolvedType::Int,
+                        NumericTy::Float => ResolvedType::Float,
+                    },
                     _ => {
                         self.errors.push(errors::type_mismatch(
                             "numeric",
@@ -79,6 +97,8 @@ impl TypeChecker {
                 if lhs_num.is_some() && rhs_num.is_some() {
                     // Mixed numeric comparison is valid (promotion handled at codegen)
                     ResolvedType::Bool
+                } else if (is_str_like)(&left_ty) && (is_str_like)(&right_ty) {
+                    ResolvedType::Bool
                 } else if left_ty == right_ty || self.types_compatible(&left_ty, &right_ty) {
                     // Same-type or compatible comparison
                     ResolvedType::Bool
@@ -93,7 +113,48 @@ impl TypeChecker {
                 }
             }
             BinaryOp::And | BinaryOp::Or => ResolvedType::Bool,
-            BinaryOp::In | BinaryOp::NotIn => ResolvedType::Bool,
+            BinaryOp::In | BinaryOp::NotIn => {
+                let lhs_is_str = is_str_like(&left_ty);
+                let rhs_is_str = is_str_like(&right_ty);
+
+                // str in str
+                if lhs_is_str && rhs_is_str {
+                    return ResolvedType::Bool;
+                }
+
+                // List/Set membership: "<item> in <collection>"
+                if let ResolvedType::Generic(name, args) = &right_ty {
+                    match name.as_str() {
+                        "List" | "Set" if !args.is_empty() => {
+                            let elem_ty = &args[0];
+                            if self.types_compatible(&left_ty, elem_ty) || matches!(left_ty, ResolvedType::Unknown) {
+                                return ResolvedType::Bool;
+                            }
+                            self.errors
+                                .push(errors::type_mismatch(&elem_ty.to_string(), &left_ty.to_string(), span));
+                            return ResolvedType::Bool;
+                        }
+                        "Dict" if args.len() >= 2 => {
+                            let key_ty = &args[0];
+                            if self.types_compatible(&left_ty, key_ty) || matches!(left_ty, ResolvedType::Unknown) {
+                                return ResolvedType::Bool;
+                            }
+                            self.errors
+                                .push(errors::type_mismatch(&key_ty.to_string(), &left_ty.to_string(), span));
+                            return ResolvedType::Bool;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Fallback: keep previous permissive behavior but note mismatch.
+                self.errors.push(errors::type_mismatch(
+                    "supported membership (str, list, set, dict)",
+                    &format!("{} {} {}", left_ty, op, right_ty),
+                    span,
+                ));
+                ResolvedType::Bool
+            }
             BinaryOp::Is => ResolvedType::Bool,
         }
     }

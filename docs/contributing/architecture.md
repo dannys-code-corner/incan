@@ -40,7 +40,8 @@ This diagram shows the compilation pipeline of the Incan compiler in high level.
 
 - **Frontend**: Parses `.incn` source and typechecks it, producing a typed AST (or diagnostics).
 - **.incn source**: The source code of an Incan program.
-- **Lexer**: Tokenizes source text into lexer tokens (used by the parser). I.e. it converts the source code into a stream of tokens that the parser can understand.
+- **Lexer**: Tokenizes source text into lexer tokens (used by the parser).
+  It converts source code into a token stream the parser can understand.
 - **Parser**: Parses lexer tokens into an AST.
 - **AST**: The abstract syntax tree (syntax structure + spans for diagnostics).
 - **Typechecker**: Resolves names/imports and checks types, annotating the AST with type information.
@@ -49,14 +50,16 @@ This diagram shows the compilation pipeline of the Incan compiler in high level.
 - **Lowering**: Transforms typed AST → IR (including ownership/mutability/conversion decisions).
 - **IR**: A Rust-oriented, ownership-aware intermediate representation used for code generation.
 - **IrEmitter**: Emits IR into Rust code structures (TokenStream) before final formatting.
-- **TokenStream**: A Rust `TokenStream` (from `proc_macro2`) produced by codegen (`quote`/`syn`) before being formatted into Rust source (not the same as the lexer tokens mentioned above).
+- **TokenStream**: A Rust `TokenStream` (from `proc_macro2`) produced by codegen (`quote`/`syn`) before being
+  formatted into Rust source (not the same as the lexer tokens mentioned above).
 - **prettyplease**: Formats Rust syntax/TokenStream output into human-readable Rust source text.
 - **Rust source**: The generated Rust code as text.
 - **ProjectGenerator**: Writes the generated Rust code into a standalone Cargo project (and can invoke `cargo build/run`).
 - **Cargo project**: The generated Rust project directory (`Cargo.toml` + `src/*` + `target/*` after builds).
 - **Cargo**: Rust’s build system and package manager.
 - **CLI**: Command-line entrypoint that orchestrates compile/build/run/fmt/test workflows.
-- **LSP**: IDE-facing server that runs compiler frontend stages and returns diagnostics/hover/definition via the Language Server Protocol.
+- **LSP**: IDE-facing server that runs compiler frontend stages and returns diagnostics/hover/definition via the Language
+  Server Protocol.
 - **Runtime crates**: `incan_stdlib` / `incan_derive` crates used by generated Rust programs (not the compiler).
 
 ## Walkthrough: `incan build`
@@ -94,9 +97,11 @@ incan build file.incn
 
 Notes:
 
-- **Debugging individual stages**: Use CLI stage flags (`--lex`, `--parse`, `--check`, `--emit-rust`) to inspect intermediate outputs (see [Getting Started](tooling/getting_started.md)).
+- **Debugging individual stages**: Use CLI stage flags (`--lex`, `--parse`, `--check`, `--emit-rust`) to inspect
+  intermediate outputs (see [Getting Started](tooling/getting_started.md)).
 - **Multi-file projects**: Import resolution rules and module layout are described in [Imports & Modules](guide/imports_and_modules.md).
-- **Rust interop dependencies**: `rust::` imports trigger Cargo dependency injection with a strict policy (see [Rust Interop](guide/rust_interop.md) and [RFC 013](RFCs/013_rust_crate_dependencies.md)).
+- **Rust interop dependencies**: `rust::` imports trigger Cargo dependency injection with a strict policy
+  (see [Rust Interop](guide/rust_interop.md) and [RFC 013](RFCs/013_rust_crate_dependencies.md)).
 - **Runtime boundary**: Generated programs depend on `incan_stdlib` and `incan_derive`, but the compiler does not (see `crates/`).
 
 ## Module Layout
@@ -153,77 +158,93 @@ Runtime crates (used by generated Rust programs, not the compiler)
         - Proc-macro derives to generate impls for stdlib traits
 ```
 
+## Semantic Core
+
+We have a **semantic core** crate (`incan_semantics`) that holds pure, deterministic helpers shared by the compiler and
+runtime, without creating dependency cycles.
+
+- **Location**: `crates/incan_semantics`
+- **Purpose**: centralize semantic policy and pure helpers so compile-time behavior and runtime behavior cannot drift.
+- **Used by**: compiler (typechecker, const-eval, lowering/codegen decisions) and stdlib/runtime helpers.
+- **Constraints**: pure/deterministic (no IO, no global state) and no dependencies on compiler crates.
+
+See crate-level documentation in `crates/incan_semantics` for the contract, extension checklist,
+and drift-prevention expectations; tests in `tests/semantic_core_*` serve as the source of truth
+for covered domains.
+
 ### Frontend (`src/frontend/`)
 
-| Module            | Purpose |
-|-------------------|---------|
-| `lexer/`          | Tokenization; keyword recognition via `phf` perfect hash |
-| `parser.rs`       | Recursive descent; precedence climbing for expressions |
-| `ast.rs`          | Untyped AST; `Spanned<T>` for error reporting |
-| `module.rs`       | Module metadata and import path modeling |
-| `resolver.rs`     | Import/module resolution across multi-file programs |
-| `typechecker/`    | Two-pass symbol collection + type checking (see submodules below) |
-| `symbols.rs`      | Symbol table; import resolution |
-| `diagnostics.rs`  | Error types and pretty printing via `miette` |
+| Module           | Purpose                                           |
+|------------------|---------------------------------------------------|
+| `lexer/`         | Tokenization and keyword recognition              |
+| `parser.rs`      | Parser (recursive descent + expression precedence)|
+| `ast.rs`         | Untyped AST (`Spanned<T>` for diagnostics)        |
+| `module.rs`      | Import path modeling and module metadata          |
+| `resolver.rs`    | Multi-file module resolution                      |
+| `typechecker/`   | Two-pass collection + type checking               |
+| `symbols.rs`     | Symbol table and scope management                 |
+| `diagnostics.rs` | Error types and pretty printing via `miette`      |
 
 #### Typechecker submodules (`typechecker/`)
 
-| File              | Responsibility |
-|-------------------|----------------|
-| `mod.rs`          | `TypeChecker` struct + public API (`check_program`, `check_with_imports`) |
-| `collect.rs`      | First pass: register types, functions, imports into symbol table |
-| `check_decl.rs`   | Second pass: validate declarations (models, classes, traits, enums, functions) |
-| `check_stmt.rs`   | Statement checking: assignments, returns, control flow |
-| `check_expr/`     | Expression checking: dispatcher + themed helpers (calls, indexing, ops, match, etc.) |
+| File            | Responsibility                                |
+|-----------------|-----------------------------------------------|
+| `mod.rs`        | `TypeChecker` API (`check_program`, imports)  |
+| `collect.rs`    | Pass 1: register types/functions/imports      |
+| `check_decl.rs` | Pass 2: validate declarations                 |
+| `check_stmt.rs` | Statement checking (assign/return/control)    |
+| `check_expr/`   | Expression checking (calls/indexing/ops/match)|
 
 ### Backend (`src/backend/`)
 
-| Module                | Purpose |
-|-----------------------|---------|
-| `ir/codegen.rs`       | **Main entry point** (`IrCodegen`); orchestrates lowering & emission |
-| `ir/lower/`           | AST → IR lowering; resolves types and ownership semantics |
-| `ir/emit/`            | IR → Rust via `syn`/`quote`; applies type conversions |
-| `ir/emit_service/`    | Emission helpers split by IR layer (decl/stmt/expr/builtins) |
-| `ir/conversions.rs`   | Centralized type conversions (`&str` → `String`, borrows, clones) |
-| `ir/types.rs`         | IR type definitions (`IrType`) |
-| `ir/expr.rs`          | IR expression definitions (`IrExpr`, `TypedExpr`, `BuiltinFn`, `MethodKind`) |
-| `ir/stmt.rs`          | IR statement definitions (`IrStmt`) |
-| `ir/decl.rs`          | IR declaration definitions (`IrDecl`) |
-| `project.rs`          | Cargo project scaffolding and generation |
+| Module              | Purpose                                         |
+|---------------------|-------------------------------------------------|
+| `ir/codegen.rs`     | Entry point (`IrCodegen`): lowering + emission  |
+| `ir/lower/`         | AST → IR lowering (types + ownership decisions) |
+| `ir/emit/`          | IR → Rust via `syn`/`quote`                     |
+| `ir/emit_service/`  | Emission helpers split by layer                 |
+| `ir/conversions.rs` | Centralized conversions (`&str` → `String`)     |
+| `ir/types.rs`       | IR types (`IrType`)                             |
+| `ir/expr.rs`        | IR expressions (`TypedExpr`, builtins, methods) |
+| `ir/stmt.rs`        | IR statements (`IrStmt`)                        |
+| `ir/decl.rs`        | IR declarations (`IrDecl`)                      |
+| `project.rs`        | Cargo project scaffolding and generation        |
 
 #### Expression Emission (`src/backend/ir/emit/expressions/`)
 
 The expression emitter is split into focused submodules for maintainability:
 
-| Submodule            | Purpose |
-|----------------------|---------|
-| `mod.rs`             | Main `emit_expr` entry point; dispatches to specialized handlers |
-| `builtins.rs`        | Emit `BuiltinCall` variants (`print`, `len`, `range`, etc.) |
-| `methods.rs`         | Emit `KnownMethodCall` variants and string-based method fallback |
-| `calls.rs`           | Regular function calls and binary operations |
-| `indexing.rs`        | Index, slice, and field access; centralized negative-index handling |
-| `comprehensions.rs`  | List and dict comprehensions |
-| `structs_enums.rs`   | Struct constructor expressions |
-| `format.rs`          | Format strings (f-strings) and range expressions |
-| `lvalue.rs`          | Assignment target expressions (left-hand side of `=`) |
+| Submodule           | Purpose                                           |
+|---------------------|---------------------------------------------------|
+| `mod.rs`            | `emit_expr` entry point and dispatch              |
+| `builtins.rs`       | Builtin calls (`print`, `len`, `range`, etc.)     |
+| `methods.rs`        | Known methods + fallback method calls             |
+| `calls.rs`          | Function calls and binary operations              |
+| `indexing.rs`       | Index/slice/field access                          |
+| `comprehensions.rs` | List and dict comprehensions                      |
+| `structs_enums.rs`  | Struct constructors and enum-related expressions  |
+| `format.rs`         | f-strings and range expressions                   |
+| `lvalue.rs`         | Assignment targets                                |
 
-**Enum-based dispatch**: Built-in functions and known methods use enum types (`BuiltinFn`, `MethodKind`) instead of string matching. This provides compile-time exhaustiveness checking and makes it easier to add new builtins/methods (see [Extending Incan](contributing/extending_language.md)).
+**Enum-based dispatch**: Built-in functions and known methods use enum types (`BuiltinFn`, `MethodKind`) instead of
+string matching. This provides compile-time exhaustiveness checking and makes it easier to add new builtins/methods
+(see [Extending Incan](contributing/extending_language.md)).
 
 ### CLI (`src/cli/`)
 
-| Module            | Purpose |
-|-------------------|---------|
-| `commands.rs`     | Command handlers: `build`, `run`, `fmt`, `test` |
-| `test_runner.rs`  | pytest-style test discovery & execution |
-| `prelude.rs`      | Stdlib loading (embedded `.incn` files) |
+| Module           | Purpose                                    |
+|------------------|--------------------------------------------|
+| `commands.rs`    | Command handlers (`build`, `run`, `fmt`)   |
+| `test_runner.rs` | pytest-style test discovery and execution  |
+| `prelude.rs`     | Stdlib loading (embedded `.incn` files)    |
 
 ### Tooling
 
-| Module    | Purpose |
-|-----------|---------|
-| `format/` | Source code formatter |
-| `lsp/`    | LSP backend logic (diagnostics/hover/goto) |
-| `bin/`    | Extra binaries (e.g. `lsp`) |
+| Module    | Purpose                                 |
+|-----------|-----------------------------------------|
+| `format/` | Source formatter                        |
+| `lsp/`    | LSP backend logic (diagnostics/hover)   |
+| `bin/`    | Extra binaries (e.g. `lsp`)             |
 
 ## Key Data Types
 
@@ -253,7 +274,8 @@ ast::Type          ──►  IrType               ──►  (syn Type)
 
 ## Extending the Language
 
-Incan’s compiler is intentionally staged (Lexer → Parser/AST → Typechecker → IR → Rust). This makes the system easier to reason about, but it also means “language changes” can touch multiple layers.
+Incan’s compiler is intentionally staged (Lexer → Parser/AST → Typechecker → IR → Rust). This makes the system easier
+to reason about, but it also means “language changes” can touch multiple layers.
 
 For contributor guidance on **when to add a builtin vs when to add new syntax**, plus end-to-end checklists, see:
 

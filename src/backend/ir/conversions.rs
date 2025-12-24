@@ -166,8 +166,8 @@
 
 use super::expr::BinOp;
 use super::{IrExpr, IrExprKind, IrType, TypedExpr};
-use crate::numeric::{NumericOp, NumericTy, needs_float_promotion, result_numeric_type};
 use crate::numeric_adapters::{ir_type_to_numeric_ty, numeric_op_from_ir, pow_exponent_kind_from_ir};
+use incan_semantics::{NumericOp, NumericTy, needs_float_promotion, result_numeric_type};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -297,6 +297,46 @@ fn emit_binop_token(op: &BinOp) -> TokenStream {
 
 /// Determine a BinOpPlan: conversions + emit strategy in one place.
 pub fn determine_binop_plan(op: &BinOp, left: &TypedExpr, right: &TypedExpr) -> BinOpPlan {
+    let is_stringish = |ty: &IrType| match ty {
+        IrType::String => true,
+        IrType::Ref(inner) | IrType::RefMut(inner) => matches!(inner.as_ref(), IrType::String),
+        _ => false,
+    };
+
+    if matches!(op, BinOp::Add) && is_stringish(&left.ty) && is_stringish(&right.ty) {
+        return BinOpPlan {
+            lhs_conv: NumericConversion::None,
+            rhs_conv: NumericConversion::None,
+            result_ty: IrType::String,
+            emit: BinOpEmitKind::StdlibCall {
+                path: quote! { incan_stdlib::strings::str_concat },
+            },
+        };
+    }
+
+    if matches!(
+        op,
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+    ) && is_stringish(&left.ty)
+        && is_stringish(&right.ty)
+    {
+        let path = match op {
+            BinOp::Eq => quote! { incan_stdlib::strings::str_eq },
+            BinOp::Ne => quote! { incan_stdlib::strings::str_ne },
+            BinOp::Lt => quote! { incan_stdlib::strings::str_lt },
+            BinOp::Le => quote! { incan_stdlib::strings::str_le },
+            BinOp::Gt => quote! { incan_stdlib::strings::str_gt },
+            BinOp::Ge => quote! { incan_stdlib::strings::str_ge },
+            _ => unreachable!(),
+        };
+        return BinOpPlan {
+            lhs_conv: NumericConversion::None,
+            rhs_conv: NumericConversion::None,
+            result_ty: IrType::Bool,
+            emit: BinOpEmitKind::StdlibCall { path },
+        };
+    }
+
     let num_op = match numeric_op_from_ir(op) {
         Some(op) => op,
         None => {

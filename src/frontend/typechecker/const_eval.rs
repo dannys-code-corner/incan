@@ -11,10 +11,15 @@
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::{ResolvedType, resolve_type};
-use crate::numeric::{NumericTy, result_numeric_type};
 use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved, pow_exponent_kind_from_ast};
+use incan_semantics::errors::{STRING_INDEX_OUT_OF_RANGE_MSG, STRING_SLICE_STEP_ZERO_MSG};
+use incan_semantics::strings::{self, StringAccessError};
+use incan_semantics::{NumericTy, result_numeric_type};
 
 use super::TypeChecker;
+use crate::frontend::typechecker::helpers::{
+    freeze_const_type, frozen_bytes_ty, frozen_str_ty, is_frozen_str, is_intlike_for_index, is_str_like,
+};
 
 /// Const category used by RFC 008.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,9 +31,33 @@ pub enum ConstKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ConstValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    FrozenStr(String),
+    FrozenBytes(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConstEvalResult {
     pub ty: ResolvedType,
     pub kind: ConstKind,
+    pub value: Option<ConstValue>,
+}
+
+fn const_str(value: &ConstValue) -> Option<&str> {
+    match value {
+        ConstValue::FrozenStr(s) => Some(s.as_str()),
+        _ => None,
+    }
+}
+
+fn const_int(value: &ConstValue) -> Option<i64> {
+    match value {
+        ConstValue::Int(i) => Some(*i),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,18 +73,7 @@ impl TypeChecker {
     /// This makes `const X: List[T] = [...]` behave as `const X: FrozenList[T] = [...]`, ensuring
     /// the resulting constant has a deeply immutable type (no mutating APIs).
     fn freeze_const_annotation(&self, ty: ResolvedType) -> ResolvedType {
-        match ty {
-            ResolvedType::Str => ResolvedType::Named("FrozenStr".to_string()),
-            ResolvedType::Generic(name, args) => match name.as_str() {
-                "List" => ResolvedType::Generic("FrozenList".to_string(), args),
-                "Dict" => ResolvedType::Generic("FrozenDict".to_string(), args),
-                "Set" => ResolvedType::Generic("FrozenSet".to_string(), args),
-                // Keep tuples as tuples; their elements may still be frozen.
-                "Tuple" => ResolvedType::Generic("Tuple".to_string(), args),
-                _ => ResolvedType::Generic(name, args),
-            },
-            other => other,
-        }
+        freeze_const_type(ty)
     }
 
     pub(crate) fn check_and_resolve_const(&mut self, konst: &ConstDecl, decl_span: Span) {
@@ -67,6 +85,9 @@ impl TypeChecker {
 
         // Publish classification for downstream stages.
         self.type_info.const_kinds.insert(konst.name.clone(), result.kind);
+        if let Some(val) = result.value.clone() {
+            self.type_info.const_values.insert(konst.name.clone(), val);
+        }
         // Record the root initializer type so lowering/codegen can use it.
         self.record_expr_type(konst.value.span, result.ty.clone());
 
@@ -183,6 +204,7 @@ impl TypeChecker {
                 Some(ConstEvalResult {
                     ty: ResolvedType::Tuple(tys),
                     kind,
+                    value: None,
                 })
             }
             Expr::Unary(op, inner) => {
@@ -190,7 +212,16 @@ impl TypeChecker {
                 match op {
                     UnaryOp::Neg => {
                         if matches!(r.ty, ResolvedType::Int | ResolvedType::Float) {
-                            Some(ConstEvalResult { ty: r.ty, kind: r.kind })
+                            let value = match r.value.as_ref() {
+                                Some(ConstValue::Int(n)) => Some(ConstValue::Int(-n)),
+                                Some(ConstValue::Float(f)) => Some(ConstValue::Float(-f)),
+                                _ => None,
+                            };
+                            Some(ConstEvalResult {
+                                ty: r.ty,
+                                kind: r.kind,
+                                value,
+                            })
                         } else {
                             self.errors.push(CompileError::type_error(
                                 format!("Unary '-' is not supported for type '{}'", r.ty),
@@ -201,9 +232,14 @@ impl TypeChecker {
                     }
                     UnaryOp::Not => {
                         if matches!(r.ty, ResolvedType::Bool) {
+                            let value = match r.value.as_ref() {
+                                Some(ConstValue::Bool(b)) => Some(ConstValue::Bool(!b)),
+                                _ => None,
+                            };
                             Some(ConstEvalResult {
                                 ty: ResolvedType::Bool,
                                 kind: r.kind,
+                                value,
                             })
                         } else {
                             self.errors.push(CompileError::type_error(
@@ -219,7 +255,61 @@ impl TypeChecker {
                 let l = self.eval_const_expr(left, None, stack, decl_span)?;
                 let r = self.eval_const_expr(right, None, stack, decl_span)?;
 
-                let (result_ty, result_kind) = match op {
+                // String concatenation (str + str)
+                if matches!(op, BinaryOp::Add) && is_str_like(&l.ty) && is_str_like(&r.ty) {
+                    let value = match (
+                        l.value.as_ref().and_then(const_str),
+                        r.value.as_ref().and_then(const_str),
+                    ) {
+                        (Some(lhs), Some(rhs)) => Some(ConstValue::FrozenStr(strings::str_concat(lhs, rhs))),
+                        _ => None,
+                    };
+                    return Some(ConstEvalResult {
+                        ty: frozen_str_ty(),
+                        kind: ConstKind::Frozen,
+                        value,
+                    });
+                }
+
+                // String comparisons
+                if matches!(
+                    op,
+                    BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq
+                ) && is_str_like(&l.ty)
+                    && is_str_like(&r.ty)
+                {
+                    return Some(ConstEvalResult {
+                        ty: ResolvedType::Bool,
+                        kind: ConstKind::RustNative,
+                        value: None,
+                    });
+                }
+
+                // String membership
+                if matches!(op, BinaryOp::In | BinaryOp::NotIn) && is_str_like(&l.ty) && is_str_like(&r.ty) {
+                    let value = match (
+                        l.value.as_ref().and_then(const_str),
+                        r.value.as_ref().and_then(const_str),
+                    ) {
+                        (Some(needle), Some(haystack)) => {
+                            let contains = strings::str_contains(haystack, needle);
+                            let result = if matches!(op, BinaryOp::NotIn) {
+                                !contains
+                            } else {
+                                contains
+                            };
+                            Some(ConstValue::Bool(result))
+                        }
+                        _ => None,
+                    };
+                    return Some(ConstEvalResult {
+                        ty: ResolvedType::Bool,
+                        kind: ConstKind::RustNative,
+                        value,
+                    });
+                }
+
+                let (result_ty, result_kind, value) = match op {
                     // Numeric ops (Python-like semantics via numeric policy)
                     BinaryOp::Add
                     | BinaryOp::Sub
@@ -228,42 +318,34 @@ impl TypeChecker {
                     | BinaryOp::FloorDiv
                     | BinaryOp::Mod
                     | BinaryOp::Pow => {
-                        // Special-case string concatenation for frozen strings
-                        if matches!(op, BinaryOp::Add)
-                            && matches!(l.ty, ResolvedType::Named(ref n) if n == "FrozenStr")
-                            && matches!(r.ty, ResolvedType::Named(ref n) if n == "FrozenStr")
-                        {
-                            (ResolvedType::Named("FrozenStr".to_string()), ConstKind::Frozen)
-                        } else {
-                            // Convert to NumericTy
-                            let lhs_num = numeric_ty_from_resolved(&l.ty);
-                            let rhs_num = numeric_ty_from_resolved(&r.ty);
+                        // Convert to NumericTy
+                        let lhs_num = numeric_ty_from_resolved(&l.ty);
+                        let rhs_num = numeric_ty_from_resolved(&r.ty);
 
-                            match (lhs_num, rhs_num) {
-                                (Some(lhs), Some(rhs)) => {
-                                    let num_op = numeric_op_from_ast(op).expect("INVARIANT: arithmetic op");
-                                    let pow_exp = if matches!(op, BinaryOp::Pow) {
-                                        Some(pow_exponent_kind_from_ast(right, &r.ty))
-                                    } else {
-                                        None
-                                    };
-                                    let result = result_numeric_type(num_op, lhs, rhs, pow_exp);
-                                    let ty = match result {
-                                        NumericTy::Int => ResolvedType::Int,
-                                        NumericTy::Float => ResolvedType::Float,
-                                    };
-                                    (ty, ConstKind::RustNative)
-                                }
-                                _ => {
-                                    self.errors.push(CompileError::type_error(
-                                        format!(
-                                            "Binary operator '{}' is not supported for types '{}' and '{}'",
-                                            op, l.ty, r.ty
-                                        ),
-                                        expr.span,
-                                    ));
-                                    return None;
-                                }
+                        match (lhs_num, rhs_num) {
+                            (Some(lhs), Some(rhs)) => {
+                                let num_op = numeric_op_from_ast(op).expect("INVARIANT: arithmetic op");
+                                let pow_exp = if matches!(op, BinaryOp::Pow) {
+                                    Some(pow_exponent_kind_from_ast(right, &r.ty))
+                                } else {
+                                    None
+                                };
+                                let result = result_numeric_type(num_op, lhs, rhs, pow_exp);
+                                let ty = match result {
+                                    NumericTy::Int => ResolvedType::Int,
+                                    NumericTy::Float => ResolvedType::Float,
+                                };
+                                (ty, ConstKind::RustNative, None)
+                            }
+                            _ => {
+                                self.errors.push(CompileError::type_error(
+                                    format!(
+                                        "Binary operator '{}' is not supported for types '{}' and '{}'",
+                                        op, l.ty, r.ty
+                                    ),
+                                    expr.span,
+                                ));
+                                return None;
                             }
                         }
                     }
@@ -274,9 +356,9 @@ impl TypeChecker {
                         let rhs_num = numeric_ty_from_resolved(&r.ty);
                         if lhs_num.is_some() && rhs_num.is_some() {
                             // Mixed numeric comparison is valid
-                            (ResolvedType::Bool, ConstKind::RustNative)
+                            (ResolvedType::Bool, ConstKind::RustNative, None)
                         } else if self.types_compatible(&l.ty, &r.ty) {
-                            (ResolvedType::Bool, ConstKind::RustNative)
+                            (ResolvedType::Bool, ConstKind::RustNative, None)
                         } else {
                             self.errors.push(CompileError::type_error(
                                 format!("Cannot compare '{}' with '{}'", l.ty, r.ty),
@@ -287,7 +369,18 @@ impl TypeChecker {
                     }
                     BinaryOp::And | BinaryOp::Or => {
                         if matches!(l.ty, ResolvedType::Bool) && matches!(r.ty, ResolvedType::Bool) {
-                            (ResolvedType::Bool, ConstKind::RustNative)
+                            let value = match (l.value.as_ref(), r.value.as_ref()) {
+                                (Some(ConstValue::Bool(lb)), Some(ConstValue::Bool(rb))) => {
+                                    let res = if matches!(op, BinaryOp::And) {
+                                        *lb && *rb
+                                    } else {
+                                        *lb || *rb
+                                    };
+                                    Some(ConstValue::Bool(res))
+                                }
+                                _ => None,
+                            };
+                            (ResolvedType::Bool, ConstKind::RustNative, value)
                         } else {
                             self.errors.push(CompileError::type_error(
                                 format!(
@@ -311,10 +404,12 @@ impl TypeChecker {
                 Some(ConstEvalResult {
                     ty: result_ty,
                     kind: result_kind,
+                    value,
                 })
             }
             Expr::List(items) => {
                 let elem_expected = expected.and_then(|t| match t {
+                    ResolvedType::FrozenList(elem) => Some(elem.as_ref()),
                     ResolvedType::Generic(name, args) if name == "FrozenList" && !args.is_empty() => Some(&args[0]),
                     _ => None,
                 });
@@ -338,12 +433,14 @@ impl TypeChecker {
                 }
 
                 Some(ConstEvalResult {
-                    ty: ResolvedType::Generic("FrozenList".to_string(), vec![elem_ty]),
+                    ty: ResolvedType::FrozenList(Box::new(elem_ty)),
                     kind: ConstKind::Frozen,
+                    value: None,
                 })
             }
             Expr::Set(items) => {
                 let elem_expected = expected.and_then(|t| match t {
+                    ResolvedType::FrozenSet(elem) => Some(elem.as_ref()),
                     ResolvedType::Generic(name, args) if name == "FrozenSet" && !args.is_empty() => Some(&args[0]),
                     _ => None,
                 });
@@ -366,12 +463,14 @@ impl TypeChecker {
                 }
 
                 Some(ConstEvalResult {
-                    ty: ResolvedType::Generic("FrozenSet".to_string(), vec![elem_ty]),
+                    ty: ResolvedType::FrozenSet(Box::new(elem_ty)),
                     kind: ConstKind::Frozen,
+                    value: None,
                 })
             }
             Expr::Dict(pairs) => {
                 let (k_expected, v_expected) = match expected {
+                    Some(ResolvedType::FrozenDict(k, v)) => (Some(k.as_ref()), Some(v.as_ref())),
                     Some(ResolvedType::Generic(name, args)) if name == "FrozenDict" && args.len() >= 2 => {
                         (Some(&args[0]), Some(&args[1]))
                     }
@@ -404,8 +503,125 @@ impl TypeChecker {
                 }
 
                 Some(ConstEvalResult {
-                    ty: ResolvedType::Generic("FrozenDict".to_string(), vec![key_ty, val_ty]),
+                    ty: ResolvedType::FrozenDict(Box::new(key_ty), Box::new(val_ty)),
                     kind: ConstKind::Frozen,
+                    value: None,
+                })
+            }
+
+            Expr::Index(base, idx) => {
+                let b = self.eval_const_expr(base, None, stack, decl_span)?;
+                let i = self.eval_const_expr(idx, None, stack, decl_span)?;
+                if !is_frozen_str(&b.ty) && !matches!(b.ty, ResolvedType::Str) {
+                    self.errors.push(CompileError::type_error(
+                        "Indexing is only supported for strings in const initializers".to_string(),
+                        expr.span,
+                    ));
+                    return None;
+                }
+                if !is_intlike_for_index(&i.ty) {
+                    self.errors.push(CompileError::type_error(
+                        format!("String index must be int (got '{}')", i.ty),
+                        idx.span,
+                    ));
+                    return None;
+                }
+                let mut value = None;
+                if let (Some(base_str), Some(idx_val)) = (
+                    b.value.as_ref().and_then(const_str),
+                    i.value.as_ref().and_then(const_int),
+                ) {
+                    match strings::str_char_at(base_str, idx_val) {
+                        Ok(ch) => value = Some(ConstValue::FrozenStr(ch)),
+                        Err(StringAccessError::IndexOutOfRange) => {
+                            self.errors.push(CompileError::type_error(
+                                STRING_INDEX_OUT_OF_RANGE_MSG.to_string(),
+                                expr.span,
+                            ));
+                            return None;
+                        }
+                        Err(StringAccessError::SliceStepZero) => unreachable!("step zero is not used for index"),
+                    }
+                }
+                Some(ConstEvalResult {
+                    ty: frozen_str_ty(),
+                    kind: ConstKind::Frozen,
+                    value,
+                })
+            }
+
+            Expr::Slice(base, slice) => {
+                let b = self.eval_const_expr(base, None, stack, decl_span)?;
+                if !is_frozen_str(&b.ty) && !matches!(b.ty, ResolvedType::Str) {
+                    self.errors.push(CompileError::type_error(
+                        "Slicing is only supported for strings in const initializers".to_string(),
+                        base.span,
+                    ));
+                    return None;
+                }
+
+                let mut start_val = None;
+                if let Some(s) = &slice.start {
+                    let ty = self.eval_const_expr(s, None, stack, decl_span)?;
+                    if !is_intlike_for_index(&ty.ty) {
+                        self.errors.push(CompileError::type_error(
+                            format!("Slice start must be int (got '{}')", ty.ty),
+                            s.span,
+                        ));
+                        return None;
+                    }
+                    start_val = ty.value.as_ref().and_then(const_int);
+                }
+                let mut end_val = None;
+                if let Some(e) = &slice.end {
+                    let ty = self.eval_const_expr(e, None, stack, decl_span)?;
+                    if !is_intlike_for_index(&ty.ty) {
+                        self.errors.push(CompileError::type_error(
+                            format!("Slice end must be int (got '{}')", ty.ty),
+                            e.span,
+                        ));
+                        return None;
+                    }
+                    end_val = ty.value.as_ref().and_then(const_int);
+                }
+                let mut step_val = None;
+                if let Some(st) = &slice.step {
+                    let ty = self.eval_const_expr(st, None, stack, decl_span)?;
+                    if !is_intlike_for_index(&ty.ty) {
+                        self.errors.push(CompileError::type_error(
+                            format!("Slice step must be int (got '{}')", ty.ty),
+                            st.span,
+                        ));
+                        return None;
+                    }
+                    step_val = ty.value.as_ref().and_then(const_int);
+                }
+
+                let mut value = None;
+                if let Some(base_str) = b.value.as_ref().and_then(const_str) {
+                    match strings::str_slice(base_str, start_val, end_val, step_val) {
+                        Ok(out) => value = Some(ConstValue::FrozenStr(out)),
+                        Err(StringAccessError::SliceStepZero) => {
+                            let span = slice.step.as_ref().map(|s| s.span).unwrap_or(expr.span);
+                            self.errors
+                                .push(CompileError::type_error(STRING_SLICE_STEP_ZERO_MSG.to_string(), span));
+                            return None;
+                        }
+                        Err(StringAccessError::IndexOutOfRange) => {
+                            // Should not normally occur due to clamping but keep in sync with semantics.
+                            self.errors.push(CompileError::type_error(
+                                STRING_INDEX_OUT_OF_RANGE_MSG.to_string(),
+                                expr.span,
+                            ));
+                            return None;
+                        }
+                    }
+                }
+
+                Some(ConstEvalResult {
+                    ty: frozen_str_ty(),
+                    kind: ConstKind::Frozen,
+                    value,
                 })
             }
 
@@ -420,8 +636,6 @@ impl TypeChecker {
             | Expr::Closure(_, _)
             | Expr::Yield(_)
             | Expr::Range { .. }
-            | Expr::Index(_, _)
-            | Expr::Slice(_, _)
             | Expr::Field(_, _)
             | Expr::Try(_)
             | Expr::Paren(_)
@@ -451,25 +665,30 @@ impl TypeChecker {
         _decl_span: Span,
     ) -> ConstEvalResult {
         match lit {
-            Literal::Int(_) => ConstEvalResult {
+            Literal::Int(n) => ConstEvalResult {
                 ty: ResolvedType::Int,
                 kind: ConstKind::RustNative,
+                value: Some(ConstValue::Int(*n)),
             },
-            Literal::Float(_) => ConstEvalResult {
+            Literal::Float(f) => ConstEvalResult {
                 ty: ResolvedType::Float,
                 kind: ConstKind::RustNative,
+                value: Some(ConstValue::Float(*f)),
             },
-            Literal::Bool(_) => ConstEvalResult {
+            Literal::Bool(b) => ConstEvalResult {
                 ty: ResolvedType::Bool,
                 kind: ConstKind::RustNative,
+                value: Some(ConstValue::Bool(*b)),
             },
-            Literal::String(_) => ConstEvalResult {
-                ty: ResolvedType::Named("FrozenStr".to_string()),
+            Literal::String(s) => ConstEvalResult {
+                ty: frozen_str_ty(),
                 kind: ConstKind::Frozen,
+                value: Some(ConstValue::FrozenStr(s.clone())),
             },
-            Literal::Bytes(_) => ConstEvalResult {
-                ty: ResolvedType::Named("FrozenBytes".to_string()),
+            Literal::Bytes(b) => ConstEvalResult {
+                ty: frozen_bytes_ty(),
                 kind: ConstKind::Frozen,
+                value: Some(ConstValue::FrozenBytes(b.clone())),
             },
             Literal::None => {
                 // None is ambiguous without annotation.
@@ -483,6 +702,7 @@ impl TypeChecker {
                 ConstEvalResult {
                     ty,
                     kind: ConstKind::RustNative,
+                    value: None,
                 }
             }
         }

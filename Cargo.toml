@@ -1,10 +1,10 @@
 [workspace]
-members = [".", "crates/incan_derive", "crates/incan_stdlib"]
+members = [".", "crates/incan_derive", "crates/incan_stdlib", "crates/incan_semantics"]
 exclude = ["target/incan"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 description = "The Incan programming language compiler"
 edition = "2024"
 rust-version = "1.85"
@@ -31,6 +31,9 @@ description.workspace = true
 readme.workspace = true
 
 [dependencies]
+# Shared semantic helpers
+incan_semantics = { path = "crates/incan_semantics" }
+
 # LSP server implementation
 tower-lsp = "0.17"  # TODO: update to latest version
 # Async runtime (for LSP and generated async code)
@@ -61,6 +64,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 insta = { version = "1.45", features = ["glob"] }
 # Property-based testing
 proptest = "1"
+# Runtime crate for parity tests
+incan_stdlib = { path = "crates/incan_stdlib" }
 
 [[bin]]
 name = "incan"

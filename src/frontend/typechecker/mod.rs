@@ -47,7 +47,9 @@ mod check_expr;
 mod check_stmt;
 mod collect;
 mod const_eval;
+mod helpers;
 
+pub use const_eval::ConstValue;
 #[cfg(test)]
 mod tests;
 
@@ -57,6 +59,10 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::CompileError;
 use crate::frontend::module::{ExportedSymbol, exported_symbols};
 use crate::frontend::symbols::*;
+use helpers::{
+    FROZEN_BYTES_TY_NAME, FROZEN_DICT_TY_NAME, FROZEN_LIST_TY_NAME, FROZEN_SET_TY_NAME, FROZEN_STR_TY_NAME,
+    TUPLE_TY_NAME,
+};
 
 /// Capture reusable typechecking output for later compiler stages.
 ///
@@ -85,11 +91,17 @@ pub struct TypeCheckInfo {
     pub expr_types: HashMap<(usize, usize), ResolvedType>,
     /// Const category classification (RFC 008): const name -> kind.
     pub const_kinds: HashMap<String, const_eval::ConstKind>,
+    /// Computed const values (when available), keyed by const name.
+    pub const_values: HashMap<String, ConstValue>,
 }
 
 impl TypeCheckInfo {
     pub fn expr_type(&self, span: Span) -> Option<&ResolvedType> {
         self.expr_types.get(&(span.start, span.end))
+    }
+
+    pub fn const_value(&self, name: &str) -> Option<&ConstValue> {
+        self.const_values.get(name)
     }
 }
 
@@ -159,6 +171,29 @@ impl TypeChecker {
 
     pub(crate) fn record_expr_type(&mut self, span: Span, ty: ResolvedType) {
         self.type_info.expr_types.insert((span.start, span.end), ty);
+    }
+
+    /// Look up a type by name and return its [`TypeInfo`], if known.
+    ///
+    /// ## Parameters
+    /// - `name`: The type name to look up.
+    ///
+    /// ## Returns
+    /// - `Some(&TypeInfo)`: If `name` resolves to a type symbol.
+    /// - `None`: If the symbol is missing or not a type.
+    ///
+    /// ## Notes
+    /// - This helper exists to flatten the common pattern:
+    ///   - `symbols.lookup(name)` → `Option<SymbolId>`
+    ///   - `symbols.get(id)` → `Option<&Symbol>`
+    ///   - `match sym.kind { SymbolKind::Type(info) => ... }`
+    pub(crate) fn lookup_type_info(&self, name: &str) -> Option<&TypeInfo> {
+        let id = self.symbols.lookup(name)?;
+        let sym = self.symbols.get(id)?;
+        match &sym.kind {
+            SymbolKind::Type(info) => Some(info),
+            _ => None,
+        }
     }
 
     /// Check a program and return errors if any.
@@ -281,24 +316,61 @@ impl TypeChecker {
         match (actual, expected) {
             (ResolvedType::Unknown, _) | (_, ResolvedType::Unknown) => true,
             (ResolvedType::TypeVar(_), _) | (_, ResolvedType::TypeVar(_)) => true,
+            (ResolvedType::FrozenStr, ResolvedType::Str | ResolvedType::FrozenStr) => true,
             // `FrozenStr` is a read-only string wrapper; allow it where `str` is expected.
-            (ResolvedType::Named(name), ResolvedType::Str) if name == "FrozenStr" => true,
+            (ResolvedType::Named(name), ResolvedType::Str) if name == FROZEN_STR_TY_NAME => true,
+            (ResolvedType::FrozenBytes, ResolvedType::Bytes | ResolvedType::FrozenBytes) => true,
             // Allow `FrozenBytes` where `bytes` is expected.
-            (ResolvedType::Named(name), ResolvedType::Bytes) if name == "FrozenBytes" => true,
+            (ResolvedType::Named(name), ResolvedType::Bytes) if name == FROZEN_BYTES_TY_NAME => true,
+            (ResolvedType::FrozenList(a), ResolvedType::FrozenList(b)) => self.types_compatible(a, b),
+            (ResolvedType::FrozenList(a), ResolvedType::Generic(name, args))
+                if name == FROZEN_LIST_TY_NAME && args.len() == 1 =>
+            {
+                self.types_compatible(a, &args[0])
+            }
+            (ResolvedType::Generic(name, args), ResolvedType::FrozenList(b))
+                if name == FROZEN_LIST_TY_NAME && args.len() == 1 =>
+            {
+                self.types_compatible(&args[0], b)
+            }
+            (ResolvedType::FrozenSet(a), ResolvedType::FrozenSet(b)) => self.types_compatible(a, b),
+            (ResolvedType::FrozenSet(a), ResolvedType::Generic(name, args))
+                if name == FROZEN_SET_TY_NAME && args.len() == 1 =>
+            {
+                self.types_compatible(a, &args[0])
+            }
+            (ResolvedType::Generic(name, args), ResolvedType::FrozenSet(b))
+                if name == FROZEN_SET_TY_NAME && args.len() == 1 =>
+            {
+                self.types_compatible(&args[0], b)
+            }
+            (ResolvedType::FrozenDict(k1, v1), ResolvedType::FrozenDict(k2, v2)) => {
+                self.types_compatible(k1, k2) && self.types_compatible(v1, v2)
+            }
+            (ResolvedType::FrozenDict(k1, v1), ResolvedType::Generic(name, args))
+                if name == FROZEN_DICT_TY_NAME && args.len() >= 2 =>
+            {
+                self.types_compatible(k1, &args[0]) && self.types_compatible(v1, &args[1])
+            }
+            (ResolvedType::Generic(name, args), ResolvedType::FrozenDict(k2, v2))
+                if name == FROZEN_DICT_TY_NAME && args.len() >= 2 =>
+            {
+                self.types_compatible(&args[0], k2) && self.types_compatible(&args[1], v2)
+            }
             // Treat `Tuple` as both:
             // - a concrete tuple type: `Tuple[T1, T2, ...]`
             // - a supertype for any tuple when used without args: `Tuple`
             //
             // This matches snapshot tests that use `tuple[int, str]` and `Tuple` as "any tuple".
-            (ResolvedType::Tuple(_), ResolvedType::Named(name)) if name == "Tuple" => true,
-            (ResolvedType::Tuple(elems), ResolvedType::Generic(name, args)) if name == "Tuple" => {
+            (ResolvedType::Tuple(_), ResolvedType::Named(name)) if name == TUPLE_TY_NAME => true,
+            (ResolvedType::Tuple(elems), ResolvedType::Generic(name, args)) if name == TUPLE_TY_NAME => {
                 elems.len() == args.len()
                     && elems
                         .iter()
                         .zip(args.iter())
                         .all(|(t1, t2)| self.types_compatible(t1, t2))
             }
-            (ResolvedType::Generic(name, args), ResolvedType::Tuple(elems)) if name == "Tuple" => {
+            (ResolvedType::Generic(name, args), ResolvedType::Tuple(elems)) if name == TUPLE_TY_NAME => {
                 elems.len() == args.len()
                     && elems
                         .iter()

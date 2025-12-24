@@ -9,7 +9,7 @@ use super::super::types::IrType;
 use super::AstLowering;
 use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
-use crate::numeric::PowExponentKind;
+use incan_semantics::PowExponentKind;
 
 impl AstLowering {
     /// Lower an expression using the available typechecker output (if present).
@@ -249,6 +249,7 @@ impl AstLowering {
                 let elem_ty = match &obj.ty {
                     IrType::List(e) => (**e).clone(),
                     IrType::Dict(_, v) => (**v).clone(),
+                    IrType::String => IrType::String,
                     _ => IrType::Unknown,
                 };
                 (
@@ -435,31 +436,37 @@ impl AstLowering {
             }
 
             ast::Expr::Slice(target, slice) => {
-                // list[start:end] → list.get(start..end).unwrap().to_vec()
                 let target_expr = self.lower_expr(&target.node)?;
-                let start = if let Some(s) = &slice.start {
-                    Some(Box::new(self.lower_expr(&s.node)?))
-                } else {
-                    None
+                let start = slice
+                    .start
+                    .as_ref()
+                    .map(|s| Ok(Box::new(self.lower_expr(&s.node)?)))
+                    .transpose()?;
+                let end = slice
+                    .end
+                    .as_ref()
+                    .map(|e| Ok(Box::new(self.lower_expr(&e.node)?)))
+                    .transpose()?;
+                let step = slice
+                    .step
+                    .as_ref()
+                    .map(|st| Ok(Box::new(self.lower_expr(&st.node)?)))
+                    .transpose()?;
+
+                let result_ty = match &target_expr.ty {
+                    IrType::List(inner) => IrType::List(inner.clone()),
+                    IrType::String => IrType::String,
+                    _ => IrType::Unknown,
                 };
-                let end = if let Some(e) = &slice.end {
-                    Some(Box::new(self.lower_expr(&e.node)?))
-                } else {
-                    None
-                };
-                // Determine element type from target type
-                let elem_ty = if let IrType::List(ref inner) = target_expr.ty {
-                    (**inner).clone()
-                } else {
-                    IrType::Unknown
-                };
+
                 (
                     IrExprKind::Slice {
                         target: Box::new(target_expr),
                         start,
                         end,
+                        step,
                     },
-                    IrType::List(Box::new(elem_ty)),
+                    result_ty,
                 )
             }
 

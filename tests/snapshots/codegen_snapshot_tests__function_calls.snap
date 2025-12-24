@@ -13,7 +13,11 @@ use incan_derive::{FieldInfo, IncanClass};
 use std::collections::HashMap;
 fn greet(name: String) -> String {
     "Simple function for testing calls";
-    return format!("Hello, {}!", name);
+    return {
+        let __parts: [&str; 2usize] = ["Hello, ", "!"];
+        let __args: Vec<String> = vec![format!("{}", name)];
+        incan_stdlib::strings::fstring(&__parts, &__args)
+    };
 }
 fn add(a: i64, b: i64) -> i64 {
     "Test positional arguments";
@@ -21,7 +25,11 @@ fn add(a: i64, b: i64) -> i64 {
 }
 fn greet_with_title(name: String, title: String) -> String {
     "Test default arguments";
-    return format!("Hello, {} {}!", title, name);
+    return {
+        let __parts: [&str; 3usize] = ["Hello, ", " ", "!"];
+        let __args: Vec<String> = vec![format!("{}", title), format!("{}", name)];
+        incan_stdlib::strings::fstring(&__parts, &__args)
+    };
 }
 fn test_function_calls() {
     let message = greet("World".to_string());
@@ -31,10 +39,10 @@ fn test_function_calls() {
     let length = "hello".len() as i64;
     let string_list = vec!["a", "b", "c"];
     let count = string_list.len() as i64;
-    let upper = "test".to_uppercase();
-    let lower = "TEST".to_lowercase();
-    let stripped = "  spaces  ".trim().to_string();
-    let result = "hello world".to_uppercase().trim().to_string();
+    let upper = incan_stdlib::strings::str_upper(&"test");
+    let lower = incan_stdlib::strings::str_lower(&"TEST");
+    let stripped = incan_stdlib::strings::str_strip(&"  spaces  ");
+    let result = incan_stdlib::strings::str_upper(&"hello world").trim().to_string();
     let numbers = vec![1, 2, 3];
     numbers.push(4);
     let popped = numbers.pop().unwrap_or_default();

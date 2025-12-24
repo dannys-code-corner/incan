@@ -3,7 +3,7 @@
 //! This module contains helper functions for converting AST types, operators,
 //! and performing variable lookups during the lowering pass.
 //!
-//! Numeric semantics follow Python-like rules (via `crate::numeric`):
+//! Numeric semantics follow Python-like rules (via `incan_semantics`):
 //! - `/` always yields `Float` (even `int / int`)
 //! - `%` supports floats with Python remainder semantics
 //! - `**` yields `Int` only for non-negative int literal exponents; otherwise `Float`
@@ -13,7 +13,37 @@ use super::super::types::IrType;
 use super::AstLowering;
 use crate::frontend::ast;
 use crate::frontend::symbols::ResolvedType;
-use crate::numeric::{NumericOp, NumericTy, PowExponentKind, result_numeric_type};
+use crate::numeric_adapters::{ir_type_to_numeric_ty, numeric_op_from_ast};
+use incan_semantics::{NumericTy, PowExponentKind, result_numeric_type};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GenericBaseKind {
+    List,
+    Dict,
+    Set,
+    Option,
+    Result,
+    Tuple,
+    FrozenList,
+    FrozenSet,
+    FrozenDict,
+    Other,
+}
+
+fn classify_generic_base(name: &str) -> GenericBaseKind {
+    match name {
+        "List" | "list" => GenericBaseKind::List,
+        "Dict" | "dict" | "HashMap" => GenericBaseKind::Dict,
+        "Set" | "set" => GenericBaseKind::Set,
+        "Option" | "option" => GenericBaseKind::Option,
+        "Result" | "result" => GenericBaseKind::Result,
+        "Tuple" | "tuple" => GenericBaseKind::Tuple,
+        "FrozenList" => GenericBaseKind::FrozenList,
+        "FrozenSet" => GenericBaseKind::FrozenSet,
+        "FrozenDict" => GenericBaseKind::FrozenDict,
+        _ => GenericBaseKind::Other,
+    }
+}
 
 impl AstLowering {
     /// Lower an AST type in a `const` context, applying RFC 008 freezing rules.
@@ -29,6 +59,8 @@ impl AstLowering {
             ast::Type::Simple(name) => match name.as_str() {
                 "str" => IrType::StaticStr,
                 "bytes" => IrType::StaticBytes,
+                "FrozenStr" => IrType::FrozenStr,
+                "FrozenBytes" => IrType::FrozenBytes,
                 // Primitives remain the same
                 "int" => IrType::Int,
                 "float" => IrType::Float,
@@ -42,32 +74,21 @@ impl AstLowering {
                     }
                 }
             },
-            ast::Type::Generic(base, params) => match base.as_str() {
-                "List" | "list" => IrType::NamedGeneric(
-                    "FrozenList".to_string(),
-                    // For frozen containers, recursively apply const-type lowering to parameters
-                    params
-                        .iter()
-                        .map(|p| self.lower_const_annotation_type(&p.node))
-                        .collect(),
-                ),
-                "Dict" | "dict" | "HashMap" => IrType::NamedGeneric(
-                    "FrozenDict".to_string(),
-                    params
-                        .iter()
-                        .map(|p| self.lower_const_annotation_type(&p.node))
-                        .collect(),
-                ),
-                "Set" | "set" => IrType::NamedGeneric(
-                    "FrozenSet".to_string(),
-                    params
-                        .iter()
-                        .map(|p| self.lower_const_annotation_type(&p.node))
-                        .collect(),
-                ),
-                // Other generics fall back to regular lowering
-                _ => IrType::NamedGeneric(base.clone(), params.iter().map(|p| self.lower_type(&p.node)).collect()),
-            },
+            ast::Type::Generic(base, params) => {
+                let params_lowered: Vec<_> = params
+                    .iter()
+                    .map(|p| self.lower_const_annotation_type(&p.node))
+                    .collect();
+                match classify_generic_base(base.as_str()) {
+                    GenericBaseKind::List => IrType::NamedGeneric("FrozenList".to_string(), params_lowered),
+                    GenericBaseKind::Dict => IrType::NamedGeneric("FrozenDict".to_string(), params_lowered),
+                    GenericBaseKind::Set => IrType::NamedGeneric("FrozenSet".to_string(), params_lowered),
+                    GenericBaseKind::FrozenList | GenericBaseKind::FrozenSet | GenericBaseKind::FrozenDict => {
+                        IrType::NamedGeneric(base.clone(), params_lowered)
+                    }
+                    _ => IrType::NamedGeneric(base.clone(), params.iter().map(|p| self.lower_type(&p.node)).collect()),
+                }
+            }
             // Delegate function/tuple/unit/self handling to regular lowering
             other => self.lower_type(other),
         }
@@ -83,20 +104,27 @@ impl AstLowering {
             ResolvedType::Bool => IrType::Bool,
             ResolvedType::Str => IrType::String,
             ResolvedType::Bytes => IrType::Unknown,
+            ResolvedType::FrozenStr => IrType::FrozenStr,
+            ResolvedType::FrozenBytes => IrType::FrozenBytes,
+            ResolvedType::FrozenList(elem) => {
+                IrType::NamedGeneric("FrozenList".to_string(), vec![self.lower_resolved_type(elem)])
+            }
+            ResolvedType::FrozenSet(elem) => {
+                IrType::NamedGeneric("FrozenSet".to_string(), vec![self.lower_resolved_type(elem)])
+            }
+            ResolvedType::FrozenDict(k, v) => IrType::NamedGeneric(
+                "FrozenDict".to_string(),
+                vec![self.lower_resolved_type(k), self.lower_resolved_type(v)],
+            ),
             ResolvedType::Unit => IrType::Unit,
-            ResolvedType::Named(name) => match name.as_str() {
-                // RFC 008: Map frozen string/bytes to static forms for const emission
-                "FrozenStr" => IrType::StaticStr,
-                "FrozenBytes" => IrType::StaticBytes,
-                _ => IrType::Struct(name.clone()),
-            },
-            ResolvedType::Generic(name, args) => match name.as_str() {
-                "List" | "list" => IrType::List(Box::new(
+            ResolvedType::Named(name) => IrType::Struct(name.clone()),
+            ResolvedType::Generic(name, args) => match classify_generic_base(name.as_str()) {
+                GenericBaseKind::List => IrType::List(Box::new(
                     args.first()
                         .map(|t| self.lower_resolved_type(t))
                         .unwrap_or(IrType::Unknown),
                 )),
-                "Dict" | "dict" => IrType::Dict(
+                GenericBaseKind::Dict => IrType::Dict(
                     Box::new(
                         args.first()
                             .map(|t| self.lower_resolved_type(t))
@@ -108,17 +136,17 @@ impl AstLowering {
                             .unwrap_or(IrType::Unknown),
                     ),
                 ),
-                "Set" | "set" => IrType::Set(Box::new(
+                GenericBaseKind::Set => IrType::Set(Box::new(
                     args.first()
                         .map(|t| self.lower_resolved_type(t))
                         .unwrap_or(IrType::Unknown),
                 )),
-                "Option" | "option" => IrType::Option(Box::new(
+                GenericBaseKind::Option => IrType::Option(Box::new(
                     args.first()
                         .map(|t| self.lower_resolved_type(t))
                         .unwrap_or(IrType::Unknown),
                 )),
-                "Result" | "result" => IrType::Result(
+                GenericBaseKind::Result => IrType::Result(
                     Box::new(
                         args.first()
                             .map(|t| self.lower_resolved_type(t))
@@ -130,12 +158,11 @@ impl AstLowering {
                             .unwrap_or(IrType::Unknown),
                     ),
                 ),
-                "Tuple" | "tuple" => IrType::Tuple(args.iter().map(|t| self.lower_resolved_type(t)).collect()),
-                // RFC 008 frozen types (generic).
-                "FrozenList" | "FrozenSet" | "FrozenDict" => {
+                GenericBaseKind::Tuple => IrType::Tuple(args.iter().map(|t| self.lower_resolved_type(t)).collect()),
+                GenericBaseKind::FrozenList | GenericBaseKind::FrozenSet | GenericBaseKind::FrozenDict => {
                     IrType::NamedGeneric(name.clone(), args.iter().map(|t| self.lower_resolved_type(t)).collect())
                 }
-                _ => IrType::Struct(name.clone()),
+                GenericBaseKind::Other => IrType::Struct(name.clone()),
             },
             ResolvedType::Function(params, ret) => IrType::Function {
                 params: params.iter().map(|p| self.lower_resolved_type(p)).collect(),
@@ -163,6 +190,8 @@ impl AstLowering {
                 "int" => IrType::Int,
                 "float" => IrType::Float,
                 "str" => IrType::String,
+                "FrozenStr" => IrType::FrozenStr,
+                "FrozenBytes" => IrType::FrozenBytes,
                 "bool" => IrType::Bool,
                 "None" | "Unit" => IrType::Unit,
                 _ => {
@@ -175,56 +204,64 @@ impl AstLowering {
                     }
                 }
             },
-            ast::Type::Generic(base, params) => match base.as_str() {
-                "List" | "list" => IrType::List(Box::new(
-                    params
-                        .first()
-                        .map(|p| self.lower_type(&p.node))
-                        .unwrap_or(IrType::Unknown),
-                )),
-                "Dict" | "dict" | "HashMap" => IrType::Dict(
-                    Box::new(
+            ast::Type::Generic(base, params) => {
+                let lowered_params: Vec<_> = params.iter().map(|p| self.lower_type(&p.node)).collect();
+                match classify_generic_base(base.as_str()) {
+                    GenericBaseKind::List => IrType::List(Box::new(
                         params
                             .first()
                             .map(|p| self.lower_type(&p.node))
                             .unwrap_or(IrType::Unknown),
+                    )),
+                    GenericBaseKind::Dict => IrType::Dict(
+                        Box::new(
+                            params
+                                .first()
+                                .map(|p| self.lower_type(&p.node))
+                                .unwrap_or(IrType::Unknown),
+                        ),
+                        Box::new(
+                            params
+                                .get(1)
+                                .map(|p| self.lower_type(&p.node))
+                                .unwrap_or(IrType::Unknown),
+                        ),
                     ),
-                    Box::new(
-                        params
-                            .get(1)
-                            .map(|p| self.lower_type(&p.node))
-                            .unwrap_or(IrType::Unknown),
-                    ),
-                ),
-                "Set" | "set" => IrType::Set(Box::new(
-                    params
-                        .first()
-                        .map(|p| self.lower_type(&p.node))
-                        .unwrap_or(IrType::Unknown),
-                )),
-                "Option" | "option" => IrType::Option(Box::new(
-                    params
-                        .first()
-                        .map(|p| self.lower_type(&p.node))
-                        .unwrap_or(IrType::Unknown),
-                )),
-                "Result" | "result" => IrType::Result(
-                    Box::new(
+                    GenericBaseKind::Set => IrType::Set(Box::new(
                         params
                             .first()
                             .map(|p| self.lower_type(&p.node))
                             .unwrap_or(IrType::Unknown),
-                    ),
-                    Box::new(
+                    )),
+                    GenericBaseKind::Option => IrType::Option(Box::new(
                         params
-                            .get(1)
+                            .first()
                             .map(|p| self.lower_type(&p.node))
                             .unwrap_or(IrType::Unknown),
+                    )),
+                    GenericBaseKind::Result => IrType::Result(
+                        Box::new(
+                            params
+                                .first()
+                                .map(|p| self.lower_type(&p.node))
+                                .unwrap_or(IrType::Unknown),
+                        ),
+                        Box::new(
+                            params
+                                .get(1)
+                                .map(|p| self.lower_type(&p.node))
+                                .unwrap_or(IrType::Unknown),
+                        ),
                     ),
-                ),
-                "Tuple" | "tuple" => IrType::Tuple(params.iter().map(|p| self.lower_type(&p.node)).collect()),
-                _ => IrType::NamedGeneric(base.clone(), params.iter().map(|p| self.lower_type(&p.node)).collect()),
-            },
+                    GenericBaseKind::Tuple => IrType::Tuple(lowered_params),
+                    GenericBaseKind::FrozenList | GenericBaseKind::FrozenSet | GenericBaseKind::FrozenDict => {
+                        IrType::NamedGeneric(base.clone(), lowered_params)
+                    }
+                    GenericBaseKind::Other => {
+                        IrType::NamedGeneric(base.clone(), params.iter().map(|p| self.lower_type(&p.node)).collect())
+                    }
+                }
+            }
             ast::Type::Function(params, ret) => IrType::Function {
                 params: params.iter().map(|p| self.lower_type(&p.node)).collect(),
                 ret: Box::new(self.lower_type(&ret.node)),
@@ -305,12 +342,12 @@ impl AstLowering {
             | ast::BinaryOp::Mod
             | ast::BinaryOp::Pow => {
                 // Convert to NumericTy
-                let lhs_num = Self::ir_type_to_numeric_ty(left);
-                let rhs_num = Self::ir_type_to_numeric_ty(right);
+                let lhs_num = ir_type_to_numeric_ty(left);
+                let rhs_num = ir_type_to_numeric_ty(right);
 
                 match (lhs_num, rhs_num) {
                     (Some(lhs), Some(rhs)) => {
-                        if let Some(num_op) = Self::binop_to_numeric_op(*op) {
+                        if let Some(num_op) = numeric_op_from_ast(op) {
                             let result = result_numeric_type(num_op, lhs, rhs, pow_exp_kind);
                             match result {
                                 NumericTy::Int => IrType::Int,
@@ -323,35 +360,6 @@ impl AstLowering {
                     _ => left.clone(),
                 }
             }
-        }
-    }
-
-    /// Convert an IrType to NumericTy for policy lookup.
-    fn ir_type_to_numeric_ty(ty: &IrType) -> Option<NumericTy> {
-        match ty {
-            IrType::Int => Some(NumericTy::Int),
-            IrType::Float => Some(NumericTy::Float),
-            _ => None,
-        }
-    }
-
-    /// Convert a BinaryOp to NumericOp for policy lookup.
-    fn binop_to_numeric_op(op: ast::BinaryOp) -> Option<NumericOp> {
-        match op {
-            ast::BinaryOp::Add => Some(NumericOp::Add),
-            ast::BinaryOp::Sub => Some(NumericOp::Sub),
-            ast::BinaryOp::Mul => Some(NumericOp::Mul),
-            ast::BinaryOp::Div => Some(NumericOp::Div),
-            ast::BinaryOp::FloorDiv => Some(NumericOp::FloorDiv),
-            ast::BinaryOp::Mod => Some(NumericOp::Mod),
-            ast::BinaryOp::Pow => Some(NumericOp::Pow),
-            ast::BinaryOp::Eq => Some(NumericOp::Eq),
-            ast::BinaryOp::NotEq => Some(NumericOp::NotEq),
-            ast::BinaryOp::Lt => Some(NumericOp::Lt),
-            ast::BinaryOp::Gt => Some(NumericOp::Gt),
-            ast::BinaryOp::LtEq => Some(NumericOp::LtEq),
-            ast::BinaryOp::GtEq => Some(NumericOp::GtEq),
-            _ => None,
         }
     }
 

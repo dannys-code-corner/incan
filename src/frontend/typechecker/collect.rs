@@ -6,6 +6,7 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::module::ExportedSymbol;
 use crate::frontend::symbols::*;
+use crate::frontend::typechecker::helpers::freeze_const_type;
 
 use super::{TypeChecker, VALID_DERIVES};
 
@@ -150,17 +151,7 @@ impl TypeChecker {
             .map(|t| {
                 // `const` implies deep immutability; map common container annotations to frozen equivalents.
                 let resolved = resolve_type(&t.node, &self.symbols);
-                match resolved {
-                    ResolvedType::Str => ResolvedType::Named("FrozenStr".to_string()),
-                    ResolvedType::Bytes => ResolvedType::Named("FrozenBytes".to_string()),
-                    ResolvedType::Generic(name, args) => match name.as_str() {
-                        "List" => ResolvedType::Generic("FrozenList".to_string(), args),
-                        "Dict" => ResolvedType::Generic("FrozenDict".to_string(), args),
-                        "Set" => ResolvedType::Generic("FrozenSet".to_string(), args),
-                        _ => ResolvedType::Generic(name, args),
-                    },
-                    other => other,
-                }
+                freeze_const_type(resolved)
             })
             .unwrap_or(ResolvedType::Unknown);
 
