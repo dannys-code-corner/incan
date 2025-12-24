@@ -218,11 +218,7 @@ where
 fn py_mod_i64_impl(a: i64, b: i64) -> i64 {
     debug_assert!(b != 0);
     let r = a % b;
-    if (r > 0 && b < 0) || (r < 0 && b > 0) {
-        r + b
-    } else {
-        r
-    }
+    if (r > 0 && b < 0) || (r < 0 && b > 0) { r + b } else { r }
 }
 
 #[inline]
@@ -230,11 +226,7 @@ fn py_floor_div_i64_impl(a: i64, b: i64) -> i64 {
     debug_assert!(b != 0);
     let q = a / b;
     let r = a % b;
-    if (r > 0 && b < 0) || (r < 0 && b > 0) {
-        q - 1
-    } else {
-        q
-    }
+    if (r > 0 && b < 0) || (r < 0 && b > 0) { q - 1 } else { q }
 }
 
 #[inline]

@@ -96,7 +96,7 @@ pub type CliResult<T> = Result<T, CliError>;
 
 /// ASCII art logo - embedded at compile time from assets/logo.txt
 const LOGO: &str = include_str!("../../assets/logo.txt");
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = crate::version::INCAN_VERSION;
 
 // ============================================================================
 // Clap CLI definition

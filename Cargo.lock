@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "incan"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "clap",
  "insta",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "incan_derive"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "incan_stdlib"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "incan_derive",
  "serde",
