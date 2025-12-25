@@ -3,6 +3,8 @@ name: Auto-label issues and PRs (sync)
 on:
   issues:
     types: [opened, edited]
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
   pull_request_target:
     types: [opened, edited, reopened, synchronize, ready_for_review]
 
@@ -42,14 +44,21 @@ jobs:
               ["Documentation", "documentation"],
             ]);
 
+            // Extract a section from a markdown string based on a heading.
             function extractSection(markdown, heading) {
-              // Captures the text after `##/###/... {heading}` up to the next heading.
-              const re = new RegExp(`^#{2,6}\\s+${heading.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\s*$`, "mi");
+              // Escape special regex characters in the heading.
+              const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              // Create a regular expression to match the heading.
+              const re = new RegExp(`^\\s*#{2,6}\\s+${esc}\\s*$`, "mi");
+              // Execute the regular expression on the markdown string.
               const m = re.exec(markdown);
+              // If no match, return an empty string.
               if (!m) return "";
+              // Get the start index of the match.
               const start = m.index + m[0].length;
+              // Get the rest of the markdown string after the match.
               const rest = markdown.slice(start);
-              const next = rest.search(/^#{2,6}\s+/m);
+              const next = rest.search(/^\\s*#{2,6}\\s+/m);
               return (next === -1 ? rest : rest.slice(0, next)).trim();
             }
 
@@ -66,11 +75,15 @@ jobs:
               const checkedLines = areaBlock
                 .split("\n")
                 .map((l) => l.trim())
-                .filter((l) => /^- \[[xX]\]\s+/.test(l));
+                .filter((l) => /^[-*]\s*\[[xX]\]\s+/.test(l));
 
+              // For each option, add the corresponding label to the set.
               for (const [opt, label] of optionToLabel.entries()) {
                 if (checkedLines.some((l) => l.includes(opt))) desired.add(label);
               }
+
+              // Log the preview of the area block, the checked lines, and the desired labels.
+              console.log({ isPR, areaBlockPreview: areaBlock.slice(0, 300), checkedLines, desired: [...desired] });
             } else {
               // Issue forms render selected options as plain text in the section.
               for (const [opt, label] of optionToLabel.entries()) {
