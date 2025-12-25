@@ -1,0 +1,110 @@
+name: Auto-label issues and PRs (sync)
+
+on:
+  issues:
+    types: [opened, edited]
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const isPR = context.eventName === "pull_request_target";
+            const payload = context.payload;
+
+            const body = isPR ? (payload.pull_request?.body ?? "") : (payload.issue?.body ?? "");
+
+            // Only manage these labels; never remove unrelated labels (bug/feature/etc).
+            const managed = new Set([
+              "incan language semantics",
+              "incan compiler",
+              "tooling",
+              "editor integration",
+              "runtime / core crates",
+              "documentation",
+            ]);
+
+            // Map template "Area" option strings -> labels.
+            // IMPORTANT: these option strings must match the templates exactly.
+            const optionToLabel = new Map([
+              ["Incan Language (syntax/semantics)", "incan language semantics"],
+              ["Compiler (frontend/backend/codegen)", "incan compiler"],
+              ["Tooling (CLI/formatter/test runner)", "tooling"],
+              ["Editor integration (LSP/VS Code extension)", "editor integration"],
+              ["Runtime / Core crates (stdlib/core/derive)", "runtime / core crates"],
+              ["Documentation", "documentation"],
+            ]);
+
+            function extractSection(markdown, heading) {
+              // Captures the text after `##/###/... {heading}` up to the next heading.
+              const re = new RegExp(`^#{2,6}\\s+${heading.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\s*$`, "mi");
+              const m = re.exec(markdown);
+              if (!m) return "";
+              const start = m.index + m[0].length;
+              const rest = markdown.slice(start);
+              const next = rest.search(/^#{2,6}\s+/m);
+              return (next === -1 ? rest : rest.slice(0, next)).trim();
+            }
+
+            // Issue forms render the dropdown under "### Area"; PR template uses "## Area(s)".
+            let areaBlock = extractSection(body, isPR ? "Area(s)" : "Area");
+            if (!areaBlock) {
+              areaBlock = extractSection(body, "Area");
+            }
+
+            const desired = new Set();
+
+            if (isPR) {
+              // PR template uses checkboxes; only apply labels for checked items.
+              const checkedLines = areaBlock
+                .split("\n")
+                .map((l) => l.trim())
+                .filter((l) => /^- \[[xX]\]\s+/.test(l));
+
+              for (const [opt, label] of optionToLabel.entries()) {
+                if (checkedLines.some((l) => l.includes(opt))) desired.add(label);
+              }
+            } else {
+              // Issue forms render selected options as plain text in the section.
+              for (const [opt, label] of optionToLabel.entries()) {
+                if (areaBlock.includes(opt)) desired.add(label);
+              }
+            }
+
+            // If user picked "Other" or the section is missing, don't touch labels.
+            if (desired.size === 0) return;
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = isPR ? payload.pull_request.number : context.issue.number;
+
+            // Current labels on the issue/PR
+            const current = new Set(
+              (isPR ? payload.pull_request.labels : payload.issue.labels ?? []).map((l) => l.name)
+            );
+
+            // Compute label changes
+            const toAdd = [...desired].filter(l => !current.has(l));
+            const toRemove = [...current].filter(l => managed.has(l) && !desired.has(l));
+
+            if (toAdd.length > 0) {
+              await github.rest.issues.addLabels({ owner, repo, issue_number, labels: toAdd });
+            }
+
+            for (const label of toRemove) {
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
+              } catch (e) {
+                // If the label was removed concurrently or doesn't exist, ignore.
+                if (e?.status !== 404) throw e;
+              }
+            }
+
+
