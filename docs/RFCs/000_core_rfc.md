@@ -1,6 +1,6 @@
 # RFC 000: Incan Core Language RFC (Phase 1)
 
-**Status:** Implemented  
+**Status:** Done  
 **Created:** 2024-11-26
 
 This RFC consolidates the core semantics decisions for Incan's first implementation phase.

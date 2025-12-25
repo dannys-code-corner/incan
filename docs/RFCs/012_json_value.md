@@ -1,5 +1,9 @@
 # RFC 012: JsonValue Type for Dynamic JSON
 
+## Status
+
+Draft
+
 ## Summary
 
 Add a `JsonValue` type for handling JSON with unknown or varying structure at runtime.

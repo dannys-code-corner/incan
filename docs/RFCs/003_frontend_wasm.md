@@ -1,6 +1,6 @@
 # RFC 003: Frontend & WebAssembly Support
 
-**Status**: Future  
+**Status**: Blocked  
 **Category**: Major Feature
 
 ## Summary

@@ -1,6 +1,6 @@
 # RFC 006: Python-Style Generators
 
-**Status:** Proposed  
+**Status:** Planned  
 **Created:** 2024-12-10
 
 ## Summary

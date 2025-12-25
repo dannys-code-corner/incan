@@ -1,6 +1,6 @@
 # RFC 007: Inline Tests
 
-**Status:** Proposed  
+**Status:** Planned  
 **Created:** 2024-12-10
 
 ## Summary

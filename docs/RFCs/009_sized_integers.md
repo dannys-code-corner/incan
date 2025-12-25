@@ -1,6 +1,6 @@
 # RFC 009: Sized Integer Types & Builtin Type Registry
 
-**Status:** Proposed  
+**Status:** Planned  
 **Created:** 2024-12-11  
 **Updated:** 2024-12-23
 

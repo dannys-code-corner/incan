@@ -1,6 +1,6 @@
 # RFC 015: Hatch-like Tooling (Project Lifecycle CLI)
 
-**Status:** Proposed  
+**Status:** Planned  
 **Created:** 2025-12-23  
 
 ## Summary

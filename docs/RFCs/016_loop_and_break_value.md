@@ -1,6 +1,6 @@
 # RFC 016: `loop` and `break <value>` (Loop Expressions)
 
-**Status:** Proposed  
+**Status:** Planned  
 **Created:** 2025-12-24  
 
 ## Summary

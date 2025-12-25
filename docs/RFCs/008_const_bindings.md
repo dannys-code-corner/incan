@@ -1,6 +1,6 @@
 # RFC 008: Const Bindings
 
-**Status:** Implemented  
+**Status:** Done  
 **Created:** 2025-12-10  
 **Implemented:** 2025-12-23  
 
