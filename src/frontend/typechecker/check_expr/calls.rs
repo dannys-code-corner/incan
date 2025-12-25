@@ -7,6 +7,9 @@
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
+use crate::frontend::typechecker::helpers::{
+    DICT_TY_NAME, LIST_TY_NAME, SET_TY_NAME, dict_ty, list_ty, option_ty, result_ty,
+};
 
 use super::TypeChecker;
 
@@ -48,12 +51,12 @@ impl TypeChecker {
                         arg_types.first().cloned().unwrap_or(ResolvedType::Unknown),
                     )
                 };
-                Some(ResolvedType::Generic("Result".to_string(), vec![ok_ty, err_ty]))
+                Some(result_ty(ok_ty, err_ty))
             }
             "Some" => {
                 let arg_types = self.check_call_arg_types(args);
                 let inner = arg_types.first().cloned().unwrap_or(ResolvedType::Unknown);
-                Some(ResolvedType::Generic("Option".to_string(), vec![inner]))
+                Some(option_ty(inner))
             }
 
             // I/O / utility
@@ -71,7 +74,7 @@ impl TypeChecker {
             }
             "range" => {
                 self.check_call_args(args);
-                Some(ResolvedType::Generic("List".to_string(), vec![ResolvedType::Int]))
+                Some(list_ty(ResolvedType::Int))
             }
 
             // Time / async-ish helpers
@@ -134,7 +137,7 @@ impl TypeChecker {
                     let arg_expr = Self::call_arg_expr(arg);
                     let arg_ty = self.check_expr(arg_expr);
                     match &arg_ty {
-                        ResolvedType::Generic(name, type_args) if name == "Dict" && type_args.len() >= 2 => {
+                        ResolvedType::Generic(name, type_args) if name == DICT_TY_NAME && type_args.len() >= 2 => {
                             (type_args[0].clone(), type_args[1].clone())
                         }
                         _ => (ResolvedType::Unknown, ResolvedType::Unknown),
@@ -142,7 +145,7 @@ impl TypeChecker {
                 } else {
                     (ResolvedType::Unknown, ResolvedType::Unknown)
                 };
-                Some(ResolvedType::Generic("Dict".to_string(), vec![key_ty, val_ty]))
+                Some(dict_ty(key_ty, val_ty))
             }
             "list" => {
                 let elem_ty = if let Some(arg) = args.first() {
@@ -150,7 +153,8 @@ impl TypeChecker {
                     let arg_ty = self.check_expr(arg_expr);
                     match &arg_ty {
                         ResolvedType::Generic(name, type_args)
-                            if (name == "List" || name == "Vec" || name == "Set") && !type_args.is_empty() =>
+                            if (name == LIST_TY_NAME || name == "Vec" || name == SET_TY_NAME)
+                                && !type_args.is_empty() =>
                         {
                             type_args[0].clone()
                         }
@@ -160,7 +164,7 @@ impl TypeChecker {
                 } else {
                     ResolvedType::Unknown
                 };
-                Some(ResolvedType::Generic("List".to_string(), vec![elem_ty]))
+                Some(list_ty(elem_ty))
             }
             "set" => {
                 let elem_ty = if let Some(arg) = args.first() {
@@ -168,7 +172,8 @@ impl TypeChecker {
                     let arg_ty = self.check_expr(arg_expr);
                     match &arg_ty {
                         ResolvedType::Generic(name, type_args)
-                            if (name == "List" || name == "Vec" || name == "Set") && !type_args.is_empty() =>
+                            if (name == LIST_TY_NAME || name == "Vec" || name == SET_TY_NAME)
+                                && !type_args.is_empty() =>
                         {
                             type_args[0].clone()
                         }
@@ -177,7 +182,7 @@ impl TypeChecker {
                 } else {
                     ResolvedType::Unknown
                 };
-                Some(ResolvedType::Generic("Set".to_string(), vec![elem_ty]))
+                Some(ResolvedType::Generic(SET_TY_NAME.to_string(), vec![elem_ty]))
             }
             "enumerate" => {
                 let mut inner_ty = ResolvedType::Unknown;
@@ -185,15 +190,12 @@ impl TypeChecker {
                     let arg_expr = Self::call_arg_expr(arg);
                     let iter_ty = self.check_expr(arg_expr);
                     if let ResolvedType::Generic(name, type_args) = &iter_ty {
-                        if (name == "List" || name == "Vec") && !type_args.is_empty() {
+                        if (name == LIST_TY_NAME || name == "Vec") && !type_args.is_empty() {
                             inner_ty = type_args[0].clone();
                         }
                     }
                 }
-                Some(ResolvedType::Generic(
-                    "List".to_string(),
-                    vec![ResolvedType::Tuple(vec![ResolvedType::Int, inner_ty])],
-                ))
+                Some(list_ty(ResolvedType::Tuple(vec![ResolvedType::Int, inner_ty])))
             }
             "zip" => {
                 let mut ty1 = ResolvedType::Unknown;
@@ -207,32 +209,23 @@ impl TypeChecker {
                     let iter2_ty = self.check_expr(arg2);
 
                     if let ResolvedType::Generic(name, type_args) = &iter1_ty {
-                        if (name == "List" || name == "Vec") && !type_args.is_empty() {
+                        if (name == LIST_TY_NAME || name == "Vec") && !type_args.is_empty() {
                             ty1 = type_args[0].clone();
                         }
                     }
                     if let ResolvedType::Generic(name, type_args) = &iter2_ty {
-                        if (name == "List" || name == "Vec") && !type_args.is_empty() {
+                        if (name == LIST_TY_NAME || name == "Vec") && !type_args.is_empty() {
                             ty2 = type_args[0].clone();
                         }
                     }
                 }
 
-                Some(ResolvedType::Generic(
-                    "List".to_string(),
-                    vec![ResolvedType::Tuple(vec![ty1, ty2])],
-                ))
+                Some(list_ty(ResolvedType::Tuple(vec![ty1, ty2])))
             }
 
             // File I/O functions
-            "read_file" => Some(ResolvedType::Generic(
-                "Result".to_string(),
-                vec![ResolvedType::Str, ResolvedType::Str],
-            )),
-            "write_file" => Some(ResolvedType::Generic(
-                "Result".to_string(),
-                vec![ResolvedType::Unit, ResolvedType::Str],
-            )),
+            "read_file" => Some(result_ty(ResolvedType::Str, ResolvedType::Str)),
+            "write_file" => Some(result_ty(ResolvedType::Unit, ResolvedType::Str)),
 
             // Type conversion functions
             "int" => {
@@ -255,10 +248,7 @@ impl TypeChecker {
             }
             "json_parse" => {
                 self.check_call_args(args);
-                Some(ResolvedType::Generic(
-                    "Result".to_string(),
-                    vec![ResolvedType::Unknown, ResolvedType::Str],
-                ))
+                Some(result_ty(ResolvedType::Unknown, ResolvedType::Str))
             }
 
             // Async primitives

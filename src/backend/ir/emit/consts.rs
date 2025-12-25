@@ -38,8 +38,13 @@ impl<'a> IrEmitter<'a> {
     pub(super) fn validate_const_emittable(&self, name: &str, ty: &IrType, value: &TypedExpr) -> Result<(), EmitError> {
         fn ok_ty(ty: &IrType) -> bool {
             match ty {
-                IrType::Int | IrType::Float | IrType::Bool | IrType::StaticStr | IrType::StaticBytes => true,
-                IrType::Struct(name) if name == "FrozenStr" || name == "FrozenBytes" => true,
+                IrType::Int
+                | IrType::Float
+                | IrType::Bool
+                | IrType::StaticStr
+                | IrType::StaticBytes
+                | IrType::FrozenStr
+                | IrType::FrozenBytes => true,
                 IrType::Tuple(items) => items.iter().all(ok_ty),
                 IrType::NamedGeneric(name, args) if name == "FrozenList" => args.first().map(ok_ty).unwrap_or(false),
                 IrType::NamedGeneric(name, args) if name == "FrozenSet" => args.first().map(ok_ty).unwrap_or(false),

@@ -34,6 +34,7 @@
 /// assert_eq!(py_floor_div_i64(7, -3), -3);  // Rust would give -2
 /// assert_eq!(py_floor_div_i64(-7, -3), 2);
 /// ```
+use incan_semantics::{ZERO_DIVISION_MSG, py_floor_div_i64_impl, py_mod_f64_impl, py_mod_i64_impl};
 
 // --- Generic helpers and sealed traits ---------------------------------------------------------
 
@@ -129,7 +130,7 @@ where
     let l: f64 = lhs.to_float();
     let r: f64 = rhs.to_float();
     if r == 0.0 {
-        panic!("ZeroDivisionError: float division by zero");
+        panic!("{}", ZERO_DIVISION_MSG);
     }
     l / r
 }
@@ -168,7 +169,7 @@ where
     R: sealed::IncanNumeric + Copy,
 {
     if rhs.to_float() == 0.0 {
-        panic!("ZeroDivisionError: float division by zero");
+        panic!("{}", ZERO_DIVISION_MSG);
     }
     <L as PyModImpl<R>>::py_mod(lhs, rhs)
 }
@@ -207,38 +208,12 @@ where
     R: sealed::IncanNumeric + Copy,
 {
     if rhs.to_float() == 0.0 {
-        panic!("ZeroDivisionError: float division by zero");
+        panic!("{}", ZERO_DIVISION_MSG);
     }
     <L as PyFloorDivImpl<R>>::py_floor_div(lhs, rhs)
 }
 
 // --- Internal helpers reused across impls ------------------------------------------------------
-
-#[inline]
-fn py_mod_i64_impl(a: i64, b: i64) -> i64 {
-    debug_assert!(b != 0);
-    let r = a % b;
-    if (r > 0 && b < 0) || (r < 0 && b > 0) { r + b } else { r }
-}
-
-#[inline]
-fn py_floor_div_i64_impl(a: i64, b: i64) -> i64 {
-    debug_assert!(b != 0);
-    let q = a / b;
-    let r = a % b;
-    if (r > 0 && b < 0) || (r < 0 && b > 0) { q - 1 } else { q }
-}
-
-#[inline]
-fn py_mod_f64_impl(a: f64, b: f64) -> f64 {
-    debug_assert!(b != 0.0);
-    let r = a % b;
-    if (r > 0.0 && b < 0.0) || (r < 0.0 && b > 0.0) {
-        r + b
-    } else {
-        r
-    }
-}
 
 // --- Python-like modulo -----------------------------------------------------------------------
 
@@ -386,6 +361,8 @@ pub fn py_mod_f64(a: f64, b: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use incan_semantics::{NumericOp, NumericTy, result_numeric_type};
+    use std::any::Any;
     use std::f64;
 
     fn approx_eq(a: f64, b: f64) -> bool {
@@ -398,6 +375,55 @@ mod tests {
         assert!(approx_eq(py_div(2_i64, 2.0_f64), 1.0));
         assert!(approx_eq(py_div(2.0_f64, 2_i64), 1.0));
         assert!(approx_eq(py_div(2.0_f64, 2.0_f64), 1.0));
+    }
+
+    #[test]
+    fn test_semantic_core_division_type() {
+        assert_eq!(
+            result_numeric_type(NumericOp::Div, NumericTy::Int, NumericTy::Int, None),
+            NumericTy::Float
+        );
+    }
+
+    #[test]
+    fn test_semantic_core_matches_runtime_signatures() {
+        // Division: always float
+        let r = py_div(7_i64, 2_i64);
+        assert!((&r as &dyn Any).is::<f64>());
+        assert_eq!(
+            result_numeric_type(NumericOp::Div, NumericTy::Int, NumericTy::Int, None),
+            NumericTy::Float
+        );
+
+        // FloorDiv: int/int -> int, otherwise float
+        let r_int = py_floor_div(7_i64, 2_i64);
+        assert!((&r_int as &dyn Any).is::<i64>());
+        assert_eq!(
+            result_numeric_type(NumericOp::FloorDiv, NumericTy::Int, NumericTy::Int, None),
+            NumericTy::Int
+        );
+
+        let r_float = py_floor_div(7_i64, 2.0_f64);
+        assert!((&r_float as &dyn Any).is::<f64>());
+        assert_eq!(
+            result_numeric_type(NumericOp::FloorDiv, NumericTy::Int, NumericTy::Float, None),
+            NumericTy::Float
+        );
+
+        // Mod: int/int -> int, otherwise float
+        let m_int = py_mod(7_i64, 3_i64);
+        assert!((&m_int as &dyn Any).is::<i64>());
+        assert_eq!(
+            result_numeric_type(NumericOp::Mod, NumericTy::Int, NumericTy::Int, None),
+            NumericTy::Int
+        );
+
+        let m_float = py_mod(7.0_f64, 3_i64);
+        assert!((&m_float as &dyn Any).is::<f64>());
+        assert_eq!(
+            result_numeric_type(NumericOp::Mod, NumericTy::Float, NumericTy::Int, None),
+            NumericTy::Float
+        );
     }
 
     #[test]

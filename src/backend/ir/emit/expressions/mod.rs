@@ -121,7 +121,12 @@ impl<'a> IrEmitter<'a> {
 
             IrExprKind::Field { object, field } => self.emit_field_expr(object, field),
             IrExprKind::Index { object, index } => self.emit_index_expr(object, index),
-            IrExprKind::Slice { target, start, end } => self.emit_slice_expr(target, start, end),
+            IrExprKind::Slice {
+                target,
+                start,
+                end,
+                step,
+            } => self.emit_slice_expr(target, start, end, step),
 
             IrExprKind::ListComp {
                 element,

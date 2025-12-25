@@ -12,37 +12,46 @@ use incan_stdlib::prelude::*;
 use incan_derive::{FieldInfo, IncanClass};
 fn test_string_methods() {
     let s = "Hello World".to_string();
-    let upper = s.to_uppercase();
-    let lower = s.to_lowercase();
-    let stripped = s.trim().to_string();
+    let upper = incan_stdlib::strings::str_upper(&s);
+    let lower = incan_stdlib::strings::str_lower(&s);
+    let stripped = incan_stdlib::strings::str_strip(&s);
 }
 fn test_string_contains() {
     let text = "hello world".to_string();
-    let has_hello = text.contains("hello");
-    let has_goodbye = text.contains("goodbye");
+    let has_hello = incan_stdlib::strings::str_contains(&text, &"hello");
+    let has_goodbye = incan_stdlib::strings::str_contains(&text, &"goodbye");
 }
 fn test_string_split() {
     let text = "one,two,three".to_string();
-    let parts = text.split(",").map(|s| s.to_string()).collect::<Vec<_>>();
+    let parts = incan_stdlib::strings::str_split(&text, Some(&","));
 }
 fn test_string_replace() {
     let text = "hello world".to_string();
-    let replaced = text.replace("world", "python");
+    let replaced = incan_stdlib::strings::str_replace(&text, &"world", &"python");
+}
+fn test_string_slice() {
+    let text = "héllo".to_string();
+    let mid = incan_stdlib::strings::str_slice(
+        &text,
+        Some((1) as i64),
+        Some((-1) as i64),
+        None,
+    );
 }
 fn test_string_startswith_endswith() {
     let text = "hello.txt".to_string();
-    let starts = text.starts_with("hello");
-    let ends = text.ends_with(".txt");
+    let starts = incan_stdlib::strings::str_starts_with(&text, &"hello");
+    let ends = incan_stdlib::strings::str_ends_with(&text, &".txt");
 }
 fn test_string_join() {
     let sep = ", ".to_string();
     let words = vec!["one", "two", "three"];
-    let joined = words.join(sep);
+    let joined = incan_stdlib::strings::str_join(&sep, &words);
 }
 fn test_string_concatenation() {
     let mut result = "hello".to_string();
-    result = result + " ";
-    result = result + "world";
+    result = incan_stdlib::strings::str_concat(result, " ");
+    result = incan_stdlib::strings::str_concat(result, "world");
     println!("{}", result);
 }
 fn main() {
@@ -50,6 +59,7 @@ fn main() {
     test_string_contains();
     test_string_split();
     test_string_replace();
+    test_string_slice();
     test_string_startswith_endswith();
     test_string_join();
     test_string_concatenation();

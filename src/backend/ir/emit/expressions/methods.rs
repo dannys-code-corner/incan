@@ -11,6 +11,46 @@ use super::super::super::expr::{IrExprKind, MethodKind, TypedExpr};
 use super::super::super::types::IrType;
 use super::super::{EmitError, IrEmitter};
 
+mod collection_methods;
+mod string_methods;
+
+use collection_methods::emit_collection_method;
+use string_methods::emit_string_method;
+
+/// Compute common receiver setup for method emission.
+///
+/// This deduplicates the pattern of:
+/// - Detecting `FrozenStr` receivers
+/// - Unwrapping them via `.as_str()`
+/// - Computing whether the receiver is string-like for stdlib routing
+pub(super) struct ReceiverInfo {
+    /// The receiver token stream (possibly wrapped in `.as_str()` for FrozenStr).
+    pub(super) r: TokenStream,
+    /// A borrow of the receiver: `&#r`.
+    pub(super) r_borrow: TokenStream,
+    /// Whether the receiver is a string-like type (String or FrozenStr).
+    pub(super) is_stringish: bool,
+}
+
+impl ReceiverInfo {
+    /// Build receiver info from the receiver type and emitted receiver tokens.
+    fn new(receiver_ty: &IrType, emitted: TokenStream) -> Self {
+        let is_frozen_str = matches!(receiver_ty, IrType::FrozenStr);
+        let r = if is_frozen_str {
+            quote! { #emitted.as_str() }
+        } else {
+            emitted
+        };
+        let r_borrow = quote! { &#r };
+        let is_stringish = matches!(receiver_ty, IrType::String | IrType::FrozenStr);
+        Self {
+            r,
+            r_borrow,
+            is_stringish,
+        }
+    }
+}
+
 impl<'a> IrEmitter<'a> {
     /// Check whether a variable name looks like a Rust type name (TitleCase).
     ///
@@ -57,155 +97,18 @@ impl<'a> IrEmitter<'a> {
         args: &[TypedExpr],
     ) -> Result<TokenStream, EmitError> {
         let r0 = self.emit_expr(receiver)?;
-        let receiver_is_frozen_str = matches!(&receiver.ty, IrType::Struct(n) if n == "FrozenStr");
-        let r = if receiver_is_frozen_str {
-            quote! { #r0.as_str() }
-        } else {
-            r0
-        };
+        let info = ReceiverInfo::new(&receiver.ty, r0);
+        if let Some(res) = emit_string_method(self, &receiver.ty, &info, kind, args) {
+            return res;
+        }
+        if let Some(res) = emit_collection_method(self, receiver, &info, kind, args) {
+            return res;
+        }
 
         match kind {
-            // ---- String methods ----
-            MethodKind::Upper => Ok(quote! { #r.to_uppercase() }),
-            MethodKind::Lower => Ok(quote! { #r.to_lowercase() }),
-            MethodKind::Strip => Ok(quote! { #r.trim().to_string() }),
-            MethodKind::Split => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { #r.split(#a).map(|s| s.to_string()).collect::<Vec<_>>() })
-                } else {
-                    Ok(quote! { vec![#r.to_string()] })
-                }
-            }
-            MethodKind::Replace => {
-                if args.len() >= 2 {
-                    let pattern = self.emit_expr(&args[0])?;
-                    let replacement = self.emit_expr(&args[1])?;
-                    Ok(quote! { #r.replace(#pattern, #replacement) })
-                } else {
-                    Ok(quote! { #r.to_string() })
-                }
-            }
-            MethodKind::Join => {
-                if let Some(arg) = args.first() {
-                    let items = self.emit_expr(arg)?;
-                    Ok(quote! { #items.join(#r) })
-                } else {
-                    Ok(quote! { String::new() })
-                }
-            }
-            MethodKind::StartsWith => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { #r.starts_with(#a) })
-                } else {
-                    Ok(quote! { true })
-                }
-            }
-            MethodKind::EndsWith => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { #r.ends_with(#a) })
-                } else {
-                    Ok(quote! { true })
-                }
-            }
-
-            // ---- Collection methods ----
-            MethodKind::Contains => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    match &receiver.ty {
-                        IrType::Struct(n) if n == "FrozenStr" => Ok(quote! { #r.contains(#a) }),
-                        IrType::String => Ok(quote! { #r.contains(#a) }),
-                        IrType::List(_) | IrType::Set(_) => Ok(quote! { #r.contains(&#a) }),
-                        IrType::Dict(_, _) => Ok(quote! { #r.contains_key(&#a) }),
-                        _ => Ok(quote! { #r.contains(&#a) }),
-                    }
-                } else {
-                    Ok(quote! { false })
-                }
-            }
-            MethodKind::Get => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { #r.get(#a) })
-                } else {
-                    Ok(quote! { None })
-                }
-            }
-            MethodKind::Insert => {
-                if args.len() >= 2 {
-                    let k = self.emit_expr(&args[0])?;
-                    let v = self.emit_expr(&args[1])?;
-                    Ok(quote! { #r.insert(#k, #v) })
-                } else {
-                    Ok(quote! { () })
-                }
-            }
-            MethodKind::Remove => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { #r.remove(#a) })
-                } else {
-                    Ok(quote! { None })
-                }
-            }
-
-            // ---- List methods ----
-            MethodKind::Append => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { #r.push(#a) })
-                } else {
-                    Ok(quote! { () })
-                }
-            }
-            MethodKind::Pop => {
-                // Snapshot-stable behavior: always default the popped value.
-                // (This is used in both Vec::pop and user-defined `pop()` methods in generated code.)
-                Ok(quote! { #r.pop().unwrap_or_default() })
-            }
-            MethodKind::Swap => {
-                if args.len() >= 2 {
-                    let a1 = self.emit_expr(&args[0])?;
-                    let a2 = self.emit_expr(&args[1])?;
-                    Ok(quote! { #r.swap((#a1) as usize, (#a2) as usize) })
-                } else {
-                    Ok(quote! { () })
-                }
-            }
-            MethodKind::Reserve => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { #r.reserve((#a) as usize) })
-                } else {
-                    Ok(quote! { () })
-                }
-            }
-            MethodKind::ReserveExact => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { #r.reserve_exact((#a) as usize) })
-                } else {
-                    Ok(quote! { () })
-                }
-            }
-
             // ---- Internal/special methods ----
-            MethodKind::Slice => {
-                if args.len() >= 2 {
-                    let start = self.emit_expr(&args[0])?;
-                    let end = self.emit_expr(&args[1])?;
-                    if let IrExprKind::Int(-1) = &args[1].kind {
-                        Ok(quote! { #r[(#start as usize)..] })
-                    } else {
-                        Ok(quote! { #r[(#start as usize)..(#end as usize)] })
-                    }
-                } else {
-                    Ok(quote! { #r[..] })
-                }
-            }
+            MethodKind::Slice => self.emit_runtime_str_slice(&info, args),
+            _ => unreachable!("string methods are handled via emit_string_method"),
         }
     }
 
@@ -220,123 +123,21 @@ impl<'a> IrEmitter<'a> {
         args: &[TypedExpr],
     ) -> Result<TokenStream, EmitError> {
         let r0 = self.emit_expr(receiver)?;
-        let receiver_is_frozen_str = matches!(&receiver.ty, IrType::Struct(n) if n == "FrozenStr");
-        let r = if receiver_is_frozen_str {
-            quote! { #r0.as_str() }
-        } else {
-            r0
-        };
+        let info = ReceiverInfo::new(&receiver.ty, r0);
+        let r = &info.r;
+
+        if let Some(kind) = MethodKind::from_name(method) {
+            if let Some(res) = emit_string_method(self, &receiver.ty, &info, &kind, args) {
+                return res;
+            }
+            if let Some(res) = emit_collection_method(self, receiver, &info, &kind, args) {
+                return res;
+            }
+        }
 
         // Handle special methods (legacy string-based dispatch)
-        match method {
-            "upper" => return Ok(quote! { #r.to_uppercase() }),
-            "lower" => return Ok(quote! { #r.to_lowercase() }),
-            "strip" => return Ok(quote! { #r.trim().to_string() }),
-            "split" => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    return Ok(quote! { #r.split(#a).map(|s| s.to_string()).collect::<Vec<_>>() });
-                }
-            }
-            "contains" => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    match &receiver.ty {
-                        IrType::String => return Ok(quote! { #r.contains(#a) }),
-                        IrType::List(_) | IrType::Set(_) => return Ok(quote! { #r.contains(&#a) }),
-                        IrType::Dict(_, _) => return Ok(quote! { #r.contains_key(&#a) }),
-                        _ => return Ok(quote! { #r.contains(&#a) }),
-                    }
-                }
-            }
-            "replace" => {
-                if args.len() == 2 {
-                    let pattern = self.emit_expr(&args[0])?;
-                    let replacement = self.emit_expr(&args[1])?;
-                    return Ok(quote! { #r.replace(#pattern, #replacement) });
-                }
-            }
-            "join" => {
-                if let Some(arg) = args.first() {
-                    let items = self.emit_expr(arg)?;
-                    return Ok(quote! { #items.join(#r) });
-                }
-            }
-            "startswith" => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    return Ok(quote! { #r.starts_with(#a) });
-                }
-            }
-            "endswith" => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    return Ok(quote! { #r.ends_with(#a) });
-                }
-            }
-            "__slice__" => {
-                if args.len() == 2 {
-                    let start = self.emit_expr(&args[0])?;
-                    let end = self.emit_expr(&args[1])?;
-                    if let IrExprKind::Int(-1) = &args[1].kind {
-                        return Ok(quote! { #r[(#start as usize)..] });
-                    }
-                    return Ok(quote! { #r[(#start as usize)..(#end as usize)] });
-                }
-            }
-            "swap" => {
-                if args.len() == 2 {
-                    let a1 = self.emit_expr(&args[0])?;
-                    let a2 = self.emit_expr(&args[1])?;
-                    return Ok(quote! { #r.swap((#a1) as usize, (#a2) as usize) });
-                }
-            }
-            "append" => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    return Ok(quote! { #r.push(#a) });
-                }
-            }
-            "pop" => {
-                // Snapshot-stable behavior: always default the popped value.
-                return Ok(quote! { #r.pop().unwrap_or_default() });
-            }
-            "get" => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    return Ok(quote! { #r.get(#a) });
-                }
-            }
-            "insert" => {
-                if args.len() == 2 {
-                    let k = self.emit_expr(&args[0])?;
-                    let v = self.emit_expr(&args[1])?;
-                    return Ok(quote! { #r.insert(#k, #v) });
-                }
-            }
-            "remove" => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    return Ok(quote! { #r.remove(#a) });
-                }
-            }
-            "reserve" | "reserve_exact" => {
-                if let Some(arg) = args.first() {
-                    let is_list = match &receiver.ty {
-                        IrType::List(_) => true,
-                        IrType::RefMut(inner) | IrType::Ref(inner) => {
-                            matches!(inner.as_ref(), IrType::List(_))
-                        }
-                        _ => false,
-                    };
-                    if is_list {
-                        let a = self.emit_expr(arg)?;
-                        let m = format_ident!("{}", method);
-                        return Ok(quote! { #r.#m((#a) as usize) });
-                    }
-                }
-            }
-            _ => {}
+        if method == "__slice__" {
+            return self.emit_runtime_str_slice(&info, args);
         }
 
         // Check if this is an enum variant construction.
@@ -367,6 +168,34 @@ impl<'a> IrEmitter<'a> {
         let m = format_ident!("{}", method);
         let arg_tokens: Vec<TokenStream> = args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?;
         Ok(quote! { #r.#m(#(#arg_tokens),*) })
+    }
+
+    /// Emit a runtime string slice call using shared stdlib/semantics helpers.
+    ///
+    /// This ensures emitted Rust uses the same Unicode/panic behavior as runtime and avoids drift
+    /// from direct range slicing on Rust strings.
+    fn emit_runtime_str_slice(&self, info: &ReceiverInfo, args: &[TypedExpr]) -> Result<TokenStream, EmitError> {
+        let r_borrow = &info.r_borrow;
+
+        let start_tokens = if let Some(arg0) = args.first() {
+            let start = self.emit_expr(arg0)?;
+            quote! { Some((#start) as i64) }
+        } else {
+            quote! { None }
+        };
+
+        let end_tokens = if let Some(arg1) = args.get(1) {
+            if matches!(arg1.kind, IrExprKind::Int(-1)) {
+                quote! { None }
+            } else {
+                let end = self.emit_expr(arg1)?;
+                quote! { Some((#end) as i64) }
+            }
+        } else {
+            quote! { None }
+        };
+
+        Ok(quote! { incan_stdlib::strings::str_slice(#r_borrow, #start_tokens, #end_tokens, None) })
     }
 
     /// Emit an enum variant construction call (Type.Variant(...) -> Type::Variant(...)).

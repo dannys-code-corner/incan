@@ -3,10 +3,11 @@
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::*;
-use crate::numeric::{NumericTy, result_numeric_type};
 use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved};
+use incan_semantics::{NumericTy, result_numeric_type};
 
 use super::TypeChecker;
+use crate::frontend::typechecker::helpers::{DICT_TY_NAME, LIST_TY_NAME, SET_TY_NAME, ensure_bool_condition};
 
 impl TypeChecker {
     // ========================================================================
@@ -300,7 +301,7 @@ impl TypeChecker {
         // Verify object is indexable and types match
         match &obj_ty {
             ResolvedType::Generic(name, args) => match name.as_str() {
-                "List" => {
+                LIST_TY_NAME => {
                     // List[T] - index must be int, value must be T
                     if !matches!(index_ty, ResolvedType::Int) {
                         self.errors.push(errors::index_type_mismatch(
@@ -319,7 +320,7 @@ impl TypeChecker {
                         }
                     }
                 }
-                "Dict" => {
+                DICT_TY_NAME => {
                     // Dict[K, V] - index must be K, value must be V
                     if let Some(key_ty) = args.first() {
                         if !self.types_compatible(&index_ty, key_ty) {
@@ -448,13 +449,8 @@ impl TypeChecker {
 
     fn check_if_stmt(&mut self, if_stmt: &IfStmt) {
         let cond_ty = self.check_expr(&if_stmt.condition);
-        if !self.types_compatible(&cond_ty, &ResolvedType::Bool) {
-            self.errors.push(errors::type_mismatch(
-                "bool",
-                &cond_ty.to_string(),
-                if_stmt.condition.span,
-            ));
-        }
+        let is_compatible = self.types_compatible(&cond_ty, &ResolvedType::Bool);
+        ensure_bool_condition(&cond_ty, if_stmt.condition.span, is_compatible, &mut self.errors);
 
         self.symbols.enter_scope(ScopeKind::Block);
         for stmt in &if_stmt.then_body {
@@ -473,13 +469,8 @@ impl TypeChecker {
 
     fn check_while_stmt(&mut self, while_stmt: &WhileStmt) {
         let cond_ty = self.check_expr(&while_stmt.condition);
-        if !self.types_compatible(&cond_ty, &ResolvedType::Bool) {
-            self.errors.push(errors::type_mismatch(
-                "bool",
-                &cond_ty.to_string(),
-                while_stmt.condition.span,
-            ));
-        }
+        let is_compatible = self.types_compatible(&cond_ty, &ResolvedType::Bool);
+        ensure_bool_condition(&cond_ty, while_stmt.condition.span, is_compatible, &mut self.errors);
 
         self.symbols.enter_scope(ScopeKind::Block);
         for stmt in &while_stmt.body {
@@ -516,8 +507,8 @@ impl TypeChecker {
         match iter_ty {
             ResolvedType::Generic(name, args) => {
                 match name.as_str() {
-                    "List" | "Set" if !args.is_empty() => args[0].clone(),
-                    "Dict" if args.len() >= 2 => {
+                    LIST_TY_NAME | SET_TY_NAME if !args.is_empty() => args[0].clone(),
+                    DICT_TY_NAME if args.len() >= 2 => {
                         // Iterating dict gives keys
                         args[0].clone()
                     }

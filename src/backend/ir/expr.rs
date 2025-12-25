@@ -128,11 +128,12 @@ pub enum IrExprKind {
         index: Box<IrExpr>,
     },
 
-    // Slice access (list[start:end])
+    // Slice access (list[start:end[:step]])
     Slice {
         target: Box<IrExpr>,
         start: Option<Box<IrExpr>>,
         end: Option<Box<IrExpr>>,
+        step: Option<Box<IrExpr>>,
     },
 
     // List comprehension

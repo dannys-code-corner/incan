@@ -527,9 +527,11 @@ dependencies = [
 
 [[package]]
 name = "incan"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "clap",
+ "incan_semantics",
+ "incan_stdlib",
  "insta",
  "miette",
  "phf",
@@ -548,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "incan_derive"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -556,10 +558,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "incan_semantics"
+version = "0.1.0-alpha.4"
+
+[[package]]
 name = "incan_stdlib"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "incan_derive",
+ "incan_semantics",
  "serde",
  "serde_json",
 ]

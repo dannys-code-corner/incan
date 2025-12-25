@@ -539,6 +539,11 @@ pub enum ResolvedType {
     Bool,
     Str,
     Bytes,
+    FrozenStr,
+    FrozenBytes,
+    FrozenList(Box<ResolvedType>),
+    FrozenDict(Box<ResolvedType>, Box<ResolvedType>),
+    FrozenSet(Box<ResolvedType>),
     /// Unit type
     Unit,
     /// Named type (class, model, newtype, enum)
@@ -601,6 +606,11 @@ impl std::fmt::Display for ResolvedType {
             ResolvedType::Bool => write!(f, "bool"),
             ResolvedType::Str => write!(f, "str"),
             ResolvedType::Bytes => write!(f, "bytes"),
+            ResolvedType::FrozenStr => write!(f, "FrozenStr"),
+            ResolvedType::FrozenBytes => write!(f, "FrozenBytes"),
+            ResolvedType::FrozenList(elem) => write!(f, "FrozenList[{}]", elem),
+            ResolvedType::FrozenDict(k, v) => write!(f, "FrozenDict[{}, {}]", k, v),
+            ResolvedType::FrozenSet(elem) => write!(f, "FrozenSet[{}]", elem),
             ResolvedType::Unit => write!(f, "Unit"),
             ResolvedType::Named(name) => write!(f, "{}", name),
             ResolvedType::Generic(name, args) => {
@@ -651,6 +661,11 @@ fn normalize_type_name(name: &str) -> String {
         "tuple" => "Tuple".to_string(),
         "option" => "Option".to_string(),
         "result" => "Result".to_string(),
+        "frozenlist" => "FrozenList".to_string(),
+        "frozenset" => "FrozenSet".to_string(),
+        "frozendict" => "FrozenDict".to_string(),
+        "frozenstr" => "FrozenStr".to_string(),
+        "frozenbytes" => "FrozenBytes".to_string(),
         // Already uppercase or custom types
         _ => name.to_string(),
     }
@@ -664,6 +679,8 @@ pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
             "bool" => ResolvedType::Bool,
             "str" => ResolvedType::Str,
             "bytes" => ResolvedType::Bytes,
+            "FrozenStr" => ResolvedType::FrozenStr,
+            "FrozenBytes" => ResolvedType::FrozenBytes,
             "Unit" => ResolvedType::Unit,
             _ => {
                 // Check if it's a known type
@@ -679,7 +696,22 @@ pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
             let resolved_args: Vec<_> = args.iter().map(|a| resolve_type(&a.node, symbols)).collect();
             // Normalize type name for built-in generics (list → List, dict → Dict, etc.)
             let normalized_name = normalize_type_name(name);
-            ResolvedType::Generic(normalized_name, resolved_args)
+            match normalized_name.as_str() {
+                "FrozenList" => {
+                    let elem = resolved_args.first().cloned().unwrap_or(ResolvedType::Unknown);
+                    ResolvedType::FrozenList(Box::new(elem))
+                }
+                "FrozenSet" => {
+                    let elem = resolved_args.first().cloned().unwrap_or(ResolvedType::Unknown);
+                    ResolvedType::FrozenSet(Box::new(elem))
+                }
+                "FrozenDict" => {
+                    let k = resolved_args.first().cloned().unwrap_or(ResolvedType::Unknown);
+                    let v = resolved_args.get(1).cloned().unwrap_or(ResolvedType::Unknown);
+                    ResolvedType::FrozenDict(Box::new(k), Box::new(v))
+                }
+                _ => ResolvedType::Generic(normalized_name, resolved_args),
+            }
         }
         Type::Function(params, ret) => {
             let resolved_params: Vec<_> = params.iter().map(|p| resolve_type(&p.node, symbols)).collect();

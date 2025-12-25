@@ -23,6 +23,8 @@ impl<'a> IrEmitter<'a> {
             IrType::String => quote! { String },
             IrType::StaticStr => quote! { &'static str },
             IrType::StaticBytes => quote! { &'static [u8] },
+            IrType::FrozenStr => quote! { FrozenStr },
+            IrType::FrozenBytes => quote! { FrozenBytes },
             IrType::StrRef => quote! { &str },
             IrType::List(elem) => {
                 let e = self.emit_type(elem);

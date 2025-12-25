@@ -165,13 +165,21 @@ impl<'a> IrEmitter<'a> {
                 self.scan_expr_for_param_writes(object, param_names, mutated);
                 self.scan_expr_for_param_writes(index, param_names, mutated);
             }
-            IrExprKind::Slice { target, start, end } => {
+            IrExprKind::Slice {
+                target,
+                start,
+                end,
+                step,
+            } => {
                 self.scan_expr_for_param_writes(target, param_names, mutated);
                 if let Some(s) = start {
                     self.scan_expr_for_param_writes(s, param_names, mutated);
                 }
                 if let Some(e) = end {
                     self.scan_expr_for_param_writes(e, param_names, mutated);
+                }
+                if let Some(st) = step {
+                    self.scan_expr_for_param_writes(st, param_names, mutated);
                 }
             }
             IrExprKind::ListComp {
@@ -372,12 +380,11 @@ impl<'a> IrEmitter<'a> {
                 } else {
                     match (ty, &value.kind) {
                         // RFC 008: frozen scalars.
-                        //
                         // These types are wrappers around `'static` data and must be constructed explicitly.
-                        (T::Struct(name), IrExprKind::String(s)) if name == "FrozenStr" => {
+                        (T::FrozenStr, IrExprKind::String(s)) => {
                             quote! { FrozenStr::new(#s) }
                         }
-                        (T::Struct(name), IrExprKind::Bytes(bytes)) if name == "FrozenBytes" => {
+                        (T::FrozenBytes, IrExprKind::Bytes(bytes)) => {
                             let lit = Literal::byte_string(bytes);
                             quote! { FrozenBytes::new(#lit) }
                         }

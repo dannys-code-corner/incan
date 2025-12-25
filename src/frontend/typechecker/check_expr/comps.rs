@@ -5,6 +5,7 @@
 
 use crate::frontend::ast::*;
 use crate::frontend::symbols::*;
+use crate::frontend::typechecker::helpers::{dict_ty, list_ty};
 
 use super::TypeChecker;
 
@@ -37,7 +38,7 @@ impl TypeChecker {
         let result_elem_ty = self.check_expr(&comp.expr);
         self.symbols.exit_scope();
 
-        ResolvedType::Generic("List".to_string(), vec![result_elem_ty])
+        list_ty(result_elem_ty)
     }
 
     /// Type-check a dict comprehension and return `Dict[K, V]`.
@@ -69,7 +70,7 @@ impl TypeChecker {
         let val_ty = self.check_expr(&comp.value);
         self.symbols.exit_scope();
 
-        ResolvedType::Generic("Dict".to_string(), vec![key_ty, val_ty])
+        dict_ty(key_ty, val_ty)
     }
 
     /// Type-check a closure expression and return a function type.

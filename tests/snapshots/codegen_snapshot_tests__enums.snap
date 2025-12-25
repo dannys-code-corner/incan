@@ -161,10 +161,18 @@ fn process_maybe(value: Maybe) -> i64 {
 fn handle_result(result: Result) -> String {
     match result {
         Result::Ok(value) => {
-            return format!("Success: {}", value);
+            return {
+                let __parts: [&str; 2usize] = ["Success: ", ""];
+                let __args: Vec<String> = vec![format!("{}", value)];
+                incan_stdlib::strings::fstring(&__parts, &__args)
+            };
         }
         Result::Err(error) => {
-            return format!("Error: {}", error);
+            return {
+                let __parts: [&str; 2usize] = ["Error: ", ""];
+                let __args: Vec<String> = vec![format!("{}", error)];
+                incan_stdlib::strings::fstring(&__parts, &__args)
+            };
         }
     };
 }
@@ -174,13 +182,27 @@ fn handle_message(msg: Message) -> String {
             return "Quitting".to_string();
         }
         Message::Move(x, y) => {
-            return format!("Moving to ({}, {})", x, y);
+            return {
+                let __parts: [&str; 3usize] = ["Moving to (", ", ", ")"];
+                let __args: Vec<String> = vec![format!("{}", x), format!("{}", y)];
+                incan_stdlib::strings::fstring(&__parts, &__args)
+            };
         }
         Message::Write(text) => {
-            return format!("Writing: {}", text);
+            return {
+                let __parts: [&str; 2usize] = ["Writing: ", ""];
+                let __args: Vec<String> = vec![format!("{}", text)];
+                incan_stdlib::strings::fstring(&__parts, &__args)
+            };
         }
         Message::ChangeColor(r, g, b) => {
-            return format!("Color: RGB({}, {}, {})", r, g, b);
+            return {
+                let __parts: [&str; 4usize] = ["Color: RGB(", ", ", ", ", ")"];
+                let __args: Vec<String> = vec![
+                    format!("{}", r), format!("{}", g), format!("{}", b)
+                ];
+                incan_stdlib::strings::fstring(&__parts, &__args)
+            };
         }
     };
 }
@@ -232,12 +254,20 @@ fn count_items(container: DataContainer) -> i64 {
 fn main() {
     let color = Color::Red;
     let color_name = get_color_name(color.clone());
-    println!("{}", format!("Color: {}", color_name));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Color: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", color_name)]; incan_stdlib::strings::fstring(&
+        __parts, & __args) }
+    );
     let some_value = Maybe::Some(42);
     let none_value = Maybe::None;
     let result1 = process_maybe(some_value.clone());
     let result2 = process_maybe(none_value.clone());
-    println!("{}", format!("Some: {}, None: {}", result1, result2));
+    println!(
+        "{}", { let __parts : [& str; 3usize] = ["Some: ", ", None: ", ""]; let __args :
+        Vec < String > = vec![format!("{}", result1), format!("{}", result2)];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
     let ok_result = Result::Ok(100);
     let err_result = Result::Err("Something went wrong".to_string());
     let ok_msg = handle_result(ok_result.clone());
@@ -258,21 +288,53 @@ fn main() {
     let circle_area = calculate_area(circle.clone());
     let rect_area = calculate_area(rectangle.clone());
     let tri_area = calculate_area(triangle.clone());
-    println!("{}", format!("Circle area: {}", circle_area));
-    println!("{}", format!("Rectangle area: {}", rect_area));
-    println!("{}", format!("Triangle area: {}", tri_area));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Circle area: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", circle_area)]; incan_stdlib::strings::fstring(&
+        __parts, & __args) }
+    );
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Rectangle area: ", ""]; let __args :
+        Vec < String > = vec![format!("{}", rect_area)]; incan_stdlib::strings::fstring(&
+        __parts, & __args) }
+    );
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Triangle area: ", ""]; let __args : Vec
+        < String > = vec![format!("{}", tri_area)]; incan_stdlib::strings::fstring(&
+        __parts, & __args) }
+    );
     let status = Status::InProgress;
     let priority = Priority::High;
     let priority_level = get_priority_level(priority.clone());
-    println!("{}", format!("Priority level: {}", priority_level));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Priority level: ", ""]; let __args :
+        Vec < String > = vec![format!("{}", priority_level)];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
     let empty = DataContainer::Empty;
     let single = DataContainer::Single(42);
     let multiple = DataContainer::Multiple(vec![1, 2, 3, 4, 5]);
     let mapped = DataContainer::Mapped(
         [("a", 1), ("b", 2), ("c", 3)].into_iter().collect::<HashMap<_, _>>(),
     );
-    println!("{}", format!("Empty count: {}", count_items(empty.clone())));
-    println!("{}", format!("Single count: {}", count_items(single.clone())));
-    println!("{}", format!("Multiple count: {}", count_items(multiple.clone())));
-    println!("{}", format!("Mapped count: {}", count_items(mapped.clone())));
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Empty count: ", ""]; let __args : Vec <
+        String > = vec![format!("{}", count_items(empty.clone()))];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Single count: ", ""]; let __args : Vec
+        < String > = vec![format!("{}", count_items(single.clone()))];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Multiple count: ", ""]; let __args :
+        Vec < String > = vec![format!("{}", count_items(multiple.clone()))];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
+    println!(
+        "{}", { let __parts : [& str; 2usize] = ["Mapped count: ", ""]; let __args : Vec
+        < String > = vec![format!("{}", count_items(mapped.clone()))];
+        incan_stdlib::strings::fstring(& __parts, & __args) }
+    );
 }

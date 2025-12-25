@@ -229,9 +229,13 @@ impl<T: 'static> core::ops::Index<usize> for FrozenList<T> {
     }
 }
 
+// Clippy can suggest eliding `'a` here, but this `IntoIterator` impl needs a named lifetime because it is referenced
+// in the associated types (`Item` / `IntoIter`). Keeping `'a` explicit makes the relationship between
+// `&FrozenList<T>` and the yielded `&T` clear.
+#[allow(clippy::needless_lifetimes)]
 impl<'a, T: 'static> IntoIterator for &'a FrozenList<T> {
-    type Item = &'static T;
-    type IntoIter = core::slice::Iter<'static, T>;
+    type Item = &'a T;
+    type IntoIter = core::slice::Iter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.data.iter()
