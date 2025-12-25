@@ -1,5 +1,7 @@
 name: "Feature request"
 description: Propose a new language feature, tooling improvement, or enhancement.
+title: "feature - "
+type: Feature
 labels: ["feature"]
 body:
   - type: dropdown

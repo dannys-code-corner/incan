@@ -1,5 +1,7 @@
 name: "Chore / maintenance"
 description: Refactors, cleanup, dependency bumps, CI improvements, and other non-feature work.
+title: "chore - "
+type: Chore
 body:
   - type: dropdown
     id: area

@@ -1,24 +1,32 @@
 name: Auto-label issues and PRs (sync)
-
-on:
+"on":
   issues:
     types: [opened, edited]
-  # pull_request:
-  #   types: [opened, edited, reopened, synchronize, ready_for_review]
-  pull_request_target:
+  pull_request:
     types: [opened, edited, reopened, synchronize, ready_for_review]
 
 permissions:
   issues: write
 
 jobs:
-  label:
+  triage:
     runs-on: ubuntu-latest
+    env:
+      # Centralized mapping so we don't duplicate it across the PR and Issue scripts.
+      # NOTE: This must stay in sync with the exact option strings in `.github/ISSUE_TEMPLATE/*.yml`
+      # and `.github/pull_request_template.md`.
+      AREA_OPTION_TO_LABEL_JSON: >-
+        {
+          "Incan Language (syntax/semantics)": "incan language semantics",
+          "Compiler (frontend/backend/codegen)": "incan compiler",
+          "Tooling (CLI/formatter/test runner)": "tooling",
+          "Editor integration (LSP/VS Code extension)": "editor integration",
+          "Runtime / Core crates (stdlib/core/derive)": "runtime / core crates",
+          "Documentation": "documentation"
+        }
     steps:
-      - name: Dump event payload (debug)
-        run: cat "$GITHUB_EVENT_PATH"
-
-      - name: GitHub App installation token
+      # TODO: switch the internal code to Incan once the language is ready enough for it
+      - name: Minting the GitHub App's installation token
         id: app_token
         env:
           APP_ID: ${{ secrets.INCAN_TRIAGE_APP_ID }}
@@ -56,43 +64,25 @@ jobs:
             | jq -r '.token')
 
           echo "token=$token" >> "$GITHUB_OUTPUT"
-      
-      - uses: actions/github-script@v7
+
+      - name: Sync PR labels (Area(s) -> labels)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app_token.outputs.token }}
           script: |
-            const isPR = context.eventName === "pull_request_target";
             const payload = context.payload;
-            const body = isPR ? (payload.pull_request?.body ?? "") : (payload.issue?.body ?? "");
-
-            // Only manage these labels; never remove unrelated labels (bug/feature/etc).
-            const managed = new Set([
-              "incan language semantics",
-              "incan compiler",
-              "tooling",
-              "editor integration",
-              "runtime / core crates",
-              "documentation",
-            ]);
+            const body = payload.pull_request?.body ?? "";
 
             // Map template "Area" option strings -> labels.
-            // IMPORTANT: these option strings must match the templates exactly.
-            const optionToLabel = new Map([
-              ["Incan Language (syntax/semantics)", "incan language semantics"],
-              ["Compiler (frontend/backend/codegen)", "incan compiler"],
-              ["Tooling (CLI/formatter/test runner)", "tooling"],
-              ["Editor integration (LSP/VS Code extension)", "editor integration"],
-              ["Runtime / Core crates (stdlib/core/derive)", "runtime / core crates"],
-              ["Documentation", "documentation"],
-            ]);
+            const optionToLabelObj = JSON.parse(process.env.AREA_OPTION_TO_LABEL_JSON ?? "{}");
+            const managed = new Set(Object.values(optionToLabelObj));
+            const optionToLabel = new Map(Object.entries(optionToLabelObj));
 
             // Extract a section from a markdown string based on a heading.
             function extractSection(markdown, heading) {
-              // Escape special regex characters in the heading.
               const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-              // Create a regular expression to match the heading.
               const re = new RegExp(`^\\s*#{2,6}\\s+${esc}\\s*$`, "mi");
-              // Execute the regular expression on the markdown string.
               const m = re.exec(markdown);
               // If no match, return an empty string.
               if (!m) return "";
@@ -104,62 +94,149 @@ jobs:
               return (next === -1 ? rest : rest.slice(0, next)).trim();
             }
 
-            // Issue forms render the dropdown under "### Area"; PR template uses "## Area(s)".
-            let areaBlock = extractSection(body, isPR ? "Area(s)" : "Area");
-            if (!areaBlock) {
-              areaBlock = extractSection(body, "Area");
-            }
+            const areaBlock = extractSection(body, "Area(s)") || extractSection(body, "Area");
+            const checkedLines = areaBlock
+              .split("\n")
+              .map((l) => l.trim())
+              .filter((l) => /^[-*]\s*\[[xX]\]\s+/.test(l));
 
             const desired = new Set();
-
-            if (isPR) {
-              // PR template uses checkboxes; only apply labels for checked items.
-              const checkedLines = areaBlock
-                .split("\n")
-                .map((l) => l.trim())
-                .filter((l) => /^[-*]\s*\[[xX]\]\s+/.test(l));
-
-              // For each option, add the corresponding label to the set.
-              for (const [opt, label] of optionToLabel.entries()) {
-                if (checkedLines.some((l) => l.includes(opt))) desired.add(label);
-              }
-
-              // Log the preview of the area block, the checked lines, and the desired labels.
-              console.log({ isPR, areaBlockPreview: areaBlock.slice(0, 300), checkedLines, desired: [...desired] });
-            } else {
-              // Issue forms render selected options as plain text in the section.
-              for (const [opt, label] of optionToLabel.entries()) {
-                if (areaBlock.includes(opt)) desired.add(label);
-              }
+            for (const [opt, label] of optionToLabel.entries()) {
+              if (checkedLines.some((l) => l.includes(opt))) desired.add(label);
             }
 
-            // If user picked "Other" or the section is missing, don't touch labels.
             if (desired.size === 0) return;
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const issue_number = isPR ? payload.pull_request.number : context.issue.number;
+            const issue_number = payload.pull_request.number;
 
-            // Current labels on the issue/PR
-            const current = new Set(
-              (isPR ? payload.pull_request.labels : payload.issue.labels ?? []).map((l) => l.name)
-            );
-
-            // Compute label changes
-            const toAdd = [...desired].filter(l => !current.has(l));
-            const toRemove = [...current].filter(l => managed.has(l) && !desired.has(l));
+            const current = new Set((payload.pull_request.labels ?? []).map((l) => l.name));
+            const toAdd = [...desired].filter((l) => !current.has(l));
+            const toRemove = [...current].filter((l) => managed.has(l) && !desired.has(l));
 
             if (toAdd.length > 0) {
               await github.rest.issues.addLabels({ owner, repo, issue_number, labels: toAdd });
             }
 
+            // Remove any labels that are no longer desired.
             for (const label of toRemove) {
               try {
                 await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
               } catch (e) {
-                // If the label was removed concurrently or doesn't exist, ignore.
                 if (e?.status !== 404) throw e;
               }
             }
 
+      - name: Sync issue labels and Issue Type (Area -> labels, title prefix -> type)
+        if: github.event_name == 'issues'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app_token.outputs.token }}
+          script: |
+            const payload = context.payload;
+            const body = payload.issue?.body ?? "";
+
+            // Map template "Area" option strings -> labels.
+            const optionToLabelObj = JSON.parse(process.env.AREA_OPTION_TO_LABEL_JSON ?? "{}");
+            const managed = new Set(Object.values(optionToLabelObj));
+            const optionToLabel = new Map(Object.entries(optionToLabelObj));
+
+            // Extract a section from a markdown string based on a heading.
+            function extractSection(markdown, heading) {
+              const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const re = new RegExp(`^\\s*#{2,6}\\s+${esc}\\s*$`, "mi");
+              const m = re.exec(markdown);
+              if (!m) return "";
+              const start = m.index + m[0].length;
+              const rest = markdown.slice(start);
+              const next = rest.search(/^\\s*#{2,6}\\s+/m);
+              return (next === -1 ? rest : rest.slice(0, next)).trim();
+            }
+
+            const areaBlock = extractSection(body, "Area");
+            const desired = new Set();
+            for (const [opt, label] of optionToLabel.entries()) {
+              if (areaBlock.includes(opt)) desired.add(label);
+            }
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.issue.number;
+
+            // --- Label sync (only managed labels) ---
+            if (desired.size > 0) {
+              const current = new Set((payload.issue.labels ?? []).map((l) => l.name));
+              const toAdd = [...desired].filter((l) => !current.has(l));
+              const toRemove = [...current].filter((l) => managed.has(l) && !desired.has(l));
+
+              // Add any labels that are desired.
+              if (toAdd.length > 0) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number, labels: toAdd });
+              }
+              for (const label of toRemove) {
+                try {
+                  await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
+                } catch (e) {
+                  if (e?.status !== 404) throw e;
+                }
+              }
+            }
+
+            // --- Issue Type sync (native Issue Type, NOT labels) ---
+            const title = payload.issue?.title ?? "";
+            const lower = title.toLowerCase();
+
+            const prefixToType = [
+              ["bug -", "Bug"],
+              ["feature -", "Feature"],
+              ["chore -", "Chore"],
+            ];
+
+            const desiredTypeName =
+              prefixToType.find(([prefix]) => lower.startsWith(prefix))?.[1] ?? null;
+
+            if (!desiredTypeName) return;
+
+            // Update the issue type.
+            try {
+              const query = `
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    issue(number: $number) {
+                      id
+                      issueType { id name }
+                    }
+                    issueTypes(first: 50) {
+                      nodes { id name }
+                    }
+                  }
+                }
+              `;
+
+              const res = await github.graphql(query, { owner, repo, number: issue_number });
+              const repoInfo = res?.repository;
+              const issue = repoInfo?.issue;
+              const types = repoInfo?.issueTypes?.nodes ?? [];
+
+              const currentTypeName = issue?.issueType?.name ?? null;
+              if (currentTypeName === desiredTypeName) return;
+
+              // Find the desired issue type.
+              const desiredType = types.find((t) => t?.name === desiredTypeName);
+              if (!issue?.id || !desiredType?.id) return;
+
+              const mutation = `
+                mutation($issueId: ID!, $issueTypeId: ID!) {
+                  updateIssue(input: { id: $issueId, issueTypeId: $issueTypeId }) {
+                    issue { id issueType { name } }
+                  }
+                }
+              `;
+
+              // Update the issue type.
+              await github.graphql(mutation, { issueId: issue.id, issueTypeId: desiredType.id });
+            } catch (e) {
+              console.log("Issue type sync failed (non-fatal):", e?.message ?? e);
+            }
 
