@@ -84,8 +84,11 @@ jobs:
               const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
               const re = new RegExp(`^\\s*#{2,6}\\s+${esc}\\s*$`, "mi");
               const m = re.exec(markdown);
+              // If no match, return an empty string.
               if (!m) return "";
+              // Get the start index of the match.
               const start = m.index + m[0].length;
+              // Get the rest of the markdown string after the match.
               const rest = markdown.slice(start);
               const next = rest.search(/^\\s*#{2,6}\\s+/m);
               return (next === -1 ? rest : rest.slice(0, next)).trim();
