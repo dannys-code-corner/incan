@@ -1,5 +1,7 @@
 name: "Bug report"
 description: Report a problem with the compiler, tooling, runtime, or docs behavior.
+title: "bug - "
+type: Bug
 labels: ["bug"]
 body:
   - type: markdown

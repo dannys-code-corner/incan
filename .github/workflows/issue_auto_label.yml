@@ -107,4 +107,73 @@ jobs:
               }
             }
 
+            // -------------------------------------------------------------------------------------
+            // Issue Type sync (native GitHub issue type, NOT labels)
+            // -------------------------------------------------------------------------------------
+            // We deliberately do not infer type from labels. Instead, we map from the title prefix that issue forms
+            // prefill (bug/feature/chore).
+            //
+            // Notes:
+            // - Only applies to issues (not PRs).
+            // - If the GraphQL schema doesn't support issueType for this repo, the query/mutation
+            //   will no-op safely (caught and logged).
+            if (!isPR) {
+              const title = payload.issue?.title ?? "";
+              const lower = title.toLowerCase();
+
+              let desiredTypeName = null;
+              if (lower.startsWith("bug -")) desiredTypeName = "Bug";
+              else if (lower.startsWith("feature -")) desiredTypeName = "Feature";
+              else if (lower.startsWith("chore -")) desiredTypeName = "Chore";
+
+              if (desiredTypeName) {
+                try {
+                  const query = `
+                    query($owner: String!, $repo: String!, $number: Int!) {
+                      repository(owner: $owner, name: $repo) {
+                        issue(number: $number) {
+                          id
+                          issueType { id name }
+                        }
+                        issueTypes(first: 50) {
+                          nodes { id name }
+                        }
+                      }
+                    }
+                  `;
+
+                  const res = await github.graphql(query, { owner, repo, number: issue_number });
+                  const repoInfo = res?.repository;
+                  const issue = repoInfo?.issue;
+                  const types = repoInfo?.issueTypes?.nodes ?? [];
+
+                  const currentTypeName = issue?.issueType?.name ?? null;
+                  if (currentTypeName === desiredTypeName) return;
+
+                  const desiredType = types.find((t) => t?.name === desiredTypeName);
+                  if (!issue?.id || !desiredType?.id) {
+                    console.log("Issue type sync skipped: missing issue id or issueType id", {
+                      issueId: issue?.id,
+                      desiredTypeName,
+                      availableTypes: types.map((t) => t?.name),
+                    });
+                    return;
+                  }
+
+                  const mutation = `
+                    mutation($issueId: ID!, $issueTypeId: ID!) {
+                      updateIssue(input: { id: $issueId, issueTypeId: $issueTypeId }) {
+                        issue { id issueType { name } }
+                      }
+                    }
+                  `;
+
+                  await github.graphql(mutation, { issueId: issue.id, issueTypeId: desiredType.id });
+                } catch (e) {
+                  // We don't want labeling to fail just because issue types aren't available/configured.
+                  console.log("Issue type sync failed (non-fatal):", e?.message ?? e);
+                }
+              }
+            }
+
 
