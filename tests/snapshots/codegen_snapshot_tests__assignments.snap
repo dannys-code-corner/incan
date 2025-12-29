@@ -27,7 +27,7 @@ fn test_augmented_assignments() {
     x = x - 3;
     x = x * 2;
     x = incan_stdlib::num::py_div((x) as f64, (4) as f64);
-    x = incan_stdlib::num::py_mod(x, 4);
+    x = incan_stdlib::num::py_mod_i64(x, 4);
     let mut s = "hello".to_string();
     s = incan_stdlib::strings::str_concat(s, " world");
 }

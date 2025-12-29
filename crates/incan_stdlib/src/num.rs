@@ -34,7 +34,49 @@
 /// assert_eq!(py_floor_div_i64(7, -3), -3);  // Rust would give -2
 /// assert_eq!(py_floor_div_i64(-7, -3), 2);
 /// ```
-use incan_core::{ZERO_DIVISION_MSG, py_floor_div_i64_impl, py_mod_f64_impl, py_mod_i64_impl};
+use incan_core::ZERO_DIVISION_MSG;
+
+// --- Numeric kernels (hot) ---------------------------------------------------------------------
+//
+// These are implemented in `incan_stdlib` (rather than calling into `incan_core`) so they can be
+// inlined aggressively into generated binaries without requiring LTO.
+
+#[inline]
+fn py_mod_i64_impl(a: i64, b: i64) -> i64 {
+    debug_assert!(b != 0);
+    // Use `wrapping_rem` to avoid the extra overflow guard Rust emits for `i64::MIN % -1`.
+    // (We still panic on division by zero at the wrapper layer for consistent Python-like errors.)
+    let r = a.wrapping_rem(b);
+    // Python semantics: remainder has the sign of the divisor.
+    if (r > 0 && b < 0) || (r < 0 && b > 0) { r + b } else { r }
+}
+
+#[inline]
+fn py_floor_div_i64_impl(a: i64, b: i64) -> i64 {
+    debug_assert!(b != 0);
+    let q = a / b;
+    let r = a % b;
+    // Python semantics: quotient rounds toward negative infinity.
+    if r == 0 {
+        return q;
+    }
+    if b > 0 {
+        if r < 0 { q - 1 } else { q }
+    } else {
+        if r > 0 { q - 1 } else { q }
+    }
+}
+
+#[inline]
+fn py_mod_f64_impl(a: f64, b: f64) -> f64 {
+    debug_assert!(b != 0.0);
+    let r = a % b;
+    if (r > 0.0 && b < 0.0) || (r < 0.0 && b > 0.0) {
+        r + b
+    } else {
+        r
+    }
+}
 
 // --- Generic helpers and sealed traits ---------------------------------------------------------
 
@@ -52,6 +94,7 @@ mod sealed {
     /// Marker for Incan integer types (future-friendly: add i8/i16/i32/i64/etc.).
     pub trait IncanInt: Sealed {
         fn to_float(self) -> f64;
+        fn is_zero(self) -> bool;
     }
 
     impl IncanInt for i64 {
@@ -59,12 +102,17 @@ mod sealed {
         fn to_float(self) -> f64 {
             self as f64
         }
+        #[inline]
+        fn is_zero(self) -> bool {
+            self == 0
+        }
     }
 
     // --- Incan float types ---
     /// Marker for Incan float types (future-friendly: add f32/f64/etc.).
     pub trait IncanFloat: Sealed {
         fn to_float(self) -> f64;
+        fn is_zero(self) -> bool;
     }
 
     impl IncanFloat for f64 {
@@ -72,12 +120,17 @@ mod sealed {
         fn to_float(self) -> f64 {
             self
         }
+        #[inline]
+        fn is_zero(self) -> bool {
+            self == 0.0
+        }
     }
 
     // --- Unified numeric trait ---
     /// Unified numeric trait to allow shared bounds across supported ints/floats.
     pub trait IncanNumeric: Sealed {
         fn to_float(self) -> f64;
+        fn is_zero(self) -> bool;
     }
 
     impl IncanNumeric for i64 {
@@ -85,12 +138,20 @@ mod sealed {
         fn to_float(self) -> f64 {
             <Self as IncanInt>::to_float(self)
         }
+        #[inline]
+        fn is_zero(self) -> bool {
+            <Self as IncanInt>::is_zero(self)
+        }
     }
 
     impl IncanNumeric for f64 {
         #[inline]
         fn to_float(self) -> f64 {
             <Self as IncanFloat>::to_float(self)
+        }
+        #[inline]
+        fn is_zero(self) -> bool {
+            <Self as IncanFloat>::is_zero(self)
         }
     }
 }
@@ -163,12 +224,13 @@ where
 /// assert_eq!(py_mod(7_i64, 3_i64), 1);
 /// assert!((py_mod(-7.0_f64, 3.0_f64) - 2.0).abs() < 1e-10);
 /// ```
+#[inline]
 pub fn py_mod<L, R>(lhs: L, rhs: R) -> <L as PyModImpl<R>>::Output
 where
     L: PyModImpl<R>,
     R: sealed::IncanNumeric + Copy,
 {
-    if rhs.to_float() == 0.0 {
+    if rhs.is_zero() {
         panic!("{}", ZERO_DIVISION_MSG);
     }
     <L as PyModImpl<R>>::py_mod(lhs, rhs)
@@ -202,12 +264,13 @@ where
 /// assert_eq!(py_floor_div(7_i64, 3_i64), 2);
 /// assert!((py_floor_div(-7.0_f64, 3.0_f64) + 3.0).abs() < 1e-10);
 /// ```
+#[inline]
 pub fn py_floor_div<L, R>(lhs: L, rhs: R) -> <L as PyFloorDivImpl<R>>::Output
 where
     L: PyFloorDivImpl<R>,
     R: sealed::IncanNumeric + Copy,
 {
-    if rhs.to_float() == 0.0 {
+    if rhs.is_zero() {
         panic!("{}", ZERO_DIVISION_MSG);
     }
     <L as PyFloorDivImpl<R>>::py_floor_div(lhs, rhs)
@@ -299,7 +362,10 @@ impl PyFloorDivImpl<f64> for f64 {
 
 #[inline]
 pub fn py_floor_div_i64(a: i64, b: i64) -> i64 {
-    py_floor_div(a, b)
+    if b == 0 {
+        panic!("{}", ZERO_DIVISION_MSG);
+    }
+    py_floor_div_i64_impl(a, b)
 }
 
 /// Python-style floor division for floats.
@@ -316,7 +382,10 @@ pub fn py_floor_div_i64(a: i64, b: i64) -> i64 {
 /// ```
 #[inline]
 pub fn py_floor_div_f64(a: f64, b: f64) -> f64 {
-    py_floor_div(a, b)
+    if b == 0.0 {
+        panic!("{}", ZERO_DIVISION_MSG);
+    }
+    (a / b).floor()
 }
 
 /// Python-style modulo for integers.
@@ -336,7 +405,10 @@ pub fn py_floor_div_f64(a: f64, b: f64) -> f64 {
 /// ```
 #[inline]
 pub fn py_mod_i64(a: i64, b: i64) -> i64 {
-    py_mod(a, b)
+    if b == 0 {
+        panic!("{}", ZERO_DIVISION_MSG);
+    }
+    py_mod_i64_impl(a, b)
 }
 
 /// Python-style modulo for floats.
@@ -353,7 +425,10 @@ pub fn py_mod_i64(a: i64, b: i64) -> i64 {
 /// ```
 #[inline]
 pub fn py_mod_f64(a: f64, b: f64) -> f64 {
-    py_mod(a, b)
+    if b == 0.0 {
+        panic!("{}", ZERO_DIVISION_MSG);
+    }
+    py_mod_f64_impl(a, b)
 }
 
 // --- Tests -------------------------------------------------------------------------------------

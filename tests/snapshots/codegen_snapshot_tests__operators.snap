@@ -15,7 +15,7 @@ fn test_operators() {
     let sub = 5 - 3;
     let mul = 4 * 6;
     let float_div = incan_stdlib::num::py_div((10) as f64, (3) as f64);
-    let mod_result = incan_stdlib::num::py_mod(10, 3);
+    let mod_result = incan_stdlib::num::py_mod_i64(10, 3);
     let eq = 5 == 5;
     let ne = 3 != 4;
     let lt = 2 < 5;
