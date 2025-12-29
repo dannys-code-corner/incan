@@ -160,17 +160,28 @@ Runtime crates (used by generated Rust programs, not the compiler)
 
 ## Semantic Core
 
-We have a **semantic core** crate (`incan_semantics`) that holds pure, deterministic helpers shared by the compiler and
+We have a **semantic core** crate (`incan_core`) that holds pure, deterministic helpers shared by the compiler and
 runtime, without creating dependency cycles.
 
-- **Location**: `crates/incan_semantics`
+- **Location**: `crates/incan_core`
 - **Purpose**: centralize semantic policy and pure helpers so compile-time behavior and runtime behavior cannot drift.
 - **Used by**: compiler (typechecker, const-eval, lowering/codegen decisions) and stdlib/runtime helpers.
 - **Constraints**: pure/deterministic (no IO, no global state) and no dependencies on compiler crates.
 
-See crate-level documentation in `crates/incan_semantics` for the contract, extension checklist,
+See crate-level documentation in `crates/incan_core` for the contract, extension checklist,
 and drift-prevention expectations; tests in `tests/semantic_core_*` serve as the source of truth
 for covered domains.
+
+## Syntax Frontend
+
+We have a shared **syntax frontend** crate (`incan_syntax`) that centralizes lexer/parser/AST/diagnostics in a
+dependency-light crate suitable for reuse across compiler and tooling.
+
+- **Location**: `crates/incan_syntax`
+- **Purpose**: provide a single, shared syntax layer (lexing, parsing, AST, diagnostics) to prevent drift between
+  compiler, formatter, LSP, and future interactive tooling.
+- **Used by**: compiler frontend and tooling (formatter/LSP); depends on `incan_core::lang` registries for vocabulary ids.
+- **Constraints**: syntax-only (no name resolution/type checking/IR); no dependencies on compiler crates.
 
 ### Frontend (`src/frontend/`)
 

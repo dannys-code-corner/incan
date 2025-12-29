@@ -1,4 +1,4 @@
-//! Provide shared, pure semantic helpers for the Incan compiler and runtime.
+//! Provide shared, pure semantic helpers and canonical language vocabulary for the Incan compiler and runtime.
 //!
 //! This crate is intentionally small and dependency-light. It contains deterministic helpers that both:
 //! - the compiler can use for typechecking/const-eval/lowering decisions, and
@@ -7,8 +7,12 @@
 //! ## Notes
 //!
 //! - This is a “semantic core” crate: **no IO**, no global state, and no compiler-specific types.
-//! - Current scope: numeric policy (Python-like semantics) and string semantics (Unicode-scalar
-//!   indexing/slicing, comparisons, membership, concat, shared error messages).
+//! - Current scope: numeric policy (Python-like semantics), string semantics (Unicode-scalar
+//!   indexing/slicing, comparisons, membership, concat, shared error messages), and canonical language vocabulary.
+
+pub mod errors;
+pub mod lang;
+pub mod strings;
 
 /// Represent the numeric category used by semantic policy.
 ///
@@ -97,7 +101,7 @@ impl PowExponentKind {
 ///
 /// ## Examples
 /// ```rust
-/// use incan_semantics::{result_numeric_type, NumericOp, NumericTy, PowExponentKind};
+/// use incan_core::{result_numeric_type, NumericOp, NumericTy, PowExponentKind};
 /// assert_eq!(result_numeric_type(NumericOp::Div, NumericTy::Int, NumericTy::Int, None), NumericTy::Float);
 /// assert_eq!(
 ///     result_numeric_type(
@@ -206,9 +210,6 @@ pub fn is_numeric_comparison_op(op: NumericOp) -> bool {
         NumericOp::Eq | NumericOp::NotEq | NumericOp::Lt | NumericOp::LtEq | NumericOp::Gt | NumericOp::GtEq
     )
 }
-
-pub mod errors;
-pub mod strings;
 
 // =====================================================================
 // Runtime-facing numeric helpers (pure; shared with stdlib)

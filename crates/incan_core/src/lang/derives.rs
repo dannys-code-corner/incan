@@ -1,0 +1,128 @@
+//! Builtin derive vocabulary.
+//!
+//! This registry defines the canonical set of derive names accepted by the compiler via `@derive(...)`.
+//! Callers should avoid hard-coding derive strings and instead use [`DeriveId`] for identity.
+//!
+//! ## Notes
+//! - Derives are treated as *language vocabulary* (like keywords/operators) even though they map
+//!   to Rust traits/derive macros under the hood.
+//! - Matching is **case-sensitive** (Rust trait names are case-sensitive).
+
+use super::registry::{LangItemInfo, RFC, RfcId, Stability};
+
+/// Stable identifier for a builtin derive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeriveId {
+    // String representation
+    Debug,
+    Display,
+
+    // Comparison
+    Eq,
+    Ord,
+    Hash,
+
+    // Copying / defaults
+    Clone,
+    Copy,
+    Default,
+
+    // Serialization
+    Serialize,
+    Deserialize,
+}
+
+/// Metadata for a builtin derive.
+pub type DeriveInfo = LangItemInfo<DeriveId>;
+
+/// Registry of all builtin derives accepted by the compiler.
+pub const DERIVES: &[DeriveInfo] = &[
+    info(
+        DeriveId::Debug,
+        "Debug",
+        "Derive Rust-style debug formatting.",
+        RFC::_000,
+    ),
+    info(
+        DeriveId::Display,
+        "Display",
+        "Derive user-facing string formatting.",
+        RFC::_000,
+    ),
+    info(DeriveId::Eq, "Eq", "Derive equality comparisons.", RFC::_000),
+    info(DeriveId::Ord, "Ord", "Derive ordering comparisons.", RFC::_000),
+    info(
+        DeriveId::Hash,
+        "Hash",
+        "Derive hashing support (for map/set keys).",
+        RFC::_000,
+    ),
+    info(DeriveId::Clone, "Clone", "Derive deep cloning.", RFC::_000),
+    info(
+        DeriveId::Copy,
+        "Copy",
+        "Derive copy semantics for simple value types.",
+        RFC::_000,
+    ),
+    info(
+        DeriveId::Default,
+        "Default",
+        "Derive a default value constructor.",
+        RFC::_000,
+    ),
+    info(
+        DeriveId::Serialize,
+        "Serialize",
+        "Derive serialization support (e.g. JSON).",
+        RFC::_000,
+    ),
+    info(
+        DeriveId::Deserialize,
+        "Deserialize",
+        "Derive deserialization support (e.g. JSON).",
+        RFC::_000,
+    ),
+];
+
+/// Resolve a spelling to a [`DeriveId`].
+///
+/// ## Parameters
+/// - `name`: Candidate derive name.
+///
+/// ## Returns
+/// - `Some(DeriveId)` if `name` matches a known derive.
+/// - `None` otherwise.
+pub fn from_str(name: &str) -> Option<DeriveId> {
+    DERIVES.iter().find(|d| d.canonical == name).map(|d| d.id)
+}
+
+/// Return the canonical spelling for a derive.
+pub fn as_str(id: DeriveId) -> &'static str {
+    info_for(id).canonical
+}
+
+/// Return the full metadata entry for a derive.
+///
+/// ## Panics
+/// - If the registry is missing an entry for `id` (this indicates a programming error).
+pub fn info_for(id: DeriveId) -> &'static DeriveInfo {
+    DERIVES.iter().find(|d| d.id == id).expect("derive info missing")
+}
+
+const fn info(
+    id: DeriveId,
+    canonical: &'static str,
+    description: &'static str,
+    introduced_in_rfc: RfcId,
+) -> DeriveInfo {
+    LangItemInfo {
+        id,
+        canonical,
+        aliases: &[],
+        description,
+        introduced_in_rfc,
+        since_version: None,
+        stability: Stability::Stable,
+        examples: &[],
+    }
+}

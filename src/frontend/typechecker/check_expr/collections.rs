@@ -5,7 +5,7 @@
 
 use crate::frontend::ast::*;
 use crate::frontend::symbols::ResolvedType;
-use crate::frontend::typechecker::helpers::{SET_TY_NAME, dict_ty, list_ty};
+use crate::frontend::typechecker::helpers::{dict_ty, list_ty, set_ty};
 
 use super::TypeChecker;
 
@@ -65,6 +65,6 @@ impl TypeChecker {
             self.check_expr(elem);
         }
 
-        ResolvedType::Generic(SET_TY_NAME.to_string(), vec![elem_ty])
+        set_ty(elem_ty)
     }
 }

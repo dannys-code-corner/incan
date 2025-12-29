@@ -9,7 +9,7 @@ use super::super::types::IrType;
 use super::AstLowering;
 use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
-use incan_semantics::PowExponentKind;
+use incan_core::PowExponentKind;
 
 impl AstLowering {
     /// Lower an expression using the available typechecker output (if present).

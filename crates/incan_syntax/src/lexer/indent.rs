@@ -4,8 +4,8 @@
 
 use super::Lexer;
 use super::tokens::{Token, TokenKind};
-use crate::frontend::ast::Span;
-use crate::frontend::diagnostics::CompileError;
+use crate::ast::Span;
+use crate::diagnostics::CompileError;
 
 impl<'a> Lexer<'a> {
     pub(super) fn handle_indentation(&mut self) {

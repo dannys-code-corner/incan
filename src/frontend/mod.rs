@@ -9,11 +9,11 @@
 //! - `diagnostics`: error reporting and lints
 //! - `resolver`: module resolution for multi-file projects
 
-pub mod ast;
-pub mod diagnostics;
-pub mod lexer;
+// Syntax components are provided by the shared incan_syntax crate.
+pub use incan_syntax::{ast, diagnostics, lexer, parser};
+
+// Compiler-specific pieces remain local.
 pub mod module;
-pub mod parser;
 pub mod resolver;
 pub mod symbols;
 pub mod typechecker;

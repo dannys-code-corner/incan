@@ -167,7 +167,7 @@
 use super::expr::BinOp;
 use super::{IrExpr, IrExprKind, IrType, TypedExpr};
 use crate::numeric_adapters::{ir_type_to_numeric_ty, numeric_op_from_ir, pow_exponent_kind_from_ir};
-use incan_semantics::{NumericOp, NumericTy, needs_float_promotion, result_numeric_type};
+use incan_core::{NumericOp, NumericTy, needs_float_promotion, result_numeric_type};
 use proc_macro2::TokenStream;
 use quote::quote;
 

@@ -34,7 +34,7 @@
 /// assert_eq!(py_floor_div_i64(7, -3), -3);  // Rust would give -2
 /// assert_eq!(py_floor_div_i64(-7, -3), 2);
 /// ```
-use incan_semantics::{ZERO_DIVISION_MSG, py_floor_div_i64_impl, py_mod_f64_impl, py_mod_i64_impl};
+use incan_core::{ZERO_DIVISION_MSG, py_floor_div_i64_impl, py_mod_f64_impl, py_mod_i64_impl};
 
 // --- Generic helpers and sealed traits ---------------------------------------------------------
 
@@ -115,7 +115,7 @@ mod sealed {
 /// result = py_div(7, 2)  # result is 3.5
 /// # semantically the same as:
 /// # result = 7 / 2
-/// ``````
+/// ```
 ///
 /// ```rust
 /// use incan_stdlib::num::py_div;
@@ -361,7 +361,7 @@ pub fn py_mod_f64(a: f64, b: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use incan_semantics::{NumericOp, NumericTy, result_numeric_type};
+    use incan_core::{NumericOp, NumericTy, result_numeric_type};
     use std::any::Any;
     use std::f64;
 

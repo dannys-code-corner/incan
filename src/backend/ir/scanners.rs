@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 use crate::frontend::ast::{self, Declaration, Expr, Literal, Program, Spanned, Statement};
 use crate::frontend::ast::{CallArg, DecoratorArg, FStringPart, ImportKind};
+use incan_core::lang::derives::{self, DeriveId};
 
 /// Detect whether serde derives are used anywhere in the program
 pub fn detect_serde_usage(program: &Program) -> bool {
@@ -22,7 +23,10 @@ pub fn detect_serde_usage(program: &Program) -> bool {
                 for arg in &dec.node.args {
                     if let DecoratorArg::Positional(expr) = arg {
                         if let Expr::Ident(name) = &expr.node {
-                            if name == "Serialize" || name == "Deserialize" {
+                            if matches!(
+                                derives::from_str(name.as_str()),
+                                Some(DeriveId::Serialize | DeriveId::Deserialize)
+                            ) {
                                 return true;
                             }
                         }
@@ -110,10 +114,25 @@ fn expr_uses_async(expr: &Expr) -> bool {
         Expr::Await(_) => true,
         Expr::Call(function, args) => {
             if let Expr::Ident(name) = &function.node {
-                if matches!(
-                    name.as_str(),
-                    "spawn" | "sleep" | "timeout" | "channel" | "unbounded_channel"
-                ) {
+                if let Some(id) = incan_core::lang::surface::functions::from_str(name.as_str()) {
+                    use incan_core::lang::surface::functions::SurfaceFnId as F;
+                    return matches!(
+                        id,
+                        F::SleepMs
+                            | F::Timeout
+                            | F::TimeoutMs
+                            | F::SelectTimeout
+                            | F::YieldNow
+                            | F::Spawn
+                            | F::SpawnBlocking
+                            | F::Channel
+                            | F::UnboundedChannel
+                            | F::Oneshot
+                    );
+                }
+                if incan_core::lang::builtins::from_str(name.as_str())
+                    == Some(incan_core::lang::builtins::BuiltinFnId::Sleep)
+                {
                     return true;
                 }
             }

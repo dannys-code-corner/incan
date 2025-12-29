@@ -169,7 +169,7 @@ Auto-convert JSON objects to `Dict[str, ???]`. Rejected because:
 
 ## Implementation Plan
 
-1. Add `JsonValue` as a builtin type (maps to `serde_json::Value`)
+1. Add `JsonValue` as a language surface type in `incan_core::lang::surface` (maps to `serde_json::Value`)
 2. Implement constructors and methods in codegen
 3. Add typechecker support for indexing operations
 4. Add `JsonValue` field support in models

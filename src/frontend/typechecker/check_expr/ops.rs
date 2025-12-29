@@ -14,10 +14,11 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::ResolvedType;
 use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved, pow_exponent_kind_from_ast};
-use incan_semantics::{NumericTy, result_numeric_type};
+use incan_core::{NumericTy, result_numeric_type};
 
 use super::TypeChecker;
-use crate::frontend::typechecker::helpers::is_str_like;
+use crate::frontend::typechecker::helpers::{collection_type_id, is_str_like};
+use incan_core::lang::types::collections::CollectionTypeId;
 
 impl TypeChecker {
     /// Type-check a binary operation and return its result type.
@@ -124,8 +125,8 @@ impl TypeChecker {
 
                 // List/Set membership: "<item> in <collection>"
                 if let ResolvedType::Generic(name, args) = &right_ty {
-                    match name.as_str() {
-                        "List" | "Set" if !args.is_empty() => {
+                    match collection_type_id(name.as_str()) {
+                        Some(CollectionTypeId::List | CollectionTypeId::Set) if !args.is_empty() => {
                             let elem_ty = &args[0];
                             if self.types_compatible(&left_ty, elem_ty) || matches!(left_ty, ResolvedType::Unknown) {
                                 return ResolvedType::Bool;
@@ -134,7 +135,7 @@ impl TypeChecker {
                                 .push(errors::type_mismatch(&elem_ty.to_string(), &left_ty.to_string(), span));
                             return ResolvedType::Bool;
                         }
-                        "Dict" if args.len() >= 2 => {
+                        Some(CollectionTypeId::Dict) if args.len() >= 2 => {
                             let key_ty = &args[0];
                             if self.types_compatible(&left_ty, key_ty) || matches!(left_ty, ResolvedType::Unknown) {
                                 return ResolvedType::Bool;

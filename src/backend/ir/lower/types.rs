@@ -3,7 +3,7 @@
 //! This module contains helper functions for converting AST types, operators,
 //! and performing variable lookups during the lowering pass.
 //!
-//! Numeric semantics follow Python-like rules (via `incan_semantics`):
+//! Numeric semantics follow Python-like rules (via `incan_core`):
 //! - `/` always yields `Float` (even `int / int`)
 //! - `%` supports floats with Python remainder semantics
 //! - `**` yields `Int` only for non-negative int literal exponents; otherwise `Float`
@@ -14,35 +14,27 @@ use super::AstLowering;
 use crate::frontend::ast;
 use crate::frontend::symbols::ResolvedType;
 use crate::numeric_adapters::{ir_type_to_numeric_ty, numeric_op_from_ast};
-use incan_semantics::{NumericTy, PowExponentKind, result_numeric_type};
+use incan_core::lang::types::collections::{self, CollectionTypeId};
+use incan_core::lang::types::numerics::{self, NumericTypeId};
+use incan_core::lang::types::stringlike::{self, StringLikeId};
+use incan_core::{NumericTy, PowExponentKind, result_numeric_type};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GenericBaseKind {
-    List,
-    Dict,
-    Set,
-    Option,
-    Result,
-    Tuple,
-    FrozenList,
-    FrozenSet,
-    FrozenDict,
+    Collection(CollectionTypeId),
+    /// Rust interop convenience: treat `Vec[T]` like `List[T]`.
+    Vec,
     Other,
 }
 
 fn classify_generic_base(name: &str) -> GenericBaseKind {
-    match name {
-        "List" | "list" => GenericBaseKind::List,
-        "Dict" | "dict" | "HashMap" => GenericBaseKind::Dict,
-        "Set" | "set" => GenericBaseKind::Set,
-        "Option" | "option" => GenericBaseKind::Option,
-        "Result" | "result" => GenericBaseKind::Result,
-        "Tuple" | "tuple" => GenericBaseKind::Tuple,
-        "FrozenList" => GenericBaseKind::FrozenList,
-        "FrozenSet" => GenericBaseKind::FrozenSet,
-        "FrozenDict" => GenericBaseKind::FrozenDict,
-        _ => GenericBaseKind::Other,
+    if name == "Vec" {
+        return GenericBaseKind::Vec;
     }
+    if let Some(id) = collections::from_str(name) {
+        return GenericBaseKind::Collection(id);
+    }
+    GenericBaseKind::Other
 }
 
 impl AstLowering {
@@ -56,35 +48,64 @@ impl AstLowering {
     /// - `Set[T]` -> `NamedGeneric("FrozenSet", [T])`
     pub(super) fn lower_const_annotation_type(&self, ty: &ast::Type) -> IrType {
         match ty {
-            ast::Type::Simple(name) => match name.as_str() {
-                "str" => IrType::StaticStr,
-                "bytes" => IrType::StaticBytes,
-                "FrozenStr" => IrType::FrozenStr,
-                "FrozenBytes" => IrType::FrozenBytes,
-                // Primitives remain the same
-                "int" => IrType::Int,
-                "float" => IrType::Float,
-                "bool" => IrType::Bool,
-                "None" | "Unit" => IrType::Unit,
-                _ => {
-                    if let Some(enum_ty) = self.enum_names.get(name) {
-                        enum_ty.clone()
-                    } else {
-                        IrType::Struct(name.clone())
-                    }
+            ast::Type::Simple(name) => {
+                let n = name.as_str();
+
+                if n == "None" || n == "Unit" {
+                    return IrType::Unit;
                 }
-            },
+
+                if let Some(id) = numerics::from_str(n) {
+                    return match id {
+                        NumericTypeId::Int => IrType::Int,
+                        NumericTypeId::Float => IrType::Float,
+                        NumericTypeId::Bool => IrType::Bool,
+                    };
+                }
+
+                if let Some(id) = stringlike::from_str(n) {
+                    return match id {
+                        // In a const context, strings/bytes map to their `'static` IR equivalents.
+                        StringLikeId::Str | StringLikeId::FString => IrType::StaticStr,
+                        StringLikeId::Bytes => IrType::StaticBytes,
+                        StringLikeId::FrozenStr => IrType::FrozenStr,
+                        StringLikeId::FrozenBytes => IrType::FrozenBytes,
+                    };
+                }
+
+                if let Some(enum_ty) = self.enum_names.get(name) {
+                    enum_ty.clone()
+                } else {
+                    IrType::Struct(name.clone())
+                }
+            }
             ast::Type::Generic(base, params) => {
                 let params_lowered: Vec<_> = params
                     .iter()
                     .map(|p| self.lower_const_annotation_type(&p.node))
                     .collect();
                 match classify_generic_base(base.as_str()) {
-                    GenericBaseKind::List => IrType::NamedGeneric("FrozenList".to_string(), params_lowered),
-                    GenericBaseKind::Dict => IrType::NamedGeneric("FrozenDict".to_string(), params_lowered),
-                    GenericBaseKind::Set => IrType::NamedGeneric("FrozenSet".to_string(), params_lowered),
-                    GenericBaseKind::FrozenList | GenericBaseKind::FrozenSet | GenericBaseKind::FrozenDict => {
-                        IrType::NamedGeneric(base.clone(), params_lowered)
+                    GenericBaseKind::Vec | GenericBaseKind::Collection(CollectionTypeId::List) => IrType::NamedGeneric(
+                        collections::as_str(CollectionTypeId::FrozenList).to_string(),
+                        params_lowered,
+                    ),
+                    GenericBaseKind::Collection(CollectionTypeId::Dict) => IrType::NamedGeneric(
+                        collections::as_str(CollectionTypeId::FrozenDict).to_string(),
+                        params_lowered,
+                    ),
+                    GenericBaseKind::Collection(CollectionTypeId::Set) => IrType::NamedGeneric(
+                        collections::as_str(CollectionTypeId::FrozenSet).to_string(),
+                        params_lowered,
+                    ),
+                    GenericBaseKind::Collection(
+                        CollectionTypeId::FrozenList | CollectionTypeId::FrozenSet | CollectionTypeId::FrozenDict,
+                    ) => {
+                        let Some(id) = collections::from_str(base.as_str()) else {
+                            // Should not happen: `classify_generic_base()` told us this is a collection type.
+                            // Fall back to preserving the user spelling to avoid panicking during lowering.
+                            return IrType::NamedGeneric(base.clone(), params_lowered);
+                        };
+                        IrType::NamedGeneric(collections::as_str(id).to_string(), params_lowered)
                     }
                     _ => IrType::NamedGeneric(base.clone(), params.iter().map(|p| self.lower_type(&p.node)).collect()),
                 }
@@ -106,25 +127,28 @@ impl AstLowering {
             ResolvedType::Bytes => IrType::Unknown,
             ResolvedType::FrozenStr => IrType::FrozenStr,
             ResolvedType::FrozenBytes => IrType::FrozenBytes,
-            ResolvedType::FrozenList(elem) => {
-                IrType::NamedGeneric("FrozenList".to_string(), vec![self.lower_resolved_type(elem)])
-            }
-            ResolvedType::FrozenSet(elem) => {
-                IrType::NamedGeneric("FrozenSet".to_string(), vec![self.lower_resolved_type(elem)])
-            }
+            ResolvedType::FrozenList(elem) => IrType::NamedGeneric(
+                collections::as_str(CollectionTypeId::FrozenList).to_string(),
+                vec![self.lower_resolved_type(elem)],
+            ),
+            ResolvedType::FrozenSet(elem) => IrType::NamedGeneric(
+                collections::as_str(CollectionTypeId::FrozenSet).to_string(),
+                vec![self.lower_resolved_type(elem)],
+            ),
             ResolvedType::FrozenDict(k, v) => IrType::NamedGeneric(
-                "FrozenDict".to_string(),
+                collections::as_str(CollectionTypeId::FrozenDict).to_string(),
                 vec![self.lower_resolved_type(k), self.lower_resolved_type(v)],
             ),
             ResolvedType::Unit => IrType::Unit,
             ResolvedType::Named(name) => IrType::Struct(name.clone()),
+            ResolvedType::Ref(inner) => IrType::Ref(Box::new(self.lower_resolved_type(inner))),
             ResolvedType::Generic(name, args) => match classify_generic_base(name.as_str()) {
-                GenericBaseKind::List => IrType::List(Box::new(
+                GenericBaseKind::Vec | GenericBaseKind::Collection(CollectionTypeId::List) => IrType::List(Box::new(
                     args.first()
                         .map(|t| self.lower_resolved_type(t))
                         .unwrap_or(IrType::Unknown),
                 )),
-                GenericBaseKind::Dict => IrType::Dict(
+                GenericBaseKind::Collection(CollectionTypeId::Dict) => IrType::Dict(
                     Box::new(
                         args.first()
                             .map(|t| self.lower_resolved_type(t))
@@ -136,17 +160,17 @@ impl AstLowering {
                             .unwrap_or(IrType::Unknown),
                     ),
                 ),
-                GenericBaseKind::Set => IrType::Set(Box::new(
+                GenericBaseKind::Collection(CollectionTypeId::Set) => IrType::Set(Box::new(
                     args.first()
                         .map(|t| self.lower_resolved_type(t))
                         .unwrap_or(IrType::Unknown),
                 )),
-                GenericBaseKind::Option => IrType::Option(Box::new(
+                GenericBaseKind::Collection(CollectionTypeId::Option) => IrType::Option(Box::new(
                     args.first()
                         .map(|t| self.lower_resolved_type(t))
                         .unwrap_or(IrType::Unknown),
                 )),
-                GenericBaseKind::Result => IrType::Result(
+                GenericBaseKind::Collection(CollectionTypeId::Result) => IrType::Result(
                     Box::new(
                         args.first()
                             .map(|t| self.lower_resolved_type(t))
@@ -158,9 +182,25 @@ impl AstLowering {
                             .unwrap_or(IrType::Unknown),
                     ),
                 ),
-                GenericBaseKind::Tuple => IrType::Tuple(args.iter().map(|t| self.lower_resolved_type(t)).collect()),
-                GenericBaseKind::FrozenList | GenericBaseKind::FrozenSet | GenericBaseKind::FrozenDict => {
-                    IrType::NamedGeneric(name.clone(), args.iter().map(|t| self.lower_resolved_type(t)).collect())
+                GenericBaseKind::Collection(CollectionTypeId::Tuple) => {
+                    IrType::Tuple(args.iter().map(|t| self.lower_resolved_type(t)).collect())
+                }
+                GenericBaseKind::Collection(
+                    CollectionTypeId::FrozenList | CollectionTypeId::FrozenSet | CollectionTypeId::FrozenDict,
+                ) => {
+                    // Normalize to canonical spelling from incan_core.
+                    let Some(id) = collections::from_str(name.as_str()) else {
+                        // Should not happen: `classify_generic_base()` told us this is a collection type.
+                        // Preserve the type name rather than panicking during lowering.
+                        return IrType::NamedGeneric(
+                            name.clone(),
+                            args.iter().map(|t| self.lower_resolved_type(t)).collect(),
+                        );
+                    };
+                    IrType::NamedGeneric(
+                        collections::as_str(id).to_string(),
+                        args.iter().map(|t| self.lower_resolved_type(t)).collect(),
+                    )
                 }
                 GenericBaseKind::Other => IrType::Struct(name.clone()),
             },
@@ -186,34 +226,51 @@ impl AstLowering {
     /// The corresponding IR type representation.
     pub(super) fn lower_type(&self, ty: &ast::Type) -> IrType {
         match ty {
-            ast::Type::Simple(name) => match name.as_str() {
-                "int" => IrType::Int,
-                "float" => IrType::Float,
-                "str" => IrType::String,
-                "FrozenStr" => IrType::FrozenStr,
-                "FrozenBytes" => IrType::FrozenBytes,
-                "bool" => IrType::Bool,
-                "None" | "Unit" => IrType::Unit,
-                _ => {
-                    // Check if this is a known enum
-                    if let Some(enum_ty) = self.enum_names.get(name) {
-                        enum_ty.clone()
-                    } else {
-                        // Default to struct
-                        IrType::Struct(name.clone())
-                    }
+            ast::Type::Simple(name) => {
+                let n = name.as_str();
+
+                if n == "None" || n == "Unit" {
+                    return IrType::Unit;
                 }
-            },
+
+                if let Some(id) = numerics::from_str(n) {
+                    return match id {
+                        NumericTypeId::Int => IrType::Int,
+                        NumericTypeId::Float => IrType::Float,
+                        NumericTypeId::Bool => IrType::Bool,
+                    };
+                }
+
+                if let Some(id) = stringlike::from_str(n) {
+                    return match id {
+                        StringLikeId::Str | StringLikeId::FString => IrType::String,
+                        // NOTE: runtime `bytes` is not yet a dedicated IR type; keep it as unknown for now.
+                        StringLikeId::Bytes => IrType::Unknown,
+                        StringLikeId::FrozenStr => IrType::FrozenStr,
+                        StringLikeId::FrozenBytes => IrType::FrozenBytes,
+                    };
+                }
+
+                // Check if this is a known enum
+                if let Some(enum_ty) = self.enum_names.get(name) {
+                    enum_ty.clone()
+                } else {
+                    // Default to struct
+                    IrType::Struct(name.clone())
+                }
+            }
             ast::Type::Generic(base, params) => {
                 let lowered_params: Vec<_> = params.iter().map(|p| self.lower_type(&p.node)).collect();
                 match classify_generic_base(base.as_str()) {
-                    GenericBaseKind::List => IrType::List(Box::new(
-                        params
-                            .first()
-                            .map(|p| self.lower_type(&p.node))
-                            .unwrap_or(IrType::Unknown),
-                    )),
-                    GenericBaseKind::Dict => IrType::Dict(
+                    GenericBaseKind::Vec | GenericBaseKind::Collection(CollectionTypeId::List) => {
+                        IrType::List(Box::new(
+                            params
+                                .first()
+                                .map(|p| self.lower_type(&p.node))
+                                .unwrap_or(IrType::Unknown),
+                        ))
+                    }
+                    GenericBaseKind::Collection(CollectionTypeId::Dict) => IrType::Dict(
                         Box::new(
                             params
                                 .first()
@@ -227,19 +284,19 @@ impl AstLowering {
                                 .unwrap_or(IrType::Unknown),
                         ),
                     ),
-                    GenericBaseKind::Set => IrType::Set(Box::new(
+                    GenericBaseKind::Collection(CollectionTypeId::Set) => IrType::Set(Box::new(
                         params
                             .first()
                             .map(|p| self.lower_type(&p.node))
                             .unwrap_or(IrType::Unknown),
                     )),
-                    GenericBaseKind::Option => IrType::Option(Box::new(
+                    GenericBaseKind::Collection(CollectionTypeId::Option) => IrType::Option(Box::new(
                         params
                             .first()
                             .map(|p| self.lower_type(&p.node))
                             .unwrap_or(IrType::Unknown),
                     )),
-                    GenericBaseKind::Result => IrType::Result(
+                    GenericBaseKind::Collection(CollectionTypeId::Result) => IrType::Result(
                         Box::new(
                             params
                                 .first()
@@ -253,9 +310,16 @@ impl AstLowering {
                                 .unwrap_or(IrType::Unknown),
                         ),
                     ),
-                    GenericBaseKind::Tuple => IrType::Tuple(lowered_params),
-                    GenericBaseKind::FrozenList | GenericBaseKind::FrozenSet | GenericBaseKind::FrozenDict => {
-                        IrType::NamedGeneric(base.clone(), lowered_params)
+                    GenericBaseKind::Collection(CollectionTypeId::Tuple) => IrType::Tuple(lowered_params),
+                    GenericBaseKind::Collection(
+                        CollectionTypeId::FrozenList | CollectionTypeId::FrozenSet | CollectionTypeId::FrozenDict,
+                    ) => {
+                        let Some(id) = collections::from_str(base.as_str()) else {
+                            // Should not happen: `classify_generic_base()` told us this is a collection type.
+                            // Fall back to preserving the user spelling to avoid panicking during lowering.
+                            return IrType::NamedGeneric(base.clone(), lowered_params);
+                        };
+                        IrType::NamedGeneric(collections::as_str(id).to_string(), lowered_params)
                     }
                     GenericBaseKind::Other => {
                         IrType::NamedGeneric(base.clone(), params.iter().map(|p| self.lower_type(&p.node)).collect())

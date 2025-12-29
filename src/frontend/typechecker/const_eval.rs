@@ -12,9 +12,9 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::{ResolvedType, resolve_type};
 use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved, pow_exponent_kind_from_ast};
-use incan_semantics::errors::{STRING_INDEX_OUT_OF_RANGE_MSG, STRING_SLICE_STEP_ZERO_MSG};
-use incan_semantics::strings::{self, StringAccessError};
-use incan_semantics::{NumericTy, result_numeric_type};
+use incan_core::errors::{STRING_INDEX_OUT_OF_RANGE_MSG, STRING_SLICE_STEP_ZERO_MSG};
+use incan_core::strings::{self, StringAccessError};
+use incan_core::{NumericTy, result_numeric_type};
 
 use super::TypeChecker;
 use crate::frontend::typechecker::helpers::{
@@ -410,7 +410,13 @@ impl TypeChecker {
             Expr::List(items) => {
                 let elem_expected = expected.and_then(|t| match t {
                     ResolvedType::FrozenList(elem) => Some(elem.as_ref()),
-                    ResolvedType::Generic(name, args) if name == "FrozenList" && !args.is_empty() => Some(&args[0]),
+                    ResolvedType::Generic(name, args)
+                        if crate::frontend::typechecker::helpers::collection_type_id(name.as_str())
+                            == Some(incan_core::lang::types::collections::CollectionTypeId::FrozenList)
+                            && !args.is_empty() =>
+                    {
+                        Some(&args[0])
+                    }
                     _ => None,
                 });
 
@@ -441,7 +447,13 @@ impl TypeChecker {
             Expr::Set(items) => {
                 let elem_expected = expected.and_then(|t| match t {
                     ResolvedType::FrozenSet(elem) => Some(elem.as_ref()),
-                    ResolvedType::Generic(name, args) if name == "FrozenSet" && !args.is_empty() => Some(&args[0]),
+                    ResolvedType::Generic(name, args)
+                        if crate::frontend::typechecker::helpers::collection_type_id(name.as_str())
+                            == Some(incan_core::lang::types::collections::CollectionTypeId::FrozenSet)
+                            && !args.is_empty() =>
+                    {
+                        Some(&args[0])
+                    }
                     _ => None,
                 });
 
@@ -471,7 +483,11 @@ impl TypeChecker {
             Expr::Dict(pairs) => {
                 let (k_expected, v_expected) = match expected {
                     Some(ResolvedType::FrozenDict(k, v)) => (Some(k.as_ref()), Some(v.as_ref())),
-                    Some(ResolvedType::Generic(name, args)) if name == "FrozenDict" && args.len() >= 2 => {
+                    Some(ResolvedType::Generic(name, args))
+                        if crate::frontend::typechecker::helpers::collection_type_id(name.as_str())
+                            == Some(incan_core::lang::types::collections::CollectionTypeId::FrozenDict)
+                            && args.len() >= 2 =>
+                    {
                         (Some(&args[0]), Some(&args[1]))
                     }
                     _ => (None, None),

@@ -30,17 +30,14 @@ The Incan compiler frontend consists of several components that transform source
 
 ## Module Structure
 
-- `lexer/` - Tokenization module
-  - `mod.rs` - Lexer struct, tokenize(), re-exports
-  - `tokens.rs` - TokenKind, Token, FStringPart, KEYWORDS map
-  - `strings.rs` - String/f-string/byte-string scanning
-  - `numbers.rs` - Numeric literal scanning
-  - `indent.rs` - INDENT/DEDENT handling
-- `parser.rs` - Recursive descent parser producing an AST
-- `ast.rs` - Abstract Syntax Tree node definitions
+- Syntax is provided by the shared `incan_syntax` crate:
+  - `crates/incan_syntax/src/lexer/*` - Tokenization module
+  - `crates/incan_syntax/src/parser.rs` - Recursive descent parser producing an AST
+  - `crates/incan_syntax/src/ast.rs` - Abstract Syntax Tree node definitions
+  - `crates/incan_syntax/src/diagnostics.rs` - Syntax/parse error reporting
 - `symbols.rs` - Symbol table and scope management
 - `typechecker/` - Type checking and validation (two-pass, split by responsibility)
-- `diagnostics.rs` - Error reporting with Python-friendly messages
+- `diagnostics.rs` - Compiler diagnostics (type errors, warnings) with Python-friendly messages
 
 ## Key Design Decisions
 
@@ -148,7 +145,7 @@ error[type]: Cannot mutate 'x' - binding is immutable
 ## Common Error Patterns
 
 | Error | Cause | Fix |
-|-------|-------|-----|
+| ----- | ----- | --- |
 | Unknown symbol | Undefined variable | Define or import it |
 | Type mismatch | Wrong type | Fix type or add conversion |
 | Cannot use '?' | Not a Result | Use Result type or handle explicitly |

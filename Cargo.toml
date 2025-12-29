@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/incan_derive", "crates/incan_stdlib", "crates/incan_semantics"]
+members = [".", "crates/incan_derive", "crates/incan_stdlib", "crates/incan_core", "crates/incan_syntax"]
 exclude = ["target/incan"]
 resolver = "2"
 
@@ -31,8 +31,10 @@ description.workspace = true
 readme.workspace = true
 
 [dependencies]
-# Shared semantic helpers
-incan_semantics = { path = "crates/incan_semantics" }
+# Shared language/semantic helpers (canonical vocab)
+incan_core = { path = "crates/incan_core" }
+# Shared syntax frontend (lexer, parser, AST, diagnostics)
+incan_syntax = { path = "crates/incan_syntax" }
 
 # LSP server implementation
 tower-lsp = "0.17"  # TODO: update to latest version
@@ -40,8 +42,6 @@ tower-lsp = "0.17"  # TODO: update to latest version
 tokio = { version = "1", features = ["full"] }
 # JSON serialization (for LSP protocol)
 serde_json = "1.0"
-# Perfect hash map for keyword lookup
-phf = { version = "0.11", features = ["macros"] }
 
 # CLI parsing with typed subcommands
 clap = { version = "4.4", features = ["derive"] }

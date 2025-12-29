@@ -82,7 +82,7 @@ impl<'a> IrEmitter<'a> {
         };
 
         if matches!(obj_ty, IrType::String | IrType::FrozenStr) {
-            // Strings: delegate to stdlib, which calls into incan_semantics for policy/alignment.
+            // Strings: delegate to stdlib, which calls into incan_core for policy/alignment.
             let s_tokens = quote! { #t_raw };
             let start_expr = if let Some(s) = start {
                 let s_tokens = self.emit_expr(s)?;

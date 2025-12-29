@@ -341,13 +341,13 @@ Tip: Check https://crates.io/crates/serde/versions for available versions.
 
 ### Phase 1: Inline Versions (Minimal Viable)
 
-- Add `@ "version"` syntax to parser
+- Add `@ "version"` syntax to parser (implemented in `crates/incan_syntax`)
 - Pass version to `ProjectGenerator`
 - Fall back to `*` with warning for unknown crates without version (temporary)
 
 ### Phase 2: Features Support
 
-- Add `with ["feature"]` syntax
+- Add `with ["feature"]` syntax (implemented in `crates/incan_syntax`)
 - Update codegen to emit features in Cargo.toml
 
 ### Phase 3: Project Configuration

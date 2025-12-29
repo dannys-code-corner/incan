@@ -7,9 +7,13 @@
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
-use crate::frontend::typechecker::helpers::{
-    DICT_TY_NAME, LIST_TY_NAME, SET_TY_NAME, dict_ty, list_ty, option_ty, result_ty,
-};
+use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty, option_ty, result_ty, set_ty};
+use incan_core::lang::builtins::{self, BuiltinFnId};
+use incan_core::lang::surface::constructors::{self, ConstructorId};
+use incan_core::lang::surface::functions::{self as surface_functions, SurfaceFnId};
+use incan_core::lang::surface::math;
+use incan_core::lang::surface::types::{self as surface_types, SurfaceTypeId};
+use incan_core::lang::types::collections::CollectionTypeId;
 
 use super::TypeChecker;
 
@@ -37,273 +41,348 @@ impl TypeChecker {
 
     /// Handle a known builtin call (if the callee is a builtin name).
     fn check_builtin_call(&mut self, name: &str, args: &[CallArg]) -> Option<ResolvedType> {
-        match name {
-            "Ok" | "Err" => {
-                let arg_types = self.check_call_arg_types(args);
-                let (ok_ty, err_ty) = if name == "Ok" {
-                    (
-                        arg_types.first().cloned().unwrap_or(ResolvedType::Unknown),
-                        ResolvedType::Unknown,
-                    )
-                } else {
-                    (
-                        ResolvedType::Unknown,
-                        arg_types.first().cloned().unwrap_or(ResolvedType::Unknown),
-                    )
-                };
-                Some(result_ty(ok_ty, err_ty))
-            }
-            "Some" => {
-                let arg_types = self.check_call_arg_types(args);
-                let inner = arg_types.first().cloned().unwrap_or(ResolvedType::Unknown);
-                Some(option_ty(inner))
-            }
-
-            // I/O / utility
-            "println" | "print" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Unit)
-            }
-            "len" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Int)
-            }
-            "sum" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Int)
-            }
-            "range" => {
-                self.check_call_args(args);
-                Some(list_ty(ResolvedType::Int))
-            }
-
-            // Time / async-ish helpers
-            "sleep" => {
-                if let Some(arg) = args.first() {
-                    let arg_expr = Self::call_arg_expr(arg);
-                    let arg_ty = self.check_expr(arg_expr);
-                    if !self.types_compatible(&arg_ty, &ResolvedType::Float) {
-                        self.errors
-                            .push(errors::type_mismatch("float", &arg_ty.to_string(), arg_expr.span));
-                    }
+        // Constructors (variant-like)
+        if let Some(cid) = constructors::from_str(name) {
+            return match cid {
+                ConstructorId::Ok | ConstructorId::Err => {
+                    let arg_types = self.check_call_arg_types(args);
+                    let (ok_ty, err_ty) = if cid == ConstructorId::Ok {
+                        (
+                            arg_types.first().cloned().unwrap_or(ResolvedType::Unknown),
+                            ResolvedType::Unknown,
+                        )
+                    } else {
+                        (
+                            ResolvedType::Unknown,
+                            arg_types.first().cloned().unwrap_or(ResolvedType::Unknown),
+                        )
+                    };
+                    Some(result_ty(ok_ty, err_ty))
                 }
-                Some(ResolvedType::Unit)
-            }
-            "sleep_ms" => {
-                if let Some(arg) = args.first() {
-                    let arg_expr = Self::call_arg_expr(arg);
-                    let arg_ty = self.check_expr(arg_expr);
-                    if !self.types_compatible(&arg_ty, &ResolvedType::Int) {
-                        self.errors
-                            .push(errors::type_mismatch("int", &arg_ty.to_string(), arg_expr.span));
-                    }
+                ConstructorId::Some => {
+                    let arg_types = self.check_call_arg_types(args);
+                    let inner = arg_types.first().cloned().unwrap_or(ResolvedType::Unknown);
+                    Some(option_ty(inner))
                 }
-                Some(ResolvedType::Unit)
-            }
-            "timeout" => {
-                if let Some(arg) = args.first() {
-                    let arg_expr = Self::call_arg_expr(arg);
-                    let arg_ty = self.check_expr(arg_expr);
-                    if !self.types_compatible(&arg_ty, &ResolvedType::Float) {
-                        self.errors
-                            .push(errors::type_mismatch("float", &arg_ty.to_string(), arg_expr.span));
-                    }
-                }
-                if args.len() >= 2 {
-                    let task_expr = Self::call_arg_expr(&args[1]);
-                    self.check_expr(task_expr);
-                }
-                Some(ResolvedType::Unknown)
-            }
-            "timeout_ms" => {
-                if let Some(arg) = args.first() {
-                    let arg_expr = Self::call_arg_expr(arg);
-                    let arg_ty = self.check_expr(arg_expr);
-                    if !self.types_compatible(&arg_ty, &ResolvedType::Int) {
-                        self.errors
-                            .push(errors::type_mismatch("int", &arg_ty.to_string(), arg_expr.span));
-                    }
-                }
-                if args.len() >= 2 {
-                    let task_expr = Self::call_arg_expr(&args[1]);
-                    self.check_expr(task_expr);
-                }
-                Some(ResolvedType::Unknown)
-            }
-
-            // Python-like type conversion builtins
-            "dict" => {
-                let (key_ty, val_ty) = if let Some(arg) = args.first() {
-                    let arg_expr = Self::call_arg_expr(arg);
-                    let arg_ty = self.check_expr(arg_expr);
-                    match &arg_ty {
-                        ResolvedType::Generic(name, type_args) if name == DICT_TY_NAME && type_args.len() >= 2 => {
-                            (type_args[0].clone(), type_args[1].clone())
-                        }
-                        _ => (ResolvedType::Unknown, ResolvedType::Unknown),
-                    }
-                } else {
-                    (ResolvedType::Unknown, ResolvedType::Unknown)
-                };
-                Some(dict_ty(key_ty, val_ty))
-            }
-            "list" => {
-                let elem_ty = if let Some(arg) = args.first() {
-                    let arg_expr = Self::call_arg_expr(arg);
-                    let arg_ty = self.check_expr(arg_expr);
-                    match &arg_ty {
-                        ResolvedType::Generic(name, type_args)
-                            if (name == LIST_TY_NAME || name == "Vec" || name == SET_TY_NAME)
-                                && !type_args.is_empty() =>
-                        {
-                            type_args[0].clone()
-                        }
-                        ResolvedType::Str => ResolvedType::Str,
-                        _ => ResolvedType::Unknown,
-                    }
-                } else {
-                    ResolvedType::Unknown
-                };
-                Some(list_ty(elem_ty))
-            }
-            "set" => {
-                let elem_ty = if let Some(arg) = args.first() {
-                    let arg_expr = Self::call_arg_expr(arg);
-                    let arg_ty = self.check_expr(arg_expr);
-                    match &arg_ty {
-                        ResolvedType::Generic(name, type_args)
-                            if (name == LIST_TY_NAME || name == "Vec" || name == SET_TY_NAME)
-                                && !type_args.is_empty() =>
-                        {
-                            type_args[0].clone()
-                        }
-                        _ => ResolvedType::Unknown,
-                    }
-                } else {
-                    ResolvedType::Unknown
-                };
-                Some(ResolvedType::Generic(SET_TY_NAME.to_string(), vec![elem_ty]))
-            }
-            "enumerate" => {
-                let mut inner_ty = ResolvedType::Unknown;
-                if let Some(arg) = args.first() {
-                    let arg_expr = Self::call_arg_expr(arg);
-                    let iter_ty = self.check_expr(arg_expr);
-                    if let ResolvedType::Generic(name, type_args) = &iter_ty {
-                        if (name == LIST_TY_NAME || name == "Vec") && !type_args.is_empty() {
-                            inner_ty = type_args[0].clone();
-                        }
-                    }
-                }
-                Some(list_ty(ResolvedType::Tuple(vec![ResolvedType::Int, inner_ty])))
-            }
-            "zip" => {
-                let mut ty1 = ResolvedType::Unknown;
-                let mut ty2 = ResolvedType::Unknown;
-
-                if args.len() >= 2 {
-                    let arg1 = Self::call_arg_expr(&args[0]);
-                    let arg2 = Self::call_arg_expr(&args[1]);
-
-                    let iter1_ty = self.check_expr(arg1);
-                    let iter2_ty = self.check_expr(arg2);
-
-                    if let ResolvedType::Generic(name, type_args) = &iter1_ty {
-                        if (name == LIST_TY_NAME || name == "Vec") && !type_args.is_empty() {
-                            ty1 = type_args[0].clone();
-                        }
-                    }
-                    if let ResolvedType::Generic(name, type_args) = &iter2_ty {
-                        if (name == LIST_TY_NAME || name == "Vec") && !type_args.is_empty() {
-                            ty2 = type_args[0].clone();
-                        }
-                    }
-                }
-
-                Some(list_ty(ResolvedType::Tuple(vec![ty1, ty2])))
-            }
-
-            // File I/O functions
-            "read_file" => Some(result_ty(ResolvedType::Str, ResolvedType::Str)),
-            "write_file" => Some(result_ty(ResolvedType::Unit, ResolvedType::Str)),
-
-            // Type conversion functions
-            "int" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Int)
-            }
-            "str" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Str)
-            }
-            "float" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Float)
-            }
-
-            // JSON helpers
-            "json_stringify" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Str)
-            }
-            "json_parse" => {
-                self.check_call_args(args);
-                Some(result_ty(ResolvedType::Unknown, ResolvedType::Str))
-            }
-
-            // Async primitives
-            "spawn" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Generic(
-                    "JoinHandle".to_string(),
-                    vec![ResolvedType::Unknown],
-                ))
-            }
-            "channel" => {
-                self.check_call_args(args);
-                let inner = ResolvedType::Unknown;
-                Some(ResolvedType::Tuple(vec![
-                    ResolvedType::Generic("Sender".to_string(), vec![inner.clone()]),
-                    ResolvedType::Generic("Receiver".to_string(), vec![inner]),
-                ]))
-            }
-            "unbounded_channel" => Some(ResolvedType::Tuple(vec![
-                ResolvedType::Generic("UnboundedSender".to_string(), vec![ResolvedType::Unknown]),
-                ResolvedType::Generic("UnboundedReceiver".to_string(), vec![ResolvedType::Unknown]),
-            ])),
-            "oneshot" => Some(ResolvedType::Tuple(vec![
-                ResolvedType::Generic("OneshotSender".to_string(), vec![ResolvedType::Unknown]),
-                ResolvedType::Generic("OneshotReceiver".to_string(), vec![ResolvedType::Unknown]),
-            ])),
-            "Mutex" => {
-                let inner = if let Some(arg) = args.first() {
-                    self.check_expr(Self::call_arg_expr(arg))
-                } else {
-                    ResolvedType::Unknown
-                };
-                Some(ResolvedType::Generic("Mutex".to_string(), vec![inner]))
-            }
-            "RwLock" => {
-                let inner = if let Some(arg) = args.first() {
-                    self.check_expr(Self::call_arg_expr(arg))
-                } else {
-                    ResolvedType::Unknown
-                };
-                Some(ResolvedType::Generic("RwLock".to_string(), vec![inner]))
-            }
-            "Semaphore" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Named("Semaphore".to_string()))
-            }
-            "Barrier" => {
-                self.check_call_args(args);
-                Some(ResolvedType::Named("Barrier".to_string()))
-            }
-            "yield_now" => Some(ResolvedType::Unit),
-
-            // Builtins not handled here
-            _ => None,
+                ConstructorId::None => Some(option_ty(ResolvedType::Unknown)),
+            };
         }
+
+        // Core builtin functions (registry-driven)
+        if let Some(bid) = builtins::from_str(name) {
+            return match bid {
+                BuiltinFnId::Print => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Unit)
+                }
+                BuiltinFnId::Len => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Int)
+                }
+                BuiltinFnId::Sum => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Int)
+                }
+                BuiltinFnId::Str => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Str)
+                }
+                BuiltinFnId::Int => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Int)
+                }
+                BuiltinFnId::Float => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Float)
+                }
+                BuiltinFnId::Abs => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Int)
+                }
+                BuiltinFnId::Range => {
+                    self.check_call_args(args);
+                    Some(list_ty(ResolvedType::Int))
+                }
+                BuiltinFnId::Enumerate => {
+                    // enumerate(xs) -> List[(int, T)] (simple)
+                    let mut inner_ty = ResolvedType::Unknown;
+                    if let Some(arg) = args.first() {
+                        let iter_ty = self.check_expr(Self::call_arg_expr(arg));
+                        if let ResolvedType::Generic(name, type_args) = &iter_ty {
+                            if (name == surface_types::as_str(SurfaceTypeId::Vec)
+                                || matches!(
+                                    collection_type_id(name.as_str()),
+                                    Some(CollectionTypeId::List | CollectionTypeId::FrozenList)
+                                ))
+                                && !type_args.is_empty()
+                            {
+                                inner_ty = type_args[0].clone();
+                            }
+                        }
+                    }
+                    self.check_call_args(args);
+                    Some(list_ty(ResolvedType::Tuple(vec![ResolvedType::Int, inner_ty])))
+                }
+                BuiltinFnId::Zip => {
+                    // zip(a, b) -> List[(T1, T2)] (simple)
+                    let mut ty1 = ResolvedType::Unknown;
+                    let mut ty2 = ResolvedType::Unknown;
+                    if args.len() >= 2 {
+                        let iter1_ty = self.check_expr(Self::call_arg_expr(&args[0]));
+                        let iter2_ty = self.check_expr(Self::call_arg_expr(&args[1]));
+                        if let ResolvedType::Generic(name, type_args) = &iter1_ty {
+                            if (name == surface_types::as_str(SurfaceTypeId::Vec)
+                                || matches!(
+                                    collection_type_id(name.as_str()),
+                                    Some(CollectionTypeId::List | CollectionTypeId::FrozenList)
+                                ))
+                                && !type_args.is_empty()
+                            {
+                                ty1 = type_args[0].clone();
+                            }
+                        }
+                        if let ResolvedType::Generic(name, type_args) = &iter2_ty {
+                            if (name == surface_types::as_str(SurfaceTypeId::Vec)
+                                || matches!(
+                                    collection_type_id(name.as_str()),
+                                    Some(CollectionTypeId::List | CollectionTypeId::FrozenList)
+                                ))
+                                && !type_args.is_empty()
+                            {
+                                ty2 = type_args[0].clone();
+                            }
+                        }
+                    }
+                    self.check_call_args(args);
+                    Some(list_ty(ResolvedType::Tuple(vec![ty1, ty2])))
+                }
+                BuiltinFnId::ReadFile => {
+                    self.check_call_args(args);
+                    Some(result_ty(ResolvedType::Str, ResolvedType::Str))
+                }
+                BuiltinFnId::WriteFile => {
+                    self.check_call_args(args);
+                    Some(result_ty(ResolvedType::Unit, ResolvedType::Str))
+                }
+                BuiltinFnId::JsonStringify => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Str)
+                }
+                BuiltinFnId::Sleep => {
+                    if let Some(arg) = args.first() {
+                        let arg_expr = Self::call_arg_expr(arg);
+                        let arg_ty = self.check_expr(arg_expr);
+                        if !self.types_compatible(&arg_ty, &ResolvedType::Float) {
+                            self.errors
+                                .push(errors::type_mismatch("float", &arg_ty.to_string(), arg_expr.span));
+                        }
+                    }
+                    Some(ResolvedType::Unit)
+                }
+            };
+        }
+
+        // Surface/runtime functions (registry-driven)
+        if let Some(fid) = surface_functions::from_str(name) {
+            return match fid {
+                SurfaceFnId::SleepMs => {
+                    if let Some(arg) = args.first() {
+                        let arg_expr = Self::call_arg_expr(arg);
+                        let arg_ty = self.check_expr(arg_expr);
+                        if !self.types_compatible(&arg_ty, &ResolvedType::Int) {
+                            self.errors
+                                .push(errors::type_mismatch("int", &arg_ty.to_string(), arg_expr.span));
+                        }
+                    }
+                    Some(ResolvedType::Unit)
+                }
+                SurfaceFnId::Timeout | SurfaceFnId::TimeoutMs | SurfaceFnId::SelectTimeout => {
+                    if let Some(arg) = args.first() {
+                        let arg_expr = Self::call_arg_expr(arg);
+                        let arg_ty = self.check_expr(arg_expr);
+                        let (expected_name, expected_ty) = if fid == SurfaceFnId::Timeout {
+                            ("float", ResolvedType::Float)
+                        } else {
+                            ("int", ResolvedType::Int)
+                        };
+                        if !self.types_compatible(&arg_ty, &expected_ty) {
+                            self.errors
+                                .push(errors::type_mismatch(expected_name, &arg_ty.to_string(), arg_expr.span));
+                        }
+                    }
+                    self.check_call_args(args);
+                    Some(ResolvedType::Unknown)
+                }
+                SurfaceFnId::YieldNow => Some(ResolvedType::Unit),
+                SurfaceFnId::Spawn | SurfaceFnId::SpawnBlocking => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Generic(
+                        surface_types::as_str(SurfaceTypeId::JoinHandle).to_string(),
+                        vec![ResolvedType::Unknown],
+                    ))
+                }
+                SurfaceFnId::Channel => {
+                    self.check_call_args(args);
+                    let inner = ResolvedType::Unknown;
+                    Some(ResolvedType::Tuple(vec![
+                        ResolvedType::Generic(
+                            surface_types::as_str(SurfaceTypeId::Sender).to_string(),
+                            vec![inner.clone()],
+                        ),
+                        ResolvedType::Generic(surface_types::as_str(SurfaceTypeId::Receiver).to_string(), vec![inner]),
+                    ]))
+                }
+                SurfaceFnId::UnboundedChannel => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Tuple(vec![
+                        ResolvedType::Generic(
+                            surface_types::as_str(SurfaceTypeId::UnboundedSender).to_string(),
+                            vec![ResolvedType::Unknown],
+                        ),
+                        ResolvedType::Generic(
+                            surface_types::as_str(SurfaceTypeId::UnboundedReceiver).to_string(),
+                            vec![ResolvedType::Unknown],
+                        ),
+                    ]))
+                }
+                SurfaceFnId::Oneshot => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Tuple(vec![
+                        ResolvedType::Generic(
+                            surface_types::as_str(SurfaceTypeId::OneshotSender).to_string(),
+                            vec![ResolvedType::Unknown],
+                        ),
+                        ResolvedType::Generic(
+                            surface_types::as_str(SurfaceTypeId::OneshotReceiver).to_string(),
+                            vec![ResolvedType::Unknown],
+                        ),
+                    ]))
+                }
+            };
+        }
+
+        // Surface types that behave like constructors and whose result type depends on args.
+        if let Some(tid) = surface_types::from_str(name) {
+            return match tid {
+                SurfaceTypeId::Mutex => {
+                    let inner = if let Some(arg) = args.first() {
+                        self.check_expr(Self::call_arg_expr(arg))
+                    } else {
+                        ResolvedType::Unknown
+                    };
+                    Some(ResolvedType::Generic(
+                        surface_types::as_str(SurfaceTypeId::Mutex).to_string(),
+                        vec![inner],
+                    ))
+                }
+                SurfaceTypeId::RwLock => {
+                    let inner = if let Some(arg) = args.first() {
+                        self.check_expr(Self::call_arg_expr(arg))
+                    } else {
+                        ResolvedType::Unknown
+                    };
+                    Some(ResolvedType::Generic(
+                        surface_types::as_str(SurfaceTypeId::RwLock).to_string(),
+                        vec![inner],
+                    ))
+                }
+                SurfaceTypeId::Semaphore => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Named(
+                        surface_types::as_str(SurfaceTypeId::Semaphore).to_string(),
+                    ))
+                }
+                SurfaceTypeId::Barrier => {
+                    self.check_call_args(args);
+                    Some(ResolvedType::Named(
+                        surface_types::as_str(SurfaceTypeId::Barrier).to_string(),
+                    ))
+                }
+                _ => None,
+            };
+        }
+
+        // Python-like type conversion helpers (surface). These are not part of `lang::builtins`.
+        if let Some(cid) = collection_type_id(name) {
+            return match cid {
+                CollectionTypeId::Dict => {
+                    let (key_ty, val_ty) = if let Some(arg) = args.first() {
+                        let arg_expr = Self::call_arg_expr(arg);
+                        let arg_ty = self.check_expr(arg_expr);
+                        match &arg_ty {
+                            ResolvedType::Generic(name, type_args)
+                                if collection_type_id(name.as_str()) == Some(CollectionTypeId::Dict)
+                                    && type_args.len() >= 2 =>
+                            {
+                                (type_args[0].clone(), type_args[1].clone())
+                            }
+                            _ => (ResolvedType::Unknown, ResolvedType::Unknown),
+                        }
+                    } else {
+                        (ResolvedType::Unknown, ResolvedType::Unknown)
+                    };
+                    Some(dict_ty(key_ty, val_ty))
+                }
+                CollectionTypeId::List => {
+                    let elem_ty = if let Some(arg) = args.first() {
+                        let arg_expr = Self::call_arg_expr(arg);
+                        let arg_ty = self.check_expr(arg_expr);
+                        match &arg_ty {
+                            ResolvedType::Generic(name, type_args)
+                                if (name == surface_types::as_str(SurfaceTypeId::Vec)
+                                    || matches!(
+                                        collection_type_id(name.as_str()),
+                                        Some(
+                                            CollectionTypeId::List
+                                                | CollectionTypeId::Set
+                                                | CollectionTypeId::FrozenList
+                                                | CollectionTypeId::FrozenSet
+                                        )
+                                    ))
+                                    && !type_args.is_empty() =>
+                            {
+                                type_args[0].clone()
+                            }
+                            ResolvedType::Str => ResolvedType::Str,
+                            _ => ResolvedType::Unknown,
+                        }
+                    } else {
+                        ResolvedType::Unknown
+                    };
+                    Some(list_ty(elem_ty))
+                }
+                CollectionTypeId::Set => {
+                    let elem_ty = if let Some(arg) = args.first() {
+                        let arg_expr = Self::call_arg_expr(arg);
+                        let arg_ty = self.check_expr(arg_expr);
+                        match &arg_ty {
+                            ResolvedType::Generic(name, type_args)
+                                if (name == surface_types::as_str(SurfaceTypeId::Vec)
+                                    || matches!(
+                                        collection_type_id(name.as_str()),
+                                        Some(
+                                            CollectionTypeId::List
+                                                | CollectionTypeId::Set
+                                                | CollectionTypeId::FrozenList
+                                                | CollectionTypeId::FrozenSet
+                                        )
+                                    ))
+                                    && !type_args.is_empty() =>
+                            {
+                                type_args[0].clone()
+                            }
+                            _ => ResolvedType::Unknown,
+                        }
+                    } else {
+                        ResolvedType::Unknown
+                    };
+                    Some(set_ty(elem_ty))
+                }
+                _ => None,
+            };
+        }
+
+        None
     }
 
     /// Type-check a call expression and return its result type.
@@ -337,12 +416,10 @@ impl TypeChecker {
         // Handle math module function calls (math.sqrt, math.sin, etc.)
         if let Expr::Field(base, method) = &callee.node {
             if let Expr::Ident(module) = &base.node {
-                if module == "math" {
+                if module == math::MATH_MODULE_NAME {
                     self.check_call_args(args);
-                    match method.as_str() {
-                        "sqrt" | "sin" | "cos" | "tan" | "abs" | "floor" | "ceil" | "pow" | "log" | "log10" | "exp"
-                        | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" => return ResolvedType::Float,
-                        _ => {}
+                    if math::fn_from_str(method.as_str()).is_some() {
+                        return ResolvedType::Float;
                     }
                 }
             }
@@ -350,11 +427,6 @@ impl TypeChecker {
 
         if let Expr::Ident(name) = &callee.node {
             if let Some(result) = self.check_builtin_call(name, args) {
-                // Preserve prior behavior: some builtins did *not* check args.
-                // For those that should check args, `check_builtin_call` does it itself.
-                if matches!(name.as_str(), "read_file" | "write_file") {
-                    self.check_call_args(args);
-                }
                 return result;
             }
         }

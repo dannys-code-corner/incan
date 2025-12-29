@@ -59,10 +59,9 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::CompileError;
 use crate::frontend::module::{ExportedSymbol, exported_symbols};
 use crate::frontend::symbols::*;
-use helpers::{
-    FROZEN_BYTES_TY_NAME, FROZEN_DICT_TY_NAME, FROZEN_LIST_TY_NAME, FROZEN_SET_TY_NAME, FROZEN_STR_TY_NAME,
-    TUPLE_TY_NAME,
-};
+use helpers::{collection_type_id, stringlike_type_id};
+use incan_core::lang::types::collections::CollectionTypeId;
+use incan_core::lang::types::stringlike::StringLikeId;
 
 /// Capture reusable typechecking output for later compiler stages.
 ///
@@ -104,24 +103,6 @@ impl TypeCheckInfo {
         self.const_values.get(name)
     }
 }
-
-/// Valid derive names that can be used with @derive(...)
-pub(crate) const VALID_DERIVES: &[&str] = &[
-    // String representation
-    "Debug",
-    "Display",
-    // Comparison
-    "Eq",
-    "Ord",
-    "Hash",
-    // Copying
-    "Clone",
-    "Copy",
-    "Default",
-    // Serialization
-    "Serialize",
-    "Deserialize",
-];
 
 /// Type checker state.
 ///
@@ -316,31 +297,41 @@ impl TypeChecker {
         match (actual, expected) {
             (ResolvedType::Unknown, _) | (_, ResolvedType::Unknown) => true,
             (ResolvedType::TypeVar(_), _) | (_, ResolvedType::TypeVar(_)) => true,
+            // Internal references: allow exact ref compatibility and allow `&FrozenStr` where `&str` is expected.
+            (ResolvedType::Ref(a), ResolvedType::Ref(b)) => self.types_compatible(a, b),
             (ResolvedType::FrozenStr, ResolvedType::Str | ResolvedType::FrozenStr) => true,
             // `FrozenStr` is a read-only string wrapper; allow it where `str` is expected.
-            (ResolvedType::Named(name), ResolvedType::Str) if name == FROZEN_STR_TY_NAME => true,
+            (ResolvedType::Named(name), ResolvedType::Str)
+                if stringlike_type_id(name.as_str()) == Some(StringLikeId::FrozenStr) =>
+            {
+                true
+            }
             (ResolvedType::FrozenBytes, ResolvedType::Bytes | ResolvedType::FrozenBytes) => true,
             // Allow `FrozenBytes` where `bytes` is expected.
-            (ResolvedType::Named(name), ResolvedType::Bytes) if name == FROZEN_BYTES_TY_NAME => true,
+            (ResolvedType::Named(name), ResolvedType::Bytes)
+                if stringlike_type_id(name.as_str()) == Some(StringLikeId::FrozenBytes) =>
+            {
+                true
+            }
             (ResolvedType::FrozenList(a), ResolvedType::FrozenList(b)) => self.types_compatible(a, b),
             (ResolvedType::FrozenList(a), ResolvedType::Generic(name, args))
-                if name == FROZEN_LIST_TY_NAME && args.len() == 1 =>
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::FrozenList) && args.len() == 1 =>
             {
                 self.types_compatible(a, &args[0])
             }
             (ResolvedType::Generic(name, args), ResolvedType::FrozenList(b))
-                if name == FROZEN_LIST_TY_NAME && args.len() == 1 =>
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::FrozenList) && args.len() == 1 =>
             {
                 self.types_compatible(&args[0], b)
             }
             (ResolvedType::FrozenSet(a), ResolvedType::FrozenSet(b)) => self.types_compatible(a, b),
             (ResolvedType::FrozenSet(a), ResolvedType::Generic(name, args))
-                if name == FROZEN_SET_TY_NAME && args.len() == 1 =>
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::FrozenSet) && args.len() == 1 =>
             {
                 self.types_compatible(a, &args[0])
             }
             (ResolvedType::Generic(name, args), ResolvedType::FrozenSet(b))
-                if name == FROZEN_SET_TY_NAME && args.len() == 1 =>
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::FrozenSet) && args.len() == 1 =>
             {
                 self.types_compatible(&args[0], b)
             }
@@ -348,12 +339,12 @@ impl TypeChecker {
                 self.types_compatible(k1, k2) && self.types_compatible(v1, v2)
             }
             (ResolvedType::FrozenDict(k1, v1), ResolvedType::Generic(name, args))
-                if name == FROZEN_DICT_TY_NAME && args.len() >= 2 =>
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::FrozenDict) && args.len() >= 2 =>
             {
                 self.types_compatible(k1, &args[0]) && self.types_compatible(v1, &args[1])
             }
             (ResolvedType::Generic(name, args), ResolvedType::FrozenDict(k2, v2))
-                if name == FROZEN_DICT_TY_NAME && args.len() >= 2 =>
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::FrozenDict) && args.len() >= 2 =>
             {
                 self.types_compatible(&args[0], k2) && self.types_compatible(&args[1], v2)
             }
@@ -362,15 +353,23 @@ impl TypeChecker {
             // - a supertype for any tuple when used without args: `Tuple`
             //
             // This matches snapshot tests that use `tuple[int, str]` and `Tuple` as "any tuple".
-            (ResolvedType::Tuple(_), ResolvedType::Named(name)) if name == TUPLE_TY_NAME => true,
-            (ResolvedType::Tuple(elems), ResolvedType::Generic(name, args)) if name == TUPLE_TY_NAME => {
+            (ResolvedType::Tuple(_), ResolvedType::Named(name))
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::Tuple) =>
+            {
+                true
+            }
+            (ResolvedType::Tuple(elems), ResolvedType::Generic(name, args))
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::Tuple) =>
+            {
                 elems.len() == args.len()
                     && elems
                         .iter()
                         .zip(args.iter())
                         .all(|(t1, t2)| self.types_compatible(t1, t2))
             }
-            (ResolvedType::Generic(name, args), ResolvedType::Tuple(elems)) if name == TUPLE_TY_NAME => {
+            (ResolvedType::Generic(name, args), ResolvedType::Tuple(elems))
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::Tuple) =>
+            {
                 elems.len() == args.len()
                     && elems
                         .iter()

@@ -3,15 +3,15 @@
 This repository follows a strict dependency direction to keep semantics shared and prevent accidental drift between the
 compiler and the runtime:
 
-- `incan` (compiler) may depend on `incan_semantics`.
+- `incan` (compiler) may depend on `incan_core`.
 - `incan` must **not** depend on `incan_stdlib` except as a **dev-dependency** for parity tests.
-- `incan_stdlib` depends on `incan_semantics`.
+- `incan_stdlib` depends on `incan_core`.
 - Generated user programs depend on `incan_stdlib`.
 
 ```mermaid
 flowchart TD
-  incanCompiler[incan (compiler)] --> incanSemantics[incan_semantics]
-  incanStdlib[incan_stdlib] --> incanSemantics
+  incanCompiler[incan (compiler)] --> incanCore[incan_core]
+  incanStdlib[incan_stdlib] --> incanCore
   generatedProgram[generated program] --> incanStdlib
 ```
 
@@ -30,7 +30,7 @@ We want one “source of truth” for language behavior so the compiler and runt
 
 ## What goes where (contracts vs implementations)
 
-- **`incan_semantics`**:
+- **`incan_core`**:
   - Pure helpers that define *meaning/policy* (e.g., string indexing/slicing rules, numeric promotion, canonical error
     message constants).
   - Must be deterministic and side-effect free.
@@ -38,35 +38,35 @@ We want one “source of truth” for language behavior so the compiler and runt
 
 - **`incan_stdlib`**:
   - Runtime helpers used by generated Rust code.
-  - Should delegate behavior to `incan_semantics` for policy/consistency, and implement runtime-only actions (like
+  - Should delegate behavior to `incan_core` for policy/consistency, and implement runtime-only actions (like
     panicking) using the shared error messages/taxonomy.
 
 - **`incan` (compiler)**:
   - Parsing, typing, lowering, codegen, diagnostics.
-  - May use `incan_semantics` to implement checks/const-eval and to keep error text aligned.
+  - May use `incan_core` to implement checks/const-eval and to keep error text aligned.
   - Must not use `incan_stdlib` in normal builds; only in tests for parity.
 
 ## Allowed / forbidden dependencies
 
 - **Allowed**:
-  - `incan` → `incan_semantics` (normal dependency)
-  - `incan_stdlib` → `incan_semantics` (normal dependency)
+  - `incan` → `incan_core` (normal dependency)
+  - `incan_stdlib` → `incan_core` (normal dependency)
   - `incan` → `incan_stdlib` (dev-dependency only, for tests)
 
 - **Forbidden**:
   - `incan` → `incan_stdlib` in `[dependencies]` (this breaks layering)
-  - `incan_semantics` → `incan` or `incan_stdlib`
+  - `incan_core` → `incan` or `incan_stdlib`
 
 ## Common pitfalls
 
 - Adding a “quick helper” in `incan_stdlib` and calling it from the compiler.
-  - Fix: move the policy/logic to `incan_semantics` and keep only runtime glue (panics, wrappers) in `incan_stdlib`.
+  - Fix: move the policy/logic to `incan_core` and keep only runtime glue (panics, wrappers) in `incan_stdlib`.
 
 - Emitting direct Rust operations that bypass shared semantics (e.g., slicing Rust `String` by byte indices).
-  - Fix: emit calls to `incan_stdlib` wrappers which themselves delegate to `incan_semantics`.
+  - Fix: emit calls to `incan_stdlib` wrappers which themselves delegate to `incan_core`.
 
 - Duplicating error messages as string literals in multiple places.
-  - Fix: put canonical text in `incan_semantics` and reuse it from both compiler and runtime.
+  - Fix: put canonical text in `incan_core` and reuse it from both compiler and runtime.
 
 ## Guardrails (how it is enforced)
 
@@ -78,7 +78,7 @@ We want one “source of truth” for language behavior so the compiler and runt
 
 When you notice drift risk (compiler vs runtime):
 
-1. Put the *policy* in `incan_semantics` (pure function + typed error or canonical message).
+1. Put the *policy* in `incan_core` (pure function + typed error or canonical message).
 2. Add a thin wrapper in `incan_stdlib` that calls semantics and performs runtime-only behavior (panic, allocation,
    conversions).
 3. Update compiler const-eval / typechecking to use the semantics helper directly (never stdlib).

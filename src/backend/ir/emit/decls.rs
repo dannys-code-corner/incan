@@ -18,6 +18,8 @@ use std::collections::HashSet;
 use proc_macro2::{Literal, TokenStream};
 use quote::{format_ident, quote};
 
+use incan_core::lang::derives::{self, DeriveId};
+
 use super::super::decl::{IrDecl, IrDeclKind};
 use super::super::expr::{IrExpr, IrExprKind, MethodKind, VarAccess};
 use super::super::stmt::{AssignTarget, IrStmt, IrStmtKind};
@@ -349,18 +351,25 @@ impl<'a> IrEmitter<'a> {
 
                 // If this is a FrozenList/Set/Dict with literal initializer, emit via FrozenX::new(&[...]).
                 use super::super::types::IrType as T;
+                use incan_core::lang::types::collections::{self, CollectionTypeId};
                 let specialized_tokens: Option<TokenStream> = match (ty, &value.kind) {
-                    (T::NamedGeneric(n, args), IrExprKind::List(items)) if n == "FrozenList" && args.len() == 1 => {
+                    (T::NamedGeneric(n, args), IrExprKind::List(items))
+                        if n == collections::as_str(CollectionTypeId::FrozenList) && args.len() == 1 =>
+                    {
                         let elems: Result<Vec<_>, EmitError> = items.iter().map(|i| self.emit_expr(i)).collect();
                         let elems = elems?;
                         Some(quote! { FrozenList::new(&[ #(#elems),* ]) })
                     }
-                    (T::NamedGeneric(n, args), IrExprKind::Set(items)) if n == "FrozenSet" && args.len() == 1 => {
+                    (T::NamedGeneric(n, args), IrExprKind::Set(items))
+                        if n == collections::as_str(CollectionTypeId::FrozenSet) && args.len() == 1 =>
+                    {
                         let elems: Result<Vec<_>, EmitError> = items.iter().map(|i| self.emit_expr(i)).collect();
                         let elems = elems?;
                         Some(quote! { FrozenSet::new(&[ #(#elems),* ]) })
                     }
-                    (T::NamedGeneric(n, args), IrExprKind::Dict(pairs)) if n == "FrozenDict" && args.len() == 2 => {
+                    (T::NamedGeneric(n, args), IrExprKind::Dict(pairs))
+                        if n == collections::as_str(CollectionTypeId::FrozenDict) && args.len() == 2 =>
+                    {
                         let kvs: Result<Vec<_>, EmitError> = pairs
                             .iter()
                             .map(|(k, v)| {
@@ -399,9 +408,12 @@ impl<'a> IrEmitter<'a> {
             IrDeclKind::Import { path, alias, items } => {
                 // Skip serde imports if we're already importing them automatically
                 if self.needs_serde && path.len() == 1 && path[0] == "serde" {
-                    let is_serde_trait = items
-                        .iter()
-                        .any(|item| item.name == "Serialize" || item.name == "Deserialize");
+                    let is_serde_trait = items.iter().any(|item| {
+                        matches!(
+                            derives::from_str(item.name.as_str()),
+                            Some(DeriveId::Serialize | DeriveId::Deserialize)
+                        )
+                    });
                     if is_serde_trait {
                         return Ok(quote! {});
                     }
@@ -542,8 +554,12 @@ impl<'a> IrEmitter<'a> {
         // serde-derived convenience methods (legacy behavior)
         if impl_block.trait_name.is_none() {
             if let Some(derives) = self.struct_derives.get(&impl_block.target_type) {
-                let has_serialize = derives.iter().any(|d| d == "Serialize");
-                let has_deserialize = derives.iter().any(|d| d == "Deserialize");
+                let has_serialize = derives
+                    .iter()
+                    .any(|d| derives::from_str(d.as_str()) == Some(DeriveId::Serialize));
+                let has_deserialize = derives
+                    .iter()
+                    .any(|d| derives::from_str(d.as_str()) == Some(DeriveId::Deserialize));
 
                 if has_serialize {
                     regular_methods.push(quote! {
@@ -752,9 +768,9 @@ One obvious way.
         let derives: Vec<TokenStream> = s
             .derives
             .iter()
-            .map(|d| match d.as_str() {
-                "Serialize" => quote! { serde::Serialize },
-                "Deserialize" => quote! { serde::Deserialize },
+            .map(|d| match derives::from_str(d.as_str()) {
+                Some(DeriveId::Serialize) => quote! { serde::Serialize },
+                Some(DeriveId::Deserialize) => quote! { serde::Deserialize },
                 _ => {
                     let d_ident = format_ident!("{}", d);
                     quote! { #d_ident }
@@ -872,9 +888,9 @@ One obvious way.
         let derives: Vec<TokenStream> = e
             .derives
             .iter()
-            .map(|d| match d.as_str() {
-                "Serialize" => quote! { serde::Serialize },
-                "Deserialize" => quote! { serde::Deserialize },
+            .map(|d| match derives::from_str(d.as_str()) {
+                Some(DeriveId::Serialize) => quote! { serde::Serialize },
+                Some(DeriveId::Deserialize) => quote! { serde::Deserialize },
                 _ => {
                     let d_ident = format_ident!("{}", d);
                     quote! { #d_ident }

@@ -116,7 +116,9 @@ impl<'a> IrEmitter<'a> {
     fn is_range_iterable(&self, iterable: &TypedExpr) -> bool {
         matches!(&iterable.kind, IrExprKind::Range { .. })
             || matches!(&iterable.kind, IrExprKind::Call { func, .. }
-                if matches!(&func.kind, IrExprKind::Var { name, .. } if name == "range"))
+                if matches!(&func.kind, IrExprKind::Var { name, .. }
+                    if incan_core::lang::builtins::from_str(name.as_str())
+                        == Some(incan_core::lang::builtins::BuiltinFnId::Range)))
             || matches!(&iterable.kind, IrExprKind::BuiltinCall { func, .. }
                 if matches!(func, super::super::super::expr::BuiltinFn::Range))
     }

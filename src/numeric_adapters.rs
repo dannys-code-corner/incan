@@ -3,7 +3,7 @@ use crate::backend::ir::expr::{BinOp as IrBinOp, IrExprKind, TypedExpr, UnaryOp 
 use crate::backend::ir::types::IrType;
 use crate::frontend::ast::{BinaryOp, Expr, Literal, Spanned, UnaryOp};
 use crate::frontend::symbols::ResolvedType;
-use incan_semantics::{NumericOp, NumericTy, PowExponentKind};
+use incan_core::{NumericOp, NumericTy, PowExponentKind};
 
 /// Map frontend AST BinaryOp to NumericOp.
 pub fn numeric_op_from_ast(op: &BinaryOp) -> Option<NumericOp> {

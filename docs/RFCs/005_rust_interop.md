@@ -5,7 +5,7 @@
 
 ## Summary
 
-Define seamless Rust interop for Incan: imports like `rust::crate` should work without manual Cargo edits, with clear type mapping, codegen, and build integration.
+Define seamless Rust interop for Incan: imports like `rust::serde_json` should work without manual Cargo edits, with clear type mapping, codegen, and build integration.
 
 ## Goals
 
@@ -40,6 +40,20 @@ Define seamless Rust interop for Incan: imports like `rust::crate` should work w
   ```incan
   from rust::chrono::naive::date import NaiveDate
   ```
+
+### Related: `crate::...` absolute module paths
+
+This RFC also introduces the **Rust-style** `crate` import prefix for **Incan module paths**:
+
+```incan
+# Import from the project root (absolute module path)
+import crate::config as cfg
+from crate::utils import format_date
+```
+
+Notes:
+- `crate::...` is for **Incan modules** (project root), not for selecting a Rust crate in a `rust::...` import.
+- Parent navigation for Incan modules uses `super::...` / `..` and is specified in RFC 000.
 
 ## Type Mapping (initial)
 

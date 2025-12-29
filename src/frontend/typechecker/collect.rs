@@ -8,7 +8,8 @@ use crate::frontend::module::ExportedSymbol;
 use crate::frontend::symbols::*;
 use crate::frontend::typechecker::helpers::freeze_const_type;
 
-use super::{TypeChecker, VALID_DERIVES};
+use super::TypeChecker;
+use incan_core::lang::derives::{self, DeriveId};
 
 // ============================================================================
 // Decorator Helpers
@@ -84,7 +85,10 @@ fn collect_fields(fields: &[Spanned<FieldDecl>], symbols: &SymbolTable) -> HashM
 
 /// Inject to_json/from_json methods based on Serialize/Deserialize derives.
 fn inject_json_methods(methods: &mut HashMap<String, MethodInfo>, type_name: &str, derives: &[String]) {
-    if derives.iter().any(|d| d == "Serialize") {
+    if derives
+        .iter()
+        .any(|d| derives::from_str(d.as_str()) == Some(DeriveId::Serialize))
+    {
         methods.insert(
             "to_json".to_string(),
             MethodInfo {
@@ -96,7 +100,10 @@ fn inject_json_methods(methods: &mut HashMap<String, MethodInfo>, type_name: &st
             },
         );
     }
-    if derives.iter().any(|d| d == "Deserialize") {
+    if derives
+        .iter()
+        .any(|d| derives::from_str(d.as_str()) == Some(DeriveId::Deserialize))
+    {
         methods.insert(
             "from_json".to_string(),
             MethodInfo {
@@ -440,7 +447,7 @@ impl TypeChecker {
 
     /// Validate a single derive name, reporting appropriate errors.
     fn validate_single_derive(&mut self, name: &str, span: Span) {
-        if VALID_DERIVES.contains(&name) {
+        if derives::from_str(name).is_some() {
             return;
         }
 

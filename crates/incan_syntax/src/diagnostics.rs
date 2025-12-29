@@ -7,7 +7,8 @@
 //! This module provides `IncanDiagnostic` which implements miette's `Diagnostic`
 //! trait for rich error output with source context, hints, and related errors.
 
-use crate::frontend::ast::Span;
+use crate::ast::Span;
+use incan_core::lang::derives::{self, DeriveId};
 use miette::{Diagnostic, LabeledSpan, SourceSpan};
 
 /// A compile-time error with location information
@@ -470,40 +471,45 @@ pub mod errors {
         );
 
         // Add specific hints based on the trait
-        match trait_name {
-            "Eq" => {
+        if trait_name == "Error" {
+            error = error.with_hint("Implement the Error trait with a message() method");
+            error = error.with_hint("Example: def message(self) -> str: return self.msg");
+            return error;
+        }
+
+        match derives::from_str(trait_name) {
+            Some(DeriveId::Eq) => {
                 error = error.with_hint("Add @derive(Eq) to enable equality comparison (==, !=)");
                 error = error.with_hint("Or implement __eq__ manually for custom comparison logic");
             }
-            "Ord" => {
+            Some(DeriveId::Ord) => {
                 error = error.with_hint("Add @derive(Ord) to enable ordering comparison (<, >, <=, >=)");
                 error = error.with_hint("Or implement __lt__ manually for custom ordering");
             }
-            "Hash" => {
+            Some(DeriveId::Hash) => {
                 error = error.with_hint("Add @derive(Hash) to use this type in Set or as Dict key");
                 error = error.with_note("Hash is required for Set membership and Dict keys");
             }
-            "Clone" => {
+            Some(DeriveId::Clone) => {
                 error = error.with_hint("Add @derive(Clone) to enable .clone() method");
             }
-            "Debug" => {
+            Some(DeriveId::Copy) => {
+                error = error.with_hint("Add @derive(Copy) to allow implicit copying for simple value types");
+            }
+            Some(DeriveId::Debug) => {
                 error = error.with_hint("Add @derive(Debug) to enable {:?} formatting");
             }
-            "Display" => {
+            Some(DeriveId::Display) => {
                 error = error.with_hint("Implement __str__ method for string representation");
                 error = error.with_hint("Example: def __str__(self) -> str: return f\"{self.name}\"");
             }
-            "Default" => {
+            Some(DeriveId::Default) => {
                 error = error.with_hint("Add @derive(Default) to enable Type.default()");
             }
-            "Serialize" | "Deserialize" => {
+            Some(DeriveId::Serialize) | Some(DeriveId::Deserialize) => {
                 error = error.with_hint(format!("Add @derive({}) for JSON/serialization support", trait_name));
             }
-            "Error" => {
-                error = error.with_hint("Implement the Error trait with a message() method");
-                error = error.with_hint("Example: def message(self) -> str: return self.msg");
-            }
-            _ => {
+            None => {
                 error = error.with_hint(format!(
                     "Implement the {} trait or add 'with {}'",
                     trait_name, trait_name

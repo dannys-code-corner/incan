@@ -10,6 +10,7 @@ use quote::quote;
 use super::super::super::expr::{BuiltinFn, IrExprKind, TypedExpr};
 use super::super::super::types::IrType;
 use super::super::{EmitError, IrEmitter};
+use incan_core::lang::builtins::{self, BuiltinFnId};
 
 impl<'a> IrEmitter<'a> {
     /// Emit a builtin function call using enum-based dispatch.
@@ -171,8 +172,12 @@ impl<'a> IrEmitter<'a> {
         name: &str,
         args: &[TypedExpr],
     ) -> Result<Option<TokenStream>, EmitError> {
-        match name {
-            "print" | "println" => {
+        let Some(id) = builtins::from_str(name) else {
+            return Ok(None);
+        };
+
+        match id {
+            BuiltinFnId::Print => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     Ok(Some(quote! { println!("{}", #a) }))
@@ -180,7 +185,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(Some(quote! { println!() }))
                 }
             }
-            "len" => {
+            BuiltinFnId::Len => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     Ok(Some(quote! { #a.len() as i64 }))
@@ -188,7 +193,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "sum" => {
+            BuiltinFnId::Sum => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     let elem_type = match &arg.ty {
@@ -210,7 +215,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "str" => {
+            BuiltinFnId::Str => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     Ok(Some(quote! { #a.to_string() }))
@@ -218,7 +223,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "int" => {
+            BuiltinFnId::Int => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     match &arg.ty {
@@ -231,7 +236,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "float" => {
+            BuiltinFnId::Float => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     match &arg.ty {
@@ -243,7 +248,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "abs" => {
+            BuiltinFnId::Abs => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     Ok(Some(quote! { #a.abs() }))
@@ -251,8 +256,8 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "range" => self.emit_range_call(args),
-            "enumerate" => {
+            BuiltinFnId::Range => self.emit_range_call(args),
+            BuiltinFnId::Enumerate => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     Ok(Some(quote! { #a.iter().enumerate() }))
@@ -260,7 +265,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "zip" => {
+            BuiltinFnId::Zip => {
                 if args.len() >= 2 {
                     let a = self.emit_expr(&args[0])?;
                     let b = self.emit_expr(&args[1])?;
@@ -269,7 +274,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "read_file" => {
+            BuiltinFnId::ReadFile => {
                 if let Some(arg) = args.first() {
                     let path = self.emit_expr(arg)?;
                     Ok(Some(quote! { std::fs::read_to_string(#path) }))
@@ -277,7 +282,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "write_file" => {
+            BuiltinFnId::WriteFile => {
                 if args.len() >= 2 {
                     let path = self.emit_expr(&args[0])?;
                     let content = self.emit_expr(&args[1])?;
@@ -286,7 +291,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "json_stringify" => {
+            BuiltinFnId::JsonStringify => {
                 if let Some(arg) = args.first() {
                     let value = self.emit_expr(arg)?;
                     Ok(Some(quote! { serde_json::to_string(&#value).unwrap() }))
@@ -294,7 +299,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            "sleep" => {
+            BuiltinFnId::Sleep => {
                 if let Some(arg) = args.first() {
                     let duration_arg = self.emit_expr(arg)?;
                     Ok(Some(
@@ -303,8 +308,7 @@ impl<'a> IrEmitter<'a> {
                 } else {
                     Ok(None)
                 }
-            }
-            _ => Ok(None),
+            } // No string-fallback support for other builtins here.
         }
     }
 
