@@ -89,14 +89,15 @@ Use this only when the feature is genuinely syntactic/control-flow.
 **End-to-end checklist (typical):**
 
 - **Lexer**
-  - `src/frontend/lexer/tokens.rs`
-    - Add a `TokenKind::<YourKeyword>`
-    - Add it to the `KEYWORDS` map (and tests)
+  - `crates/incan_syntax/src/lexer/*`
+    - Add a `KeywordId` to `crates/incan_core/src/lang/keywords.rs`
+    - Ensure tokenization emits `TokenKind::Keyword(KeywordId::YourKeyword)`
+    - Update lexer parity tests (keyword/operator/punctuation registry parity)
 - **Parser**
-  - `src/frontend/parser.rs`
+  - `crates/incan_syntax/src/parser.rs`
     - Parse the syntax and build a new AST node (usually an `Expr` or `Statement` variant)
 - **AST**
-  - `src/frontend/ast.rs`
+  - `crates/incan_syntax/src/ast.rs`
     - Add the new `Expr::<YourNode>` or `Statement::<YourNode>` variant
 - **Formatter**
   - `src/format/formatter.rs`

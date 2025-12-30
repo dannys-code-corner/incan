@@ -11,6 +11,7 @@ Learn how to write Incan code — from basics to advanced patterns.
 | [Const bindings](consts.md) | Module-level compile-time constants (`const`) |
 | [Error Handling](error_handling.md) | Result, Option, and the `?` operator |
 | [Error Messages](error_messages.md) | Understanding and fixing compiler errors |
+| [Scopes & Name Resolution](scopes_and_name_resolution.md) | Block scoping, shadowing, and how names are resolved |
 | [Imports & Modules](imports_and_modules.md) | Module system and built-in functions |
 | [File I/O](file_io.md) | Reading and writing files |
 

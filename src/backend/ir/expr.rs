@@ -14,6 +14,8 @@
 //! Unknown methods (e.g., Rust interop) remain string-based via `MethodCall`.
 
 use super::{IrSpan, IrType, Ownership};
+use incan_core::lang::builtins::{self as core_builtins, BuiltinFnId};
+use incan_core::lang::surface::{dict_methods, list_methods, set_methods, string_methods};
 
 /// A typed expression in IR
 #[derive(Debug, Clone)]
@@ -382,23 +384,23 @@ impl BuiltinFn {
     ///
     /// Returns `None` for unknown functions (which are treated as user-defined).
     pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "print" | "println" => Some(Self::Print),
-            "len" => Some(Self::Len),
-            "sum" => Some(Self::Sum),
-            "str" => Some(Self::Str),
-            "int" => Some(Self::Int),
-            "float" => Some(Self::Float),
-            "abs" => Some(Self::Abs),
-            "range" => Some(Self::Range),
-            "enumerate" => Some(Self::Enumerate),
-            "zip" => Some(Self::Zip),
-            "read_file" => Some(Self::ReadFile),
-            "write_file" => Some(Self::WriteFile),
-            "json_stringify" => Some(Self::JsonStringify),
-            "sleep" => Some(Self::Sleep),
-            _ => None,
-        }
+        let id = core_builtins::from_str(name)?;
+        Some(match id {
+            BuiltinFnId::Print => Self::Print,
+            BuiltinFnId::Len => Self::Len,
+            BuiltinFnId::Sum => Self::Sum,
+            BuiltinFnId::Str => Self::Str,
+            BuiltinFnId::Int => Self::Int,
+            BuiltinFnId::Float => Self::Float,
+            BuiltinFnId::Abs => Self::Abs,
+            BuiltinFnId::Range => Self::Range,
+            BuiltinFnId::Enumerate => Self::Enumerate,
+            BuiltinFnId::Zip => Self::Zip,
+            BuiltinFnId::ReadFile => Self::ReadFile,
+            BuiltinFnId::WriteFile => Self::WriteFile,
+            BuiltinFnId::JsonStringify => Self::JsonStringify,
+            BuiltinFnId::Sleep => Self::Sleep,
+        })
     }
 }
 
@@ -464,30 +466,61 @@ impl MethodKind {
     ///
     /// Returns `None` for unknown methods (which pass through as regular method calls).
     pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            // String methods
-            "upper" => Some(Self::Upper),
-            "lower" => Some(Self::Lower),
-            "strip" => Some(Self::Strip),
-            "split" => Some(Self::Split),
-            "replace" => Some(Self::Replace),
-            "join" => Some(Self::Join),
-            "startswith" => Some(Self::StartsWith),
-            "endswith" => Some(Self::EndsWith),
-            // Collection methods
-            "contains" => Some(Self::Contains),
-            "get" => Some(Self::Get),
-            "insert" => Some(Self::Insert),
-            "remove" => Some(Self::Remove),
-            // List methods
-            "append" => Some(Self::Append),
-            "pop" => Some(Self::Pop),
-            "swap" => Some(Self::Swap),
-            "reserve" => Some(Self::Reserve),
-            "reserve_exact" => Some(Self::ReserveExact),
-            // Internal
-            "__slice__" => Some(Self::Slice),
-            _ => None,
+        // Internal
+        if name == "__slice__" {
+            return Some(Self::Slice);
         }
+
+        // List methods (includes a couple of generic collection methods we model explicitly).
+        if let Some(id) = list_methods::from_str(name) {
+            use list_methods::ListMethodId as L;
+            return Some(match id {
+                L::Append => Self::Append,
+                L::Pop => Self::Pop,
+                L::Swap => Self::Swap,
+                L::Reserve => Self::Reserve,
+                L::ReserveExact => Self::ReserveExact,
+                L::Contains => Self::Contains,
+                L::Remove => Self::Remove,
+                // Not modeled as known IR methods yet:
+                L::Count | L::Index => return None,
+            });
+        }
+
+        // Dict methods.
+        if let Some(id) = dict_methods::from_str(name) {
+            use dict_methods::DictMethodId as D;
+            return Some(match id {
+                D::Get => Self::Get,
+                D::Insert => Self::Insert,
+                // keys/values are emitted as normal method calls.
+                D::Keys | D::Values => return None,
+            });
+        }
+
+        // Set methods.
+        if set_methods::from_str(name).is_some() {
+            return Some(Self::Contains);
+        }
+
+        // String methods.
+        if let Some(id) = string_methods::from_str(name) {
+            use string_methods::StringMethodId as S;
+            return match id {
+                S::Upper => Some(Self::Upper),
+                S::Lower => Some(Self::Lower),
+                S::Strip => Some(Self::Strip),
+                S::Split => Some(Self::Split),
+                S::Replace => Some(Self::Replace),
+                S::Join => Some(Self::Join),
+                S::StartsWith => Some(Self::StartsWith),
+                S::EndsWith => Some(Self::EndsWith),
+                S::Contains => Some(Self::Contains),
+                // The rest are either typechecker-only (return types) or normal method calls:
+                _ => None,
+            };
+        }
+
+        None
     }
 }

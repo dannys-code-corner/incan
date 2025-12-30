@@ -14,7 +14,7 @@
 //!
 //! ## See also
 //!
-//! - `docs/RFCs/008_const_bindings.md`
+//! - `docs/RFCs/done/008_const_bindings.md`
 //! - [`crate::backend::ir::emit::program`]: where const string folding is initialized
 
 use proc_macro2::TokenStream;
@@ -23,6 +23,7 @@ use quote::quote;
 use super::super::expr::{BinOp, IrExprKind, Literal as IrLiteral, TypedExpr};
 use super::super::types::IrType;
 use super::{EmitError, IrEmitter};
+use incan_core::lang::types::collections::{self, CollectionTypeId};
 
 impl<'a> IrEmitter<'a> {
     /// RFC 008 const representability check.
@@ -46,9 +47,13 @@ impl<'a> IrEmitter<'a> {
                 | IrType::FrozenStr
                 | IrType::FrozenBytes => true,
                 IrType::Tuple(items) => items.iter().all(ok_ty),
-                IrType::NamedGeneric(name, args) if name == "FrozenList" => args.first().map(ok_ty).unwrap_or(false),
-                IrType::NamedGeneric(name, args) if name == "FrozenSet" => args.first().map(ok_ty).unwrap_or(false),
-                IrType::NamedGeneric(name, args) if name == "FrozenDict" => {
+                IrType::NamedGeneric(name, args) if name == collections::as_str(CollectionTypeId::FrozenList) => {
+                    args.first().map(ok_ty).unwrap_or(false)
+                }
+                IrType::NamedGeneric(name, args) if name == collections::as_str(CollectionTypeId::FrozenSet) => {
+                    args.first().map(ok_ty).unwrap_or(false)
+                }
+                IrType::NamedGeneric(name, args) if name == collections::as_str(CollectionTypeId::FrozenDict) => {
                     args.first().map(ok_ty).unwrap_or(false) && args.get(1).map(ok_ty).unwrap_or(false)
                 }
                 _ => false,

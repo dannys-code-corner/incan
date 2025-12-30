@@ -52,18 +52,18 @@ install:
 .PHONY: fmt  ## quality - Format Rust code
 fmt:
 	@echo "\033[1mFormatting code...\033[0m"
-	@cargo fmt
+	@cargo fmt --all
 	@echo "\033[32m✓ Code formatted\033[0m"
 
 .PHONY: fmt-check  ## quality - Check formatting without changes
 fmt-check:
 	@echo "\033[1mChecking formatting...\033[0m"
-	@cargo fmt -- --check
+	@cargo fmt --all -- --check
 
 .PHONY: lint  ## quality - Run clippy linter
 lint:
 	@echo "\033[1mRunning clippy...\033[0m"
-	@cargo clippy -- -D warnings
+	@cargo clippy --all-targets --all-features -- -D warnings
 
 .PHONY: check  ## quality - Run all quality checks (fmt + lint)
 check: fmt-check lint
@@ -77,7 +77,7 @@ udeps:
 .PHONY: pre-commit  ## quality - Full CI check: fmt, lint, udeps, test, and build
 pre-commit: fmt lint udeps
 	@echo "\033[1mRunning tests...\033[0m"
-	@cargo test --quiet
+	@cargo test --all --quiet
 	@echo "\033[1mBuilding release...\033[0m"
 	@cargo build --release --quiet
 	@echo "\033[32m✓ Pre-commit checks passed\033[0m"
@@ -89,7 +89,7 @@ pre-commit: fmt lint udeps
 .PHONY: test  ## test - Run all tests
 test:
 	@echo "\033[1mRunning tests...\033[0m"
-	@cargo test
+	@cargo test --all --verbose
 
 .PHONY: examples  ## test - Smoke test examples (check all, run entrypoints with timeout)
 examples: release

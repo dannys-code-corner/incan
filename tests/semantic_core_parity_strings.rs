@@ -3,8 +3,8 @@
 
 use incan::frontend::typechecker::{ConstValue, TypeCheckInfo};
 use incan::frontend::{lexer, parser, typechecker};
-use incan_semantics::errors::{STRING_INDEX_OUT_OF_RANGE_MSG, STRING_SLICE_STEP_ZERO_MSG};
-use incan_semantics::strings::{str_char_at, str_concat, str_contains, str_slice};
+use incan_core::errors::{STRING_INDEX_OUT_OF_RANGE_MSG, STRING_SLICE_STEP_ZERO_MSG};
+use incan_core::strings::{str_char_at, str_concat, str_contains, str_slice};
 use incan_stdlib::strings::{str_concat as rt_str_concat, str_index as rt_str_index, str_slice as rt_str_slice};
 
 fn run_const_eval_with_info(src: &str) -> Result<TypeCheckInfo, Vec<String>> {
@@ -149,7 +149,7 @@ fn fstring_shared_helper() {
     let parts = ["Hello ", "!"];
     let args = vec![format!("{}", "world")];
     assert_eq!(
-        incan_semantics::strings::fstring(&parts, &args),
+        incan_core::strings::fstring(&parts, &args),
         incan_stdlib::strings::fstring(&parts, &args)
     );
 

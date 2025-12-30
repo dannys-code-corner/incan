@@ -1,0 +1,201 @@
+//! Surface/runtime/interop types vocabulary.
+//!
+//! These types are part of the language surface (documented, user-facing), but are not “core”
+//! builtin types like `int`/`str` and do not belong in `lang::types::*` registries.
+
+use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+
+/// Stable identifier for a surface type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SurfaceTypeId {
+    // Async primitives
+    Mutex,
+    RwLock,
+    Semaphore,
+    Barrier,
+
+    // Task handles
+    JoinHandle,
+
+    // Channels
+    Sender,
+    Receiver,
+    UnboundedSender,
+    UnboundedReceiver,
+    OneshotSender,
+    OneshotReceiver,
+
+    // Interop types
+    Vec,
+    HashMap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SurfaceTypeKind {
+    Named,
+    Generic,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SurfaceTypeInfo {
+    pub kind: SurfaceTypeKind,
+    pub item: LangItemInfo<SurfaceTypeId>,
+}
+
+pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
+    // Async primitives
+    info(
+        SurfaceTypeId::Mutex,
+        "Mutex",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Async/runtime mutex.",
+        RFC::_000,
+    ),
+    info(
+        SurfaceTypeId::RwLock,
+        "RwLock",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Async/runtime read-write lock.",
+        RFC::_000,
+    ),
+    info(
+        SurfaceTypeId::Semaphore,
+        "Semaphore",
+        &[],
+        SurfaceTypeKind::Named,
+        "Async/runtime semaphore.",
+        RFC::_000,
+    ),
+    info(
+        SurfaceTypeId::Barrier,
+        "Barrier",
+        &[],
+        SurfaceTypeKind::Named,
+        "Async/runtime barrier.",
+        RFC::_000,
+    ),
+    // Task handles
+    info(
+        SurfaceTypeId::JoinHandle,
+        "JoinHandle",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Handle to a spawned task.",
+        RFC::_000,
+    ),
+    // Channels
+    info(
+        SurfaceTypeId::Sender,
+        "Sender",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Bounded channel sender.",
+        RFC::_000,
+    ),
+    info(
+        SurfaceTypeId::Receiver,
+        "Receiver",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Bounded channel receiver.",
+        RFC::_000,
+    ),
+    info(
+        SurfaceTypeId::UnboundedSender,
+        "UnboundedSender",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Unbounded channel sender.",
+        RFC::_000,
+    ),
+    info(
+        SurfaceTypeId::UnboundedReceiver,
+        "UnboundedReceiver",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Unbounded channel receiver.",
+        RFC::_000,
+    ),
+    info(
+        SurfaceTypeId::OneshotSender,
+        "OneshotSender",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Oneshot channel sender.",
+        RFC::_000,
+    ),
+    info(
+        SurfaceTypeId::OneshotReceiver,
+        "OneshotReceiver",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Oneshot channel receiver.",
+        RFC::_000,
+    ),
+    // Interop
+    info(
+        SurfaceTypeId::Vec,
+        "Vec",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Rust interop `Vec<T>`.",
+        RFC::_005,
+    ),
+    info(
+        SurfaceTypeId::HashMap,
+        "HashMap",
+        &[],
+        SurfaceTypeKind::Generic,
+        "Rust interop `HashMap<K, V>`.",
+        RFC::_005,
+    ),
+];
+
+pub fn from_str(name: &str) -> Option<SurfaceTypeId> {
+    if let Some(t) = SURFACE_TYPES.iter().find(|t| t.item.canonical == name) {
+        return Some(t.item.id);
+    }
+    SURFACE_TYPES
+        .iter()
+        .find(|t| {
+            let aliases: &[&str] = t.item.aliases;
+            aliases.contains(&name)
+        })
+        .map(|t| t.item.id)
+}
+
+pub fn as_str(id: SurfaceTypeId) -> &'static str {
+    info_for(id).item.canonical
+}
+
+pub fn info_for(id: SurfaceTypeId) -> &'static SurfaceTypeInfo {
+    SURFACE_TYPES
+        .iter()
+        .find(|t| t.item.id == id)
+        .expect("surface type info missing")
+}
+
+const fn info(
+    id: SurfaceTypeId,
+    canonical: &'static str,
+    aliases: &'static [&'static str],
+    kind: SurfaceTypeKind,
+    description: &'static str,
+    introduced_in_rfc: RfcId,
+) -> SurfaceTypeInfo {
+    SurfaceTypeInfo {
+        kind,
+        item: LangItemInfo {
+            id,
+            canonical,
+            aliases,
+            description,
+            introduced_in_rfc,
+            since_version: None,
+            stability: Stability::Stable,
+            examples: &[],
+        },
+    }
+}

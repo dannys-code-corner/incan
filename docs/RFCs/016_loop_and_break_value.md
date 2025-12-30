@@ -217,6 +217,19 @@ Additionally, `IrStmtKind::Break` should be extended to carry an optional value 
 
 ## Alternatives considered
 
+## Implementation notes (current crate layout)
+
+This RFC introduces new syntax and vocabulary:
+
+- A new keyword: `loop`
+- An extended form of `break` (`break <value>`)
+
+In the current workspace, those changes should be implemented in:
+
+- `crates/incan_core/src/lang/keywords.rs`: add `loop` to the keyword registry (with correct RFC provenance)
+- `crates/incan_syntax`: lexer emits `TokenKind::Keyword(KeywordId::Loop)` and parser handles `loop:` and `break <expr>`
+- `crates/incan_core` docgen/tests: update reference docs + add parity/guardrail tests so registry ↔ lexer stay aligned
+
 ### Alternative A: Only keep `while True:`
 
 Pros:

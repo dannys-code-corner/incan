@@ -4,10 +4,11 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::*;
 use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved};
-use incan_semantics::{NumericTy, result_numeric_type};
+use incan_core::lang::types::collections::CollectionTypeId;
+use incan_core::{NumericTy, result_numeric_type};
 
 use super::TypeChecker;
-use crate::frontend::typechecker::helpers::{DICT_TY_NAME, LIST_TY_NAME, SET_TY_NAME, ensure_bool_condition};
+use crate::frontend::typechecker::helpers::{collection_type_id, ensure_bool_condition};
 
 impl TypeChecker {
     // ========================================================================
@@ -300,8 +301,8 @@ impl TypeChecker {
 
         // Verify object is indexable and types match
         match &obj_ty {
-            ResolvedType::Generic(name, args) => match name.as_str() {
-                LIST_TY_NAME => {
+            ResolvedType::Generic(name, args) => match collection_type_id(name.as_str()) {
+                Some(CollectionTypeId::List) => {
                     // List[T] - index must be int, value must be T
                     if !matches!(index_ty, ResolvedType::Int) {
                         self.errors.push(errors::index_type_mismatch(
@@ -320,7 +321,7 @@ impl TypeChecker {
                         }
                     }
                 }
-                DICT_TY_NAME => {
+                Some(CollectionTypeId::Dict) => {
                     // Dict[K, V] - index must be K, value must be V
                     if let Some(key_ty) = args.first() {
                         if !self.types_compatible(&index_ty, key_ty) {
@@ -506,13 +507,13 @@ impl TypeChecker {
     pub(crate) fn infer_iterator_element_type(&self, iter_ty: &ResolvedType) -> ResolvedType {
         match iter_ty {
             ResolvedType::Generic(name, args) => {
-                match name.as_str() {
-                    LIST_TY_NAME | SET_TY_NAME if !args.is_empty() => args[0].clone(),
-                    DICT_TY_NAME if args.len() >= 2 => {
+                match collection_type_id(name.as_str()) {
+                    Some(CollectionTypeId::List) | Some(CollectionTypeId::Set) if !args.is_empty() => args[0].clone(),
+                    Some(CollectionTypeId::Dict) if args.len() >= 2 => {
                         // Iterating dict gives keys
                         args[0].clone()
                     }
-                    "Tuple" if !args.is_empty() => {
+                    Some(CollectionTypeId::Tuple) if !args.is_empty() => {
                         // For tuple iteration, return first element type (simplified)
                         args[0].clone()
                     }

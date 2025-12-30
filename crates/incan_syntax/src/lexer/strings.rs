@@ -4,8 +4,8 @@
 
 use super::Lexer;
 use super::tokens::{FStringPart, Token, TokenKind};
-use crate::frontend::ast::Span;
-use crate::frontend::diagnostics::CompileError;
+use crate::ast::Span;
+use crate::diagnostics::CompileError;
 
 // ============================================================================
 // Escape sequence handling

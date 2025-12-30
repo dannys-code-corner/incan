@@ -84,12 +84,15 @@ fn test_invalid_fixtures() {
 /// Test specific lexer behavior
 mod lexer_tests {
     use incan::frontend::lexer::{TokenKind, lex};
+    use incan_core::lang::keywords::KeywordId;
+    use incan_core::lang::operators::OperatorId;
+    use incan_core::lang::punctuation::PunctuationId;
 
     #[test]
     fn test_floor_div_tokens() {
         let tokens = lex("a //= b\nc // d").unwrap();
-        let has_floor_div_eq = tokens.iter().any(|t| matches!(t.kind, TokenKind::SlashSlashEq));
-        let has_floor_div = tokens.iter().any(|t| matches!(t.kind, TokenKind::SlashSlash));
+        let has_floor_div_eq = tokens.iter().any(|t| t.kind.is_operator(OperatorId::SlashSlashEq));
+        let has_floor_div = tokens.iter().any(|t| t.kind.is_operator(OperatorId::SlashSlash));
         assert!(has_floor_div_eq, "expected to see //= token");
         assert!(has_floor_div, "expected to see // token");
     }
@@ -97,13 +100,13 @@ mod lexer_tests {
     #[test]
     fn test_rust_style_imports() {
         let tokens = lex("import foo::bar::baz as fb").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::Import));
+        assert!(tokens[0].kind.is_keyword(KeywordId::Import));
         assert!(matches!(&tokens[1].kind, TokenKind::Ident(s) if s == "foo"));
-        assert!(matches!(tokens[2].kind, TokenKind::ColonColon));
+        assert!(tokens[2].kind.is_punctuation(PunctuationId::ColonColon));
         assert!(matches!(&tokens[3].kind, TokenKind::Ident(s) if s == "bar"));
-        assert!(matches!(tokens[4].kind, TokenKind::ColonColon));
+        assert!(tokens[4].kind.is_punctuation(PunctuationId::ColonColon));
         assert!(matches!(&tokens[5].kind, TokenKind::Ident(s) if s == "baz"));
-        assert!(matches!(tokens[6].kind, TokenKind::As));
+        assert!(tokens[6].kind.is_keyword(KeywordId::As));
         assert!(matches!(&tokens[7].kind, TokenKind::Ident(s) if s == "fb"));
     }
 
@@ -111,32 +114,32 @@ mod lexer_tests {
     fn test_try_operator() {
         let tokens = lex("result?").unwrap();
         assert!(matches!(&tokens[0].kind, TokenKind::Ident(s) if s == "result"));
-        assert!(matches!(tokens[1].kind, TokenKind::Question));
+        assert!(tokens[1].kind.is_punctuation(PunctuationId::Question));
     }
 
     #[test]
     fn test_fat_arrow() {
         let tokens = lex("x => y").unwrap();
-        assert!(matches!(tokens[1].kind, TokenKind::FatArrow));
+        assert!(tokens[1].kind.is_punctuation(PunctuationId::FatArrow));
     }
 
     #[test]
     fn test_case_keyword() {
         let tokens = lex("case Some(x):").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::Case));
+        assert!(tokens[0].kind.is_keyword(KeywordId::Case));
     }
 
     #[test]
     fn test_pass_keyword() {
         let tokens = lex("pass").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::Pass));
+        assert!(tokens[0].kind.is_keyword(KeywordId::Pass));
     }
 
     #[test]
     fn test_mut_self() {
         let tokens = lex("mut self").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::Mut));
-        assert!(matches!(tokens[1].kind, TokenKind::SelfKw));
+        assert!(tokens[0].kind.is_keyword(KeywordId::Mut));
+        assert!(tokens[1].kind.is_keyword(KeywordId::SelfKw));
     }
 
     #[test]
@@ -148,16 +151,16 @@ mod lexer_tests {
     #[test]
     fn test_yield_keyword() {
         let tokens = lex("yield value").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::Yield));
+        assert!(tokens[0].kind.is_keyword(KeywordId::Yield));
         assert!(matches!(&tokens[1].kind, TokenKind::Ident(s) if s == "value"));
     }
 
     #[test]
     fn test_rust_keyword() {
         let tokens = lex("import rust::serde_json").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::Import));
-        assert!(matches!(tokens[1].kind, TokenKind::RustKw));
-        assert!(matches!(tokens[2].kind, TokenKind::ColonColon));
+        assert!(tokens[0].kind.is_keyword(KeywordId::Import));
+        assert!(tokens[1].kind.is_keyword(KeywordId::Rust));
+        assert!(tokens[2].kind.is_punctuation(PunctuationId::ColonColon));
         assert!(matches!(&tokens[3].kind, TokenKind::Ident(s) if s == "serde_json"));
     }
 }

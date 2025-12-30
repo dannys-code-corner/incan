@@ -221,10 +221,25 @@ declaration    = model_decl | class_decl | trait_decl | newtype_decl
                | enum_decl | function_decl | import_decl ;
 
 (* Imports *)
-import_decl    = "import" module_path [ "as" IDENT ]
-               | "from" module_path "import" IDENT { "," IDENT }
-               | "import" "py" STRING "as" IDENT ;
-module_path    = IDENT { "::" IDENT } ;
+import_decl    = import_stmt | from_import_stmt ;
+
+import_stmt    = "import" ( python_import | rust_import | module_path ) [ "as" IDENT ] ;
+from_import_stmt
+              = "from" rust_import "import" import_item { "," import_item }
+              | "from" module_path "import" import_item { "," import_item } ;
+
+import_item    = IDENT [ "as" IDENT ] ;
+
+python_import  = "python" STRING ;
+rust_import    = "rust" "::" IDENT { "::" IDENT } ;
+
+(* Module paths *)
+module_path    = parent_prefix IDENT { ( "::" | "." ) IDENT } ;
+parent_prefix  = { ".." }
+              | { "super" ( "::" | "." ) } ;
+(*
+  Note: Absolute (project-root) module paths via `crate::...` are specified by RFC 005.
+*)
 
 (* Model *)
 model_decl     = { decorator } "model" IDENT [ type_params ] ":"
@@ -314,6 +329,7 @@ pattern        = IDENT | literal | IDENT "(" pattern_list ")" | "_" ;
 pattern_list   = pattern { "," pattern } ;
 
 if_expr        = "if" expr ":" INDENT { statement } DEDENT
+                 { "elif" expr ":" INDENT { statement } DEDENT }
                  [ "else" ":" INDENT { statement } DEDENT ] ;
 
 list_comp      = "[" expr "for" IDENT "in" expr [ "if" expr ] "]" ;

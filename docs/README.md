@@ -23,6 +23,7 @@ How to write Incan code.
 | [File I/O](guide/file_io.md) | Reading, writing files and path handling |
 | [Async Programming](guide/async_programming.md) | Async/await with Tokio |
 | [Derives & Traits](guide/derives_and_traits.md) | Derive macros and trait system |
+| [Scopes & Name Resolution](guide/scopes_and_name_resolution.md) | Block scoping, shadowing, and how names are resolved |
 | [Imports & Modules](guide/imports_and_modules.md) | Module system, imports, and built-in functions |
 | [Rust Interop](guide/rust_interop.md) | Using Rust crates directly from Incan |
 | [Web Framework](guide/web_framework.md) | Building web apps with Axum |

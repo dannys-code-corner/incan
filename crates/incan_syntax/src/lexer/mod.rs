@@ -18,11 +18,12 @@ mod numbers;
 mod strings;
 pub mod tokens;
 
-pub use tokens::{FStringPart, Token, TokenKind};
+pub use tokens::{FStringPart, Token, TokenKind, keyword_id};
 
-use crate::frontend::ast::Span;
-use crate::frontend::diagnostics::CompileError;
-use tokens::KEYWORDS;
+use crate::ast::Span;
+use crate::diagnostics::CompileError;
+use incan_core::lang::operators::OperatorId;
+use incan_core::lang::punctuation::PunctuationId;
 
 // ============================================================================
 // LEXER STATE
@@ -198,37 +199,51 @@ impl<'a> Lexer<'a> {
             '\r' => {}
 
             // Operators and punctuation
-            '+' => self.operator(start, TokenKind::Plus, &[('=', TokenKind::PlusEq)]),
-            '-' => self.operator(
-                start,
-                TokenKind::Minus,
-                &[('>', TokenKind::Arrow), ('=', TokenKind::MinusEq)],
-            ),
+            '+' => self.operator(start, OperatorId::Plus, &[('=', OperatorId::PlusEq)]),
+            '-' => {
+                if self.match_char('>') {
+                    self.add_punct(PunctuationId::Arrow, start);
+                } else if self.match_char('=') {
+                    self.add_op(OperatorId::MinusEq, start);
+                } else {
+                    self.add_op(OperatorId::Minus, start);
+                }
+            }
             '*' => self.operator(
                 start,
-                TokenKind::Star,
-                &[('*', TokenKind::StarStar), ('=', TokenKind::StarEq)],
+                OperatorId::Star,
+                &[('*', OperatorId::StarStar), ('=', OperatorId::StarEq)],
             ),
             '/' => self.scan_slash(start),
-            '%' => self.operator(start, TokenKind::Percent, &[('=', TokenKind::PercentEq)]),
-            '?' => self.add_token(TokenKind::Question, start),
-            '@' => self.add_token(TokenKind::At, start),
-            ',' => self.add_token(TokenKind::Comma, start),
-            '(' => self.open_bracket(TokenKind::LParen, start),
-            ')' => self.close_bracket(TokenKind::RParen, start),
-            '[' => self.open_bracket(TokenKind::LBracket, start),
-            ']' => self.close_bracket(TokenKind::RBracket, start),
-            '{' => self.open_bracket(TokenKind::LBrace, start),
-            '}' => self.close_bracket(TokenKind::RBrace, start),
-            ':' => self.operator(start, TokenKind::Colon, &[(':', TokenKind::ColonColon)]),
-            '=' => self.operator(
-                start,
-                TokenKind::Eq,
-                &[('=', TokenKind::EqEq), ('>', TokenKind::FatArrow)],
-            ),
+            '%' => self.operator(start, OperatorId::Percent, &[('=', OperatorId::PercentEq)]),
+            '?' => self.add_punct(PunctuationId::Question, start),
+            '@' => self.add_punct(PunctuationId::At, start),
+            ',' => self.add_punct(PunctuationId::Comma, start),
+            '(' => self.open_bracket(PunctuationId::LParen, start),
+            ')' => self.close_bracket(PunctuationId::RParen, start),
+            '[' => self.open_bracket(PunctuationId::LBracket, start),
+            ']' => self.close_bracket(PunctuationId::RBracket, start),
+            '{' => self.open_bracket(PunctuationId::LBrace, start),
+            '}' => self.close_bracket(PunctuationId::RBrace, start),
+            ':' => {
+                if self.match_char(':') {
+                    self.add_punct(PunctuationId::ColonColon, start);
+                } else {
+                    self.add_punct(PunctuationId::Colon, start);
+                }
+            }
+            '=' => {
+                if self.match_char('=') {
+                    self.add_op(OperatorId::EqEq, start);
+                } else if self.match_char('>') {
+                    self.add_punct(PunctuationId::FatArrow, start);
+                } else {
+                    self.add_op(OperatorId::Eq, start);
+                }
+            }
             '!' => {
                 if self.match_char('=') {
-                    self.add_token(TokenKind::NotEq, start);
+                    self.add_op(OperatorId::NotEq, start);
                 } else {
                     self.errors.push(CompileError::new(
                         "Unexpected character '!'".to_string(),
@@ -236,19 +251,19 @@ impl<'a> Lexer<'a> {
                     ));
                 }
             }
-            '<' => self.operator(start, TokenKind::Lt, &[('=', TokenKind::LtEq)]),
-            '>' => self.operator(start, TokenKind::Gt, &[('=', TokenKind::GtEq)]),
+            '<' => self.operator(start, OperatorId::Lt, &[('=', OperatorId::LtEq)]),
+            '>' => self.operator(start, OperatorId::Gt, &[('=', OperatorId::GtEq)]),
             '.' => {
                 if self.match_char('.') {
                     if self.match_char('.') {
-                        self.add_token(TokenKind::Ellipsis, start);
+                        self.add_punct(PunctuationId::Ellipsis, start);
                     } else if self.match_char('=') {
-                        self.add_token(TokenKind::DotDotEq, start);
+                        self.add_op(OperatorId::DotDotEq, start);
                     } else {
-                        self.add_token(TokenKind::DotDot, start);
+                        self.add_op(OperatorId::DotDot, start);
                     }
                 } else {
-                    self.add_token(TokenKind::Dot, start);
+                    self.add_punct(PunctuationId::Dot, start);
                 }
             }
 
@@ -302,15 +317,23 @@ impl<'a> Lexer<'a> {
         self.tokens.push(Token::new(kind, Span::new(start, self.current_pos)));
     }
 
+    fn add_op(&mut self, id: OperatorId, start: usize) {
+        self.add_token(TokenKind::Operator(id), start);
+    }
+
+    fn add_punct(&mut self, id: PunctuationId, start: usize) {
+        self.add_token(TokenKind::Punctuation(id), start);
+    }
+
     /// Try to match compound operator, fallback to simple.
-    fn operator(&mut self, start: usize, simple: TokenKind, compounds: &[(char, TokenKind)]) {
-        for (c, kind) in compounds {
+    fn operator(&mut self, start: usize, simple: OperatorId, compounds: &[(char, OperatorId)]) {
+        for (c, id) in compounds {
             if self.match_char(*c) {
-                self.add_token(kind.clone(), start);
+                self.add_op(*id, start);
                 return;
             }
         }
-        self.add_token(simple, start);
+        self.add_op(simple, start);
     }
 
     /// Scan slash operators: `/`, `/=`, `//`, `//=`.
@@ -318,28 +341,28 @@ impl<'a> Lexer<'a> {
         if self.match_char('/') {
             // `//` or `//=`
             if self.match_char('=') {
-                self.add_token(TokenKind::SlashSlashEq, start);
+                self.add_op(OperatorId::SlashSlashEq, start);
             } else {
-                self.add_token(TokenKind::SlashSlash, start);
+                self.add_op(OperatorId::SlashSlash, start);
             }
         } else if self.match_char('=') {
             // `/=`
-            self.add_token(TokenKind::SlashEq, start);
+            self.add_op(OperatorId::SlashEq, start);
         } else {
             // `/`
-            self.add_token(TokenKind::Slash, start);
+            self.add_op(OperatorId::Slash, start);
         }
     }
 
     /// Emit a bracket token and track bracket depth.
-    fn open_bracket(&mut self, kind: TokenKind, start: usize) {
+    fn open_bracket(&mut self, kind: PunctuationId, start: usize) {
         self.bracket_depth += 1;
-        self.add_token(kind, start);
+        self.add_punct(kind, start);
     }
 
     /// Emit a closing bracket token and decrement bracket depth.
     /// Produces an error if there's no matching opening bracket.
-    fn close_bracket(&mut self, kind: TokenKind, start: usize) {
+    fn close_bracket(&mut self, kind: PunctuationId, start: usize) {
         if self.bracket_depth == 0 {
             self.errors.push(CompileError::new(
                 "Unmatched closing bracket".to_string(),
@@ -348,29 +371,30 @@ impl<'a> Lexer<'a> {
         } else {
             self.bracket_depth -= 1;
         }
-        self.add_token(kind, start);
+        self.add_punct(kind, start);
     }
 
     // ========================================================================
     // Identifier scanning
     // ========================================================================
 
-    fn scan_identifier(&mut self, start: usize, first: char) {
-        let mut name = String::from(first);
-
+    fn scan_identifier(&mut self, start: usize, _first: char) {
         while let Some(c) = self.peek() {
             if is_ident_continue(c) {
-                name.push(c);
                 self.advance();
             } else {
                 break;
             }
         }
 
-        // Look up keyword in O(1) using perfect hash map
-        let kind = KEYWORDS.get(name.as_str()).cloned().unwrap_or(TokenKind::Ident(name));
+        let spelling = &self.source[start..self.current_pos];
 
-        self.add_token(kind, start);
+        // Look up identifier spelling in the reserved-word registry (no allocation for keywords).
+        if let Some(id) = keyword_id(spelling) {
+            self.add_token(TokenKind::Keyword(id), start);
+        } else {
+            self.add_token(TokenKind::Ident(spelling.to_string()), start);
+        }
     }
 }
 
@@ -403,32 +427,168 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Vec<CompileError>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use incan_core::lang::keywords::KeywordId;
+    use incan_core::lang::operators::OperatorId;
+
+    #[test]
+    fn test_punctuation_registry_parity() {
+        use incan_core::lang::punctuation::{self, PunctuationId};
+
+        for p in punctuation::PUNCTUATION {
+            match p.id {
+                // Closing delimiters error when unmatched; use a matching pair.
+                PunctuationId::LParen | PunctuationId::RParen => {
+                    let tokens = lex("()").unwrap();
+                    assert!(tokens[0].kind.is_punctuation(PunctuationId::LParen));
+                    assert!(tokens[1].kind.is_punctuation(PunctuationId::RParen));
+                }
+                PunctuationId::LBracket | PunctuationId::RBracket => {
+                    let tokens = lex("[]").unwrap();
+                    assert!(tokens[0].kind.is_punctuation(PunctuationId::LBracket));
+                    assert!(tokens[1].kind.is_punctuation(PunctuationId::RBracket));
+                }
+                PunctuationId::LBrace | PunctuationId::RBrace => {
+                    let tokens = lex("{}").unwrap();
+                    assert!(tokens[0].kind.is_punctuation(PunctuationId::LBrace));
+                    assert!(tokens[1].kind.is_punctuation(PunctuationId::RBrace));
+                }
+
+                // Everything else should tokenize cleanly as a single token.
+                _ => {
+                    let tokens = lex(p.canonical).unwrap_or_else(|errs| {
+                        panic!("lex({:?}) failed: {:?}", p.canonical, errs);
+                    });
+                    assert!(!tokens.is_empty(), "lex({:?}) produced no tokens", p.canonical);
+
+                    match p.id {
+                        PunctuationId::Comma => assert!(tokens[0].kind.is_punctuation(PunctuationId::Comma)),
+                        PunctuationId::Colon => assert!(tokens[0].kind.is_punctuation(PunctuationId::Colon)),
+                        PunctuationId::Question => assert!(tokens[0].kind.is_punctuation(PunctuationId::Question)),
+                        PunctuationId::At => assert!(tokens[0].kind.is_punctuation(PunctuationId::At)),
+
+                        PunctuationId::Dot => assert!(tokens[0].kind.is_punctuation(PunctuationId::Dot)),
+                        PunctuationId::ColonColon => assert!(tokens[0].kind.is_punctuation(PunctuationId::ColonColon)),
+
+                        PunctuationId::Arrow => assert!(tokens[0].kind.is_punctuation(PunctuationId::Arrow)),
+                        PunctuationId::FatArrow => assert!(tokens[0].kind.is_punctuation(PunctuationId::FatArrow)),
+
+                        PunctuationId::Ellipsis => assert!(tokens[0].kind.is_punctuation(PunctuationId::Ellipsis)),
+
+                        // Delimiters handled above.
+                        PunctuationId::LParen
+                        | PunctuationId::RParen
+                        | PunctuationId::LBracket
+                        | PunctuationId::RBracket
+                        | PunctuationId::LBrace
+                        | PunctuationId::RBrace => unreachable!("handled above"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_keyword_registry_parity() {
+        use incan_core::lang::keywords;
+
+        for k in keywords::KEYWORDS {
+            let tokens = lex(k.canonical).unwrap_or_else(|errs| panic!("lex({:?}) failed: {:?}", k.canonical, errs));
+            assert!(
+                tokens.len() >= 2,
+                "expected token + EOF for keyword {:?}, got {:?}",
+                k.id,
+                tokens
+            );
+            assert!(matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)));
+
+            let tokens = &tokens[..tokens.len() - 1];
+            assert_eq!(
+                tokens.len(),
+                1,
+                "expected single non-EOF token for keyword {:?}, got {:?}",
+                k.id,
+                tokens
+            );
+            assert!(tokens[0].kind.is_keyword(k.id));
+        }
+    }
+
+    #[test]
+    fn test_operator_registry_parity() {
+        use incan_core::lang::operators;
+
+        for o in operators::OPERATORS {
+            for &sp in o.spellings {
+                let tokens = lex(sp).unwrap_or_else(|errs| panic!("lex({:?}) failed: {:?}", sp, errs));
+                assert!(
+                    tokens.len() >= 2,
+                    "expected token + EOF for operator spelling {:?}, got {:?}",
+                    sp,
+                    tokens
+                );
+                assert!(matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)));
+
+                let tokens = &tokens[..tokens.len() - 1];
+                assert_eq!(
+                    tokens.len(),
+                    1,
+                    "expected single non-EOF token for operator spelling {:?}, got {:?}",
+                    sp,
+                    tokens
+                );
+
+                if o.is_keyword_spelling {
+                    // Word operators are lexed as keywords.
+                    let expected_kw = match o.id {
+                        operators::OperatorId::And => KeywordId::And,
+                        operators::OperatorId::Or => KeywordId::Or,
+                        operators::OperatorId::Not => KeywordId::Not,
+                        operators::OperatorId::In => KeywordId::In,
+                        operators::OperatorId::Is => KeywordId::Is,
+                        _ => panic!("unexpected keyword-spelling operator {:?}", o.id),
+                    };
+                    assert!(tokens[0].kind.is_keyword(expected_kw));
+                } else {
+                    assert!(tokens[0].kind.is_operator(o.id));
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_keywords() {
         let tokens = lex("def async await class model trait").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::Def));
-        assert!(matches!(tokens[1].kind, TokenKind::Async));
-        assert!(matches!(tokens[2].kind, TokenKind::Await));
-        assert!(matches!(tokens[3].kind, TokenKind::Class));
-        assert!(matches!(tokens[4].kind, TokenKind::Model));
-        assert!(matches!(tokens[5].kind, TokenKind::Trait));
+        assert!(matches!(tokens[0].kind, TokenKind::Keyword(KeywordId::Def)));
+        assert!(matches!(tokens[1].kind, TokenKind::Keyword(KeywordId::Async)));
+        assert!(matches!(tokens[2].kind, TokenKind::Keyword(KeywordId::Await)));
+        assert!(matches!(tokens[3].kind, TokenKind::Keyword(KeywordId::Class)));
+        assert!(matches!(tokens[4].kind, TokenKind::Keyword(KeywordId::Model)));
+        assert!(matches!(tokens[5].kind, TokenKind::Keyword(KeywordId::Trait)));
     }
 
     #[test]
     fn test_operators() {
         let tokens = lex("+ - * / :: => -> ? @ == !=").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::Plus));
-        assert!(matches!(tokens[1].kind, TokenKind::Minus));
-        assert!(matches!(tokens[2].kind, TokenKind::Star));
-        assert!(matches!(tokens[3].kind, TokenKind::Slash));
-        assert!(matches!(tokens[4].kind, TokenKind::ColonColon));
-        assert!(matches!(tokens[5].kind, TokenKind::FatArrow));
-        assert!(matches!(tokens[6].kind, TokenKind::Arrow));
-        assert!(matches!(tokens[7].kind, TokenKind::Question));
-        assert!(matches!(tokens[8].kind, TokenKind::At));
-        assert!(matches!(tokens[9].kind, TokenKind::EqEq));
-        assert!(matches!(tokens[10].kind, TokenKind::NotEq));
+        assert!(matches!(tokens[0].kind, TokenKind::Operator(OperatorId::Plus)));
+        assert!(matches!(tokens[1].kind, TokenKind::Operator(OperatorId::Minus)));
+        assert!(matches!(tokens[2].kind, TokenKind::Operator(OperatorId::Star)));
+        assert!(matches!(tokens[3].kind, TokenKind::Operator(OperatorId::Slash)));
+        assert!(matches!(
+            tokens[4].kind,
+            TokenKind::Punctuation(PunctuationId::ColonColon)
+        ));
+        assert!(matches!(
+            tokens[5].kind,
+            TokenKind::Punctuation(PunctuationId::FatArrow)
+        ));
+        assert!(matches!(tokens[6].kind, TokenKind::Punctuation(PunctuationId::Arrow)));
+        assert!(matches!(
+            tokens[7].kind,
+            TokenKind::Punctuation(PunctuationId::Question)
+        ));
+        assert!(matches!(tokens[8].kind, TokenKind::Punctuation(PunctuationId::At)));
+        assert!(matches!(tokens[9].kind, TokenKind::Operator(OperatorId::EqEq)));
+        assert!(matches!(tokens[10].kind, TokenKind::Operator(OperatorId::NotEq)));
     }
 
     #[test]
@@ -464,11 +624,14 @@ mod tests {
     #[test]
     fn test_import_path() {
         let tokens = lex("import polars::prelude as pl").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::Import));
+        assert!(matches!(tokens[0].kind, TokenKind::Keyword(KeywordId::Import)));
         assert!(matches!(&tokens[1].kind, TokenKind::Ident(s) if s == "polars"));
-        assert!(matches!(tokens[2].kind, TokenKind::ColonColon));
+        assert!(matches!(
+            tokens[2].kind,
+            TokenKind::Punctuation(PunctuationId::ColonColon)
+        ));
         assert!(matches!(&tokens[3].kind, TokenKind::Ident(s) if s == "prelude"));
-        assert!(matches!(tokens[4].kind, TokenKind::As));
+        assert!(matches!(tokens[4].kind, TokenKind::Keyword(KeywordId::As)));
         assert!(matches!(&tokens[5].kind, TokenKind::Ident(s) if s == "pl"));
     }
 
@@ -519,9 +682,9 @@ mod tests {
     fn test_matched_brackets_ok() {
         // Properly matched brackets should work fine
         let tokens = lex("(x)").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::LParen));
+        assert!(matches!(tokens[0].kind, TokenKind::Punctuation(PunctuationId::LParen)));
         assert!(matches!(&tokens[1].kind, TokenKind::Ident(s) if s == "x"));
-        assert!(matches!(tokens[2].kind, TokenKind::RParen));
+        assert!(matches!(tokens[2].kind, TokenKind::Punctuation(PunctuationId::RParen)));
     }
 
     #[test]
@@ -562,7 +725,7 @@ mod tests {
         // 1..2 should be Int, DotDot, Int - not a float
         let tokens = lex("1..2").unwrap();
         assert!(matches!(tokens[0].kind, TokenKind::Int(1)));
-        assert!(matches!(tokens[1].kind, TokenKind::DotDot));
+        assert!(matches!(tokens[1].kind, TokenKind::Operator(OperatorId::DotDot)));
         assert!(matches!(tokens[2].kind, TokenKind::Int(2)));
     }
 
@@ -571,7 +734,7 @@ mod tests {
         // 1..=5 should work
         let tokens = lex("1..=5").unwrap();
         assert!(matches!(tokens[0].kind, TokenKind::Int(1)));
-        assert!(matches!(tokens[1].kind, TokenKind::DotDotEq));
+        assert!(matches!(tokens[1].kind, TokenKind::Operator(OperatorId::DotDotEq)));
         assert!(matches!(tokens[2].kind, TokenKind::Int(5)));
     }
 }

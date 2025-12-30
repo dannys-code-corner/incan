@@ -1,0 +1,19 @@
+[package]
+name = "incan_syntax"
+version = "0.1.0-alpha.4"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Shared syntax frontend (lexer, AST, parser) for the Incan compiler and tooling"
+repository = "https://github.com/dannys-code-corner/incan-programming-language"
+homepage = "https://github.com/dannys-code-corner/incan-programming-language"
+authors = ["Danny Meijer <dannys.code.corner@gmail.com>"]
+
+[dependencies]
+incan_core = { path = "../incan_core" }
+thiserror = "2.0"
+miette = { version = "7.0", features = ["fancy"] }
+tracing = "0.1"
+
+[dev-dependencies]
+insta = { version = "1.45", features = ["glob"] }

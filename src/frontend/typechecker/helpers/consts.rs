@@ -3,8 +3,8 @@ use crate::frontend::ast::Span;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::ResolvedType;
 
-use super::{FROZEN_DICT_TY_NAME, FROZEN_LIST_TY_NAME, FROZEN_SET_TY_NAME, LIST_TY_NAME, SET_TY_NAME, TUPLE_TY_NAME};
-use super::{frozen_bytes_ty, frozen_str_ty};
+use super::{collection_type_id, frozen_bytes_ty, frozen_str_ty, tuple_generic_ty};
+use incan_core::lang::types::collections::CollectionTypeId;
 
 /// Check whether a type is acceptable for indexing/slicing integer positions.
 ///
@@ -22,25 +22,29 @@ pub fn freeze_const_type(ty: ResolvedType) -> ResolvedType {
         ResolvedType::FrozenStr => ResolvedType::FrozenStr,
         ResolvedType::Bytes => frozen_bytes_ty(),
         ResolvedType::FrozenBytes => ResolvedType::FrozenBytes,
-        ResolvedType::Generic(name, args) => match name.as_str() {
-            LIST_TY_NAME => ResolvedType::FrozenList(Box::new(args.first().cloned().unwrap_or(ResolvedType::Unknown))),
-            super::DICT_TY_NAME => ResolvedType::FrozenDict(
-                Box::new(args.first().cloned().unwrap_or(ResolvedType::Unknown)),
-                Box::new(args.get(1).cloned().unwrap_or(ResolvedType::Unknown)),
-            ),
-            SET_TY_NAME => ResolvedType::FrozenSet(Box::new(args.first().cloned().unwrap_or(ResolvedType::Unknown))),
-            FROZEN_LIST_TY_NAME => {
+        ResolvedType::Generic(name, args) => match collection_type_id(name.as_str()) {
+            Some(CollectionTypeId::List) => {
                 ResolvedType::FrozenList(Box::new(args.first().cloned().unwrap_or(ResolvedType::Unknown)))
             }
-            FROZEN_DICT_TY_NAME => ResolvedType::FrozenDict(
+            Some(CollectionTypeId::Dict) => ResolvedType::FrozenDict(
                 Box::new(args.first().cloned().unwrap_or(ResolvedType::Unknown)),
                 Box::new(args.get(1).cloned().unwrap_or(ResolvedType::Unknown)),
             ),
-            FROZEN_SET_TY_NAME => {
+            Some(CollectionTypeId::Set) => {
+                ResolvedType::FrozenSet(Box::new(args.first().cloned().unwrap_or(ResolvedType::Unknown)))
+            }
+            Some(CollectionTypeId::FrozenList) => {
+                ResolvedType::FrozenList(Box::new(args.first().cloned().unwrap_or(ResolvedType::Unknown)))
+            }
+            Some(CollectionTypeId::FrozenDict) => ResolvedType::FrozenDict(
+                Box::new(args.first().cloned().unwrap_or(ResolvedType::Unknown)),
+                Box::new(args.get(1).cloned().unwrap_or(ResolvedType::Unknown)),
+            ),
+            Some(CollectionTypeId::FrozenSet) => {
                 ResolvedType::FrozenSet(Box::new(args.first().cloned().unwrap_or(ResolvedType::Unknown)))
             }
             // Tuples stay tuples; their element types may already be frozen.
-            TUPLE_TY_NAME => ResolvedType::Generic(TUPLE_TY_NAME.to_string(), args),
+            Some(CollectionTypeId::Tuple) => tuple_generic_ty(args),
             _ => ResolvedType::Generic(name, args),
         },
         ResolvedType::FrozenList(_) | ResolvedType::FrozenDict(_, _) | ResolvedType::FrozenSet(_) => ty,

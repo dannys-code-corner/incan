@@ -98,10 +98,10 @@ incan build file.incn
 Notes:
 
 - **Debugging individual stages**: Use CLI stage flags (`--lex`, `--parse`, `--check`, `--emit-rust`) to inspect
-  intermediate outputs (see [Getting Started](tooling/getting_started.md)).
-- **Multi-file projects**: Import resolution rules and module layout are described in [Imports & Modules](guide/imports_and_modules.md).
+  intermediate outputs (see [Getting Started](../tooling/getting_started.md)).
+- **Multi-file projects**: Import resolution rules and module layout are described in [Imports & Modules](../guide/imports_and_modules.md).
 - **Rust interop dependencies**: `rust::` imports trigger Cargo dependency injection with a strict policy
-  (see [Rust Interop](guide/rust_interop.md) and [RFC 013](RFCs/013_rust_crate_dependencies.md)).
+  (see [Rust Interop](../guide/rust_interop.md) and [RFC 013](../RFCs/013_rust_crate_dependencies.md)).
 - **Runtime boundary**: Generated programs depend on `incan_stdlib` and `incan_derive`, but the compiler does not (see `crates/`).
 
 ## Module Layout
@@ -160,30 +160,41 @@ Runtime crates (used by generated Rust programs, not the compiler)
 
 ## Semantic Core
 
-We have a **semantic core** crate (`incan_semantics`) that holds pure, deterministic helpers shared by the compiler and
+We have a **semantic core** crate (`incan_core`) that holds pure, deterministic helpers shared by the compiler and
 runtime, without creating dependency cycles.
 
-- **Location**: `crates/incan_semantics`
+- **Location**: `crates/incan_core`
 - **Purpose**: centralize semantic policy and pure helpers so compile-time behavior and runtime behavior cannot drift.
 - **Used by**: compiler (typechecker, const-eval, lowering/codegen decisions) and stdlib/runtime helpers.
 - **Constraints**: pure/deterministic (no IO, no global state) and no dependencies on compiler crates.
 
-See crate-level documentation in `crates/incan_semantics` for the contract, extension checklist,
+See crate-level documentation in `crates/incan_core` for the contract, extension checklist,
 and drift-prevention expectations; tests in `tests/semantic_core_*` serve as the source of truth
 for covered domains.
+
+## Syntax Frontend
+
+We have a shared **syntax frontend** crate (`incan_syntax`) that centralizes lexer/parser/AST/diagnostics in a
+dependency-light crate suitable for reuse across compiler and tooling.
+
+- **Location**: `crates/incan_syntax`
+- **Purpose**: provide a single, shared syntax layer (lexing, parsing, AST, diagnostics) to prevent drift between
+  compiler, formatter, LSP, and future interactive tooling.
+- **Used by**: compiler frontend and tooling (formatter/LSP); depends on `incan_core::lang` registries for vocabulary ids.
+- **Constraints**: syntax-only (no name resolution/type checking/IR); no dependencies on compiler crates.
 
 ### Frontend (`src/frontend/`)
 
 | Module           | Purpose                                           |
 |------------------|---------------------------------------------------|
-| `lexer/`         | Tokenization and keyword recognition              |
-| `parser.rs`      | Parser (recursive descent + expression precedence)|
-| `ast.rs`         | Untyped AST (`Spanned<T>` for diagnostics)        |
+| `lexer`          | Tokenization (re-exported from `crates/incan_syntax`) |
+| `parser`         | Parser (re-exported from `crates/incan_syntax`) |
+| `ast`            | Untyped AST (`Spanned<T>` for diagnostics) (re-exported from `crates/incan_syntax`) |
 | `module.rs`      | Import path modeling and module metadata          |
 | `resolver.rs`    | Multi-file module resolution                      |
 | `typechecker/`   | Two-pass collection + type checking               |
 | `symbols.rs`     | Symbol table and scope management                 |
-| `diagnostics.rs` | Error types and pretty printing via `miette`      |
+| `diagnostics`    | Syntax/parse diagnostics (re-exported from `crates/incan_syntax`) |
 
 #### Typechecker submodules (`typechecker/`)
 
@@ -228,7 +239,7 @@ The expression emitter is split into focused submodules for maintainability:
 
 **Enum-based dispatch**: Built-in functions and known methods use enum types (`BuiltinFn`, `MethodKind`) instead of
 string matching. This provides compile-time exhaustiveness checking and makes it easier to add new builtins/methods
-(see [Extending Incan](contributing/extending_language.md)).
+(see [Extending Incan](extending_language.md)).
 
 ### CLI (`src/cli/`)
 
@@ -279,4 +290,4 @@ to reason about, but it also means “language changes” can touch multiple lay
 
 For contributor guidance on **when to add a builtin vs when to add new syntax**, plus end-to-end checklists, see:
 
-- [Extending Incan: Builtins vs New Syntax](contributing/extending_language.md)
+- [Extending Incan: Builtins vs New Syntax](extending_language.md)

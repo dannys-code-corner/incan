@@ -167,7 +167,7 @@
 use super::expr::BinOp;
 use super::{IrExpr, IrExprKind, IrType, TypedExpr};
 use crate::numeric_adapters::{ir_type_to_numeric_ty, numeric_op_from_ir, pow_exponent_kind_from_ir};
-use incan_semantics::{NumericOp, NumericTy, needs_float_promotion, result_numeric_type};
+use incan_core::{NumericOp, NumericTy, needs_float_promotion, result_numeric_type};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -388,12 +388,22 @@ pub fn determine_binop_plan(op: &BinOp, left: &TypedExpr, right: &TypedExpr) -> 
             let result_is_int = matches!(result_ty, IrType::Int);
             BinOpEmitKind::Pow { result_is_int }
         }
-        NumericOp::Mod => BinOpEmitKind::StdlibCall {
-            path: quote! { incan_stdlib::num::py_mod },
-        },
-        NumericOp::FloorDiv => BinOpEmitKind::StdlibCall {
-            path: quote! { incan_stdlib::num::py_floor_div },
-        },
+        NumericOp::Mod => {
+            let path = match result_ty {
+                IrType::Int => quote! { incan_stdlib::num::py_mod_i64 },
+                IrType::Float => quote! { incan_stdlib::num::py_mod_f64 },
+                _ => quote! { incan_stdlib::num::py_mod },
+            };
+            BinOpEmitKind::StdlibCall { path }
+        }
+        NumericOp::FloorDiv => {
+            let path = match result_ty {
+                IrType::Int => quote! { incan_stdlib::num::py_floor_div_i64 },
+                IrType::Float => quote! { incan_stdlib::num::py_floor_div_f64 },
+                _ => quote! { incan_stdlib::num::py_floor_div },
+            };
+            BinOpEmitKind::StdlibCall { path }
+        }
         NumericOp::Div => BinOpEmitKind::StdlibCall {
             path: quote! { incan_stdlib::num::py_div },
         },

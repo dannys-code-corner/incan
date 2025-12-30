@@ -8,6 +8,9 @@ use std::collections::HashSet;
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
+use incan_core::lang::surface::constructors;
+use incan_core::lang::surface::constructors::ConstructorId;
+use incan_core::lang::types::collections::{self, CollectionTypeId};
 
 use super::TypeChecker;
 
@@ -64,41 +67,42 @@ impl TypeChecker {
             }
             Pattern::Literal(_) => {}
             Pattern::Constructor(name, sub_patterns) => {
-                match name.as_str() {
-                    "Ok" => {
-                        if let ResolvedType::Generic(type_name, args) = expected_ty {
-                            if type_name == "Result" && !args.is_empty() {
-                                if let Some(pat) = sub_patterns.first() {
-                                    self.check_pattern(pat, &args[0]);
+                if let Some(cid) = constructors::from_str(name.as_str()) {
+                    match cid {
+                        ConstructorId::Ok => {
+                            if let ResolvedType::Generic(type_name, args) = expected_ty {
+                                if type_name == collections::as_str(CollectionTypeId::Result) && !args.is_empty() {
+                                    if let Some(pat) = sub_patterns.first() {
+                                        self.check_pattern(pat, &args[0]);
+                                    }
+                                    return;
                                 }
-                                return;
                             }
                         }
-                    }
-                    "Err" => {
-                        if let ResolvedType::Generic(type_name, args) = expected_ty {
-                            if type_name == "Result" && args.len() >= 2 {
-                                if let Some(pat) = sub_patterns.first() {
-                                    self.check_pattern(pat, &args[1]);
+                        ConstructorId::Err => {
+                            if let ResolvedType::Generic(type_name, args) = expected_ty {
+                                if type_name == collections::as_str(CollectionTypeId::Result) && args.len() >= 2 {
+                                    if let Some(pat) = sub_patterns.first() {
+                                        self.check_pattern(pat, &args[1]);
+                                    }
+                                    return;
                                 }
-                                return;
                             }
                         }
-                    }
-                    "Some" => {
-                        if let ResolvedType::Generic(type_name, args) = expected_ty {
-                            if type_name == "Option" && !args.is_empty() {
-                                if let Some(pat) = sub_patterns.first() {
-                                    self.check_pattern(pat, &args[0]);
+                        ConstructorId::Some => {
+                            if let ResolvedType::Generic(type_name, args) = expected_ty {
+                                if type_name == collections::as_str(CollectionTypeId::Option) && !args.is_empty() {
+                                    if let Some(pat) = sub_patterns.first() {
+                                        self.check_pattern(pat, &args[0]);
+                                    }
+                                    return;
                                 }
-                                return;
                             }
                         }
+                        ConstructorId::None => {
+                            return;
+                        }
                     }
-                    "None" => {
-                        return;
-                    }
-                    _ => {}
                 }
 
                 let variant_name = if name.contains("::") {

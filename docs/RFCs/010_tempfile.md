@@ -142,6 +142,13 @@ temp = TempFile.new()?  # Uses system temp dir
 
 ## Implementation
 
+### Vocabulary / crate layout note
+
+In the current workspace, user-facing vocabulary is centralized in `incan_core`. This RFC introduces new surface types and methods, so the canonical spellings should be registered in:
+
+- `crates/incan_core/src/lang/surface/types.rs` (add `TempFile`, `TempDir`)
+- Add method names to `crates/incan_core/src/lang/surface/methods.rs` (consolidated surface method registries), e.g. a `tempfile_methods` registry for `TempFile`/`TempDir` methods like `new`, `with_suffix`, `persist`, etc.
+
 ### Backend
 
 Map to the Rust `tempfile` crate:

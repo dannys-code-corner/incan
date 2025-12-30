@@ -88,9 +88,9 @@ fn convert_fstring_parts(&self, parts: &[LexFStringPart], fstring_start: usize) 
 
 ~40 lines of changes across:
 
-- `src/frontend/lexer.rs` - Track offsets in `scan_fstring()`
-- `src/frontend/ast.rs` - Update `FStringPart` (if needed)
-- `src/frontend/parser.rs` - Compute precise spans
+- `crates/incan_syntax/src/lexer/strings.rs` - Track offsets in `scan_fstring()`
+- `crates/incan_syntax/src/ast.rs` - Update `FStringPart` (if needed)
+- `crates/incan_syntax/src/parser.rs` - Compute precise spans
 
 ## Priority
 

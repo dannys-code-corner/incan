@@ -1,4 +1,4 @@
-//! Provide shared, pure semantic helpers for the Incan compiler and runtime.
+//! Provide shared, pure semantic helpers and canonical language vocabulary for the Incan compiler and runtime.
 //!
 //! This crate is intentionally small and dependency-light. It contains deterministic helpers that both:
 //! - the compiler can use for typechecking/const-eval/lowering decisions, and
@@ -7,8 +7,12 @@
 //! ## Notes
 //!
 //! - This is a “semantic core” crate: **no IO**, no global state, and no compiler-specific types.
-//! - Current scope: numeric policy (Python-like semantics) and string semantics (Unicode-scalar
-//!   indexing/slicing, comparisons, membership, concat, shared error messages).
+//! - Current scope: numeric policy (Python-like semantics), string semantics (Unicode-scalar indexing/slicing,
+//!   comparisons, membership, concat, shared error messages), and canonical language vocabulary.
+
+pub mod errors;
+pub mod lang;
+pub mod strings;
 
 /// Represent the numeric category used by semantic policy.
 ///
@@ -97,7 +101,7 @@ impl PowExponentKind {
 ///
 /// ## Examples
 /// ```rust
-/// use incan_semantics::{result_numeric_type, NumericOp, NumericTy, PowExponentKind};
+/// use incan_core::{result_numeric_type, NumericOp, NumericTy, PowExponentKind};
 /// assert_eq!(result_numeric_type(NumericOp::Div, NumericTy::Int, NumericTy::Int, None), NumericTy::Float);
 /// assert_eq!(
 ///     result_numeric_type(
@@ -207,9 +211,6 @@ pub fn is_numeric_comparison_op(op: NumericOp) -> bool {
     )
 }
 
-pub mod errors;
-pub mod strings;
-
 // =====================================================================
 // Runtime-facing numeric helpers (pure; shared with stdlib)
 // =====================================================================
@@ -222,9 +223,12 @@ pub mod strings;
 ///
 /// ## Returns
 /// - (`i64`): remainder with the sign of the divisor.
+#[inline]
 pub fn py_mod_i64_impl(a: i64, b: i64) -> i64 {
     debug_assert!(b != 0);
-    let r = a % b;
+    // Use `wrapping_rem` to avoid treating `i64::MIN % -1` as an overflow case.
+    // This better matches Python semantics (which has unbounded ints) for this edge case.
+    let r = a.wrapping_rem(b);
     if (r > 0 && b < 0) || (r < 0 && b > 0) { r + b } else { r }
 }
 
@@ -236,6 +240,7 @@ pub fn py_mod_i64_impl(a: i64, b: i64) -> i64 {
 ///
 /// ## Returns
 /// - (`i64`): quotient rounded toward negative infinity.
+#[inline]
 pub fn py_floor_div_i64_impl(a: i64, b: i64) -> i64 {
     debug_assert!(b != 0);
     let q = a / b;
@@ -251,6 +256,7 @@ pub fn py_floor_div_i64_impl(a: i64, b: i64) -> i64 {
 ///
 /// ## Returns
 /// - (`f64`): remainder with the sign of the divisor.
+#[inline]
 pub fn py_mod_f64_impl(a: f64, b: f64) -> f64 {
     debug_assert!(b != 0.0);
     let r = a % b;

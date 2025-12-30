@@ -75,13 +75,18 @@ impl<'a> IrEmitter<'a> {
                 }
 
                 // Determine conversion context based on whether this is an Incan or Rust function
+                let in_return = *self.in_return_context.borrow();
                 let context = if let IrExprKind::Var { name, .. } = &func.kind {
                     // External Rust functions: either explicit rust:: prefix or imported from Rust crate
                     if name.starts_with("rust::") || self.external_rust_functions.contains(name) {
                         ConversionContext::ExternalFunctionArg
+                    } else if in_return {
+                        ConversionContext::IncanFunctionArgInReturn
                     } else {
                         ConversionContext::IncanFunctionArg
                     }
+                } else if in_return {
+                    ConversionContext::IncanFunctionArgInReturn
                 } else {
                     ConversionContext::IncanFunctionArg
                 };

@@ -7,9 +7,15 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
 use crate::frontend::typechecker::helpers::{
-    DICT_TY_NAME, LIST_TY_NAME, SET_TY_NAME, is_frozen_bytes, is_frozen_str, is_intlike_for_index, list_ty, option_ty,
+    collection_name, collection_type_id, is_frozen_bytes, is_frozen_str, is_intlike_for_index, list_ty, option_ty,
     string_method_return,
 };
+use incan_core::lang::surface::types as surface_types;
+use incan_core::lang::surface::{
+    dict_methods, float_methods, frozen_bytes_methods, frozen_dict_methods, frozen_list_methods, frozen_set_methods,
+    list_methods, set_methods,
+};
+use incan_core::lang::types::collections::CollectionTypeId;
 
 use super::TypeChecker;
 
@@ -25,15 +31,15 @@ impl TypeChecker {
         let index_ty = self.check_expr(index);
 
         match base_ty {
-            ResolvedType::Generic(name, args) => match name.as_str() {
-                "List" if !args.is_empty() => {
+            ResolvedType::Generic(name, args) => match collection_type_id(name.as_str()) {
+                Some(CollectionTypeId::List) if !args.is_empty() => {
                     if !is_intlike_for_index(&index_ty) {
                         self.errors
                             .push(errors::index_type_mismatch("int", &index_ty.to_string(), index.span));
                     }
                     args[0].clone()
                 }
-                "Dict" if args.len() >= 2 => {
+                Some(CollectionTypeId::Dict) if args.len() >= 2 => {
                     let key_ty = &args[0];
                     if !self.types_compatible(&index_ty, key_ty) {
                         self.errors.push(errors::index_type_mismatch(
@@ -44,7 +50,7 @@ impl TypeChecker {
                     }
                     args[1].clone()
                 }
-                "Tuple" => {
+                Some(CollectionTypeId::Tuple) => {
                     // `Tuple[T1, ...]` (and `tuple[...]` normalized) behaves like a tuple.
                     let elems = args;
                     let Expr::Literal(Literal::Int(raw_idx)) = &index.node else {
@@ -121,8 +127,10 @@ impl TypeChecker {
         };
 
         match base_ty {
-            ResolvedType::Generic(name, args) => match name.as_str() {
-                LIST_TY_NAME => ResolvedType::Generic(LIST_TY_NAME.to_string(), args),
+            ResolvedType::Generic(name, args) => match collection_type_id(name.as_str()) {
+                Some(CollectionTypeId::List) => {
+                    ResolvedType::Generic(collection_name(CollectionTypeId::List).to_string(), args)
+                }
                 _ => ResolvedType::Unknown,
             },
             ResolvedType::Str => {
@@ -156,9 +164,11 @@ impl TypeChecker {
     ) -> ResolvedType {
         // Handle builtin math module
         if let Expr::Ident(name) = &base.node {
-            if name == "math" {
+            if name == incan_core::lang::surface::math::MATH_MODULE_NAME {
                 match field {
-                    "pi" | "e" | "tau" | "inf" | "nan" => return ResolvedType::Float,
+                    _ if incan_core::lang::surface::math::const_from_str(field).is_some() => {
+                        return ResolvedType::Float;
+                    }
                     _ => {}
                 }
             }
@@ -254,24 +264,19 @@ impl TypeChecker {
 
         // External/runtime-provided concurrency primitives: be permissive
         if let ResolvedType::Named(name) = &base_ty {
-            match name.as_str() {
-                "Mutex" | "RwLock" | "Semaphore" | "Barrier" => {
-                    return ResolvedType::Unknown;
-                }
-                _ => {}
+            if surface_types::from_str(name.as_str()).is_some() {
+                return ResolvedType::Unknown;
             }
         }
 
         // Builtin methods for builtin types (so we don't report missing methods).
         if matches!(base_ty, ResolvedType::Float) {
-            match method {
-                // Math functions available on f64 in Rust
-                "sqrt" | "abs" | "floor" | "ceil" | "round" | "sin" | "cos" | "tan" | "exp" | "ln" | "log2"
-                | "log10" => return ResolvedType::Float,
-                "is_nan" | "is_infinite" | "is_finite" => return ResolvedType::Bool,
-                "powi" => return ResolvedType::Float, // float.powi(int) -> float
-                "powf" => return ResolvedType::Float, // float.powf(float) -> float
-                _ => {}
+            if let Some(id) = float_methods::from_str(method) {
+                use float_methods::FloatMethodId as M;
+                match id {
+                    M::IsNan | M::IsInfinite | M::IsFinite => return ResolvedType::Bool,
+                    _ => return ResolvedType::Float,
+                }
             }
         }
 
@@ -287,71 +292,124 @@ impl TypeChecker {
             }
         }
         if is_frozen_bytes(&base_ty) {
-            match method {
-                "len" => return ResolvedType::Int,
-                "is_empty" => return ResolvedType::Bool,
-                _ => {}
+            if let Some(id) = frozen_bytes_methods::from_str(method) {
+                use frozen_bytes_methods::FrozenBytesMethodId as M;
+                match id {
+                    M::Len => return ResolvedType::Int,
+                    M::IsEmpty => return ResolvedType::Bool,
+                }
             }
         }
 
         match &base_ty {
-            ResolvedType::FrozenList(_) => match method {
-                "len" => return ResolvedType::Int,
-                "is_empty" => return ResolvedType::Bool,
-                _ => {}
-            },
-            ResolvedType::FrozenSet(_) => match method {
-                "len" => return ResolvedType::Int,
-                "is_empty" => return ResolvedType::Bool,
-                "contains" => return ResolvedType::Bool,
-                _ => {}
-            },
-            ResolvedType::FrozenDict(_, _) => match method {
-                "len" => return ResolvedType::Int,
-                "is_empty" => return ResolvedType::Bool,
-                "contains_key" => return ResolvedType::Bool,
-                _ => {}
-            },
+            ResolvedType::FrozenList(_) => {
+                if let Some(id) = frozen_list_methods::from_str(method) {
+                    use frozen_list_methods::FrozenListMethodId as M;
+                    match id {
+                        M::Len => return ResolvedType::Int,
+                        M::IsEmpty => return ResolvedType::Bool,
+                    }
+                }
+            }
+            ResolvedType::FrozenSet(_) => {
+                if let Some(id) = frozen_set_methods::from_str(method) {
+                    use frozen_set_methods::FrozenSetMethodId as M;
+                    match id {
+                        M::Len => return ResolvedType::Int,
+                        M::IsEmpty | M::Contains => return ResolvedType::Bool,
+                    }
+                }
+            }
+            ResolvedType::FrozenDict(_, _) => {
+                if let Some(id) = frozen_dict_methods::from_str(method) {
+                    use frozen_dict_methods::FrozenDictMethodId as M;
+                    match id {
+                        M::Len => return ResolvedType::Int,
+                        M::IsEmpty | M::ContainsKey => return ResolvedType::Bool,
+                    }
+                }
+            }
             _ => {}
         }
 
-        if let ResolvedType::Generic(name, type_args) = &base_ty {
-            if name == LIST_TY_NAME {
-                let elem = type_args.first().cloned().unwrap_or(ResolvedType::Unknown);
-                match method {
-                    "append" => {
-                        if let Some(arg0) = arg_types.first() {
-                            if !self.types_compatible(arg0, &elem) {
-                                self.errors
-                                    .push(errors::type_mismatch(&elem.to_string(), &arg0.to_string(), span));
-                            }
+        // Option[T] helpers.
+        //
+        // NOTE: `Dict.get(k)` is backed by Rust `HashMap::get`, which returns `Option<&V>`.
+        // We model that as `Option[&V]` internally, so helpers like `.copied()` can typecheck in the same way they do
+        // in Rust.
+        if base_ty.is_option() {
+            let inner = base_ty.option_inner_type().cloned().unwrap_or(ResolvedType::Unknown);
+            match method {
+                "copied" => {
+                    // Rust: `Option<&T>::copied() -> Option<T>` (for `T: Copy`).
+                    if let ResolvedType::Ref(t) = inner {
+                        let t = (*t).clone();
+                        if matches!(t, ResolvedType::Int | ResolvedType::Float | ResolvedType::Bool) {
+                            return option_ty(t);
                         }
-                        return ResolvedType::Unit;
                     }
-                    "pop" => return elem,
-                    "contains" => return ResolvedType::Bool,
-                    "swap" => return ResolvedType::Unit,
-                    "reserve" => return ResolvedType::Unit,
-                    "reserve_exact" => return ResolvedType::Unit,
-                    "remove" => return ResolvedType::Unit,
-                    "count" => return ResolvedType::Int,
-                    "index" => return ResolvedType::Int,
-                    _ => {}
+                }
+                "unwrap_or" => {
+                    // Rust: `Option<T>::unwrap_or(default: T) -> T`
+                    //
+                    // For `Option<&T>`, this is `unwrap_or(default: &T) -> &T`.
+                    if let Some(default_ty) = arg_types.first() {
+                        if !self.types_compatible(default_ty, &inner) {
+                            self.errors
+                                .push(errors::type_mismatch(&inner.to_string(), &default_ty.to_string(), span));
+                        }
+                    }
+                    return inner;
+                }
+                "unwrap" => {
+                    return inner;
+                }
+                _ => {}
+            }
+        }
+
+        // FIXME: Too many levels of nesting here.
+        if let ResolvedType::Generic(name, type_args) = &base_ty {
+            if collection_type_id(name.as_str()) == Some(CollectionTypeId::List) {
+                let elem = type_args.first().cloned().unwrap_or(ResolvedType::Unknown);
+                if let Some(id) = list_methods::from_str(method) {
+                    use list_methods::ListMethodId as M;
+                    match id {
+                        M::Append => {
+                            if let Some(arg0) = arg_types.first() {
+                                if !self.types_compatible(arg0, &elem) {
+                                    self.errors
+                                        .push(errors::type_mismatch(&elem.to_string(), &arg0.to_string(), span));
+                                }
+                            }
+                            return ResolvedType::Unit;
+                        }
+                        M::Pop => return elem,
+                        M::Contains => return ResolvedType::Bool,
+                        M::Swap | M::Reserve | M::ReserveExact | M::Remove => return ResolvedType::Unit,
+                        M::Count | M::Index => return ResolvedType::Int,
+                    }
                 }
             }
-            if name == DICT_TY_NAME {
+            if collection_type_id(name.as_str()) == Some(CollectionTypeId::Dict) {
                 let key = type_args.first().cloned().unwrap_or(ResolvedType::Unknown);
                 let val = type_args.get(1).cloned().unwrap_or(ResolvedType::Unknown);
-                match method {
-                    "keys" => return list_ty(key),
-                    "values" => return list_ty(val),
-                    // Allow get/insert helpers to match examples; keep return types simple.
-                    "get" => return option_ty(val.clone()),
-                    "insert" => return ResolvedType::Unit,
-                    _ => {}
+                if let Some(id) = dict_methods::from_str(method) {
+                    use dict_methods::DictMethodId as M;
+                    match id {
+                        M::Keys => return list_ty(key),
+                        M::Values => return list_ty(val),
+                        // `Dict.get(k)` is backed by Rust `HashMap::get`, which returns `Option<&V>`.
+                        // Model this as an internal reference so chained Rust-idiom helpers (like `.copied()`)
+                        // typecheck consistently with codegen.
+                        M::Get => return option_ty(ResolvedType::Ref(Box::new(val.clone()))),
+                        M::Insert => return ResolvedType::Unit,
+                    }
                 }
             }
-            if name == SET_TY_NAME && method == "contains" {
+            if collection_type_id(name.as_str()) == Some(CollectionTypeId::Set)
+                && set_methods::from_str(method).is_some()
+            {
                 return ResolvedType::Bool;
             }
         }
@@ -412,20 +470,15 @@ impl TypeChecker {
         // For common external generic types (interop/runtime-provided) that we don't model in
         // the checker, be permissive and do not error on unknown methods.
         if let ResolvedType::Generic(name, _args) = &base_ty {
-            match name.as_str() {
-                "Mutex" | "RwLock" | "Semaphore" | "Barrier" | "Result" | "Option" | "HashMap" | "Vec" | "List"
-                | "Tuple" => {
-                    return ResolvedType::Unknown;
-                }
-                _ => {}
+            if surface_types::from_str(name.as_str()).is_some() {
+                return ResolvedType::Unknown;
             }
         }
 
         // Guardrail: don't silently return Unknown for missing methods on known user types.
         // For unknown/external types we returned Unknown above without error.
         let base_name_str = base_ty.to_string();
-        let skip_error_for_known_runtime =
-            matches!(base_name_str.as_str(), "Mutex" | "RwLock" | "Semaphore" | "Barrier");
+        let skip_error_for_known_runtime = surface_types::from_str(base_name_str.as_str()).is_some();
         if !(matches!(base_ty, ResolvedType::Named(ref n) if self.symbols.lookup(n).is_none())
             || skip_error_for_known_runtime)
         {

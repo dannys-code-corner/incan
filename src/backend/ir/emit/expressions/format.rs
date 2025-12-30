@@ -4,7 +4,7 @@
 //! - Format string expressions (f-strings): `f"Hello {name}"`
 //! - Range expressions: `start..end`, `start..=end`, `..end`, `start..`
 
-use incan_semantics::strings::escape_format_literal;
+use incan_core::strings::escape_format_literal;
 use proc_macro2::{Literal as TokenLiteral, TokenStream};
 use quote::quote;
 
@@ -26,7 +26,7 @@ impl<'a> IrEmitter<'a> {
     ///
     /// ## Notes
     ///
-    /// - Literal segments are brace-escaped via `incan_semantics::strings::escape_format_literal`.
+    /// - Literal segments are brace-escaped via `incan_core::strings::escape_format_literal`.
     /// - Expression segments are formatted via `format!("{}", expr)` before being passed to the
     ///   semantic-core f-string join helper.
     pub(in super::super) fn emit_format_expr(&self, parts: &[FormatPart]) -> Result<TokenStream, EmitError> {

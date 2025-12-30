@@ -1,0 +1,157 @@
+//! Shareable metadata for `incan_core::lang` registries.
+//!
+//! The `incan_core::lang` module is a set of **registry-first** vocabularies: keywords,
+//! operators, builtin functions, builtin types, etc. This submodule provides the small,
+//! dependency-free metadata types that are reused across all registries.
+//!
+//! ## Notes
+//! - These types are intentionally lightweight and `Copy`-friendly so registries can live in
+//!   `const` tables.
+//! - Metadata is meant for tooling/docs/diagnostics; enforcement of syntax rules still lives
+//!   in the lexer/parser.
+//!
+//! ## See also
+//! - [`crate::lang::keywords`]
+//! - [`crate::lang::operators`]
+//! - [`crate::lang::builtins`]
+//! - [`crate::lang::types`]
+
+/// Identify the RFC that introduced a vocabulary item.
+///
+/// ## Notes
+/// - The canonical format is `"RFC 000"` (three-digit id).
+///
+/// ## Examples
+/// ```rust
+/// use incan_core::lang::registry::RfcId;
+///
+/// let rfc: RfcId = "RFC 000";
+/// assert!(rfc.starts_with("RFC "));
+/// ```
+pub type RfcId = &'static str;
+
+/// RFC 000 — core language RFC.
+pub const RFC_000: RfcId = "RFC 000";
+
+/// RFC 001 — test fixtures (`yield` for setup/teardown).
+pub const RFC_001: RfcId = "RFC 001";
+
+/// RFC 004 — async fixtures (Tokio integration; async runtime primitives).
+pub const RFC_004: RfcId = "RFC 004";
+
+/// RFC 005 — Rust interop (`rust::...` imports).
+pub const RFC_005: RfcId = "RFC 005";
+
+/// RFC 008 — const bindings (`const NAME = ...`).
+pub const RFC_008: RfcId = "RFC 008";
+
+/// RFC 009 — sized integers & builtin type registry (builtin type methods; frozen containers).
+pub const RFC_009: RfcId = "RFC 009";
+
+/// Namespace-style access to RFC ids.
+///
+/// This exists purely for ergonomics at call sites so individual registries don’t need to import
+/// dozens of `RFC_###` constants into their `use` lists.
+///
+/// ## Notes
+/// - Rust identifiers cannot start with digits, so the style is `RFC::_000` (not `RFC::000`).
+/// - The underlying value is still an [`RfcId`] (`&'static str`).
+pub struct RFC;
+
+impl RFC {
+    /// RFC 000 — core language RFC.
+    pub const _000: RfcId = RFC_000;
+    /// RFC 001 — test fixtures (`yield` for setup/teardown).
+    pub const _001: RfcId = RFC_001;
+    /// RFC 004 — async fixtures (Tokio integration; async runtime primitives).
+    pub const _004: RfcId = RFC_004;
+    /// RFC 005 — Rust interop (`rust::...` imports).
+    pub const _005: RfcId = RFC_005;
+    /// RFC 008 — const bindings (`const NAME = ...`).
+    pub const _008: RfcId = RFC_008;
+    /// RFC 009 — sized integers & builtin type registry (builtin type methods; frozen containers).
+    pub const _009: RfcId = RFC_009;
+}
+
+/// Identify the language/compiler version a vocabulary item is available since.
+///
+/// ## Notes
+/// - This is currently a free-form string (e.g. `"0.1.0"`). We can tighten this later once
+///   the project formalizes versioning.
+///
+/// ## Examples
+/// ```rust
+/// use incan_core::lang::registry::SinceVersion;
+///
+/// let since: SinceVersion = "0.1.0";
+/// assert!(!since.is_empty());
+/// ```
+pub type SinceVersion = &'static str;
+
+/// Describe the lifecycle status of a language vocabulary item.
+///
+/// ## Notes
+/// - This is intended for docs/tooling (e.g. to warn on deprecated spellings), not for
+///   feature-gating by itself.
+///
+/// ## Examples
+/// ```rust
+/// use incan_core::lang::registry::Stability;
+///
+/// let s = Stability::Stable;
+/// assert_eq!(format!("{s:?}"), "Stable");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Stability {
+    Stable,
+    Draft,
+    Deprecated,
+}
+
+/// Represent a small example snippet for documentation.
+///
+/// ## Notes
+/// - `code` is the example body, usually in Incan syntax.
+/// - `note` is an optional short explanation (one or two sentences).
+///
+/// ## Examples
+/// ```rust
+/// use incan_core::lang::registry::Example;
+///
+/// let ex = Example {
+///     code: "if cond:\n  pass",
+///     note: Some("Minimal conditional."),
+/// };
+/// assert!(ex.code.contains("if"));
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct Example {
+    pub code: &'static str,
+    pub note: Option<&'static str>,
+}
+
+/// Shared metadata shape for “registry-first” vocabulary items.
+///
+/// Many language vocabularies share the same core fields:
+/// - stable identity (`id`)
+/// - accepted spellings (`canonical` + `aliases`)
+/// - documentation (`description` + `examples`)
+/// - provenance (`introduced_in_rfc`, `since_version`, `stability`)
+///
+/// Registries that need extra per-item data (e.g. operator precedence, keyword category/usage) should wrap this
+/// struct in an “extension” info type.
+///
+/// ## Notes
+/// - `description` is intentionally mandatory to keep docs/tooling consistent.
+/// - This type is `Copy` so it can live in `const` tables.
+#[derive(Debug, Clone, Copy)]
+pub struct LangItemInfo<Id> {
+    pub id: Id,
+    pub canonical: &'static str,
+    pub aliases: &'static [&'static str],
+    pub description: &'static str,
+    pub introduced_in_rfc: RfcId,
+    pub since_version: Option<SinceVersion>,
+    pub stability: Stability,
+    pub examples: &'static [Example],
+}

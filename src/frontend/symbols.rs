@@ -5,6 +5,15 @@
 use std::collections::HashMap;
 
 use crate::frontend::ast::{Receiver, Span, Type};
+use incan_core::lang::builtins::{self, BuiltinFnId};
+use incan_core::lang::surface::functions::{self as surface_functions, SurfaceFnId};
+use incan_core::lang::surface::types as surface_types;
+use incan_core::lang::types::collections;
+use incan_core::lang::types::collections::CollectionTypeId;
+use incan_core::lang::types::numerics;
+use incan_core::lang::types::numerics::NumericTypeId;
+use incan_core::lang::types::stringlike;
+use incan_core::lang::types::stringlike::StringLikeId;
 
 /// Unique identifier for symbols
 pub type SymbolId = usize;
@@ -31,29 +40,34 @@ impl SymbolTable {
     }
 
     fn add_builtins(&mut self) {
-        // Builtin types
-        let builtin_types = [
-            "int",
-            "float",
-            "bool",
-            "str",
-            "bytes",
-            "List",
-            "Dict",
-            "Set",
-            "Tuple",
-            "Option",
-            "Result",
-            "Unit",
-            // RFC 008 frozen const types
-            "FrozenStr",
-            "FrozenBytes",
-            "FrozenList",
-            "FrozenSet",
-            "FrozenDict",
-        ];
+        // Builtin types (from the canonical `incan_core::lang::types` registries).
+        //
+        // We define both canonical spellings and aliases so name lookup stays robust and we avoid
+        // drift between the compiler and the language vocabulary registries.
+        let mut builtin_types: Vec<&'static str> = Vec::new();
+        for t in numerics::NUMERIC_TYPES {
+            builtin_types.push(t.canonical);
+            builtin_types.extend_from_slice(t.aliases);
+        }
+        for t in stringlike::STRING_LIKE_TYPES {
+            builtin_types.push(t.canonical);
+            builtin_types.extend_from_slice(t.aliases);
+        }
+        for t in collections::COLLECTION_TYPES {
+            builtin_types.push(t.canonical);
+            builtin_types.extend_from_slice(t.aliases);
+        }
+        for t in surface_types::SURFACE_TYPES {
+            builtin_types.push(t.item.canonical);
+            builtin_types.extend_from_slice(t.item.aliases);
+        }
+        // Unit-ish types that are not yet modeled in `incan_core::lang::types`.
+        builtin_types.push("Unit");
+        builtin_types.push("None");
 
-        for name in builtin_types {
+        // Deduplicate to avoid defining the same builtin twice.
+        let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+        for name in builtin_types.into_iter().filter(|n| seen.insert(*n)) {
             self.define(Symbol {
                 name: name.to_string(),
                 kind: SymbolKind::Type(TypeInfo::Builtin),
@@ -148,7 +162,7 @@ impl SymbolTable {
             scope: 0,
         });
         self.define(Symbol {
-            name: "print".to_string(),
+            name: builtins::as_str(BuiltinFnId::Print).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![("msg".to_string(), ResolvedType::Str)],
                 return_type: ResolvedType::Unit,
@@ -159,7 +173,7 @@ impl SymbolTable {
             scope: 0,
         });
         self.define(Symbol {
-            name: "len".to_string(),
+            name: builtins::as_str(BuiltinFnId::Len).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![("collection".to_string(), ResolvedType::Unknown)],
                 return_type: ResolvedType::Int,
@@ -171,7 +185,7 @@ impl SymbolTable {
         });
         // Async primitives (exposed as builtins)
         self.define(Symbol {
-            name: "sleep".to_string(),
+            name: builtins::as_str(BuiltinFnId::Sleep).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![("seconds".to_string(), ResolvedType::Float)],
                 return_type: ResolvedType::Unit,
@@ -182,7 +196,7 @@ impl SymbolTable {
             scope: 0,
         });
         self.define(Symbol {
-            name: "sleep_ms".to_string(),
+            name: surface_functions::as_str(SurfaceFnId::SleepMs).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![("millis".to_string(), ResolvedType::Int)],
                 return_type: ResolvedType::Unit,
@@ -193,7 +207,7 @@ impl SymbolTable {
             scope: 0,
         });
         self.define(Symbol {
-            name: "yield_now".to_string(),
+            name: surface_functions::as_str(SurfaceFnId::YieldNow).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![],
                 return_type: ResolvedType::Unit,
@@ -204,7 +218,7 @@ impl SymbolTable {
             scope: 0,
         });
         self.define(Symbol {
-            name: "timeout".to_string(),
+            name: surface_functions::as_str(SurfaceFnId::Timeout).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![
                     ("seconds".to_string(), ResolvedType::Float),
@@ -218,7 +232,7 @@ impl SymbolTable {
             scope: 0,
         });
         self.define(Symbol {
-            name: "timeout_ms".to_string(),
+            name: surface_functions::as_str(SurfaceFnId::TimeoutMs).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![
                     ("millis".to_string(), ResolvedType::Int),
@@ -232,7 +246,7 @@ impl SymbolTable {
             scope: 0,
         });
         self.define(Symbol {
-            name: "spawn".to_string(),
+            name: surface_functions::as_str(SurfaceFnId::Spawn).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![("task".to_string(), ResolvedType::Unknown)],
                 return_type: ResolvedType::Unknown,
@@ -243,7 +257,7 @@ impl SymbolTable {
             scope: 0,
         });
         self.define(Symbol {
-            name: "spawn_blocking".to_string(),
+            name: surface_functions::as_str(SurfaceFnId::SpawnBlocking).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![("task".to_string(), ResolvedType::Unknown)],
                 return_type: ResolvedType::Unknown,
@@ -256,7 +270,7 @@ impl SymbolTable {
 
         // range() builtin - returns an iterator
         self.define(Symbol {
-            name: "range".to_string(),
+            name: builtins::as_str(BuiltinFnId::Range).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
                 params: vec![("n".to_string(), ResolvedType::Int)],
                 return_type: ResolvedType::Named("Range".to_string()), // Iterator-like
@@ -558,6 +572,12 @@ pub enum ResolvedType {
     TypeVar(String),
     /// Self type (resolved to the implementing type in traits)
     SelfType,
+    /// Internal reference type (borrowed `&T`).
+    ///
+    /// ## Notes
+    /// - This is currently compiler-internal (not a user-spellable surface type).
+    /// - It exists to model Rust interop semantics like `HashMap::get` returning `Option<&V>`.
+    Ref(Box<ResolvedType>),
     /// Unknown/error type
     Unknown,
 }
@@ -565,18 +585,28 @@ pub enum ResolvedType {
 impl ResolvedType {
     /// Check if this is a Result type
     pub fn is_result(&self) -> bool {
-        matches!(self, ResolvedType::Generic(name, _) if name == "Result")
+        matches!(
+            self,
+            ResolvedType::Generic(name, _) if collections::from_str(name.as_str()) == Some(CollectionTypeId::Result)
+        )
     }
 
     /// Check if this is an Option type
     pub fn is_option(&self) -> bool {
-        matches!(self, ResolvedType::Generic(name, _) if name == "Option")
+        matches!(
+            self,
+            ResolvedType::Generic(name, _) if collections::from_str(name.as_str()) == Some(CollectionTypeId::Option)
+        )
     }
 
     /// Get the Ok type from Result[T, E]
     pub fn result_ok_type(&self) -> Option<&ResolvedType> {
         match self {
-            ResolvedType::Generic(name, args) if name == "Result" && !args.is_empty() => Some(&args[0]),
+            ResolvedType::Generic(name, args)
+                if collections::from_str(name.as_str()) == Some(CollectionTypeId::Result) && !args.is_empty() =>
+            {
+                Some(&args[0])
+            }
             _ => None,
         }
     }
@@ -584,7 +614,11 @@ impl ResolvedType {
     /// Get the Err type from Result[T, E]
     pub fn result_err_type(&self) -> Option<&ResolvedType> {
         match self {
-            ResolvedType::Generic(name, args) if name == "Result" && args.len() >= 2 => Some(&args[1]),
+            ResolvedType::Generic(name, args)
+                if collections::from_str(name.as_str()) == Some(CollectionTypeId::Result) && args.len() >= 2 =>
+            {
+                Some(&args[1])
+            }
             _ => None,
         }
     }
@@ -592,7 +626,11 @@ impl ResolvedType {
     /// Get the inner type from Option[T]
     pub fn option_inner_type(&self) -> Option<&ResolvedType> {
         match self {
-            ResolvedType::Generic(name, args) if name == "Option" && !args.is_empty() => Some(&args[0]),
+            ResolvedType::Generic(name, args)
+                if collections::from_str(name.as_str()) == Some(CollectionTypeId::Option) && !args.is_empty() =>
+            {
+                Some(&args[0])
+            }
             _ => None,
         }
     }
@@ -645,6 +683,7 @@ impl std::fmt::Display for ResolvedType {
             }
             ResolvedType::TypeVar(name) => write!(f, "{}", name),
             ResolvedType::SelfType => write!(f, "Self"),
+            ResolvedType::Ref(inner) => write!(f, "&{}", inner),
             ResolvedType::Unknown => write!(f, "?"),
         }
     }
@@ -653,59 +692,71 @@ impl std::fmt::Display for ResolvedType {
 /// Convert AST Type to ResolvedType
 /// Normalize type name to canonical form (uppercase for built-in generics)
 fn normalize_type_name(name: &str) -> String {
-    match name {
-        // Python-style lowercase → Rust-style uppercase
-        "list" => "List".to_string(),
-        "dict" => "Dict".to_string(),
-        "set" => "Set".to_string(),
-        "tuple" => "Tuple".to_string(),
-        "option" => "Option".to_string(),
-        "result" => "Result".to_string(),
-        "frozenlist" => "FrozenList".to_string(),
-        "frozenset" => "FrozenSet".to_string(),
-        "frozendict" => "FrozenDict".to_string(),
-        "frozenstr" => "FrozenStr".to_string(),
-        "frozenbytes" => "FrozenBytes".to_string(),
-        // Already uppercase or custom types
-        _ => name.to_string(),
+    // Generic base normalization: prefer the canonical spelling from `incan_core` for all builtin
+    // collection/generic-base types (and their aliases).
+    if let Some(id) = collections::from_str(name) {
+        return collections::as_str(id).to_string();
     }
+    name.to_string()
 }
 
 pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
     match ty {
-        Type::Simple(name) => match name.as_str() {
-            "int" => ResolvedType::Int,
-            "float" => ResolvedType::Float,
-            "bool" => ResolvedType::Bool,
-            "str" => ResolvedType::Str,
-            "bytes" => ResolvedType::Bytes,
-            "FrozenStr" => ResolvedType::FrozenStr,
-            "FrozenBytes" => ResolvedType::FrozenBytes,
-            "Unit" => ResolvedType::Unit,
-            _ => {
-                // Check if it's a known type
-                if symbols.lookup(name).is_some() {
-                    ResolvedType::Named(name.clone())
-                } else {
-                    // Could be a type variable
-                    ResolvedType::TypeVar(name.clone())
+        Type::Simple(name) => {
+            if let Some(id) = numerics::from_str(name.as_str()) {
+                return match id {
+                    NumericTypeId::Int => ResolvedType::Int,
+                    NumericTypeId::Float => ResolvedType::Float,
+                    NumericTypeId::Bool => ResolvedType::Bool,
+                };
+            }
+            if let Some(id) = stringlike::from_str(name.as_str()) {
+                return match id {
+                    StringLikeId::Str => ResolvedType::Str,
+                    StringLikeId::Bytes => ResolvedType::Bytes,
+                    StringLikeId::FrozenStr => ResolvedType::FrozenStr,
+                    StringLikeId::FrozenBytes => ResolvedType::FrozenBytes,
+                    // We currently treat f-strings as a regular string type at the type level.
+                    StringLikeId::FString => ResolvedType::Str,
+                };
+            }
+            if let Some(id) = collections::from_str(name.as_str()) {
+                // `List`/`Dict`/... can appear in type position without parameters (e.g. `Tuple` as "any tuple").
+                // Preserve it as a named type, but normalize to the canonical spelling from `incan_core`.
+                return ResolvedType::Named(collections::as_str(id).to_string());
+            }
+
+            match name.as_str() {
+                "Unit" | "None" => ResolvedType::Unit,
+                _ => {
+                    // Check if it's a known type
+                    if symbols.lookup(name).is_some() {
+                        ResolvedType::Named(name.clone())
+                    } else {
+                        // Could be a type variable
+                        ResolvedType::TypeVar(name.clone())
+                    }
                 }
             }
-        },
+        }
         Type::Generic(name, args) => {
             let resolved_args: Vec<_> = args.iter().map(|a| resolve_type(&a.node, symbols)).collect();
-            // Normalize type name for built-in generics (list → List, dict → Dict, etc.)
-            let normalized_name = normalize_type_name(name);
-            match normalized_name.as_str() {
-                "FrozenList" => {
+            // Normalize type name for built-in generics (aliases → canonical spellings).
+            let id = collections::from_str(name.as_str());
+            let normalized_name = id
+                .map(|id| collections::as_str(id).to_string())
+                .unwrap_or_else(|| normalize_type_name(name));
+
+            match id {
+                Some(CollectionTypeId::FrozenList) => {
                     let elem = resolved_args.first().cloned().unwrap_or(ResolvedType::Unknown);
                     ResolvedType::FrozenList(Box::new(elem))
                 }
-                "FrozenSet" => {
+                Some(CollectionTypeId::FrozenSet) => {
                     let elem = resolved_args.first().cloned().unwrap_or(ResolvedType::Unknown);
                     ResolvedType::FrozenSet(Box::new(elem))
                 }
-                "FrozenDict" => {
+                Some(CollectionTypeId::FrozenDict) => {
                     let k = resolved_args.first().cloned().unwrap_or(ResolvedType::Unknown);
                     let v = resolved_args.get(1).cloned().unwrap_or(ResolvedType::Unknown);
                     ResolvedType::FrozenDict(Box::new(k), Box::new(v))
