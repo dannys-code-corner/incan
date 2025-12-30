@@ -147,7 +147,7 @@ temp = TempFile.new()?  # Uses system temp dir
 In the current workspace, user-facing vocabulary is centralized in `incan_core`. This RFC introduces new surface types and methods, so the canonical spellings should be registered in:
 
 - `crates/incan_core/src/lang/surface/types.rs` (add `TempFile`, `TempDir`)
-- A new surface method registry module (e.g. `crates/incan_core/src/lang/surface/tempfile_methods.rs`) for method names like `new`, `with_suffix`, `persist`, etc.
+- Add method names to `crates/incan_core/src/lang/surface/methods.rs` (consolidated surface method registries), e.g. a `tempfile_methods` registry for `TempFile`/`TempDir` methods like `new`, `with_suffix`, `persist`, etc.
 
 ### Backend
 

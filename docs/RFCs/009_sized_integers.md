@@ -233,12 +233,10 @@ This creates triple maintenance burden and increases drift risk between docs/spe
 
 1. **Define method vocab in `incan_core`** (source of truth):
 
-    - `crates/incan_core/src/lang/surface/string_methods.rs` (for `str`/`FrozenStr`)
-    - `crates/incan_core/src/lang/surface/list_methods.rs` (for `List`)
-    - `crates/incan_core/src/lang/surface/dict_methods.rs` (for `Dict`)
-    - `crates/incan_core/src/lang/surface/set_methods.rs` (for `Set`)
-    - `crates/incan_core/src/lang/surface/frozen_*_methods.rs` (for frozen containers/bytes)
-    - For sized integer methods, add a new `crates/incan_core/src/lang/surface/sized_int_methods.rs` (or similar)
+    - `crates/incan_core/src/lang/surface/methods.rs` (surface method vocab registries; re-exported as
+      `incan_core::lang::surface::{string_methods, list_methods, dict_methods, ...}` for stable import paths)
+    - For sized integer methods, add a new registry section within `methods.rs` (or a sibling module re-exported from
+      `crates/incan_core/src/lang/surface/mod.rs` if it grows too large)
 
 2. **Compiler consumes registries** instead of string matches:
 

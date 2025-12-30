@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use incan_core::lang::types::{collections, numerics, stringlike};
-use incan_core::lang::{builtins, keywords, operators, punctuation, surface};
+use incan_core::lang::{builtins, derives, keywords, operators, punctuation, surface};
 
 fn trim_trailing_newlines_to_at_most_two(out: &mut String) {
     let mut count = 0usize;
@@ -81,6 +81,7 @@ fn write_language_reference(path: &Path) {
     out.push_str("## Contents\n\n");
     out.push_str("- [Keywords](#keywords)\n");
     out.push_str("- [Builtin functions](#builtin-functions)\n");
+    out.push_str("- [Derives](#derives)\n");
     out.push_str("- [Operators](#operators)\n");
     out.push_str("- [Punctuation](#punctuation)\n");
     out.push_str("- [Builtin types](#builtin-types)\n");
@@ -93,6 +94,7 @@ fn write_language_reference(path: &Path) {
 
     render_keywords_section(&mut out);
     render_builtins_section(&mut out);
+    render_derives_section(&mut out);
     render_operators_section(&mut out);
     render_punctuation_section(&mut out);
     render_types_section(&mut out);
@@ -188,6 +190,36 @@ fn render_builtins_section(out: &mut String) {
         let rfc = b.introduced_in_rfc;
         let since = b.since_version.unwrap_or("");
         let stability = format!("{:?}", b.stability);
+
+        out.push_str(&format!(
+            "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
+        ));
+    }
+    out.push('\n');
+}
+
+fn render_derives_section(out: &mut String) {
+    start_section(out, "## Derives");
+
+    out.push_str("| Id | Canonical | Aliases | Description | RFC | Since | Stability |\n");
+    out.push_str("|---|---|---|---|---|---|---|\n");
+
+    for d in derives::DERIVES {
+        let id = format!("{:?}", d.id);
+        let canonical = format!("`{}`", d.canonical);
+        let aliases = if d.aliases.is_empty() {
+            String::new()
+        } else {
+            d.aliases
+                .iter()
+                .map(|a| format!("`{}`", a))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let desc = d.description;
+        let rfc = d.introduced_in_rfc;
+        let since = d.since_version.unwrap_or("");
+        let stability = format!("{:?}", d.stability);
 
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"

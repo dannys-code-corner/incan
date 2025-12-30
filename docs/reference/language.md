@@ -8,6 +8,7 @@
 
 - [Keywords](#keywords)
 - [Builtin functions](#builtin-functions)
+- [Derives](#derives)
 - [Operators](#operators)
 - [Punctuation](#punctuation)
 - [Builtin types](#builtin-types)
@@ -88,6 +89,21 @@ Only keywords with examples are listed here.
 | WriteFile | `write_file` |  | Write a string/bytes to a file on disk. | RFC 000 |  | Stable |
 | JsonStringify | `json_stringify` |  | Serialize a value to JSON. | RFC 000 |  | Stable |
 | Sleep | `sleep` |  | Sleep for a duration. | RFC 000 |  | Stable |
+
+## Derives
+
+| Id | Canonical | Aliases | Description | RFC | Since | Stability |
+|---|---|---|---|---|---|---|
+| Debug | `Debug` |  | Derive Rust-style debug formatting. | RFC 000 |  | Stable |
+| Display | `Display` |  | Derive user-facing string formatting. | RFC 000 |  | Stable |
+| Eq | `Eq` |  | Derive equality comparisons. | RFC 000 |  | Stable |
+| Ord | `Ord` |  | Derive ordering comparisons. | RFC 000 |  | Stable |
+| Hash | `Hash` |  | Derive hashing support (for map/set keys). | RFC 000 |  | Stable |
+| Clone | `Clone` |  | Derive deep cloning. | RFC 000 |  | Stable |
+| Copy | `Copy` |  | Derive copy semantics for simple value types. | RFC 000 |  | Stable |
+| Default | `Default` |  | Derive a default value constructor. | RFC 000 |  | Stable |
+| Serialize | `Serialize` |  | Derive serialization support (e.g. JSON). | RFC 000 |  | Stable |
+| Deserialize | `Deserialize` |  | Derive deserialization support (e.g. JSON). | RFC 000 |  | Stable |
 
 ## Operators
 
