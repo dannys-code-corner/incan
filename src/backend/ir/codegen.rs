@@ -731,6 +731,19 @@ model User:
     }
 
     #[test]
+    fn test_serde_detection_json_stringify_builtin() {
+        let source = r#"
+def main() -> None:
+  _ = json_stringify(123)
+"#;
+        let tokens = lexer::lex(source).unwrap();
+        let ast = parser::parse(&tokens).unwrap();
+        let mut codegen = IrCodegen::new();
+        codegen.scan_for_serde(&ast);
+        assert!(codegen.needs_serde());
+    }
+
+    #[test]
     fn test_no_async_when_not_used() {
         let source = r#"
 def fetch() -> str:

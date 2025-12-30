@@ -12,7 +12,7 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::{ResolvedType, resolve_type};
 use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved, pow_exponent_kind_from_ast};
-use incan_core::errors::{STRING_INDEX_OUT_OF_RANGE_MSG, STRING_SLICE_STEP_ZERO_MSG};
+use incan_core::errors::IncanError;
 use incan_core::strings::{self, StringAccessError};
 use incan_core::{NumericTy, result_numeric_type};
 
@@ -551,7 +551,7 @@ impl TypeChecker {
                         Ok(ch) => value = Some(ConstValue::FrozenStr(ch)),
                         Err(StringAccessError::IndexOutOfRange) => {
                             self.errors.push(CompileError::type_error(
-                                STRING_INDEX_OUT_OF_RANGE_MSG.to_string(),
+                                IncanError::string_index_out_of_range().to_string(),
                                 expr.span,
                             ));
                             return None;
@@ -619,14 +619,16 @@ impl TypeChecker {
                         Ok(out) => value = Some(ConstValue::FrozenStr(out)),
                         Err(StringAccessError::SliceStepZero) => {
                             let span = slice.step.as_ref().map(|s| s.span).unwrap_or(expr.span);
-                            self.errors
-                                .push(CompileError::type_error(STRING_SLICE_STEP_ZERO_MSG.to_string(), span));
+                            self.errors.push(CompileError::type_error(
+                                IncanError::slice_step_zero().to_string(),
+                                span,
+                            ));
                             return None;
                         }
                         Err(StringAccessError::IndexOutOfRange) => {
                             // Should not normally occur due to clamping but keep in sync with semantics.
                             self.errors.push(CompileError::type_error(
-                                STRING_INDEX_OUT_OF_RANGE_MSG.to_string(),
+                                IncanError::string_index_out_of_range().to_string(),
                                 expr.span,
                             ));
                             return None;

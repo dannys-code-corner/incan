@@ -34,7 +34,7 @@
 /// assert_eq!(py_floor_div_i64(7, -3), -3);  // Rust would give -2
 /// assert_eq!(py_floor_div_i64(-7, -3), 2);
 /// ```
-use incan_core::ZERO_DIVISION_MSG;
+use crate::errors::raise_zero_division;
 
 // --- Numeric kernels (hot) ---------------------------------------------------------------------
 //
@@ -193,7 +193,7 @@ where
     let l: f64 = lhs.to_float();
     let r: f64 = rhs.to_float();
     if r == 0.0 {
-        panic!("{}", ZERO_DIVISION_MSG);
+        raise_zero_division();
     }
     l / r
 }
@@ -233,7 +233,7 @@ where
     R: sealed::IncanNumeric + Copy,
 {
     if rhs.is_zero() {
-        panic!("{}", ZERO_DIVISION_MSG);
+        raise_zero_division();
     }
     <L as PyModImpl<R>>::py_mod(lhs, rhs)
 }
@@ -273,7 +273,7 @@ where
     R: sealed::IncanNumeric + Copy,
 {
     if rhs.is_zero() {
-        panic!("{}", ZERO_DIVISION_MSG);
+        raise_zero_division();
     }
     <L as PyFloorDivImpl<R>>::py_floor_div(lhs, rhs)
 }
@@ -365,7 +365,7 @@ impl PyFloorDivImpl<f64> for f64 {
 #[inline]
 pub fn py_floor_div_i64(a: i64, b: i64) -> i64 {
     if b == 0 {
-        panic!("{}", ZERO_DIVISION_MSG);
+        raise_zero_division();
     }
     py_floor_div_i64_impl(a, b)
 }
@@ -385,7 +385,7 @@ pub fn py_floor_div_i64(a: i64, b: i64) -> i64 {
 #[inline]
 pub fn py_floor_div_f64(a: f64, b: f64) -> f64 {
     if b == 0.0 {
-        panic!("{}", ZERO_DIVISION_MSG);
+        raise_zero_division();
     }
     (a / b).floor()
 }
@@ -408,7 +408,7 @@ pub fn py_floor_div_f64(a: f64, b: f64) -> f64 {
 #[inline]
 pub fn py_mod_i64(a: i64, b: i64) -> i64 {
     if b == 0 {
-        panic!("{}", ZERO_DIVISION_MSG);
+        raise_zero_division();
     }
     py_mod_i64_impl(a, b)
 }
@@ -428,7 +428,7 @@ pub fn py_mod_i64(a: i64, b: i64) -> i64 {
 #[inline]
 pub fn py_mod_f64(a: f64, b: f64) -> f64 {
     if b == 0.0 {
-        panic!("{}", ZERO_DIVISION_MSG);
+        raise_zero_division();
     }
     py_mod_f64_impl(a, b)
 }

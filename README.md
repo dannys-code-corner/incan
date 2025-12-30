@@ -8,8 +8,8 @@ The goal isn’t to be Python, but to be a smooth path for developers familiar w
 
 Incan is also for Rust developers who want a simpler, more expressive way to write everyday application code without giving up Rust’s strengths. It keeps the “good parts” of Rust—static typing, explicit error handling, and native performance—but offers a more concise surface syntax for modeling data, composing behavior, and writing glue code. You can still drop down to Rust crates when needed, while using Incan for the parts where you’d rather focus on intent than boilerplate.
 
-> **⚠️ Alpha Software ⚠️**  
-> Incan is in active development. The language, compiler, and APIs are subject to change.  
+> **⚠️ Beta Software ⚠️**  
+> Incan is in active development. The language, compiler, and APIs may still change, although we will try to keep it stable as much as possible.  
 > Feedback and contributions are of course welcome!
 
 ## Features

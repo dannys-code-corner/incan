@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use incan_core::lang::types::{collections, numerics, stringlike};
-use incan_core::lang::{builtins, derives, keywords, operators, punctuation, surface};
+use incan_core::lang::{builtins, derives, errors, keywords, operators, punctuation, surface};
 
 fn trim_trailing_newlines_to_at_most_two(out: &mut String) {
     let mut count = 0usize;
@@ -80,6 +80,7 @@ fn write_language_reference(path: &Path) {
 
     out.push_str("## Contents\n\n");
     out.push_str("- [Keywords](#keywords)\n");
+    out.push_str("- [Builtin exceptions](#builtin-exceptions)\n");
     out.push_str("- [Builtin functions](#builtin-functions)\n");
     out.push_str("- [Derives](#derives)\n");
     out.push_str("- [Operators](#operators)\n");
@@ -93,6 +94,7 @@ fn write_language_reference(path: &Path) {
     out.push_str("- [Surface methods](#surface-methods)\n\n");
 
     render_keywords_section(&mut out);
+    render_exceptions_section(&mut out);
     render_builtins_section(&mut out);
     render_derives_section(&mut out);
     render_operators_section(&mut out);
@@ -157,6 +159,54 @@ fn render_keywords_section(out: &mut String) {
         }
         out.push_str(&format!("#### `{:?}`\n\n", k.id));
         for ex in k.examples {
+            out.push_str("```incan\n");
+            out.push_str(ex.code);
+            out.push_str("\n```\n\n");
+            if let Some(note) = ex.note {
+                out.push_str(note);
+                out.push_str("\n\n");
+            }
+        }
+    }
+}
+
+fn render_exceptions_section(out: &mut String) {
+    start_section(out, "## Builtin exceptions");
+
+    out.push_str("| Id | Canonical | Aliases | Description | RFC | Since | Stability |\n");
+    out.push_str("|---|---|---|---|---|---|---|\n");
+
+    for e in errors::EXCEPTIONS {
+        let id = format!("{:?}", e.id);
+        let canonical = format!("`{}`", e.canonical);
+        let aliases = if e.aliases.is_empty() {
+            String::new()
+        } else {
+            e.aliases
+                .iter()
+                .map(|a| format!("`{}`", a))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let desc = e.description;
+        let rfc = e.introduced_in_rfc;
+        let since = e.since_version.unwrap_or("");
+        let stability = format!("{:?}", e.stability);
+
+        out.push_str(&format!(
+            "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("### Examples\n\n");
+    out.push_str("Only exceptions with examples are listed here.\n\n");
+    for e in errors::EXCEPTIONS {
+        if e.examples.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("#### `{:?}`\n\n", e.id));
+        for ex in e.examples {
             out.push_str("```incan\n");
             out.push_str(ex.code);
             out.push_str("\n```\n\n");

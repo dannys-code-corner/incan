@@ -3,7 +3,7 @@
 
 use incan::frontend::typechecker::{ConstValue, TypeCheckInfo};
 use incan::frontend::{lexer, parser, typechecker};
-use incan_core::errors::{STRING_INDEX_OUT_OF_RANGE_MSG, STRING_SLICE_STEP_ZERO_MSG};
+use incan_core::errors::IncanError;
 use incan_core::strings::{str_char_at, str_concat, str_contains, str_slice};
 use incan_stdlib::strings::{str_concat as rt_str_concat, str_index as rt_str_index, str_slice as rt_str_slice};
 
@@ -50,6 +50,11 @@ fn semantics_vs_runtime_index_and_slice() {
     assert_eq!(
         rt_str_slice(s, Some(4), Some(0), Some(-2)),
         str_slice(s, Some(4), Some(0), Some(-2)).unwrap()
+    );
+    // Slice backwards with default end (Python-like `[::-1]` behavior)
+    assert_eq!(
+        rt_str_slice(s, Some(-1), None, Some(-1)),
+        str_slice(s, Some(-1), None, Some(-1)).unwrap()
     );
     // Negative start
     assert_eq!(
@@ -128,8 +133,9 @@ pub const S: str = "abc"
 pub const BAD: str = S[99]
 "#;
     let errs = run_const_eval_with_info(idx_src).unwrap_err();
+    let expected = IncanError::string_index_out_of_range().to_string();
     assert!(
-        errs.iter().any(|e| e.contains(STRING_INDEX_OUT_OF_RANGE_MSG)),
+        errs.iter().any(|e| e.contains(&expected)),
         "expected index error, got {errs:?}"
     );
 
@@ -138,8 +144,9 @@ pub const S: str = "abc"
 pub const BAD: str = S[0:3:0]
 "#;
     let errs = run_const_eval_with_info(step_src).unwrap_err();
+    let expected = IncanError::slice_step_zero().to_string();
     assert!(
-        errs.iter().any(|e| e.contains(STRING_SLICE_STEP_ZERO_MSG)),
+        errs.iter().any(|e| e.contains(&expected)),
         "expected slice step error, got {errs:?}"
     );
 }

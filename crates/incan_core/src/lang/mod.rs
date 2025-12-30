@@ -25,6 +25,7 @@
 
 pub mod builtins;
 pub mod derives;
+pub mod errors;
 pub mod keywords;
 pub mod operators;
 pub mod punctuation;

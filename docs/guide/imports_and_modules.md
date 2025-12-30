@@ -144,6 +144,7 @@ len(collection)     # Get length
 # Iteration
 range(n)            # Iterator 0..n
 range(start, end)   # Iterator start..end
+range(start, end, step)  # Iterator start..end with a custom step (Python-like)
 range(start..end)   # Iterator start..end (Rust-style range literal)
 range(start..=end)  # Iterator start..=end (inclusive end)
 enumerate(iter)     # Iterator with indices
@@ -164,7 +165,12 @@ Incan syntax options for `range`:
 - Python-style: `range(start, end)`
 - Single-arg: `range(n)` yields `0..n`
 
-Choose whichever style you prefer; both are equivalent in Incan and compile to Rust ranges.
+Choose whichever style you prefer; both are equivalent in Incan and compile to efficient iteration.
+
+Notes:
+
+- `range(start, end, step)` is Python-like and supports negative steps.
+- `step == 0` panics at runtime with `ValueError: range() arg 3 must not be zero`.
 
 ## Special import: `import this`
 

@@ -198,8 +198,8 @@ pub fn derive_incan_json(input: TokenStream) -> TokenStream {
         impl #name {
             /// Serializes this instance to a JSON string
             pub fn to_json(&self) -> String {
-                serde_json::to_string(self).unwrap_or_else(|e| {
-                    panic!("Failed to serialize {}: {}", stringify!(#name), e)
+                serde_json::to_string(self).unwrap_or_else(|_| {
+                    incan_stdlib::errors::raise_json_serialization_error(stringify!(#name))
                 })
             }
 
@@ -210,8 +210,8 @@ pub fn derive_incan_json(input: TokenStream) -> TokenStream {
 
             /// Serializes this instance to a pretty-printed JSON string
             pub fn to_json_pretty(&self) -> String {
-                serde_json::to_string_pretty(self).unwrap_or_else(|e| {
-                    panic!("Failed to serialize {}: {}", stringify!(#name), e)
+                serde_json::to_string_pretty(self).unwrap_or_else(|_| {
+                    incan_stdlib::errors::raise_json_serialization_error(stringify!(#name))
                 })
             }
         }

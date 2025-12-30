@@ -7,6 +7,7 @@
 ## Contents
 
 - [Keywords](#keywords)
+- [Builtin exceptions](#builtin-exceptions)
 - [Builtin functions](#builtin-functions)
 - [Derives](#derives)
 - [Operators](#operators)
@@ -70,6 +71,125 @@
 ### Examples
 
 Only keywords with examples are listed here.
+
+## Builtin exceptions
+
+| Id | Canonical | Aliases | Description | RFC | Since | Stability |
+|---|---|---|---|---|---|---|
+| ValueError | `ValueError` |  | Raised when an operation receives a value of the right type but an invalid value. | RFC 000 |  | Stable |
+| TypeError | `TypeError` |  | Raised when an operation receives a value of an inappropriate type. | RFC 000 |  | Stable |
+| ZeroDivisionError | `ZeroDivisionError` |  | Raised when dividing or taking modulo by zero (Python-like numeric semantics). | RFC 000 |  | Stable |
+| IndexError | `IndexError` |  | Raised when an index is out of bounds (e.g. string/list indexing). | RFC 000 |  | Stable |
+| KeyError | `KeyError` |  | Raised when a dict key is missing. | RFC 000 |  | Stable |
+| JsonDecodeError | `JSONDecodeError` |  | Raised when parsing JSON fails (Python-like). | RFC 000 |  | Stable |
+
+### Examples
+
+Only exceptions with examples are listed here.
+
+#### `ValueError`
+
+```incan
+def main() -> None:
+    print("abc"[0:3:0])  # step 0
+
+```
+
+Panics at runtime with `ValueError: slice step cannot be zero`.
+
+```incan
+def main() -> None:
+    _ = int("abc")
+
+```
+
+Panics at runtime with `ValueError: cannot convert 'abc' to int`.
+
+```incan
+def main() -> None:
+    _ = float("abc")
+
+```
+
+Panics at runtime with `ValueError: cannot convert 'abc' to float`.
+
+```incan
+def main() -> None:
+    # range step cannot be zero (Python-like)
+    for i in range(0, 5, 0):
+        print(i)
+
+```
+
+Panics at runtime with `ValueError: range() arg 3 must not be zero`.
+
+#### `TypeError`
+
+```incan
+def main() -> None:
+    # Example: JSON serialization failures (e.g. NaN/Inf) raise TypeError
+    _ = json_stringify(nan)
+
+```
+
+Panics at runtime with a `TypeError: ... is not JSON serializable` message.
+
+#### `ZeroDivisionError`
+
+```incan
+def main() -> None:
+    print(1 / 0)
+
+```
+
+Panics at runtime with `ZeroDivisionError: float division by zero`.
+
+#### `IndexError`
+
+```incan
+def main() -> None:
+    print("a"[99])
+
+```
+
+Panics at runtime with `IndexError: ...`.
+
+```incan
+def main() -> None:
+    xs: list[int] = [1, 2, 3]
+    print(xs[99])
+
+```
+
+Panics at runtime with `IndexError: index 99 out of range for list of length 3`.
+
+#### `KeyError`
+
+```incan
+def main() -> None:
+    d: Dict[str, int] = {"a": 1}
+    print(d["b"])
+
+```
+
+Panics at runtime with `KeyError: 'b' not found in dict`.
+
+#### `JsonDecodeError`
+
+```incan
+@derive(Deserialize)
+model User:
+    name: str
+
+def main() -> None:
+    bad: str = "{"
+    match User.from_json(bad):
+        case Ok(u): print(u.name)
+        case Err(e): print(e)
+
+```
+
+`from_json` returns `Result[T, str]`; on failure the error string is prefixed with `JSONDecodeError: ...`.
 
 ## Builtin functions
 

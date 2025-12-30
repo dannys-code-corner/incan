@@ -3,7 +3,8 @@
 //! This module is used by generated Rust code. Its functions intentionally route behavior through `incan_core::strings`
 //! so runtime behavior (including panics/messages) stays aligned with compiler expectations and parity tests.
 
-use incan_core::errors::{STRING_INDEX_OUT_OF_RANGE_MSG, STRING_SLICE_STEP_ZERO_MSG};
+use crate::errors::raise;
+use incan_core::errors::IncanError;
 use incan_core::strings::{
     StringAccessError, fstring as semantics_fstring, str_char_at as semantics_str_char_at,
     str_cmp as semantics_str_cmp, str_concat as semantics_str_concat, str_contains as semantics_str_contains,
@@ -26,10 +27,11 @@ use incan_core::strings::{
 /// ## Panics
 ///
 /// - If `idx` is out of range: with `IndexError: string index out of range`.
-pub fn str_index(s: &str, idx: i64) -> String {
+pub fn str_index<S: AsRef<str>>(s: S, idx: i64) -> String {
+    let s = s.as_ref();
     match semantics_str_char_at(s, idx) {
         Ok(ch) => ch,
-        Err(StringAccessError::IndexOutOfRange) => panic!("{}", STRING_INDEX_OUT_OF_RANGE_MSG),
+        Err(StringAccessError::IndexOutOfRange) => raise(IncanError::string_index_out_of_range()),
         Err(StringAccessError::SliceStepZero) => unreachable!("step zero is not used for index"),
     }
 }
@@ -50,13 +52,14 @@ pub fn str_index(s: &str, idx: i64) -> String {
 /// ## Panics
 ///
 /// - If `step == 0`: with `ValueError: slice step cannot be zero`.
-pub fn str_slice(s: &str, start: Option<i64>, end: Option<i64>, step: Option<i64>) -> String {
+pub fn str_slice<S: AsRef<str>>(s: S, start: Option<i64>, end: Option<i64>, step: Option<i64>) -> String {
+    let s = s.as_ref();
     match semantics_str_slice(s, start, end, step) {
         Ok(out) => out,
-        Err(StringAccessError::SliceStepZero) => panic!("{}", STRING_SLICE_STEP_ZERO_MSG),
+        Err(StringAccessError::SliceStepZero) => raise(IncanError::slice_step_zero()),
         Err(StringAccessError::IndexOutOfRange) => {
             // Should not happen because slice clamps; keep aligned if policy changes.
-            panic!("{}", STRING_INDEX_OUT_OF_RANGE_MSG)
+            raise(IncanError::string_index_out_of_range())
         }
     }
 }

@@ -5,7 +5,11 @@
 
 #![deny(clippy::unwrap_used)]
 
+pub mod collections;
+pub mod conversions;
+pub mod errors;
 pub mod frozen;
+pub mod iter;
 pub mod num;
 pub mod prelude;
 pub mod reflection;

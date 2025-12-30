@@ -8,21 +8,12 @@
 //! - **Negative indices**: supported (Python-style): `s[-1]` is the last scalar.
 //! - **Slicing**: Python-like `start`, `end`, `step` (default `step = 1`), with negative indices
 //!   and bounds clamping.
-//! - **Error messages**: message constants exported here are intended to be reused across compiler
-//!   diagnostics and runtime panics.
+//! - **Error messages**: user-facing exception formatting lives in [`crate::errors::IncanError`].
 
+use core::fmt;
 use std::cmp::Ordering;
 
-/// Describe a string index-out-of-range error message.
-///
-/// ## Notes
-/// - This is intended to be shared between compiler diagnostics and runtime panics.
-pub const STRING_INDEX_OUT_OF_RANGE_MSG: &str = "IndexError: string index out of range";
-/// Describe a string slice step-zero error message.
-///
-/// ## Notes
-/// - This is intended to be shared between compiler diagnostics and runtime panics.
-pub const STRING_SLICE_STEP_ZERO_MSG: &str = "ValueError: slice step cannot be zero";
+use crate::errors::IncanError;
 
 /// Represent string access errors produced by semantic-core helpers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,16 +22,9 @@ pub enum StringAccessError {
     SliceStepZero,
 }
 
-impl StringAccessError {
-    /// Return the canonical error message for this access error.
-    ///
-    /// ## Returns
-    /// - (`&'static str`): the shared error message string.
-    pub fn message(self) -> &'static str {
-        match self {
-            StringAccessError::IndexOutOfRange => STRING_INDEX_OUT_OF_RANGE_MSG,
-            StringAccessError::SliceStepZero => STRING_SLICE_STEP_ZERO_MSG,
-        }
+impl fmt::Display for StringAccessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", IncanError::from(*self))
     }
 }
 
@@ -187,7 +171,9 @@ pub fn str_slice(
     if start_idx < 0 {
         start_idx += len;
     }
-    if end_idx < 0 {
+    // Important: for negative steps, `end = None` uses the sentinel `-1` (not `len-1`).
+    // Python's slice normalization keeps this sentinel as-is.
+    if end.is_some() && end_idx < 0 {
         end_idx += len;
     }
 
