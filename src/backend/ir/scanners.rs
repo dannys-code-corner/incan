@@ -1,12 +1,13 @@
 //! Feature scanners and collectors for IR codegen
 //!
-//! This module centralizes feature detection logic previously embedded in `IrCodegen`.
-//! The functions here are pure analyzers over the parsed AST and do not mutate global state.
+//! This module centralizes feature detection logic. The functions here are pure analyzers over the parsed AST and do
+//! not mutate global state.
 
 use std::collections::HashSet;
 
 use crate::frontend::ast::{self, Declaration, Expr, Literal, Program, Spanned, Statement};
 use crate::frontend::ast::{CallArg, DecoratorArg, FStringPart, ImportKind};
+use incan_core::lang::builtins::{self, BuiltinFnId};
 use incan_core::lang::derives::{self, DeriveId};
 
 /// Detect whether serde derives are used anywhere in the program
@@ -35,7 +36,147 @@ pub fn detect_serde_usage(program: &Program) -> bool {
             }
         }
     }
+    // Also enable serde if JSON builtins are used (e.g. `json_stringify(...)`).
+    if program_uses_json_stringify(program) {
+        return true;
+    }
     false
+}
+
+/// Detect whether the program uses the `json_stringify` builtin.
+fn program_uses_json_stringify(program: &Program) -> bool {
+    for decl in &program.declarations {
+        match &decl.node {
+            Declaration::Function(func) => {
+                if body_uses_json_stringify(&func.body) {
+                    return true;
+                }
+            }
+            Declaration::Model(model) => {
+                for method in &model.methods {
+                    if let Some(body) = &method.node.body {
+                        if body_uses_json_stringify(body) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            Declaration::Class(class) => {
+                for method in &class.methods {
+                    if let Some(body) = &method.node.body {
+                        if body_uses_json_stringify(body) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn body_uses_json_stringify(body: &[Spanned<Statement>]) -> bool {
+    body.iter().any(|stmt| stmt_uses_json_stringify(&stmt.node))
+}
+
+fn stmt_uses_json_stringify(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Expr(expr) => expr_uses_json_stringify(&expr.node),
+        Statement::Assignment(assign) => expr_uses_json_stringify(&assign.value.node),
+        Statement::CompoundAssignment(assign) => expr_uses_json_stringify(&assign.value.node),
+        Statement::FieldAssignment(assign) => expr_uses_json_stringify(&assign.value.node),
+        Statement::IndexAssignment(assign) => expr_uses_json_stringify(&assign.value.node),
+        Statement::TupleUnpack(unpack) => expr_uses_json_stringify(&unpack.value.node),
+        Statement::TupleAssign(assign) => expr_uses_json_stringify(&assign.value.node),
+        Statement::Return(Some(expr)) => expr_uses_json_stringify(&expr.node),
+        Statement::If(if_stmt) => {
+            body_uses_json_stringify(&if_stmt.then_body)
+                || if_stmt.else_body.as_ref().is_some_and(|b| body_uses_json_stringify(b))
+        }
+        Statement::While(while_stmt) => body_uses_json_stringify(&while_stmt.body),
+        Statement::For(for_stmt) => body_uses_json_stringify(&for_stmt.body),
+        _ => false,
+    }
+}
+
+fn expr_uses_json_stringify(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call(function, args) => {
+            if let Expr::Ident(name) = &function.node {
+                if builtins::from_str(name.as_str()) == Some(BuiltinFnId::JsonStringify) {
+                    return true;
+                }
+            }
+            expr_uses_json_stringify(&function.node)
+                || args.iter().any(|arg| match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => expr_uses_json_stringify(&e.node),
+                })
+        }
+        Expr::Binary(left, _, right) => expr_uses_json_stringify(&left.node) || expr_uses_json_stringify(&right.node),
+        Expr::Unary(_, expr) => expr_uses_json_stringify(&expr.node),
+        Expr::List(items) | Expr::Tuple(items) | Expr::Set(items) => {
+            items.iter().any(|item| expr_uses_json_stringify(&item.node))
+        }
+        Expr::Dict(pairs) => pairs
+            .iter()
+            .any(|(k, v)| expr_uses_json_stringify(&k.node) || expr_uses_json_stringify(&v.node)),
+        Expr::If(if_expr) => {
+            body_uses_json_stringify(&if_expr.then_body)
+                || if_expr.else_body.as_ref().is_some_and(|b| body_uses_json_stringify(b))
+        }
+        Expr::Match(scrutinee, arms) => {
+            expr_uses_json_stringify(&scrutinee.node)
+                || arms.iter().any(|arm| {
+                    let arm = &arm.node;
+                    let guard = arm.guard.as_ref().is_some_and(|g| expr_uses_json_stringify(&g.node));
+                    let body = match &arm.body {
+                        ast::MatchBody::Expr(e) => expr_uses_json_stringify(&e.node),
+                        ast::MatchBody::Block(stmts) => body_uses_json_stringify(stmts),
+                    };
+                    guard || body
+                })
+        }
+        Expr::MethodCall(base, _method, args) => {
+            expr_uses_json_stringify(&base.node)
+                || args.iter().any(|arg| match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => expr_uses_json_stringify(&e.node),
+                })
+        }
+        Expr::Index(base, idx) => expr_uses_json_stringify(&base.node) || expr_uses_json_stringify(&idx.node),
+        Expr::Slice(base, slice) => {
+            expr_uses_json_stringify(&base.node)
+                || slice.start.as_ref().is_some_and(|e| expr_uses_json_stringify(&e.node))
+                || slice.end.as_ref().is_some_and(|e| expr_uses_json_stringify(&e.node))
+                || slice.step.as_ref().is_some_and(|e| expr_uses_json_stringify(&e.node))
+        }
+        Expr::Field(base, _field) => expr_uses_json_stringify(&base.node),
+        Expr::Range { start, end, .. } => expr_uses_json_stringify(&start.node) || expr_uses_json_stringify(&end.node),
+        Expr::Await(inner) => expr_uses_json_stringify(&inner.node),
+        Expr::Try(inner) => expr_uses_json_stringify(&inner.node),
+        Expr::Paren(inner) => expr_uses_json_stringify(&inner.node),
+        Expr::Constructor(_name, args) => args.iter().any(|arg| match arg {
+            CallArg::Positional(e) | CallArg::Named(_, e) => expr_uses_json_stringify(&e.node),
+        }),
+        Expr::ListComp(comp) => {
+            expr_uses_json_stringify(&comp.expr.node)
+                || expr_uses_json_stringify(&comp.iter.node)
+                || comp.filter.as_ref().is_some_and(|f| expr_uses_json_stringify(&f.node))
+        }
+        Expr::DictComp(comp) => {
+            expr_uses_json_stringify(&comp.key.node)
+                || expr_uses_json_stringify(&comp.value.node)
+                || expr_uses_json_stringify(&comp.iter.node)
+                || comp.filter.as_ref().is_some_and(|f| expr_uses_json_stringify(&f.node))
+        }
+        Expr::Closure(_params, body) => expr_uses_json_stringify(&body.node),
+        Expr::FString(parts) => parts.iter().any(|p| match p {
+            FStringPart::Literal(_) => false,
+            FStringPart::Expr(e) => expr_uses_json_stringify(&e.node),
+        }),
+        Expr::Yield(Some(e)) => expr_uses_json_stringify(&e.node),
+        _ => false,
+    }
 }
 
 /// Detect whether async runtime is required

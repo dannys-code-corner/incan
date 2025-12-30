@@ -267,9 +267,6 @@ pub fn py_mod_f64_impl(a: f64, b: f64) -> f64 {
     }
 }
 
-/// Standardized message used for division/modulo by zero in numeric helpers.
-pub const ZERO_DIVISION_MSG: &str = "ZeroDivisionError: float division by zero";
-
 #[cfg(test)]
 mod tests {
     use super::*;

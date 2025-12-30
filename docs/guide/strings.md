@@ -19,6 +19,39 @@ String methods use Python-style names for familiarity.
 | `s.contains("x")` | `"x" in s` | `s.contains("x")` |
 | `s.replace("a", "b")` | `s.replace("a", "b")` | `s.replace("a", "b")` |
 
+## Indexing & Slicing (Python-like)
+
+Incan supports Python-style indexing and slicing for strings:
+
+- **Indexing**: `s[i]`
+  - Supports **negative indices** (e.g. `s[-1]` is the last character).
+  - Indexing is based on **Unicode scalars** (Rust `char`), not bytes.
+  - Out of range panics with `IndexError: string index out of range`.
+- **Slicing**: `s[start:end:step]`
+  - Each component is optional (e.g. `s[:3]`, `s[1:]`, `s[::2]`, `s[::-1]`).
+  - `step` defaults to `1`.
+  - `step == 0` panics with `ValueError: slice step cannot be zero`.
+  - Negative `step` is supported (Python-like). For example, `s[::-1]` reverses a string.
+
+```incan
+def main() -> None:
+    s = "héllo"
+    print(s[1])     # "é"
+    print(s[-1])    # "o"
+    print(s[1:4])   # "éll"
+    print(s[::2])   # "hlo"
+    print(s[::-1])  # "olléh"
+```
+
+The same slicing rules apply to `List[T]`:
+
+```incan
+def main() -> None:
+    xs: list[int] = [1, 2, 3]
+    for x in xs[::-1]:
+        print(x)
+```
+
 ## String Methods
 
 ### Case Conversion

@@ -565,7 +565,9 @@ impl<'a> IrEmitter<'a> {
                     regular_methods.push(quote! {
                         /// Serialize this model to a JSON string
                         pub fn to_json(&self) -> String {
-                            serde_json::to_string(self).expect("JSONError: failed to serialize to JSON")
+                            serde_json::to_string(self).unwrap_or_else(|_| {
+                                incan_stdlib::errors::raise_json_serialization_error(stringify!(#target_type))
+                            })
                         }
                     });
                 }
@@ -573,7 +575,8 @@ impl<'a> IrEmitter<'a> {
                     regular_methods.push(quote! {
                         /// Deserialize a JSON string into this model
                         pub fn from_json(json_str: String) -> Result<Self, String> {
-                            serde_json::from_str(&json_str).map_err(|e| e.to_string())
+                            serde_json::from_str(&json_str)
+                                .map_err(|e| incan_stdlib::errors::json_decode_error_string(e))
                         }
                     });
                 }

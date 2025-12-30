@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use incan_core::lang::builtins;
+use incan_core::lang::errors;
 use incan_core::lang::keywords;
 use incan_core::lang::operators;
 use incan_core::lang::punctuation;
@@ -83,6 +84,48 @@ fn builtins_spellings_unique_and_resolvable() {
             if let Some(prev) = seen.insert(alias, info.id) {
                 panic!(
                     "duplicate builtin alias spelling {:?}: {:?} and {:?}",
+                    alias, prev, info.id
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn exceptions_spellings_unique_and_resolvable() {
+    let mut seen: HashMap<&'static str, incan_core::errors::ErrorKind> = HashMap::new();
+
+    for info in errors::EXCEPTIONS {
+        assert_eq!(
+            errors::from_str(info.canonical),
+            Some(info.id),
+            "exception canonical spelling not resolvable: {}",
+            info.canonical
+        );
+        assert_eq!(
+            errors::as_str(info.id),
+            info.canonical,
+            "exception as_str mismatch for {:?}",
+            info.id
+        );
+
+        if let Some(prev) = seen.insert(info.canonical, info.id) {
+            panic!(
+                "duplicate exception spelling {:?}: {:?} and {:?}",
+                info.canonical, prev, info.id
+            );
+        }
+
+        for &alias in info.aliases {
+            assert_eq!(
+                errors::from_str(alias),
+                Some(info.id),
+                "exception alias not resolvable: {}",
+                alias
+            );
+            if let Some(prev) = seen.insert(alias, info.id) {
+                panic!(
+                    "duplicate exception alias spelling {:?}: {:?} and {:?}",
                     alias, prev, info.id
                 );
             }

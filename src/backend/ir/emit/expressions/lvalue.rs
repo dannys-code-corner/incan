@@ -18,6 +18,33 @@ use super::super::super::types::IrType;
 use super::super::{EmitError, IrEmitter};
 
 impl<'a> IrEmitter<'a> {
+    /// Emit a list indexing lvalue using stdlib helpers.
+    ///
+    /// This centralizes the `list_get_mut` emission so we don't duplicate it across:
+    /// - `IrExprKind::Index` (lvalue expression context)
+    /// - `AssignTarget::Index` (statement assignment target context)
+    ///
+    /// The stdlib helper provides Python-like negative indexing and canonical `IndexError` messages.
+    fn emit_list_get_mut_lvalue(
+        &self,
+        object: &TypedExpr,
+        index: &TypedExpr,
+        object_tokens: &TokenStream,
+    ) -> Result<TokenStream, EmitError> {
+        let idx_tokens = self.emit_expr(index)?;
+        let idx_i64 = quote! { (#idx_tokens) as i64 };
+
+        // If the list itself is already a `&mut` (e.g. a function parameter), pass it through directly.
+        // Otherwise, take `&mut` to borrow the owned `Vec<T>`.
+        let list_mut = if matches!(&object.ty, IrType::RefMut(_)) {
+            quote! { #object_tokens }
+        } else {
+            quote! { &mut #object_tokens }
+        };
+
+        Ok(quote! { *incan_stdlib::collections::list_get_mut(#list_mut, #idx_i64) })
+    }
+
     /// Emit an IR expression in lvalue (assignment-target) context.
     ///
     /// ## Parameters
@@ -40,16 +67,33 @@ impl<'a> IrEmitter<'a> {
             }
             IrExprKind::Index { object, index } => {
                 let o = self.emit_lvalue_expr(object)?;
+                let obj_ty = match &object.ty {
+                    IrType::Ref(inner) | IrType::RefMut(inner) => inner.as_ref(),
+                    other => other,
+                };
 
-                // Use the shared negative-index handling from indexing module
+                // Lists: Python-style negative indices + canonical IndexError via stdlib helper.
+                if matches!(obj_ty, IrType::List(_)) {
+                    return self.emit_list_get_mut_lvalue(object, index, &o);
+                }
+
+                // Fallback for non-list targets: emit direct Rust indexing.
+                // This may panic with Rust-native messages for unsupported/unknown container types.
                 let index_expr = self.emit_index_with_negative_handling(object, index, &o)?;
-
                 Ok(quote! { #o[#index_expr] })
             }
             IrExprKind::Field { object, field } => {
                 let o = self.emit_lvalue_expr(object)?;
                 let f = format_ident!("{}", field);
-                Ok(quote! { #o.#f })
+                // Only parenthesize when needed.
+                //
+                // `emit_lvalue_expr` may emit a leading `*` for list indexing (`*list_get_mut(..)`).
+                // Rust parses `*expr.field` as `*(expr.field)`, so we must use `(*expr).field` there.
+                if matches!(object.kind, IrExprKind::Index { .. }) {
+                    Ok(quote! { (#o).#f })
+                } else {
+                    Ok(quote! { #o.#f })
+                }
             }
             _ => self.emit_expr(expr),
         }
@@ -77,13 +121,27 @@ impl<'a> IrEmitter<'a> {
             AssignTarget::Field { object, field } => {
                 let o = self.emit_lvalue_expr(object)?;
                 let f = format_ident!("{}", field);
-                Ok(quote! { #o.#f })
+                // Same precedence rule as in `emit_lvalue_expr`: only parenthesize when the receiver may start with a
+                // unary `*` (e.g. list index lvalues).
+                if matches!(object.kind, IrExprKind::Index { .. }) {
+                    Ok(quote! { (#o).#f })
+                } else {
+                    Ok(quote! { #o.#f })
+                }
             }
             AssignTarget::Index { object, index } => {
                 let o = self.emit_lvalue_expr(object)?;
+                let obj_ty = match &object.ty {
+                    IrType::Ref(inner) | IrType::RefMut(inner) => inner.as_ref(),
+                    other => other,
+                };
+
+                // Lists: Python-style negative indices + canonical IndexError via stdlib helper.
+                if matches!(obj_ty, IrType::List(_)) {
+                    return self.emit_list_get_mut_lvalue(object, index, &o);
+                }
 
                 let index_expr = self.emit_assign_target_index(object, index, &o)?;
-
                 Ok(quote! { #o[#index_expr] })
             }
         }

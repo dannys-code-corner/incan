@@ -78,7 +78,9 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     match &arg.ty {
-                        IrType::String => Ok(quote! { #a.parse::<i64>().unwrap() }),
+                        IrType::String | IrType::FrozenStr => {
+                            Ok(quote! { incan_stdlib::conversions::int_from_str(&#a) })
+                        }
                         IrType::Float => Ok(quote! { #a as i64 }),
                         IrType::Bool => Ok(quote! { if #a { 1 } else { 0 } }),
                         _ => Ok(quote! { #a as i64 }),
@@ -91,7 +93,9 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     match &arg.ty {
-                        IrType::String => Ok(quote! { #a.parse::<f64>().unwrap() }),
+                        IrType::String | IrType::FrozenStr => {
+                            Ok(quote! { incan_stdlib::conversions::float_from_str(&#a) })
+                        }
                         IrType::Int => Ok(quote! { #a as f64 }),
                         _ => Ok(quote! { #a as f64 }),
                     }
@@ -147,7 +151,11 @@ impl<'a> IrEmitter<'a> {
             BuiltinFn::JsonStringify => {
                 if let Some(arg) = args.first() {
                     let value = self.emit_expr(arg)?;
-                    Ok(quote! { serde_json::to_string(&#value).unwrap() })
+                    Ok(quote! {
+                        serde_json::to_string(&#value).unwrap_or_else(|_| {
+                            incan_stdlib::errors::raise_json_serialization_error(std::any::type_name_of_val(&#value))
+                        })
+                    })
                 } else {
                     Ok(quote! { String::from("null") })
                 }
@@ -227,7 +235,9 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     match &arg.ty {
-                        IrType::String => Ok(Some(quote! { #a.parse::<i64>().unwrap() })),
+                        IrType::String | IrType::FrozenStr => {
+                            Ok(Some(quote! { incan_stdlib::conversions::int_from_str(&#a) }))
+                        }
                         IrType::Float => Ok(Some(quote! { #a as i64 })),
                         IrType::Bool => Ok(Some(quote! { if #a { 1 } else { 0 } })),
                         _ => Ok(Some(quote! { #a as i64 })),
@@ -240,7 +250,9 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     match &arg.ty {
-                        IrType::String => Ok(Some(quote! { #a.parse::<f64>().unwrap() })),
+                        IrType::String | IrType::FrozenStr => {
+                            Ok(Some(quote! { incan_stdlib::conversions::float_from_str(&#a) }))
+                        }
                         IrType::Int => Ok(Some(quote! { #a as f64 })),
                         _ => Ok(Some(quote! { #a as f64 })),
                     }
@@ -294,7 +306,11 @@ impl<'a> IrEmitter<'a> {
             BuiltinFnId::JsonStringify => {
                 if let Some(arg) = args.first() {
                     let value = self.emit_expr(arg)?;
-                    Ok(Some(quote! { serde_json::to_string(&#value).unwrap() }))
+                    Ok(Some(quote! {
+                        serde_json::to_string(&#value).unwrap_or_else(|_| {
+                            incan_stdlib::errors::raise_json_serialization_error(std::any::type_name_of_val(&#value))
+                        })
+                    }))
                 } else {
                     Ok(None)
                 }
@@ -320,35 +336,37 @@ impl<'a> IrEmitter<'a> {
                     (Some(s), Some(e), false) => {
                         let ss = self.emit_expr(s)?;
                         let ee = self.emit_expr(e)?;
-                        return Ok(Some(quote! { #ss..#ee }));
+                        return Ok(Some(quote! { incan_stdlib::iter::range(#ss, #ee, 1) }));
                     }
                     (Some(s), Some(e), true) => {
                         let ss = self.emit_expr(s)?;
                         let ee = self.emit_expr(e)?;
-                        return Ok(Some(quote! { #ss..=#ee }));
+                        // Inclusive ranges are not a Python `range` feature; interpret as Rust-like convenience:
+                        // `start..=end` becomes `range(start, end+1, 1)`.
+                        return Ok(Some(quote! { incan_stdlib::iter::range(#ss, (#ee) + 1, 1) }));
                     }
                     (None, Some(e), _) => {
                         let ee = self.emit_expr(e)?;
-                        return Ok(Some(quote! { 0..#ee }));
+                        return Ok(Some(quote! { incan_stdlib::iter::range(0, #ee, 1) }));
                     }
                     _ => {}
                 }
             } else {
                 let end = self.emit_expr(&args[0])?;
-                return Ok(Some(quote! { 0..#end }));
+                return Ok(Some(quote! { incan_stdlib::iter::range(0, #end, 1) }));
             }
         }
         match args.len() {
             2 => {
                 let start = self.emit_expr(&args[0])?;
                 let end = self.emit_expr(&args[1])?;
-                Ok(Some(quote! { #start..#end }))
+                Ok(Some(quote! { incan_stdlib::iter::range(#start, #end, 1) }))
             }
             3 => {
                 let start = self.emit_expr(&args[0])?;
                 let end = self.emit_expr(&args[1])?;
                 let step = self.emit_expr(&args[2])?;
-                Ok(Some(quote! { (#start..#end).step_by(#step as usize) }))
+                Ok(Some(quote! { incan_stdlib::iter::range(#start, #end, (#step) as i64) }))
             }
             _ => Ok(None),
         }

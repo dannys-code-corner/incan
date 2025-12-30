@@ -30,7 +30,6 @@ impl<'a> IrEmitter<'a> {
         index: &TypedExpr,
     ) -> Result<TokenStream, EmitError> {
         let o = self.emit_expr(object)?;
-        let index_expr = self.emit_index_with_negative_handling(object, index, &o)?;
         let obj_ty = match &object.ty {
             IrType::Ref(inner) | IrType::RefMut(inner) => inner.as_ref(),
             other => other,
@@ -39,27 +38,39 @@ impl<'a> IrEmitter<'a> {
         // Strings: delegate to stdlib helper (Unicode-scalar indexing with bounds/negative support).
         if matches!(obj_ty, IrType::String | IrType::FrozenStr) {
             let idx_tokens = self.emit_expr(index)?;
-            return Ok(quote! { incan_stdlib::strings::str_index(#o.as_str(), (#idx_tokens) as i64) });
+            return Ok(quote! { incan_stdlib::strings::str_index(&#o, (#idx_tokens) as i64) });
         }
 
         match obj_ty {
             IrType::Dict(_, v) => {
                 let i = self.emit_expr(index)?;
                 if v.is_copy() {
-                    Ok(quote! { #o[&#i] })
+                    Ok(quote! { *incan_stdlib::collections::dict_get(&#o, &#i) })
                 } else {
-                    Ok(quote! { #o[&#i].clone() })
+                    Ok(quote! { incan_stdlib::collections::dict_get(&#o, &#i).clone() })
                 }
             }
             IrType::List(elem) => {
+                let idx_tokens = self.emit_expr(index)?;
+                let idx_i64 = quote! { (#idx_tokens) as i64 };
                 if elem.is_copy() {
-                    Ok(quote! { #o[#index_expr] })
+                    Ok(quote! { *incan_stdlib::collections::list_get(&#o, #idx_i64) })
                 } else {
-                    Ok(quote! { #o[#index_expr].clone() })
+                    Ok(quote! { incan_stdlib::collections::list_get(&#o, #idx_i64).clone() })
                 }
             }
-            IrType::Unknown => Ok(quote! { #o[#index_expr].clone() }),
-            _ => Ok(quote! { #o[#index_expr] }),
+            // Fallback for unknown/unsupported index targets.
+            //
+            // We keep this path total so codegen can continue even when the IR type is not a known container.
+            // This may panic with Rust-native messages for invalid indices; we will tighten this as more container
+            // types are routed through typed stdlib helpers.
+            _ => {
+                let index_expr = self.emit_index_with_negative_handling(object, index, &o)?;
+                match obj_ty {
+                    IrType::Unknown => Ok(quote! { #o[#index_expr].clone() }),
+                    _ => Ok(quote! { #o[#index_expr] }),
+                }
+            }
         }
     }
 
@@ -102,29 +113,32 @@ impl<'a> IrEmitter<'a> {
             } else {
                 quote! { None }
             };
-            return Ok(
-                quote! { incan_stdlib::strings::str_slice(#s_tokens.as_str(), #start_expr, #end_expr, #step_expr) },
-            );
+            return Ok(quote! { incan_stdlib::strings::str_slice(&#s_tokens, #start_expr, #end_expr, #step_expr) });
         }
 
-        // Lists/other: retain existing behavior.
-        let t = t_raw;
-
+        // Lists/other: use stdlib helper for Python-like semantics (negative indices, clamping, step, step==0 error).
         let start_expr = if let Some(s) = start {
             let s_tokens = self.emit_expr(s)?;
-            quote! { (#s_tokens) as usize }
+            quote! { Some((#s_tokens) as i64) }
         } else {
-            quote! { 0 }
+            quote! { None }
         };
 
         let end_expr = if let Some(e) = end {
             let e_tokens = self.emit_expr(e)?;
-            quote! { (#e_tokens) as usize }
+            quote! { Some((#e_tokens) as i64) }
         } else {
-            quote! { #t.len() }
+            quote! { None }
         };
 
-        Ok(quote! { #t[#start_expr..#end_expr].to_vec() })
+        let step_expr = if let Some(st) = step {
+            let st_tokens = self.emit_expr(st)?;
+            quote! { Some((#st_tokens) as i64) }
+        } else {
+            quote! { None }
+        };
+
+        Ok(quote! { incan_stdlib::collections::list_slice(&#t_raw, #start_expr, #end_expr, #step_expr) })
     }
 
     /// Emit a field access expression.

@@ -20,7 +20,7 @@ fn test_len_builtin() {
     println!("{}", length);
 }
 fn test_range_builtin() {
-    for i in 0..5 {
+    for i in incan_stdlib::iter::range(0, 5, 1) {
         println!("{}", i);
     }
 }
@@ -48,7 +48,7 @@ fn test_str_builtin() {
 }
 fn test_int_builtin() {
     let text = "456".to_string();
-    let number = text.parse::<i64>().unwrap();
+    let number = incan_stdlib::conversions::int_from_str(&text);
     println!("{}", number);
 }
 fn test_float_builtin() {

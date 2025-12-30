@@ -283,11 +283,18 @@ impl<'a> IrEmitter<'a> {
 
             IrExprKind::FieldsList(fields) => Ok(quote! { vec![#(#fields),*] }),
 
-            IrExprKind::SerdeToJson => Ok(quote! { serde_json::to_string(self).unwrap() }),
+            IrExprKind::SerdeToJson => Ok(quote! {
+                serde_json::to_string(self).unwrap_or_else(|_| {
+                    incan_stdlib::errors::raise_json_serialization_error(std::any::type_name::<Self>())
+                })
+            }),
 
             IrExprKind::SerdeFromJson(type_name) => {
                 let type_ident = format_ident!("{}", type_name);
-                Ok(quote! { serde_json::from_str::<#type_ident>(&s).map_err(|e| e.to_string()) })
+                Ok(quote! {
+                    serde_json::from_str::<#type_ident>(&s)
+                        .map_err(|e| incan_stdlib::errors::json_decode_error_string(e))
+                })
             }
         }
     }
