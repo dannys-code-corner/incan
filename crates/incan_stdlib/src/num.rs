@@ -62,8 +62,10 @@ fn py_floor_div_i64_impl(a: i64, b: i64) -> i64 {
     }
     if b > 0 {
         if r < 0 { q - 1 } else { q }
+    } else if r > 0 {
+        q - 1
     } else {
-        if r > 0 { q - 1 } else { q }
+        q
     }
 }
 
@@ -94,7 +96,7 @@ mod sealed {
     /// Marker for Incan integer types (future-friendly: add i8/i16/i32/i64/etc.).
     pub trait IncanInt: Sealed {
         fn to_float(self) -> f64;
-        fn is_zero(self) -> bool;
+        fn is_zero(&self) -> bool;
     }
 
     impl IncanInt for i64 {
@@ -103,8 +105,8 @@ mod sealed {
             self as f64
         }
         #[inline]
-        fn is_zero(self) -> bool {
-            self == 0
+        fn is_zero(&self) -> bool {
+            *self == 0
         }
     }
 
@@ -112,7 +114,7 @@ mod sealed {
     /// Marker for Incan float types (future-friendly: add f32/f64/etc.).
     pub trait IncanFloat: Sealed {
         fn to_float(self) -> f64;
-        fn is_zero(self) -> bool;
+        fn is_zero(&self) -> bool;
     }
 
     impl IncanFloat for f64 {
@@ -121,8 +123,8 @@ mod sealed {
             self
         }
         #[inline]
-        fn is_zero(self) -> bool {
-            self == 0.0
+        fn is_zero(&self) -> bool {
+            *self == 0.0
         }
     }
 
@@ -130,7 +132,7 @@ mod sealed {
     /// Unified numeric trait to allow shared bounds across supported ints/floats.
     pub trait IncanNumeric: Sealed {
         fn to_float(self) -> f64;
-        fn is_zero(self) -> bool;
+        fn is_zero(&self) -> bool;
     }
 
     impl IncanNumeric for i64 {
@@ -139,7 +141,7 @@ mod sealed {
             <Self as IncanInt>::to_float(self)
         }
         #[inline]
-        fn is_zero(self) -> bool {
+        fn is_zero(&self) -> bool {
             <Self as IncanInt>::is_zero(self)
         }
     }
@@ -150,7 +152,7 @@ mod sealed {
             <Self as IncanFloat>::to_float(self)
         }
         #[inline]
-        fn is_zero(self) -> bool {
+        fn is_zero(&self) -> bool {
             <Self as IncanFloat>::is_zero(self)
         }
     }

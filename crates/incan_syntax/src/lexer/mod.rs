@@ -493,10 +493,19 @@ mod tests {
 
         for k in keywords::KEYWORDS {
             let tokens = lex(k.canonical).unwrap_or_else(|errs| panic!("lex({:?}) failed: {:?}", k.canonical, errs));
+            assert!(
+                tokens.len() >= 2,
+                "expected token + EOF for keyword {:?}, got {:?}",
+                k.id,
+                tokens
+            );
+            assert!(matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)));
+
+            let tokens = &tokens[..tokens.len() - 1];
             assert_eq!(
                 tokens.len(),
                 1,
-                "expected single token for keyword {:?}, got {:?}",
+                "expected single non-EOF token for keyword {:?}, got {:?}",
                 k.id,
                 tokens
             );
@@ -511,10 +520,19 @@ mod tests {
         for o in operators::OPERATORS {
             for &sp in o.spellings {
                 let tokens = lex(sp).unwrap_or_else(|errs| panic!("lex({:?}) failed: {:?}", sp, errs));
+                assert!(
+                    tokens.len() >= 2,
+                    "expected token + EOF for operator spelling {:?}, got {:?}",
+                    sp,
+                    tokens
+                );
+                assert!(matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)));
+
+                let tokens = &tokens[..tokens.len() - 1];
                 assert_eq!(
                     tokens.len(),
                     1,
-                    "expected single token for operator spelling {:?}, got {:?}",
+                    "expected single non-EOF token for operator spelling {:?}, got {:?}",
                     sp,
                     tokens
                 );
