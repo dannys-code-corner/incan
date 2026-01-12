@@ -189,40 +189,11 @@ impl TypeChecker {
             ));
         }
 
-        // Check methods
+        // Check methods (reuse the standard method-checking logic so parameters are in scope).
         for method in &nt.methods {
-            self.symbols.enter_scope(ScopeKind::Method {
-                receiver: method.node.receiver,
-            });
-
-            // Define self
-            self.symbols.define(Symbol {
-                name: "self".to_string(),
-                kind: SymbolKind::Variable(VariableInfo {
-                    ty: ResolvedType::Named(nt.name.clone()),
-                    is_mutable: matches!(method.node.receiver, Some(Receiver::Mutable)),
-                    is_used: true,
-                }),
-                span: Span::default(),
-                scope: 0,
-            });
-
-            // Check body
-            if let Some(body) = &method.node.body {
-                let return_type = resolve_type(&method.node.return_type.node, &self.symbols);
-                self.symbols.set_return_type(return_type.clone());
-
-                // Set error type for ? checking
-                self.current_return_error_type = return_type.result_err_type().cloned();
-
-                for stmt in body {
-                    self.check_statement(stmt);
-                }
-
-                self.current_return_error_type = None;
+            if method.node.body.is_some() {
+                self.check_method(&method.node, &nt.name);
             }
-
-            self.symbols.exit_scope();
         }
     }
 

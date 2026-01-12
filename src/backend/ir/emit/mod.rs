@@ -66,6 +66,10 @@ pub struct IrEmitter<'a> {
     enum_variant_fields: std::collections::HashMap<(String, String), VariantFields>,
     /// Struct field type lookup: (StructName, FieldName) -> IrType
     struct_field_types: std::collections::HashMap<(String, String), IrType>,
+    /// Struct field name order (as declared): StructName -> [FieldName...]
+    struct_field_names: std::collections::HashMap<String, Vec<String>>,
+    /// Struct field default expressions: (StructName, FieldName) -> default expr
+    struct_field_defaults: std::collections::HashMap<(String, String), super::IrExpr>,
     /// Whether we're currently emitting a return expression (allows moves instead of clones)
     in_return_context: RefCell<bool>,
     /// Map of const string bindings to their literal values (for const folding of string adds)
@@ -90,6 +94,8 @@ impl<'a> IrEmitter<'a> {
             external_rust_functions: std::collections::HashSet::new(),
             enum_variant_fields: std::collections::HashMap::new(),
             struct_field_types: std::collections::HashMap::new(),
+            struct_field_names: std::collections::HashMap::new(),
+            struct_field_defaults: std::collections::HashMap::new(),
             in_return_context: RefCell::new(false),
             const_string_literals: std::collections::HashMap::new(),
         }

@@ -18,6 +18,64 @@ use incan_core::lang::types::collections::CollectionTypeId;
 use super::TypeChecker;
 
 impl TypeChecker {
+    fn check_model_or_class_constructor_call(
+        &mut self,
+        type_name: &str,
+        fields: &std::collections::HashMap<String, FieldInfo>,
+        args: &[CallArg],
+        call_span: Span,
+    ) {
+        // Typecheck argument expressions regardless, so type errors in expressions still show up.
+        self.check_call_args(args);
+
+        // v0.1: only named args for model/class constructors (stable field ordering not guaranteed).
+        if args.iter().any(|a| matches!(a, CallArg::Positional(_))) {
+            self.errors
+                .push(errors::positional_constructor_args_not_supported(type_name, call_span));
+            return;
+        }
+
+        // Track provided fields and validate existence/duplicates/type compatibility.
+        let mut provided: std::collections::HashMap<&str, Span> = std::collections::HashMap::new();
+        for arg in args {
+            let CallArg::Named(field_name, expr) = arg else {
+                continue;
+            };
+
+            if provided.contains_key(field_name.as_str()) {
+                self.errors
+                    .push(errors::duplicate_constructor_field(type_name, field_name, expr.span));
+                continue;
+            }
+            provided.insert(field_name.as_str(), expr.span);
+
+            let Some(field_info) = fields.get(field_name) else {
+                self.errors
+                    .push(errors::missing_field(type_name, field_name, expr.span));
+                continue;
+            };
+
+            let value_ty = self.check_expr(expr);
+            if !self.types_compatible(&value_ty, &field_info.ty) {
+                self.errors.push(errors::field_type_mismatch(
+                    field_name,
+                    &field_info.ty.to_string(),
+                    &value_ty.to_string(),
+                    expr.span,
+                ));
+            }
+        }
+
+        // Enforce required fields (those without defaults) are present.
+        for (field_name, info) in fields {
+            if !info.has_default && !provided.contains_key(field_name.as_str()) {
+                self.errors.push(errors::missing_required_constructor_field(
+                    type_name, field_name, call_span,
+                ));
+            }
+        }
+    }
+
     /// Extract the expression from a call argument (positional or named).
     fn call_arg_expr(arg: &CallArg) -> &Spanned<Expr> {
         match arg {
@@ -390,7 +448,7 @@ impl TypeChecker {
         &mut self,
         callee: &Spanned<Expr>,
         args: &[CallArg],
-        _span: Span,
+        span: Span,
     ) -> ResolvedType {
         // Special-case: Enum variant constructor syntax `Enum.Variant(...)`.
         // If callee is a field access where the base resolves to a known enum type
@@ -428,6 +486,20 @@ impl TypeChecker {
         if let Expr::Ident(name) = &callee.node {
             if let Some(result) = self.check_builtin_call(name, args) {
                 return result;
+            }
+
+            // Model/class constructor calls: validate field arguments at the Incan level.
+            // NOTE: `lookup_type_info` returns a reference into `self`, so we clone the needed field map to avoid
+            // borrow conflicts (we need `&mut self` for validation).
+            let ctor_fields: Option<std::collections::HashMap<String, FieldInfo>> =
+                self.lookup_type_info(name).and_then(|info| match info {
+                    TypeInfo::Model(m) => Some(m.fields.clone()),
+                    TypeInfo::Class(c) => Some(c.fields.clone()),
+                    _ => None,
+                });
+            if let Some(fields) = ctor_fields {
+                self.check_model_or_class_constructor_call(name, &fields, args, span);
+                return ResolvedType::Named(name.to_string());
             }
         }
 

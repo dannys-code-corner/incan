@@ -159,6 +159,68 @@ impl AstLowering {
                     if is_known_struct || is_uppercase {
                         // Get type if known, otherwise Unknown (will be inferred at emit time)
                         let struct_ty = self.struct_names.get(name).cloned().unwrap_or(IrType::Unknown);
+
+                        // ----------------------------------------------------------------
+                        // Newtype checked construction (v0.1 hardening for #44, RFC runway)
+                        // ----------------------------------------------------------------
+                        // When T(x) is called for a newtype with a validated constructor (from_underlying or single
+                        // matching from_*):
+                        //
+                        //   1. Skip rewriting if we're inside `impl T` to avoid infinite recursion when the ctor itself
+                        //  calls T(x).
+                        //   2. Otherwise rewrite to: T::from_underlying(x).expect("...")  (fail-fast with context)
+                        //
+                        // This ensures newtype invariants are enforced at construction.
+                        // ----------------------------------------------------------------
+                        if self.newtype_checked_ctor.contains_key(name)
+                            && args.len() == 1
+                            && matches!(args[0], ast::CallArg::Positional(_))
+                            && self.current_impl_type.as_deref() != Some(name.as_str())
+                        {
+                            let ast::CallArg::Positional(value) = &args[0] else {
+                                unreachable!("checked by matches! above")
+                            };
+                            let lowered_value = self.lower_expr(&value.node)?;
+                            let ctor = self
+                                .newtype_checked_ctor
+                                .get(name)
+                                .cloned()
+                                .unwrap_or_else(|| "from_underlying".to_string());
+
+                            // Use the actual newtype struct type for the receiver (not Unknown)
+                            let receiver = TypedExpr::new(
+                                IrExprKind::Var {
+                                    name: name.clone(),
+                                    access: VarAccess::Copy,
+                                },
+                                struct_ty.clone(),
+                            );
+                            let from_underlying_call = TypedExpr::new(
+                                IrExprKind::MethodCall {
+                                    receiver: Box::new(receiver),
+                                    method: ctor.clone(),
+                                    args: vec![lowered_value],
+                                },
+                                IrType::Result(Box::new(struct_ty.clone()), Box::new(IrType::Unknown)),
+                            );
+                            // Prefer `expect` over `unwrap` so panics carry context. Note: for `Result`,
+                            // Rust's `expect` includes the `Err(...)` payload via Debug formatting.
+                            let msg = TypedExpr::new(
+                                IrExprKind::Literal(super::super::expr::Literal::StaticStr(format!(
+                                    "validated newtype construction failed: {name}::{ctor}"
+                                ))),
+                                IrType::StaticStr,
+                            );
+                            return Ok(TypedExpr::new(
+                                IrExprKind::MethodCall {
+                                    receiver: Box::new(from_underlying_call),
+                                    method: "expect".to_string(),
+                                    args: vec![msg],
+                                },
+                                struct_ty,
+                            ));
+                        }
+
                         // This is a constructor call - lower as struct instantiation
                         let fields: Vec<(String, TypedExpr)> = args
                             .iter()

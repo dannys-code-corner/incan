@@ -127,6 +127,8 @@ pub struct StructField {
     pub name: String,
     pub ty: IrType,
     pub visibility: Visibility,
+    /// Optional default initializer expression for this field (used for construction when omitted).
+    pub default: Option<super::IrExpr>,
 }
 
 /// IR enum definition

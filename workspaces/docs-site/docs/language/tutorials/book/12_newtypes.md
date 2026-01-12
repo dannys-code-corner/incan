@@ -38,6 +38,22 @@ def main() -> None:
 
 You construct a newtype by calling it like a function: `UserId(42)`.
 
+## Validated construction
+
+Newtypes can optionally define a reserved validation hook:
+
+```incan
+type Attempts = newtype int:
+    def from_underlying(n: int) -> Result[Attempts, str]:
+        if n <= 0:
+            return Err("attempts must be >= 1")
+        return Ok(Attempts(n))
+```
+
+If a newtype defines `from_underlying`, then calling it like `Attempts(5)` performs **checked construction**
+(it calls `Attempts.from_underlying(5)` and panics if it returns `Err(...)`). This is a stepping stone toward the full
+v0.2 RFC behavior.
+
 To access the wrapped value, use `.0`:
 
 ```incan
@@ -72,14 +88,14 @@ enum EmailError:
     MissingAt
 
 type Email = newtype str:
-    def from_str(v: str) -> Result[Email, EmailError]:
+    def from_underlying(v: str) -> Result[Email, EmailError]:
         """Validate an email address by checking for the presence of an @ symbol"""
         if "@" not in v:
             return Err(EmailError.MissingAt)
         return Ok(Email(v.lower()))
 
 def main() -> None:
-    match Email.from_str("Alice@Example.com"):
+    match Email.from_underlying("Alice@Example.com"):
         Ok(email) => println(f"email={email.0}")
         Err(_) => println("invalid email")
 ```

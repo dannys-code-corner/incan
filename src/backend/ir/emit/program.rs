@@ -188,9 +188,15 @@ impl<'a> IrEmitter<'a> {
                 if !s.derives.is_empty() {
                     self.struct_derives.insert(s.name.clone(), s.derives.clone());
                 }
+                self.struct_field_names
+                    .insert(s.name.clone(), s.fields.iter().map(|f| f.name.clone()).collect());
                 for field in &s.fields {
                     self.struct_field_types
                         .insert((s.name.clone(), field.name.clone()), field.ty.clone());
+                    if let Some(default) = &field.default {
+                        self.struct_field_defaults
+                            .insert((s.name.clone(), field.name.clone()), default.clone());
+                    }
                 }
             }
             if let IrDeclKind::Enum(e) = &decl.kind {
