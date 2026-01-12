@@ -127,6 +127,9 @@ jobs:
   docs-site:
     name: Docs Site Build (MkDocs)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workspaces/docs-site
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -149,4 +152,4 @@ jobs:
       - name: Regenerate language reference
         run: cargo run -p incan_core --bin generate_lang_reference
       - name: Verify no diff
-        run: git diff --exit-code docs/reference/language.md
+        run: git diff --exit-code workspaces/docs-site/docs/language/reference/language.md

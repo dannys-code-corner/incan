@@ -1,7 +1,7 @@
 //! Generate Markdown reference docs from `incan_core::lang` registries.
 //!
 //! This binary renders the vocabulary registries (keywords, operators, builtin functions, builtin types, punctuation)
-//! into human-readable Markdown tables under `docs/language/reference/`.
+//! into human-readable Markdown tables under `workspaces/docs-site/docs/language/reference/`.
 //!
 //! ## Notes
 //! - The generated files are meant to be checked into the repo and treated as derived artifacts.
@@ -62,13 +62,13 @@ fn start_section(out: &mut String, heading: &str) {
 fn main() {
     let root = workspace_root();
 
-    let out_dir = root.join("docs/language/reference");
-    fs::create_dir_all(&out_dir).expect("create docs/language/reference/");
+    let out_dir = root.join("workspaces/docs-site/docs/language/reference");
+    fs::create_dir_all(&out_dir).expect("create workspaces/docs-site/docs/language/reference/");
 
     write_language_reference(&out_dir.join("language.md"));
 }
 
-/// Write `docs/language/reference/language.md`.
+/// Write `workspaces/docs-site/docs/language/reference/language.md`.
 ///
 /// This is a single consolidated reference document generated from `incan_core::lang` registries.
 fn write_language_reference(path: &Path) {
