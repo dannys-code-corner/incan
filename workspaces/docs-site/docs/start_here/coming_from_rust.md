@@ -1,0 +1,27 @@
+# Coming from Rust (evaluator)
+
+This page is a routing guide for Rust-first evaluators.
+
+## What you should do next
+
+- Quickstart: [Getting Started](../tooling/tutorials/getting_started.md) (make-first, with fallback when needed)
+- Explanation:
+    - [Why Incan?](../language/explanation/why_incan.md)
+    - [Why not just Rust?](../language/explanation/why_not_just_rust.md)
+    - [How Incan works](../language/explanation/how_incan_works.md)
+- Interop: [Rust Interop](../language/how-to/rust_interop.md)
+- Projects today: [Projects today](../tooling/explanation/projects_today.md)
+- Reference surfaces:
+    - [Language reference (generated)](../language/reference/language.md)
+    - [CLI reference](../tooling/reference/cli_reference.md)
+- Stability: [Stability policy](../stability.md) + [Release notes](../release_notes/index.md)
+- Evolution surfaces:
+    - [Contributing start here](../contributing/index.md)
+    - [Incan Contributor Book (Advanced)](../contributing/tutorials/book/index.md)
+    - [RFC index](../RFCs/index.md)
+    - [Roadmap](../roadmap.md)
+
+## What to look for
+
+- Clear boundaries: what exists today vs roadmap (especially for WASM/frontend)
+- “Stable vs experimental” labeling without forcing you to read RFCs first

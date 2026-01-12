@@ -114,7 +114,7 @@ jobs:
       - name: Run full smoke test
         run: make smoke-test
 
-  docs:
+  generate-rust-docs:
     name: Docs Build
     runs-on: ubuntu-latest
     steps:
@@ -123,3 +123,33 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build docs
         run: cargo doc --no-deps
+
+  docs-site:
+    name: Docs Site Build (MkDocs)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workspaces/docs-site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install MkDocs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-docs.txt
+      - name: Build docs site (strict)
+        run: python -m mkdocs build --strict
+
+  generated-reference:
+    name: Generated Reference Up-to-date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Regenerate language reference
+        run: cargo run -p incan_core --bin generate_lang_reference
+      - name: Verify no diff
+        run: git diff --exit-code workspaces/docs-site/docs/language/reference/language.md

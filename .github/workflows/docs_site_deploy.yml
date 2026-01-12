@@ -1,0 +1,54 @@
+name: Docs Site Deploy
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - "*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    name: Deploy (GitHub Pages via mike)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workspaces/docs-site
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install MkDocs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-docs.txt
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy dev from main
+        if: github.ref_type == 'branch'
+        run: |
+          python -m mkdocs build --strict
+          mike deploy --push dev
+          mike set-default --push dev
+
+      - name: Deploy minor version from tag
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python -m mkdocs build --strict
+          MINOR="${TAG%.*}"
+          mike deploy --push "${MINOR}"
+

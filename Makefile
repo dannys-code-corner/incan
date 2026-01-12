@@ -14,6 +14,9 @@ help: build-quiet  ## Display this help message
 	@echo "\033[1mTesting:\033[0m"
 	@grep -E '^.PHONY: .*?## test - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## test - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
 	@echo ""
+	@echo "\033[1mDocs:\033[0m"
+	@grep -E '^.PHONY: .*?## docs - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## docs - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
+	@echo ""
 	@echo "\033[1mTooling:\033[0m"
 	@grep -E '^.PHONY: .*?## tool - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## tool - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
 	@echo ""
@@ -170,6 +173,26 @@ clean:
 	@cargo clean
 	@rm -rf target/incan/
 	@echo "\033[32m✓ Clean\033[0m"
+
+.PHONY: docs  ## docs - Build and serve the documentation site locally
+docs:
+	@$(MAKE) -C workspaces/docs-site docs
+
+.PHONY: docs-install  ## docs - Install docs site dependencies (MkDocs + Material)
+docs-install:
+	@$(MAKE) -C workspaces/docs-site docs-install
+
+.PHONY: docs-build  ## docs - Build docs site (MkDocs strict)
+docs-build:
+	@$(MAKE) -C workspaces/docs-site docs-build
+
+.PHONY: docs-serve  ## docs - Serve docs site locally (MkDocs)
+docs-serve:
+	@$(MAKE) -C workspaces/docs-site docs-serve
+
+.PHONY: docs-lint  ## docs - Lint markdown docs (markdownlint-cli2 via npx)
+docs-lint:
+	@$(MAKE) -C workspaces/docs-site docs-lint
 
 .PHONY: version  ## misc - Show version info
 version:
