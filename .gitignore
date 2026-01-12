@@ -35,5 +35,15 @@ out/
 .vscode-test/
 *.tsbuildinfo
 
+# npm / npx caches and logs (local tooling)
+.npm-cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
 # Local AI agent instructions (may reference non-committed local research files)
 .github/copilot-instructions.md
+
+# MkDocs build output
+site/

@@ -1,0 +1,204 @@
+site_name: Incan Documentation
+site_description: Documentation for the Incan programming language
+repo_name: dannys-code-corner/incan
+repo_url: https://github.com/dannys-code-corner/incan
+edit_uri: edit/main/workspaces/docs-site/docs/
+
+docs_dir: docs
+site_dir: site
+use_directory_urls: true
+
+# Keep `mkdocs build --strict` useful, but don't spam logs for intentional
+# site-root absolute links like `/RFCs/013_.../` (these are safe with
+# `use_directory_urls: true` and are often used inside snippets).
+validation:
+  absolute_links: ignore
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/link
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: purple
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch-off
+        name: Switch to system preference
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.indexes
+    - content.code.copy
+    - content.tabs.link
+
+plugins:
+  - gen-files:
+      scripts:
+        - utils/gen_rfc_index_snippet.py
+  - search
+  - tags:
+      tags_file: tags.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.arithmatex:
+      generic: true
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.snippets:
+      check_paths: true
+      base_path:
+        - docs
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+extra:
+  version:
+    provider: mike
+
+extra_javascript:
+  - _snippets/javascripts/mathjax.js
+
+nav:
+  - Home: index.md
+  - Start here:
+      - Overview: start_here/index.md
+      - Coming from Python (apps): start_here/coming_from_python.md
+      - Coming from Rust (evaluator): start_here/coming_from_rust.md
+      - Pipelines & automation: start_here/pipelines_and_automation.md
+      - Beginner: start_here/beginner.md
+  - Language:
+      - Start here: language/index.md
+      - Tutorials:
+          - The Incan Book (Basics):
+              - Overview: language/tutorials/book/index.md
+              - 1. Hello world: language/tutorials/book/01_hello_world.md
+              - 2. Values, variables, and types: language/tutorials/book/02_values_variables_and_types.md
+              - 3. Functions: language/tutorials/book/03_functions.md
+              - 4. Control flow: language/tutorials/book/04_control_flow.md
+              - 5. Modules and imports: language/tutorials/book/05_modules_and_imports.md
+              - "6. Errors (Result/Option and `?`)": language/tutorials/book/06_errors.md
+              - 7. Strings and formatting: language/tutorials/book/07_strings_and_formatting.md
+              - 8. Collections and iteration: language/tutorials/book/08_collections_and_iteration.md
+              - "9. Enums and better `match`": language/tutorials/book/09_enums.md
+              - 10. Models vs classes: language/tutorials/book/10_models_vs_classes.md
+              - 11. Traits and derives: language/tutorials/book/11_traits_and_derives.md
+              - 12. Newtypes (stronger types): language/tutorials/book/12_newtypes.md
+          - Build your first API: language/tutorials/build_your_first_api.md
+          - Web framework: language/tutorials/web_framework.md
+      - How-to:
+          - Async programming: language/how-to/async_programming.md
+          - Customize derived behavior: language/how-to/customize_derived_behavior.md
+          - Error handling recipes: language/how-to/error_handling_recipes.md
+          - Error messages: language/how-to/error_messages.md
+          - File I/O: language/how-to/file_io.md
+          - Imports and modules: language/how-to/imports_and_modules.md
+          - Modeling with enums: language/how-to/modeling_with_enums.md
+          - String processing: language/how-to/string_processing.md
+          - Performance: language/how-to/performance.md
+          - Rust interop: language/how-to/rust_interop.md
+          - Rust types (coming from Python): language/how-to/rust_types_for_python_devs.md
+      - Reference:
+          - About the language reference: language/reference/index.md
+          - Language reference (generated): language/reference/language.md
+          - Glossary: language/reference/glossary.md
+          - File I/O reference (Path/File APIs): language/reference/file_io.md
+          - Imports and modules: language/reference/imports_and_modules.md
+          - Numeric semantics: language/reference/numeric_semantics.md
+          - Strings and Bytes: language/reference/strings.md
+          - Derives & traits (reference): language/reference/derives_and_traits.md
+          - Stdlib traits:
+              - Overview: language/reference/stdlib_traits/index.md
+              - Collection protocols: language/reference/stdlib_traits/collection_protocols.md
+              - Indexing and slicing: language/reference/stdlib_traits/indexing_and_slicing.md
+              - Callable objects: language/reference/stdlib_traits/callable.md
+              - Error trait: language/reference/stdlib_traits/error.md
+              - Operators: language/reference/stdlib_traits/operators.md
+              - Conversions: language/reference/stdlib_traits/conversions.md
+          - Derives:
+              - String representation: language/reference/derives/string_representation.md
+              - Comparison: language/reference/derives/comparison.md
+              - Copying/default: language/reference/derives/copying_default.md
+              - Serialization: language/reference/derives/serialization.md
+              - Custom behavior: language/reference/derives/custom_behavior.md
+      - Explanation:
+          - Why Incan?: language/explanation/why_incan.md
+          - Why not just Rust?: language/explanation/why_not_just_rust.md
+          - How Incan works: language/explanation/how_incan_works.md
+          - Control flow: language/explanation/control_flow.md
+          - Closures: language/explanation/closures.md
+          - Consts: language/explanation/consts.md
+          - Derives & traits (explained): language/explanation/derives_and_traits.md
+          - How derives work: language/explanation/how_derives_work.md
+          - Enums: language/explanation/enums.md
+          - Error handling: language/explanation/error_handling.md
+          - Imports and modules: language/explanation/imports_and_modules.md
+          - Models and classes: language/explanation/models_and_classes.md
+          - Traits as language hooks: language/explanation/traits_as_language_hooks.md
+          - Scopes and name resolution: language/explanation/scopes_and_name_resolution.md
+  - Tooling:
+      - Start here: tooling/index.md
+      - Tutorials:
+          - Getting started: tooling/tutorials/getting_started.md
+          - Pipeline mini-project: tooling/tutorials/pipeline_mini_project.md
+      - How-to:
+          - Install/build/run: tooling/how-to/install_and_run.md
+          - CI & automation: tooling/how-to/ci_and_automation.md
+          - Troubleshooting: tooling/how-to/troubleshooting.md
+          - Editor setup: tooling/how-to/editor_setup.md
+          - LSP: tooling/how-to/lsp.md
+          - Formatting: tooling/how-to/formatting.md
+          - Testing: tooling/how-to/testing.md
+      - Explanation:
+          - Projects today: tooling/explanation/projects_today.md
+          - LSP architecture: tooling/explanation/lsp_architecture.md
+      - Reference:
+          - CLI reference: tooling/reference/cli_reference.md
+          - LSP protocol support: tooling/reference/lsp_protocol_support.md
+  - Contributing:
+      - Start here: contributing/index.md
+      - Tutorials:
+          - Incan Contributor Book (Advanced):
+              - Overview: contributing/tutorials/book/index.md
+              - 1. Architecture tour: contributing/tutorials/book/01_architecture_tour.md
+              - 2. Layering and boundaries: contributing/tutorials/book/02_layering_and_boundaries.md
+              - "3. Proposals: issues vs RFCs": contributing/tutorials/book/03_proposals_issues_vs_rfcs.md
+              - "4. Your first change: add a builtin": contributing/tutorials/book/04_add_a_builtin.md
+              - 5. Your first syntax change: contributing/tutorials/book/05_add_new_syntax.md
+              - "6. Tooling loop: formatter + tests": contributing/tutorials/book/06_tooling_loop_formatter_and_tests.md
+              - "7. Tooling loop: LSP": contributing/tutorials/book/07_tooling_loop_lsp.md
+              - 8. Docsite contributor loop: contributing/tutorials/book/08_docsite_contributor_loop.md
+      - How-to:
+          - Extending the language: contributing/how-to/extending_language.md
+          - Benchmarks & profiling (repository): contributing/how-to/benchmarks_and_profiling.md
+          - CI & automation (repository): contributing/how-to/ci_and_automation.md
+          - Writing RFCs: contributing/how-to/writing_rfcs.md
+      - Explanation:
+          - Architecture: contributing/explanation/architecture.md
+          - Layering rules: contributing/explanation/layering.md
+          - Readable, maintainable Rust: contributing/explanation/readable-maintainable-rust.md
+      - RFCs: RFCs/index.md
+  - Release notes:
+      - Overview: release_notes/index.md
+      - Release 0.1: release_notes/0_1.md
+  - Roadmap: roadmap.md
+  # XXX: Temporary page while in beta
+  - Stability policy: stability.md

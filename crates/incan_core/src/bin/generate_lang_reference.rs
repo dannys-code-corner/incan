@@ -1,7 +1,7 @@
 //! Generate Markdown reference docs from `incan_core::lang` registries.
 //!
 //! This binary renders the vocabulary registries (keywords, operators, builtin functions, builtin types, punctuation)
-//! into human-readable Markdown tables under `docs/reference/`.
+//! into human-readable Markdown tables under `docs/language/reference/`.
 //!
 //! ## Notes
 //! - The generated files are meant to be checked into the repo and treated as derived artifacts.
@@ -62,21 +62,23 @@ fn start_section(out: &mut String, heading: &str) {
 fn main() {
     let root = workspace_root();
 
-    let out_dir = root.join("docs/reference");
-    fs::create_dir_all(&out_dir).expect("create docs/reference/");
+    let out_dir = root.join("docs/language/reference");
+    fs::create_dir_all(&out_dir).expect("create docs/language/reference/");
 
     write_language_reference(&out_dir.join("language.md"));
 }
 
-/// Write `docs/reference/language.md`.
+/// Write `docs/language/reference/language.md`.
 ///
 /// This is a single consolidated reference document generated from `incan_core::lang` registries.
 fn write_language_reference(path: &Path) {
     let mut out = String::new();
     out.push_str("# Incan language reference\n\n");
-    out.push_str("> Generated file. Do not edit by hand.\n");
-    out.push_str(">\n");
-    out.push_str("> Regenerate with: `cargo run -p incan_core --bin generate_lang_reference`\n\n");
+    out.push_str("!!! warning \"Generated file\"\n");
+    out.push_str("    Do not edit this page by hand.\n");
+    out.push_str("    If it looks wrong/outdated, regenerate it from source and commit the result.\n");
+    out.push_str("\n");
+    out.push_str("    Regenerate with: `cargo run -p incan_core --bin generate_lang_reference`\n\n");
 
     out.push_str("## Contents\n\n");
     out.push_str("- [Keywords](#keywords)\n");
