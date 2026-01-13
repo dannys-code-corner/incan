@@ -4053,7 +4053,8 @@ behavior.</p>
 <h2 id="pragmatic-checklist">Pragmatic Checklist<a class="headerlink" href="#pragmatic-checklist" title="Permanent link">&para;</a></h2>
 <p><strong>If these are true, your Rust is both readable and maintainable:</strong></p>
 <ul>
-<li>✅ <strong>Formatting &amp; lints</strong>: <code>cargo fmt --check</code> and <code>cargo clippy --deny warnings</code> pass; lint level tuned to project.</li>
+<li>✅ <strong>Formatting &amp; lints</strong>: <code>cargo +nightly fmt --all -- --check</code> and <code>cargo clippy --deny warnings</code> pass; lint level tuned
+  to project.</li>
 <li>✅ <strong>Boundaries</strong>: Modules align with responsibilities; public surface area small and documented.</li>
 <li>✅ <strong>Errors</strong>: Clear <code>Result&lt;T, E&gt;</code> with actionable messages; categorized <code>E</code>.</li>
 <li>✅ <strong>Ownership</strong>: Minimal clones; predictable lifetimes; borrowing favored.</li>
@@ -4160,7 +4161,7 @@ behavior.</p>
 <span class="n">default</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
 </code></pre></div>
 <h3 id="typical-ci-steps">Typical CI Steps<a class="headerlink" href="#typical-ci-steps" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>cargo<span class="w"> </span>fmt<span class="w"> </span>--all<span class="w"> </span>--<span class="w"> </span>--check
+<div class="highlight"><pre><span></span><code>cargo<span class="w"> </span>+nightly<span class="w"> </span>fmt<span class="w"> </span>--all<span class="w"> </span>--<span class="w"> </span>--check
 cargo<span class="w"> </span>clippy<span class="w"> </span>--all-targets<span class="w"> </span>--all-features<span class="w"> </span>--<span class="w"> </span>-D<span class="w"> </span>warnings
 cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--all<span class="w"> </span>--verbose
 cargo<span class="w"> </span>audit

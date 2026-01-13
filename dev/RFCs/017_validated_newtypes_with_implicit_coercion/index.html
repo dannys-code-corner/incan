@@ -11,25 +11,21 @@
       
       
       
-        <link rel="prev" href="../11_traits_and_derives/">
       
       
-        <link rel="next" href="../../build_your_first_api/">
-      
-      
-      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.49">
     
     
       
-        <title>12. Newtypes (stronger types) - Incan Documentation</title>
+        <title>RFC 017: Validated newtypes with implicit coercion (pydantic-like feel) - Incan Documentation</title>
       
     
     
-      <link rel="stylesheet" href="../../../../assets/stylesheets/main.6f8fc17f.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.6f8fc17f.min.css">
       
         
-        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,7 +44,7 @@
       
     
     
-    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -74,7 +70,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#12-newtypes-stronger-types" class="md-skip">
+        <a href="#rfc-017-validated-newtypes-with-implicit-coercion-pydantic-like-feel" class="md-skip">
           Skip to content
         </a>
       
@@ -94,7 +90,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../../.." title="Incan Documentation" class="md-header__button md-logo" aria-label="Incan Documentation" data-md-component="logo">
+    <a href="../.." title="Incan Documentation" class="md-header__button md-logo" aria-label="Incan Documentation" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -114,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              12. Newtypes (stronger types)
+              RFC 017: Validated newtypes with implicit coercion (pydantic-like feel)
             
           </span>
         </div>
@@ -237,7 +233,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../../.." title="Incan Documentation" class="md-nav__button md-logo" aria-label="Incan Documentation" data-md-component="logo">
+    <a href="../.." title="Incan Documentation" class="md-nav__button md-logo" aria-label="Incan Documentation" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -267,7 +263,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -318,7 +314,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../../start_here/" class="md-nav__link ">
+            <a href="../../start_here/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -351,7 +347,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../start_here/coming_from_python/" class="md-nav__link">
+      <a href="../../start_here/coming_from_python/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -372,7 +368,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../start_here/coming_from_rust/" class="md-nav__link">
+      <a href="../../start_here/coming_from_rust/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -393,7 +389,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../start_here/pipelines_and_automation/" class="md-nav__link">
+      <a href="../../start_here/pipelines_and_automation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -414,7 +410,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../start_here/beginner/" class="md-nav__link">
+      <a href="../../start_here/beginner/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -439,8 +435,6 @@
       
   
   
-    
-  
   
   
     
@@ -466,16 +460,16 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../" class="md-nav__link ">
+            <a href="../../language/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -492,7 +486,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             Language
@@ -505,10 +499,8 @@
                 
   
   
-    
   
   
-  
     
     
       
@@ -523,11 +515,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
         
           
           <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
@@ -541,7 +533,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_2">
             <span class="md-nav__icon md-icon"></span>
             Tutorials
@@ -552,8 +544,6 @@
                 
   
   
-    
-  
   
   
     
@@ -592,16 +582,16 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2_1" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2_1" >
         
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../" class="md-nav__link ">
+            <a href="../../language/tutorials/book/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -618,7 +608,7 @@
             
           </div>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_2_1_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_2_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_2_1">
             <span class="md-nav__icon md-icon"></span>
             The Incan Book (Basics)
@@ -634,7 +624,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../01_hello_world/" class="md-nav__link">
+      <a href="../../language/tutorials/book/01_hello_world/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -655,7 +645,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../02_values_variables_and_types/" class="md-nav__link">
+      <a href="../../language/tutorials/book/02_values_variables_and_types/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -676,7 +666,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../03_functions/" class="md-nav__link">
+      <a href="../../language/tutorials/book/03_functions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -697,7 +687,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../04_control_flow/" class="md-nav__link">
+      <a href="../../language/tutorials/book/04_control_flow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -718,7 +708,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../05_modules_and_imports/" class="md-nav__link">
+      <a href="../../language/tutorials/book/05_modules_and_imports/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -739,7 +729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../06_errors/" class="md-nav__link">
+      <a href="../../language/tutorials/book/06_errors/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -760,7 +750,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../07_strings_and_formatting/" class="md-nav__link">
+      <a href="../../language/tutorials/book/07_strings_and_formatting/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -781,7 +771,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../08_collections_and_iteration/" class="md-nav__link">
+      <a href="../../language/tutorials/book/08_collections_and_iteration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -802,7 +792,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../09_enums/" class="md-nav__link">
+      <a href="../../language/tutorials/book/09_enums/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -823,7 +813,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../10_models_vs_classes/" class="md-nav__link">
+      <a href="../../language/tutorials/book/10_models_vs_classes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -844,7 +834,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../11_traits_and_derives/" class="md-nav__link">
+      <a href="../../language/tutorials/book/11_traits_and_derives/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -862,30 +852,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    12. Newtypes (stronger types)
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../language/tutorials/book/12_newtypes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -894,98 +864,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#why-newtypes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Why newtypes?
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#constructing-and-unwrapping" class="md-nav__link">
-    <span class="md-ellipsis">
-      Constructing and unwrapping
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validated-construction" class="md-nav__link">
-    <span class="md-ellipsis">
-      Validated construction
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validation-with-result" class="md-nav__link">
-    <span class="md-ellipsis">
-      Validation with Result
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#methods-on-newtypes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Methods on newtypes
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#try-it" class="md-nav__link">
-    <span class="md-ellipsis">
-      Try it
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#where-to-learn-more" class="md-nav__link">
-    <span class="md-ellipsis">
-      Where to learn more
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#next" class="md-nav__link">
-    <span class="md-ellipsis">
-      Next
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1006,7 +884,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../build_your_first_api/" class="md-nav__link">
+      <a href="../../language/tutorials/build_your_first_api/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1027,7 +905,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_framework/" class="md-nav__link">
+      <a href="../../language/tutorials/web_framework/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1117,7 +995,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/async_programming/" class="md-nav__link">
+      <a href="../../language/how-to/async_programming/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1138,7 +1016,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/customize_derived_behavior/" class="md-nav__link">
+      <a href="../../language/how-to/customize_derived_behavior/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1159,7 +1037,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/error_handling_recipes/" class="md-nav__link">
+      <a href="../../language/how-to/error_handling_recipes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1180,7 +1058,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/error_messages/" class="md-nav__link">
+      <a href="../../language/how-to/error_messages/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1201,7 +1079,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/file_io/" class="md-nav__link">
+      <a href="../../language/how-to/file_io/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1222,7 +1100,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/imports_and_modules/" class="md-nav__link">
+      <a href="../../language/how-to/imports_and_modules/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1243,7 +1121,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/modeling_with_enums/" class="md-nav__link">
+      <a href="../../language/how-to/modeling_with_enums/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1264,7 +1142,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/string_processing/" class="md-nav__link">
+      <a href="../../language/how-to/string_processing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1285,7 +1163,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/performance/" class="md-nav__link">
+      <a href="../../language/how-to/performance/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1306,7 +1184,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/rust_interop/" class="md-nav__link">
+      <a href="../../language/how-to/rust_interop/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1327,7 +1205,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../how-to/rust_types_for_python_devs/" class="md-nav__link">
+      <a href="../../language/how-to/rust_types_for_python_devs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1394,7 +1272,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../reference/" class="md-nav__link ">
+            <a href="../../language/reference/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -1427,7 +1305,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/language/" class="md-nav__link">
+      <a href="../../language/reference/language/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1448,7 +1326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/glossary/" class="md-nav__link">
+      <a href="../../language/reference/glossary/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1469,7 +1347,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/file_io/" class="md-nav__link">
+      <a href="../../language/reference/file_io/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1490,7 +1368,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/imports_and_modules/" class="md-nav__link">
+      <a href="../../language/reference/imports_and_modules/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1511,7 +1389,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/numeric_semantics/" class="md-nav__link">
+      <a href="../../language/reference/numeric_semantics/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1532,7 +1410,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/strings/" class="md-nav__link">
+      <a href="../../language/reference/strings/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1553,7 +1431,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/derives_and_traits/" class="md-nav__link">
+      <a href="../../language/reference/derives_and_traits/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1606,7 +1484,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../reference/stdlib_traits/" class="md-nav__link ">
+            <a href="../../language/reference/stdlib_traits/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -1639,7 +1517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/stdlib_traits/collection_protocols/" class="md-nav__link">
+      <a href="../../language/reference/stdlib_traits/collection_protocols/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1660,7 +1538,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/stdlib_traits/indexing_and_slicing/" class="md-nav__link">
+      <a href="../../language/reference/stdlib_traits/indexing_and_slicing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1681,7 +1559,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/stdlib_traits/callable/" class="md-nav__link">
+      <a href="../../language/reference/stdlib_traits/callable/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1702,7 +1580,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/stdlib_traits/error/" class="md-nav__link">
+      <a href="../../language/reference/stdlib_traits/error/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1723,7 +1601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/stdlib_traits/operators/" class="md-nav__link">
+      <a href="../../language/reference/stdlib_traits/operators/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1744,7 +1622,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/stdlib_traits/conversions/" class="md-nav__link">
+      <a href="../../language/reference/stdlib_traits/conversions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1822,7 +1700,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/derives/string_representation/" class="md-nav__link">
+      <a href="../../language/reference/derives/string_representation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1843,7 +1721,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/derives/comparison/" class="md-nav__link">
+      <a href="../../language/reference/derives/comparison/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1864,7 +1742,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/derives/copying_default/" class="md-nav__link">
+      <a href="../../language/reference/derives/copying_default/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1885,7 +1763,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/derives/serialization/" class="md-nav__link">
+      <a href="../../language/reference/derives/serialization/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1906,7 +1784,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/derives/custom_behavior/" class="md-nav__link">
+      <a href="../../language/reference/derives/custom_behavior/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2010,7 +1888,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/why_incan/" class="md-nav__link">
+      <a href="../../language/explanation/why_incan/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2031,7 +1909,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/why_not_just_rust/" class="md-nav__link">
+      <a href="../../language/explanation/why_not_just_rust/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2052,7 +1930,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/how_incan_works/" class="md-nav__link">
+      <a href="../../language/explanation/how_incan_works/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2073,7 +1951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/control_flow/" class="md-nav__link">
+      <a href="../../language/explanation/control_flow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2094,7 +1972,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/closures/" class="md-nav__link">
+      <a href="../../language/explanation/closures/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2115,7 +1993,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/consts/" class="md-nav__link">
+      <a href="../../language/explanation/consts/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2136,7 +2014,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/derives_and_traits/" class="md-nav__link">
+      <a href="../../language/explanation/derives_and_traits/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2157,7 +2035,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/how_derives_work/" class="md-nav__link">
+      <a href="../../language/explanation/how_derives_work/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2178,7 +2056,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/enums/" class="md-nav__link">
+      <a href="../../language/explanation/enums/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2199,7 +2077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/error_handling/" class="md-nav__link">
+      <a href="../../language/explanation/error_handling/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2220,7 +2098,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/imports_and_modules/" class="md-nav__link">
+      <a href="../../language/explanation/imports_and_modules/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2241,7 +2119,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/models_and_classes/" class="md-nav__link">
+      <a href="../../language/explanation/models_and_classes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2262,7 +2140,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/traits_as_language_hooks/" class="md-nav__link">
+      <a href="../../language/explanation/traits_as_language_hooks/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2283,7 +2161,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../explanation/scopes_and_name_resolution/" class="md-nav__link">
+      <a href="../../language/explanation/scopes_and_name_resolution/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2350,7 +2228,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../../tooling/" class="md-nav__link ">
+            <a href="../../tooling/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -2426,7 +2304,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/tutorials/getting_started/" class="md-nav__link">
+      <a href="../../tooling/tutorials/getting_started/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2447,7 +2325,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/tutorials/pipeline_mini_project/" class="md-nav__link">
+      <a href="../../tooling/tutorials/pipeline_mini_project/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2529,7 +2407,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/how-to/install_and_run/" class="md-nav__link">
+      <a href="../../tooling/how-to/install_and_run/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2550,7 +2428,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/how-to/ci_and_automation/" class="md-nav__link">
+      <a href="../../tooling/how-to/ci_and_automation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2571,7 +2449,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/how-to/troubleshooting/" class="md-nav__link">
+      <a href="../../tooling/how-to/troubleshooting/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2592,7 +2470,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/how-to/editor_setup/" class="md-nav__link">
+      <a href="../../tooling/how-to/editor_setup/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2613,7 +2491,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/how-to/lsp/" class="md-nav__link">
+      <a href="../../tooling/how-to/lsp/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2634,7 +2512,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/how-to/formatting/" class="md-nav__link">
+      <a href="../../tooling/how-to/formatting/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2655,7 +2533,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/how-to/testing/" class="md-nav__link">
+      <a href="../../tooling/how-to/testing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2727,7 +2605,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/explanation/projects_today/" class="md-nav__link">
+      <a href="../../tooling/explanation/projects_today/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2748,7 +2626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/explanation/lsp_architecture/" class="md-nav__link">
+      <a href="../../tooling/explanation/lsp_architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2820,7 +2698,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/reference/cli_reference/" class="md-nav__link">
+      <a href="../../tooling/reference/cli_reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2841,7 +2719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tooling/reference/lsp_protocol_support/" class="md-nav__link">
+      <a href="../../tooling/reference/lsp_protocol_support/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2910,7 +2788,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../../contributing/" class="md-nav__link ">
+            <a href="../../contributing/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -3020,7 +2898,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../../contributing/tutorials/book/" class="md-nav__link ">
+            <a href="../../contributing/tutorials/book/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -3053,7 +2931,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/tutorials/book/01_architecture_tour/" class="md-nav__link">
+      <a href="../../contributing/tutorials/book/01_architecture_tour/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3074,7 +2952,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/tutorials/book/02_layering_and_boundaries/" class="md-nav__link">
+      <a href="../../contributing/tutorials/book/02_layering_and_boundaries/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3095,7 +2973,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/tutorials/book/03_proposals_issues_vs_rfcs/" class="md-nav__link">
+      <a href="../../contributing/tutorials/book/03_proposals_issues_vs_rfcs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3116,7 +2994,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/tutorials/book/04_add_a_builtin/" class="md-nav__link">
+      <a href="../../contributing/tutorials/book/04_add_a_builtin/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3137,7 +3015,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/tutorials/book/05_add_new_syntax/" class="md-nav__link">
+      <a href="../../contributing/tutorials/book/05_add_new_syntax/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3158,7 +3036,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/tutorials/book/06_tooling_loop_formatter_and_tests/" class="md-nav__link">
+      <a href="../../contributing/tutorials/book/06_tooling_loop_formatter_and_tests/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3179,7 +3057,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/tutorials/book/07_tooling_loop_lsp/" class="md-nav__link">
+      <a href="../../contributing/tutorials/book/07_tooling_loop_lsp/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3200,7 +3078,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/tutorials/book/08_docsite_contributor_loop/" class="md-nav__link">
+      <a href="../../contributing/tutorials/book/08_docsite_contributor_loop/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3284,7 +3162,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/how-to/extending_language/" class="md-nav__link">
+      <a href="../../contributing/how-to/extending_language/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3305,7 +3183,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/how-to/benchmarks_and_profiling/" class="md-nav__link">
+      <a href="../../contributing/how-to/benchmarks_and_profiling/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3326,7 +3204,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/how-to/ci_and_automation/" class="md-nav__link">
+      <a href="../../contributing/how-to/ci_and_automation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3347,7 +3225,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/how-to/writing_rfcs/" class="md-nav__link">
+      <a href="../../contributing/how-to/writing_rfcs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3421,7 +3299,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/explanation/architecture/" class="md-nav__link">
+      <a href="../../contributing/explanation/architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3442,7 +3320,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/explanation/layering/" class="md-nav__link">
+      <a href="../../contributing/explanation/layering/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3463,7 +3341,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../contributing/explanation/readable-maintainable-rust/" class="md-nav__link">
+      <a href="../../contributing/explanation/readable-maintainable-rust/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3492,7 +3370,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../RFCs/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3545,7 +3423,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../../../release_notes/" class="md-nav__link ">
+            <a href="../../release_notes/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -3578,7 +3456,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../release_notes/0_1/" class="md-nav__link">
+      <a href="../../release_notes/0_1/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3606,7 +3484,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../roadmap/" class="md-nav__link">
+      <a href="../../roadmap/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3626,7 +3504,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../stability/" class="md-nav__link">
+      <a href="../../stability/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -3666,74 +3544,236 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#why-newtypes" class="md-nav__link">
+  <a href="#01-vs-02-whats-implemented-when" class="md-nav__link">
     <span class="md-ellipsis">
-      Why newtypes?
+      0.1 vs 0.2 (what’s implemented when)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#constructing-and-unwrapping" class="md-nav__link">
+  <a href="#area" class="md-nav__link">
     <span class="md-ellipsis">
-      Constructing and unwrapping
+      Area
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#validated-construction" class="md-nav__link">
+  <a href="#summary" class="md-nav__link">
     <span class="md-ellipsis">
-      Validated construction
+      Summary
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#validation-with-result" class="md-nav__link">
+  <a href="#motivation" class="md-nav__link">
     <span class="md-ellipsis">
-      Validation with Result
+      Motivation
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#methods-on-newtypes" class="md-nav__link">
+  <a href="#proposal-sketch" class="md-nav__link">
     <span class="md-ellipsis">
-      Methods on newtypes
+      Proposal sketch
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposal sketch">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#newtype-validationconversion-hook-canonical" class="md-nav__link">
+    <span class="md-ellipsis">
+      Newtype validation/conversion hook (canonical)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#constrained-underlying-type-syntax-nice-surface-form" class="md-nav__link">
+    <span class="md-ellipsis">
+      Constrained underlying type syntax (nice surface form)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#newtype-on-newtype-transitive-coercion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Newtype-on-newtype (transitive coercion)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#implicit-coercion-sites-compiler-rewriting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Implicit coercion sites (compiler rewriting)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Implicit coercion sites (compiler rewriting)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#proposed-contexts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Proposed contexts
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#controls-policy-avoid-hidden-panics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Controls &amp; policy (avoid hidden panics)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-behavior-pydantic-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      Failure behavior (pydantic-like)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#impact-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      Impact / compatibility
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#try-it" class="md-nav__link">
+  <a href="#implementation-notes-high-level" class="md-nav__link">
     <span class="md-ellipsis">
-      Try it
+      Implementation notes (high-level)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-to-learn-more" class="md-nav__link">
+  <a href="#unresolved-questions" class="md-nav__link">
     <span class="md-ellipsis">
-      Where to learn more
+      Unresolved questions
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#next" class="md-nav__link">
+  <a href="#checklist-comprehensive" class="md-nav__link">
     <span class="md-ellipsis">
-      Next
+      Checklist (comprehensive)
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Checklist (comprehensive)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#spec-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Spec / semantics
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#syntax-ast" class="md-nav__link">
+    <span class="md-ellipsis">
+      Syntax / AST
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#frontend-typechecker" class="md-nav__link">
+    <span class="md-ellipsis">
+      Frontend (typechecker)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lowering-ir" class="md-nav__link">
+    <span class="md-ellipsis">
+      Lowering / IR
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#codegen-rust-emission" class="md-nav__link">
+    <span class="md-ellipsis">
+      Codegen (Rust emission)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runtime-core-crates" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runtime / core crates
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tooling-docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tooling / docs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#testing-must-be-comprehensive" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing (must be comprehensive)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3755,114 +3795,324 @@
   
 
 
-<h1 id="12-newtypes-stronger-types">12. Newtypes (stronger types)<a class="headerlink" href="#12-newtypes-stronger-types" title="Permanent link">&para;</a></h1>
-<p>A <strong>newtype</strong> is a “zero-cost wrapper” around another type. It lets you create <strong>distinct types</strong> that the compiler won’t
-let you accidentally mix up.</p>
-<h2 id="why-newtypes">Why newtypes?<a class="headerlink" href="#why-newtypes" title="Permanent link">&para;</a></h2>
-<p>If two values share the same underlying type (like <code>int</code>), it’s easy to mix them up by accident.</p>
-<p>With newtypes, the compiler helps you keep them straight:</p>
-<div class="highlight"><pre><span></span><code>type UserId = newtype int
-type ProductId = newtype int
-
-def get_user_name(user_id: UserId) -&gt; str:
-    return f&quot;user={user_id.0}&quot;
-
-def get_product_name(product_id: ProductId) -&gt; str:
-    return f&quot;product={product_id.0}&quot;
-
-def main() -&gt; None:
-    user_id = UserId(42)
-    product_id = ProductId(100)
-
-    println(get_user_name(user_id))
-    println(get_product_name(product_id))
-
-    # If you accidentally swap them, the compiler can catch it:
-    # println(get_user_name(product_id))
-</code></pre></div>
-<div class="admonition tip">
-<p class="admonition-title">Coming from Python?</p>
-<p>This is similar to creating a tiny wrapper class just to avoid mixing up values, but with less runtime overhead and
-better static checking.</p>
-</div>
-<h2 id="constructing-and-unwrapping">Constructing and unwrapping<a class="headerlink" href="#constructing-and-unwrapping" title="Permanent link">&para;</a></h2>
-<p>You construct a newtype by calling it like a function: <code>UserId(42)</code>.</p>
-<h2 id="validated-construction">Validated construction<a class="headerlink" href="#validated-construction" title="Permanent link">&para;</a></h2>
-<p>Newtypes can optionally define a reserved validation hook:</p>
+<h1 id="rfc-017-validated-newtypes-with-implicit-coercion-pydantic-like-feel">RFC 017: Validated newtypes with implicit coercion (pydantic-like feel)<a class="headerlink" href="#rfc-017-validated-newtypes-with-implicit-coercion-pydantic-like-feel" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Planned<br />
+<strong>Created:</strong> 2026-01-12<br />
+<strong>Target:</strong> v0.2  </p>
+<h2 id="01-vs-02-whats-implemented-when">0.1 vs 0.2 (what’s implemented when)<a class="headerlink" href="#01-vs-02-whats-implemented-when" title="Permanent link">&para;</a></h2>
+<p>This RFC describes the intended <strong>v0.2 direction</strong>.</p>
+<p>For <strong>v0.1 stabilization</strong>, we may land only the minimum foundations needed so newtype construction and model/class
+construction semantics “make sense” (e.g., reserved hook recognition, no validation bypass paths, better diagnostics).</p>
+<h2 id="area">Area<a class="headerlink" href="#area" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Incan Language (syntax/semantics)</li>
+<li>Runtime / Core crates (stdlib/core/derive)</li>
+</ul>
+<h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
+<p>Introduce a pydantic-like “validated boundary” for <code>newtype</code> by standardizing a canonical validation/conversion hook on
+every newtype and allowing the compiler to perform implicit coercion from the underlying type in well-defined contexts
+(function arguments, typed initializers, and model/class field initialization). Invalid input fails fast with a
+<code>ValidationError</code> panic by default to preserve “pydantic feel”.</p>
+<p>Because panics can be a poor fit for reusable library code and long-running services, the proposal also keeps an explicit
+<code>Result</code>-returning constructor for recoverable flows, and introduces opt-out controls (e.g. <code>@no_implicit_coercion</code>) plus
+structured/aggregated validation errors for model/class initialization.</p>
+<h2 id="motivation">Motivation<a class="headerlink" href="#motivation" title="Permanent link">&para;</a></h2>
+<p>We want guardrails for common primitives (especially numerics) without forcing boilerplate everywhere. In practice, many
+values originate from boundaries (CLI/config/env/API), and teams want “it just works”-ergonomics with strong invariants
+and high-quality error messages.</p>
+<p>Today, users can implement validation manually (e.g. helper constructors returning <code>Result</code>), but this requires explicit
+calls at every use site. The desired “pydantic feel” is:</p>
+<ul>
+<li>pass raw values at boundaries</li>
+<li>have them coerced + validated automatically</li>
+<li>get a clear <code>ValidationError</code> on invalid inputs</li>
+</ul>
+<p>Concrete “pydantic-like” types this model can express (v1 targets):</p>
+<ul>
+<li>Constrained numerics (pure): <code>PositiveInt</code>, <code>NonNegativeInt</code>, “finite float”, etc.</li>
+<li>Parsing/normalization types (pure): e.g. <code>HttpUrl</code>, <code>UUID4</code>, <code>IPvAnyAddress</code> implemented as parse + normalize (no DNS/network
+  IO).</li>
+<li>Human-friendly boundary parsing stays explicit: e.g. <code>BytesCount = newtype int[ge=0]</code> plus an explicit
+  <code>parse_byte_size(str) -&gt; Result[BytesCount, ValidationError]</code> (v1 does not introduce implicit <code>str -&gt; int</code> parsing).</li>
+<li>Redaction/masking types: e.g. <code>SecretStr</code> can be a normal <code>newtype str</code>; masking is a formatter/serializer concern (outside
+  this RFC’s compiler changes).</li>
+</ul>
+<p>Conversely, some pydantic types are intentionally out-of-scope for v1 implicit coercion because they are non-deterministic
+(filesystem existence checks like <code>FilePath</code>, clock-based checks like <code>PastDate</code>, etc.). Those can still exist as explicit
+constructors, or via a future “impure validation” extension.</p>
+<h2 id="proposal-sketch">Proposal sketch<a class="headerlink" href="#proposal-sketch" title="Permanent link">&para;</a></h2>
+<h3 id="newtype-validationconversion-hook-canonical">Newtype validation/conversion hook (canonical)<a class="headerlink" href="#newtype-validationconversion-hook-canonical" title="Permanent link">&para;</a></h3>
+<p>For a newtype:</p>
 <div class="highlight"><pre><span></span><code>type Attempts = newtype int:
-    def from_underlying(n: int) -&gt; Result[Attempts, str]:
+    def from_underlying(n: int) -&gt; Result[Attempts, ValidationError]:
         if n &lt;= 0:
-            return Err(&quot;attempts must be &gt;= 1&quot;)
+            return Err(ValidationError(&quot;attempts must be &gt;= 1&quot;))
         return Ok(Attempts(n))
 </code></pre></div>
-<p>If a newtype defines <code>from_underlying</code>, then calling it like <code>Attempts(5)</code> performs <strong>checked construction</strong>
-(it calls <code>Attempts.from_underlying(5)</code> and panics if it returns <code>Err(...)</code>). This is a stepping stone toward the full
-v0.2 RFC behavior.</p>
-<p>To access the wrapped value, use <code>.0</code>:</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    user_id = UserId(42)
-    println(f&quot;{user_id.0}&quot;)
-</code></pre></div>
-<h2 id="validation-with-result">Validation with <code>Result</code><a class="headerlink" href="#validation-with-result" title="Permanent link">&para;</a></h2>
-<p>Newtypes are great for values that should satisfy an invariant (like “must be positive”).</p>
-<p>One common pattern is to provide a constructor helper that returns <code>Result</code>:</p>
-<div class="highlight"><pre><span></span><code>type UserId = newtype int
-
-def make_positive_id(n: int) -&gt; Result[UserId, str]:
-    if n &gt; 0:
-        return Ok(UserId(n))
-    return Err(&quot;ID must be positive&quot;)
-</code></pre></div>
-<p>You can then use <code>match</code> (or <code>?</code> if you’re inside a function returning <code>Result</code>) to handle failures.</p>
-<h2 id="methods-on-newtypes">Methods on newtypes<a class="headerlink" href="#methods-on-newtypes" title="Permanent link">&para;</a></h2>
-<p>Newtypes can also define methods:</p>
-<div class="highlight"><pre><span></span><code>enum EmailError:
-    MissingAt
-
-type Email = newtype str:
-    def from_underlying(v: str) -&gt; Result[Email, EmailError]:
-        &quot;&quot;&quot;Validate an email address by checking for the presence of an @ symbol&quot;&quot;&quot;
-        if &quot;@&quot; not in v:
-            return Err(EmailError.MissingAt)
-        return Ok(Email(v.lower()))
-
-def main() -&gt; None:
-    match Email.from_underlying(&quot;Alice@Example.com&quot;):
-        Ok(email) =&gt; println(f&quot;email={email.0}&quot;)
-        Err(_) =&gt; println(&quot;invalid email&quot;)
-</code></pre></div>
-<h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Define <code>type CartItems = newtype List[str]</code>.</li>
-<li>Write <code>def non_empty(items: List[str]) -&gt; Result[CartItems, str]</code> that rejects empty lists.</li>
-<li>In <code>main()</code>, call it with both <code>[]</code> and <code>["a"]</code> and print either the error or the first item.</li>
-</ol>
-<details class="example">
-<summary>One possible solution</summary>
-<div class="highlight"><pre><span></span><code>type CartItems = newtype List[str]
-
-def non_empty(items: List[str]) -&gt; Result[CartItems, str]:
-    if len(items) == 0:
-        return Err(&quot;must not be empty&quot;)
-    return Ok(CartItems(items))
-
-def main() -&gt; None:
-    match non_empty([]):
-        Ok(items) =&gt; println(f&quot;first={items.0[0]}&quot;)
-        Err(e) =&gt; println(f&quot;error: {e}&quot;)
-
-    match non_empty([&quot;a&quot;]):
-        Ok(items) =&gt; println(f&quot;first={items.0[0]}&quot;)
-        Err(e) =&gt; println(f&quot;error: {e}&quot;)
-</code></pre></div>
-</details>
-<h2 id="where-to-learn-more">Where to learn more<a class="headerlink" href="#where-to-learn-more" title="Permanent link">&para;</a></h2>
+<p><strong>Notes</strong>:</p>
 <ul>
-<li>Longer example in the repository: <code>examples/intermediate/newtypes.incn</code></li>
+<li><code>from_underlying</code> is the canonical “validated conversion” from the newtype’s underlying type.</li>
+<li>It is defined in the newtype body (supported today by parser); there is no separate <code>impl</code> block in Incan.</li>
+<li>If a newtype does not define <code>from_underlying</code>, the compiler auto-generates a default implementation:<ul>
+<li><code>from_underlying(x) = Ok(T(x))</code> (no extra validation).</li>
+<li>If the underlying type includes constraints (e.g. <code>int[gt=0]</code>), the generated <code>from_underlying</code> enforces those constraints.</li>
 </ul>
-<h2 id="next">Next<a class="headerlink" href="#next" title="Permanent link">&para;</a></h2>
-<p>Back: <a href="../11_traits_and_derives/">11. Traits and derives</a></p>
-<p>Next: return to <a href="../../../../start_here/">Start here</a> or continue in the <a href="../../../">Language Guide</a>.</p>
+</li>
+<li><code>from_underlying</code> is treated as a reserved hook name for newtypes (compiler-recognized for coercion/validation).</li>
+<li>Contract (important for predictability and tooling):<ul>
+<li><code>from_underlying</code> must be deterministic and side-effect free (no IO, no global mutation, no time/random dependence,
+  no randomized hashing dependence).</li>
+<li><code>from_underlying</code> must not panic; it returns <code>Err(ValidationError)</code> on invalid input.</li>
+<li>On <code>Ok(...)</code>, it must return exactly the validated newtype instance corresponding to the input (no “partial” values).</li>
+<li>This intentionally rules out validators that consult the filesystem, the clock, randomness, or the network; those
+  require explicit validation, or a future opt-in extension with tighter guardrails.</li>
+</ul>
+</li>
+</ul>
+<p>Relationship to <code>TryFrom[T]</code> (stdlib):</p>
+<ul>
+<li>Incan already has a <code>TryFrom[T]</code> trait with <code>@classmethod def try_from(cls, value: T) -&gt; Result[Self, str]</code>.</li>
+<li>This RFC introduces <code>from_underlying(...) -&gt; Result[T, ValidationError]</code> as a dedicated hook because:<ul>
+<li>we want a structured <code>ValidationError</code> (paths, chains, constraint metadata) rather than a plain <code>str</code>, and</li>
+<li>Incan does not yet have <code>impl</code> blocks for newtypes, so a compiler-recognized hook inside the newtype body keeps the
+  surface area minimal.</li>
+</ul>
+</li>
+<li>Future-friendly: the compiler could auto-provide <code>TryFrom[U]</code> for a newtype by delegating to <code>from_underlying</code> and
+  stringifying the error, but <code>from_underlying</code> remains the canonical validation contract.</li>
+</ul>
+<h3 id="constrained-underlying-type-syntax-nice-surface-form">Constrained underlying type syntax (nice surface form)<a class="headerlink" href="#constrained-underlying-type-syntax-nice-surface-form" title="Permanent link">&para;</a></h3>
+<p>To avoid the semantic implication that <code>int(...)</code> accepts constraint keyword arguments at runtime, represent constraints
+as type-level parameters using bracket syntax:</p>
+<p>(Inspiration: this is similar in spirit to Python's <code>typing.Annotated[...]</code> constraints and pydantic's constrained types.
+The goal is “feel”, not copying pydantic syntax.)</p>
+<div class="highlight"><pre><span></span><code>type NonNegativeInt = newtype int[ge=0]
+type PositiveInt = newtype int[gt=0]
+</code></pre></div>
+<p><strong>Semantics</strong>:</p>
+<ul>
+<li><code>int("5")</code> remains a plain conversion to <code>int</code> (no constraints).</li>
+<li>The constraints live on the constrained type (<code>int[ge=0]</code>) and are enforced by the newtype’s validation hook (<code>from_underlying</code>)
+  and by implicit coercion sites.</li>
+<li>This keeps constraint syntax in the “type parameter” family (similar to <code>list[T]</code>, <code>Result[T, E]</code>) rather than looking
+  like a runtime call with keyword arguments.</li>
+<li>For v1, constrained primitive types are intended to be used as the underlying type of a <code>newtype</code> (not as a general
+  “drop-in replacement” for <code>int</code>/<code>float</code> everywhere). This keeps the surface area small while preserving the feel.</li>
+</ul>
+<p>Constraint vocabulary (v1, proposal):</p>
+<ul>
+<li><code>int[...]</code>: <code>ge</code>, <code>gt</code>, <code>le</code>, <code>lt</code> (values must be compile-time constants: literals or named <code>const</code>s)</li>
+<li><code>float[...]</code> (optional for v1): <code>ge</code>, <code>gt</code>, <code>le</code>, <code>lt</code> (values must be compile-time constants: literals or named <code>const</code>s)<ul>
+<li>IEEE note: comparisons with NaN are always false, so NaN should fail all constraints by default.</li>
+</ul>
+</li>
+</ul>
+<p>Constraint semantics:</p>
+<ul>
+<li><code>ge</code>: greater than or equal (<span class="arithmatex">\(\ge\)</span>)</li>
+<li><code>gt</code>: greater than (<span class="arithmatex">\(&gt;\)</span>)</li>
+<li><code>le</code>: less than or equal (<span class="arithmatex">\(\le\)</span>)</li>
+<li><code>lt</code>: less than (<span class="arithmatex">\(&lt;\)</span>)</li>
+</ul>
+<p>Syntax notes:</p>
+<ul>
+<li>Multiple constraints are allowed: <code>int[ge=0, lt=10]</code> (order-insensitive; all constraints must hold).</li>
+<li>Constraint parameters are compile-time constants (not arbitrary expressions).</li>
+<li>Only a single constraint block is permitted on a primitive type (e.g. <code>int[...]</code> cannot be followed by another <code>[...]</code>).</li>
+<li>Duplicate keys are rejected (e.g. <code>int[gt=0, gt=1]</code> is an error).</li>
+</ul>
+<h3 id="newtype-on-newtype-transitive-coercion">Newtype-on-newtype (transitive coercion)<a class="headerlink" href="#newtype-on-newtype-transitive-coercion" title="Permanent link">&para;</a></h3>
+<p>Newtypes should be able to wrap other newtypes:</p>
+<div class="highlight"><pre><span></span><code>type PositiveInt = newtype int[gt=0]
+type RetryAttempts = newtype PositiveInt
+</code></pre></div>
+<p>In this case, implicit coercion should be transitive:</p>
+<ul>
+<li>expected <code>RetryAttempts</code>, got <code>int</code><ul>
+<li>coerce <code>int -&gt; PositiveInt</code> (validate <code>gt=0</code>)</li>
+<li>then coerce <code>PositiveInt -&gt; RetryAttempts</code></li>
+</ul>
+</li>
+</ul>
+<p>Because each newtype has exactly one underlying type, the coercion chain is deterministic. The compiler should reject cycles
+(if they can be formed) with a clear diagnostic.</p>
+<h3 id="implicit-coercion-sites-compiler-rewriting">Implicit coercion sites (compiler rewriting)<a class="headerlink" href="#implicit-coercion-sites-compiler-rewriting" title="Permanent link">&para;</a></h3>
+<p>When a context expects a validated newtype <code>T_target</code> but receives a value of some type <code>S0</code>, the compiler may insert
+implicit coercions consisting <strong>only</strong> of validated newtype conversions (<code>from_underlying</code>), potentially chained across
+nested newtypes.</p>
+<p>Critically, the compiler <strong>does not</strong> insert ambient primitive conversions (e.g. <code>str -&gt; int</code>, <code>int -&gt; float</code>) as part of
+implicit coercion. If you want parsing/coercion between primitives, write it explicitly at the call site (e.g. <code>int("5")</code>).</p>
+<h4 id="proposed-contexts">Proposed contexts<a class="headerlink" href="#proposed-contexts" title="Permanent link">&para;</a></h4>
+<ol>
+<li>Function arguments</li>
+<li>Typed initializers</li>
+<li>Model/class field initialization</li>
+<li>Newtype construction (checked by default; <code>T(x)</code> treated as a coercion/validation site)</li>
+</ol>
+<h3 id="controls-policy-avoid-hidden-panics">Controls &amp; policy (avoid hidden panics)<a class="headerlink" href="#controls-policy-avoid-hidden-panics" title="Permanent link">&para;</a></h3>
+<p>Implicit coercion is intended as a boundary ergonomics feature, but it can introduce hidden panics in reusable library
+code (especially when used via function arguments). Provide opt-out controls so library/service authors can make call
+sites explicit.</p>
+<h3 id="failure-behavior-pydantic-like">Failure behavior (pydantic-like)<a class="headerlink" href="#failure-behavior-pydantic-like" title="Permanent link">&para;</a></h3>
+<p>If <code>from_underlying(...)</code> returns <code>Err(e)</code> during implicit coercion, panic with a <code>ValidationError</code> (or wrap the returned
+<code>e</code> into a <code>ValidationError</code>), similar to pydantic raising/throwing a validation exception.</p>
+<p>Aggregation policy:</p>
+<ul>
+<li>Function arguments and typed initializers: fail fast (panic on first invalid coercion).</li>
+<li>Model/class field initialization: aggregate all field coercion errors and panic once with a multi-error
+  <code>ValidationError</code> for better diagnostics.</li>
+</ul>
+<h2 id="impact-compatibility">Impact / compatibility<a class="headerlink" href="#impact-compatibility" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Behavioral: introduces implicit conversions at specific boundaries; must be carefully scoped to avoid “magic everywhere”.</li>
+<li>Runtime: implicit coercion failure panics; this must be clearly documented as a boundary feature.</li>
+<li>Performance: newtypes should remain zero-cost wrappers in generated code; validation cost is paid only at coercion sites
+  and should not allocate/box unless the user’s <code>from_underlying</code> does so.</li>
+</ul>
+<h2 id="implementation-notes-high-level">Implementation notes (high-level)<a class="headerlink" href="#implementation-notes-high-level" title="Permanent link">&para;</a></h2>
+<p>Likely layers:</p>
+<ul>
+<li>Syntax/parser: support constrained primitive type syntax like <code>int[gt=0]</code> as a type-level annotation.</li>
+<li>Frontend/typechecker: detect coercion sites and insert validated coercion nodes.</li>
+<li>Lowering/codegen: emit calls to <code>from_underlying</code> and panic with rich errors on failure.</li>
+<li>Stdlib/core: define <code>ValidationError</code> shape and formatting.</li>
+<li>Docs: document coercion behavior and explicit alternatives.</li>
+<li>Tests: parser + typechecker + codegen + runtime behavior.</li>
+</ul>
+<h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Panic strategy: unwind vs abort for <code>ValidationError</code> panics.</li>
+<li>Constraint catalog scope for v1.</li>
+<li>Non-panicking coercion mode (<code>Result</code> mode).</li>
+<li>Serialization/FFI boundaries.</li>
+</ul>
+<h2 id="checklist-comprehensive">Checklist (comprehensive)<a class="headerlink" href="#checklist-comprehensive" title="Permanent link">&para;</a></h2>
+<h3 id="spec-semantics">Spec / semantics<a class="headerlink" href="#spec-semantics" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Lock down the <strong>canonical hook</strong> name and signature:<ul>
+<li>[ ] <code>from_underlying(underlying: U) -&gt; Result[Self, ValidationError]</code> as the compiler-recognized entrypoint</li>
+<li>[ ] deterministic / side-effect free contract, and “must not panic” rule</li>
+</ul>
+</li>
+<li>[ ] Define the <strong>failure policy</strong> precisely per coercion site:<ul>
+<li>[ ] function args + typed initializers: fail-fast (panic on first invalid coercion)</li>
+<li>[ ] model/class construction: aggregate all field coercion failures and panic once</li>
+</ul>
+</li>
+<li>[ ] Define <strong>transitive coercion</strong> rules for newtype-on-newtype (chain building + cycle detection).</li>
+<li>[ ] Define <strong>opt-out controls</strong> (library-friendly):<ul>
+<li>[ ] <code>@no_implicit_coercion</code> (type-level) and/or per-site opt-out</li>
+<li>[ ] “Result mode” / explicit construction guidance</li>
+</ul>
+</li>
+<li>[ ] Define <strong>constraint semantics</strong> for <code>int[...]</code> / <code>float[...]</code>:<ul>
+<li>[ ] permitted keys (<code>ge/gt/le/lt</code>) + compile-time const rules for values</li>
+<li>[ ] NaN policy for float constraints</li>
+<li>[ ] duplicate keys + incompatible constraint combinations diagnostics</li>
+</ul>
+</li>
+</ul>
+<h3 id="syntax-ast">Syntax / AST<a class="headerlink" href="#syntax-ast" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Parser: support constrained primitive type syntax in type position (e.g. <code>int[gt=0]</code>, <code>float[ge=0.0]</code>).</li>
+<li>[ ] AST: represent constrained types in a structured way (not as ad-hoc strings).</li>
+<li>[ ] Formatter: preserve / normalize constraint formatting (order-insensitive, stable output).</li>
+</ul>
+<h3 id="frontend-typechecker">Frontend (typechecker)<a class="headerlink" href="#frontend-typechecker" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Recognize <code>from_underlying</code> as a <strong>reserved newtype hook</strong> and validate its shape:<ul>
+<li>[ ] static (no receiver)</li>
+<li>[ ] exactly one parameter of the underlying type (including constrained underlying types)</li>
+<li>[ ] return type is <code>Result[Newtype, ValidationError]</code></li>
+</ul>
+</li>
+<li>[ ] For newtypes without <code>from_underlying</code>, define and implement the <strong>auto-generated default</strong> behavior:<ul>
+<li>[ ] <code>Ok(T(x))</code> if no constraints</li>
+<li>[ ] enforce constraints from underlying type if present</li>
+</ul>
+</li>
+<li>[ ] Insert implicit coercions at the approved sites:<ul>
+<li>[ ] function arguments</li>
+<li>[ ] typed initializers</li>
+<li>[ ] model/class field initialization</li>
+<li>[ ] newtype construction <code>T(x)</code> (checked by default)</li>
+</ul>
+</li>
+<li>[ ] Ensure the compiler does <strong>not</strong> insert ambient primitive conversions (no <code>str -&gt; int</code>, no <code>int -&gt; float</code>).</li>
+<li>[ ] Diagnostics quality:<ul>
+<li>[ ] span-accurate errors pointing at the call site / field initializer</li>
+<li>[ ] actionable hints (show explicit <code>T.from_underlying(...)</code> / <code>try_...</code> alternatives)</li>
+<li>[ ] include coercion chain in errors (e.g. <code>int -&gt; PositiveInt -&gt; RetryAttempts</code>)</li>
+</ul>
+</li>
+</ul>
+<h3 id="lowering-ir">Lowering / IR<a class="headerlink" href="#lowering-ir" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Introduce an explicit IR representation for “validated coercion” (preferred) <strong>or</strong> document the exact rewriting strategy.</li>
+<li>[ ] Ensure lowering avoids recursion traps (e.g. <code>T(x)</code> inside <code>impl T</code> / inside the hook itself).</li>
+<li>[ ] Preserve deterministic evaluation order for default values and coercion calls.</li>
+</ul>
+<h3 id="codegen-rust-emission">Codegen (Rust emission)<a class="headerlink" href="#codegen-rust-emission" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Emit <code>from_underlying(...)</code> calls at coercion sites.</li>
+<li>[ ] Emit failure behavior:<ul>
+<li>[ ] fail-fast sites: panic with <code>ValidationError</code> (include message + path context)</li>
+<li>[ ] aggregated sites: collect multiple errors and panic once</li>
+</ul>
+</li>
+<li>[ ] Keep generated code <strong>zero-cost</strong> outside coercion sites (no extra allocations on happy path beyond user code).</li>
+<li>[ ] Decide and document when generated code may use <code>.expect(...)</code> / <code>.unwrap(...)</code> vs structured error helpers.</li>
+</ul>
+<h3 id="runtime-core-crates">Runtime / core crates<a class="headerlink" href="#runtime-core-crates" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Define canonical <code>ValidationError</code> type:<ul>
+<li>[ ] structured fields (path, kind, message, optional nested causes)</li>
+<li>[ ] stable formatting (human-readable + optionally machine-readable)</li>
+</ul>
+</li>
+<li>[ ] Provide helper APIs for:<ul>
+<li>[ ] creating per-field errors</li>
+<li>[ ] aggregating multiple errors</li>
+<li>[ ] panic/raise helpers with <code>#[track_caller]</code></li>
+</ul>
+</li>
+</ul>
+<h3 id="tooling-docs">Tooling / docs<a class="headerlink" href="#tooling-docs" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Update Book + Reference docs:<ul>
+<li>[ ] explain <code>from_underlying</code></li>
+<li>[ ] document implicit coercion sites and opt-out controls</li>
+<li>[ ] show explicit alternatives (<code>Result</code>-returning flows)</li>
+</ul>
+</li>
+<li>[ ] Add examples:<ul>
+<li>[ ] constrained numeric newtypes</li>
+<li>[ ] parsing/normalization newtypes (pure)</li>
+<li>[ ] model/class aggregated validation example</li>
+</ul>
+</li>
+</ul>
+<h3 id="testing-must-be-comprehensive">Testing (must be comprehensive)<a class="headerlink" href="#testing-must-be-comprehensive" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Parser tests for constraint syntax and errors.</li>
+<li>[ ] Typechecker tests:<ul>
+<li>[ ] correct insertion of coercions at each site</li>
+<li>[ ] no ambient primitive conversions</li>
+<li>[ ] transitive coercion chains + cycle detection errors</li>
+<li>[ ] spans + hint text assertions for key diagnostics</li>
+</ul>
+</li>
+<li>[ ] Codegen snapshot tests:<ul>
+<li>[ ] emitted <code>from_underlying</code> calls at each coercion site</li>
+<li>[ ] emitted aggregation logic for model/class initialization</li>
+</ul>
+</li>
+<li>[ ] Runtime behavior tests:<ul>
+<li>[ ] panic messages include correct path/field context</li>
+<li>[ ] aggregated errors contain all invalid fields</li>
+</ul>
+</li>
+</ul>
 
 
 
@@ -3911,12 +4161,12 @@ def main() -&gt; None:
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.instant", "navigation.sections", "navigation.indexes", "content.code.copy", "content.tabs.link"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.indexes", "content.code.copy", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
     
     
-      <script src="../../../../assets/javascripts/bundle.88dd0f4e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.88dd0f4e.min.js"></script>
       
-        <script src="../../../../_snippets/javascripts/mathjax.js"></script>
+        <script src="../../_snippets/javascripts/mathjax.js"></script>
       
     
   </body>
