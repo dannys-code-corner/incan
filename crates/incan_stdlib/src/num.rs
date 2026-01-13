@@ -14,11 +14,11 @@
 //! ## Examples
 //!
 //! ```rust
-//! use incan_stdlib::num::{py_div, py_mod, py_floor_div};
+//! use incan_stdlib::num::{py_div, py_floor_div, py_mod};
 //!
 //! assert_eq!(py_floor_div(7_i64, 3_i64), 2);
-//! assert!( (py_mod(-7.0_f64, 3.0_f64) - 2.0).abs() < 1e-10 );
-//! assert!( (py_div(7, 2) - 3.5).abs() < 1e-10 );
+//! assert!((py_mod(-7.0_f64, 3.0_f64) - 2.0).abs() < 1e-10);
+//! assert!((py_div(7, 2) - 3.5).abs() < 1e-10);
 //! ```
 
 /// Python-style floor division for integers.
@@ -30,8 +30,8 @@
 /// ```
 /// use incan_stdlib::num::py_floor_div_i64;
 /// assert_eq!(py_floor_div_i64(7, 3), 2);
-/// assert_eq!(py_floor_div_i64(-7, 3), -3);  // Rust would give -2
-/// assert_eq!(py_floor_div_i64(7, -3), -3);  // Rust would give -2
+/// assert_eq!(py_floor_div_i64(-7, 3), -3); // Rust would give -2
+/// assert_eq!(py_floor_div_i64(7, -3), -3); // Rust would give -2
 /// assert_eq!(py_floor_div_i64(-7, -3), 2);
 /// ```
 use crate::errors::raise_zero_division;
@@ -401,8 +401,8 @@ pub fn py_floor_div_f64(a: f64, b: f64) -> f64 {
 /// ```
 /// use incan_stdlib::num::py_mod_i64;
 /// assert_eq!(py_mod_i64(7, 3), 1);
-/// assert_eq!(py_mod_i64(-7, 3), 2);   // Rust % gives -1
-/// assert_eq!(py_mod_i64(7, -3), -2);  // Rust % gives 1
+/// assert_eq!(py_mod_i64(-7, 3), 2); // Rust % gives -1
+/// assert_eq!(py_mod_i64(7, -3), -2); // Rust % gives 1
 /// assert_eq!(py_mod_i64(-7, -3), -1);
 /// ```
 #[inline]

@@ -22,8 +22,8 @@
 //!
 //! ## Notes
 //!
-//! - **Not lexer tokens**: [`TokenStream`] here is `proc_macro2::TokenStream` used for Rust codegen.
-//!   Lexer output is a separate token type in the frontend.
+//! - **Not lexer tokens**: [`TokenStream`] here is `proc_macro2::TokenStream` used for Rust codegen. Lexer output is a
+//!   separate token type in the frontend.
 //! - **Conversions are centralized**: Ownership/borrow/copy/string adjustments should go through
 //!   [`determine_conversion`] using a [`ConversionContext`] instead of being hand-coded inline.
 //! - **Side-effect free**: Emission is pure codegen; it does not touch the filesystem.
@@ -65,12 +65,11 @@ impl<'a> IrEmitter<'a> {
     /// - A Rust `TokenStream` representing an expression.
     ///
     /// ## Errors
-    /// - `EmitError`: if the IR contains an unsupported construct or emission of a sub-expression
-    ///   fails.
+    /// - `EmitError`: if the IR contains an unsupported construct or emission of a sub-expression fails.
     ///
     /// ## Notes
-    /// - This is the main entry point for expression emission; it delegates to specialized helpers
-    ///   in submodules for complex expression kinds.
+    /// - This is the main entry point for expression emission; it delegates to specialized helpers in submodules for
+    ///   complex expression kinds.
     pub(super) fn emit_expr(&self, expr: &TypedExpr) -> Result<TokenStream, EmitError> {
         match &expr.kind {
             IrExprKind::Unit => Ok(quote! { () }),

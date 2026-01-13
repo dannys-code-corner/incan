@@ -9,8 +9,8 @@
 //!
 //! ## Notes
 //! - Registries are intentionally **pure**: no AST types, no IO, no side effects.
-//! - The lexer/parser enforce syntax; registries provide spellings and metadata for shared use
-//!   (diagnostics, docs, formatting, highlighting).
+//! - The lexer/parser enforce syntax; registries provide spellings and metadata for shared use (diagnostics, docs,
+//!   formatting, highlighting).
 //!
 //! ## Examples
 //! ```rust

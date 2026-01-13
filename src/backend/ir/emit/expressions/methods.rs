@@ -69,8 +69,7 @@ impl<'a> IrEmitter<'a> {
     /// ## Notes
     ///
     /// - This is intentionally conservative: it avoids rewriting ALLCAPS constants as types.
-    /// - When we have stronger information (e.g. enum variant registries), prefer that over
-    ///   heuristics.
+    /// - When we have stronger information (e.g. enum variant registries), prefer that over heuristics.
     fn is_title_case_type_name(name: &str) -> bool {
         let has_upper = name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false);
         let has_lower = name.chars().any(|c| c.is_ascii_lowercase());
@@ -159,7 +158,25 @@ impl<'a> IrEmitter<'a> {
             if Self::is_title_case_type_name(name) {
                 let type_ident = format_ident!("{}", name);
                 let m = format_ident!("{}", method);
-                let arg_tokens: Vec<TokenStream> = args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?;
+                // Apply Incan-style argument conversions when calling associated functions on Incan-owned types
+                // (structs/enums). This is important for `str` literals which are emitted as `&'static str`, but many
+                // Incan-level signatures expect owned `String` in Rust (e.g., newtype `from_underlying(v: str)`).
+                //
+                // For unknown/external types, keep the previous behavior (emit args as-is) to avoid accidental
+                // conversions for Rust APIs that truly want `&str`.
+                let apply_incan_arg_conversions = matches!(receiver.ty, IrType::Struct(_) | IrType::Enum(_));
+
+                let arg_tokens: Vec<TokenStream> = if apply_incan_arg_conversions {
+                    args.iter()
+                        .map(|a| {
+                            let emitted = self.emit_expr(a)?;
+                            let conv = determine_conversion(a, None, ConversionContext::IncanFunctionArg);
+                            Ok(conv.apply(emitted))
+                        })
+                        .collect::<Result<_, _>>()?
+                } else {
+                    args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?
+                };
                 return Ok(quote! { #type_ident::#m(#(#arg_tokens),*) });
             }
         }

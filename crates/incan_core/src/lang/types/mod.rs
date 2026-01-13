@@ -4,8 +4,7 @@
 //! recognized by the compiler.
 //!
 //! ## Notes
-//! - These registries are vocabulary only: they define spellings + metadata, not type system
-//!   semantics.
+//! - These registries are vocabulary only: they define spellings + metadata, not type system semantics.
 //! - Each submodule groups a small family of types for readability.
 //!
 //! ## See also

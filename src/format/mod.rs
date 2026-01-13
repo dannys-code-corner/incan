@@ -60,7 +60,7 @@ pub fn format_source(source: &str) -> Result<String, FormatError> {
 /// # Examples
 ///
 /// ```
-/// use incan::{format_source_with_config, FormatConfig};
+/// use incan::{FormatConfig, format_source_with_config};
 ///
 /// let config = FormatConfig::default();
 /// let source = "def greet(name: str) -> str:\n    return name\n";

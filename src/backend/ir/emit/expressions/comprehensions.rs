@@ -74,8 +74,8 @@ impl<'a> IrEmitter<'a> {
         // Determine if the key needs cloning.
         // For dict comprehensions, keys need cloning when:
         // 1. The key type is non-Copy AND
-        // 2. The key is NOT a simple variable reference to the loop variable
-        //    (in which case it's already "consumed" by the key tuple position)
+        // 2. The key is NOT a simple variable reference to the loop variable (in which case it's already "consumed" by
+        //    the key tuple position)
         //
         // Special case: when iterating over a list of string literals (`Vec<&str>`), the IR element type is
         // `IrType::String`, but the Rust runtime type is `&str` which IS Copy. Check if the key is just the loop

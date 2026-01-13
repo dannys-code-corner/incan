@@ -11,7 +11,8 @@
 //! This module **primarily handles string conversions** because strings are the main source of borrow/ownership
 //! mismatches when compiling to Rust:
 //!
-//! - **Primitives** (`int`, `float`, `bool`) implement `Copy` in Rust, so they pass by value automatically—no conversion needed
+//! - **Primitives** (`int`, `float`, `bool`) implement `Copy` in Rust, so they pass by value automatically—no
+//!   conversion needed
 //! - **Strings** have a fundamental split in Rust: `&str` (borrowed, stack) vs `String` (owned, heap)
 //! - Incan's `str` type abstracts this away (like Python), but codegen must handle it
 //! - String literals like `"hello"` are `&'static str` in Rust, requiring `.to_string()` for owned contexts
@@ -88,7 +89,7 @@
 //! Return values must match the function signature:
 //!
 //! ```text
-//!
+//! 
 //! Incan:  def get_name() -> str: return "Alice"
 //! Rust:   fn get_name() -> String { return "Alice".to_string(); }
 //!                                           ^^^^^^^^^^^^^^^^^^ convert to owned
@@ -159,7 +160,7 @@
 //! Generated Rust:
 //!
 //! ```rust,ignore
-//!
+//! 
 //! let content: String = "data.txt".to_string();
 //! let data = std::fs::read_to_string(&content);  // ← borrow applied
 //! ```

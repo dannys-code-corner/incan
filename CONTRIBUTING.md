@@ -165,7 +165,7 @@ Snapshot files are in `tests/snapshots/`.
 
 1. **Run tests**: `cargo test`
 2. **Run clippy**: `cargo clippy`
-3. **Format**: `cargo fmt`
+3. **Format**: `cargo +nightly fmt` (nightly rustfmt is required for comment/doc formatting settings)
 4. **Update snapshots** if codegen changed: `cargo insta review`
 5. **Write descriptive commit messages**
 

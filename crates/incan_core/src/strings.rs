@@ -6,8 +6,7 @@
 //! ## Notes
 //! - **Indexing model**: Unicode scalar indexing (Rust `char`), not bytes or grapheme clusters.
 //! - **Negative indices**: supported (Python-style): `s[-1]` is the last scalar.
-//! - **Slicing**: Python-like `start`, `end`, `step` (default `step = 1`), with negative indices
-//!   and bounds clamping.
+//! - **Slicing**: Python-like `start`, `end`, `step` (default `step = 1`), with negative indices and bounds clamping.
 //! - **Error messages**: user-facing exception formatting lives in [`crate::errors::IncanError`].
 
 use core::fmt;

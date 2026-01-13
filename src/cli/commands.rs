@@ -128,8 +128,7 @@ const MAX_SOURCE_SIZE: u64 = 100 * 1024 * 1024;
 ///
 /// This function ensures:
 /// - The path doesn't contain `..` components
-/// - The path doesn't start with `/` (absolute path outside workspace)
-///   unless it starts with a known safe prefix
+/// - The path doesn't start with `/` (absolute path outside workspace) unless it starts with a known safe prefix
 fn validate_output_dir(out_dir: &str) -> CliResult<()> {
     let path = Path::new(out_dir);
 

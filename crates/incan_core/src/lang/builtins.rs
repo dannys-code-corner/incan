@@ -6,8 +6,7 @@
 //!
 //! ## Notes
 //! - Lookup via [`from_str`] is **case-sensitive**.
-//! - Aliases exist for backwards compatibility and ergonomics (e.g. `"println"` is accepted as
-//!   an alias for `"print"`).
+//! - Aliases exist for backwards compatibility and ergonomics (e.g. `"println"` is accepted as an alias for `"print"`).
 //!
 //! ## Examples
 //! ```rust

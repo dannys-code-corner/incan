@@ -9,17 +9,16 @@
 //!
 //! This codebase follows explicit error handling:
 //!
-//! - **Production code**: Use `Result` or `Option` with `?` / `ok_or` / `map_err`.
-//!   The `cli` and `backend` modules enforce `#![deny(clippy::unwrap_used)]`.
+//! - **Production code**: Use `Result` or `Option` with `?` / `ok_or` / `map_err`. The `cli` and `backend` modules
+//!   enforce `#![deny(clippy::unwrap_used)]`.
 //!
 //! - **Test code**: `.unwrap()` and `.expect()` are acceptable in tests.
 //!
-//! - **Generated code**: The codegen modules emit `.unwrap()` as *string literals*
-//!   in generated Rust code. This is acceptable (these are output strings, not
-//!   actual method calls in the compiler).
+//! - **Generated code**: The codegen modules emit `.unwrap()` as *string literals* in generated Rust code. This is
+//!   acceptable (these are output strings, not actual method calls in the compiler).
 //!
-//! - **True invariants**: If a panic represents a compiler bug (logic error),
-//!   use `.expect("INVARIANT: reason")` with a clear explanation.
+//! - **True invariants**: If a panic represents a compiler bug (logic error), use `.expect("INVARIANT: reason")` with a
+//!   clear explanation.
 
 pub mod backend;
 pub mod cli;

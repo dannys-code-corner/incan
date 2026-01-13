@@ -5,10 +5,8 @@
 //! dependency-free metadata types that are reused across all registries.
 //!
 //! ## Notes
-//! - These types are intentionally lightweight and `Copy`-friendly so registries can live in
-//!   `const` tables.
-//! - Metadata is meant for tooling/docs/diagnostics; enforcement of syntax rules still lives
-//!   in the lexer/parser.
+//! - These types are intentionally lightweight and `Copy`-friendly so registries can live in `const` tables.
+//! - Metadata is meant for tooling/docs/diagnostics; enforcement of syntax rules still lives in the lexer/parser.
 //!
 //! ## See also
 //! - [`crate::lang::keywords`]
@@ -76,8 +74,8 @@ impl RFC {
 /// Identify the language/compiler version a vocabulary item is available since.
 ///
 /// ## Notes
-/// - This is currently a free-form string (e.g. `"0.1.0"`). We can tighten this later once
-///   the project formalizes versioning.
+/// - This is currently a free-form string (e.g. `"0.1.0"`). We can tighten this later once the project formalizes
+///   versioning.
 ///
 /// ## Examples
 /// ```rust
@@ -91,8 +89,7 @@ pub type SinceVersion = &'static str;
 /// Describe the lifecycle status of a language vocabulary item.
 ///
 /// ## Notes
-/// - This is intended for docs/tooling (e.g. to warn on deprecated spellings), not for
-///   feature-gating by itself.
+/// - This is intended for docs/tooling (e.g. to warn on deprecated spellings), not for feature-gating by itself.
 ///
 /// ## Examples
 /// ```rust

@@ -5,8 +5,8 @@
 //!
 //! ## Notes
 //! - Emission produces a Rust syntax tree (`syn`) and formats it via `prettyplease`.
-//! - Ownership/borrow/string conversions are centralized in `backend::ir::conversions` and should
-//!   not be reimplemented ad-hoc in emission code.
+//! - Ownership/borrow/string conversions are centralized in `backend::ir::conversions` and should not be reimplemented
+//!   ad-hoc in emission code.
 //!
 //! ## See also
 //! - [`crate::backend::ir::conversions`]: conversion policy for emitted Rust
