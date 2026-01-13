@@ -27,8 +27,8 @@ impl<'a> IrEmitter<'a> {
     /// ## Notes
     ///
     /// - Literal segments are brace-escaped via `incan_core::strings::escape_format_literal`.
-    /// - Expression segments are formatted via `format!("{}", expr)` before being passed to the
-    ///   semantic-core f-string join helper.
+    /// - Expression segments are formatted via `format!("{}", expr)` before being passed to the semantic-core f-string
+    ///   join helper.
     pub(in super::super) fn emit_format_expr(&self, parts: &[FormatPart]) -> Result<TokenStream, EmitError> {
         // Build literal parts (length = args + 1) and a parallel list of formatted args.
         let mut literal_parts: Vec<String> = Vec::new();

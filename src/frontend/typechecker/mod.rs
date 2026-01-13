@@ -9,8 +9,8 @@
 //!   into the symbol table. The second pass validates bodies, expressions, and cross-references.
 //! - **Import handling**: Call [`TypeChecker::import_module`] or use [`TypeChecker::check_with_imports`] to
 //!   pre-populate symbols from dependency modules before checking the main module.
-//! - **Error accumulation**: Errors are collected (not fatal) so the checker can report as many issues as possible in
-//!   a single run.
+//! - **Error accumulation**: Errors are collected (not fatal) so the checker can report as many issues as possible in a
+//!   single run.
 //!
 //! ## What is validated
 //!
@@ -69,8 +69,8 @@ use incan_core::lang::types::stringlike::StringLikeId;
 /// of the program, rather than re-deriving types and semantics from the AST.
 ///
 /// ## Notes
-/// - Expression types are keyed by `(span.start, span.end)` so downstream code can look them up
-///   without holding AST node identities.
+/// - Expression types are keyed by `(span.start, span.end)` so downstream code can look them up without holding AST
+///   node identities.
 /// - Const classification is recorded to support RFC 008 “Rust-native vs Frozen” const emission.
 ///
 /// ## Examples

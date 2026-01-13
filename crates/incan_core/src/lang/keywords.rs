@@ -7,8 +7,8 @@
 //! ## Notes
 //! - Lookup via [`from_str`] is **case-sensitive**, except where explicit aliases are defined.
 //! - This registry is intentionally **pure** (no AST/IO/side effects).
-//! - Some reserved words are also “word operators” (e.g. `and`). If you need operator
-//!   precedence/fixity, use [`crate::lang::operators`].
+//! - Some reserved words are also “word operators” (e.g. `and`). If you need operator precedence/fixity, use
+//!   [`crate::lang::operators`].
 //!
 //! ## Examples
 //! ```rust

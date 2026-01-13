@@ -19,6 +19,7 @@
 [RFC 014]: /RFCs/014_generated_code_error_handling/
 [RFC 015]: /RFCs/015_hatch_like_tooling/
 [RFC 016]: /RFCs/016_loop_and_break_value/
+[RFC 017]: /RFCs/017_validated_newtypes_with_implicit_coercion/
 
 <!-- RFCs index table -->
 
@@ -41,5 +42,6 @@
 | [RFC 014] | Draft       | proposed / active | Error Handling in Generated Rust Code                                  |
 | [RFC 015] | Planned     | proposed / active | Hatch-like Tooling (Project Lifecycle CLI)                             |
 | [RFC 016] | Planned     | proposed / active | `loop` and `break <value>` (Loop Expressions)                          |
+| [RFC 017] | Planned     | proposed / active | Validated newtypes with implicit coercion (pydantic-like feel)         |
 
 <!-- markdownlint-enable MD013 MD060 MD053 -->

@@ -382,6 +382,37 @@ pub mod errors {
         CompileError::type_error(format!("Type '{}' has no field '{}'", type_name, field), span)
     }
 
+    pub fn duplicate_constructor_field(type_name: &str, field: &str, span: Span) -> CompileError {
+        CompileError::type_error(
+            format!(
+                "Duplicate constructor argument: field '{}' is provided more than once for type '{}'",
+                field, type_name
+            ),
+            span,
+        )
+        .with_hint("Remove the duplicate argument so each field is provided at most once")
+    }
+
+    pub fn missing_required_constructor_field(type_name: &str, field: &str, span: Span) -> CompileError {
+        CompileError::type_error(
+            format!("Missing required field '{}' when constructing '{}'", field, type_name),
+            span,
+        )
+        .with_hint(format!("Provide the field: {}(..., {}=..., ...)", type_name, field))
+        .with_note("Fields without defaults must be provided during construction")
+    }
+
+    pub fn positional_constructor_args_not_supported(type_name: &str, span: Span) -> CompileError {
+        CompileError::type_error(
+            format!(
+                "Positional constructor arguments are not supported for '{}' (use named field arguments)",
+                type_name
+            ),
+            span,
+        )
+        .with_hint(format!("Use named arguments: {}(field=value, ...)", type_name))
+    }
+
     pub fn missing_method(type_name: &str, method: &str, span: Span) -> CompileError {
         CompileError::type_error(format!("Type '{}' has no method '{}(...)'", type_name, method), span)
             .with_hint("Check the method name spelling and receiver type")

@@ -1,0 +1,23 @@
+type UserId = newtype int
+
+type Attempts = newtype int:
+    def from_underlying(n: int) -> Result[Attempts, str]:
+        if n <= 0:
+            return Err("attempts must be >= 1")
+        return Ok(Attempts(n))
+
+type Email = newtype str:
+    # RFC 017 should make from_underlying the canonical validation hook.
+    def from_str(v: str) -> Result[Email, str]:
+        if "@" not in v:
+            return Err("missing @")
+        return Ok(Email(v.lower()))
+
+def main() -> None:
+    # No validation hook: should remain a raw wrap in v0.1.
+    uid = UserId(42)
+
+    # With validation hook: should be lowered as checked construction in v0.1.
+    attempts = Attempts(5)
+    email = Email("alice@example.com")
+    println(f"{uid.0} {attempts.0} {email.0}")

@@ -7,10 +7,10 @@
 //!
 //! ## Notes
 //!
-//! - Const evaluation happens in the frontend; this module focuses on *emission constraints* and
-//!   ergonomics in Rust `const` contexts.
-//! - Const string folding is intentionally conservative; if a value cannot be proven to be a
-//!   `'static` literal chain, emission falls back to regular expression emission.
+//! - Const evaluation happens in the frontend; this module focuses on *emission constraints* and ergonomics in Rust
+//!   `const` contexts.
+//! - Const string folding is intentionally conservative; if a value cannot be proven to be a `'static` literal chain,
+//!   emission falls back to regular expression emission.
 //!
 //! ## See also
 //!

@@ -4,8 +4,8 @@
 //!
 //! ## Notes
 //!
-//! - Prefer actionable messages: users should know what construct is unsupported and what to do
-//!   instead (e.g., compute at runtime).
+//! - Prefer actionable messages: users should know what construct is unsupported and what to do instead (e.g., compute
+//!   at runtime).
 
 /// Error during IR emission.
 #[derive(Debug)]

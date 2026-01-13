@@ -254,6 +254,24 @@ fn test_inferred_reassign_codegen() {
     insta::assert_snapshot!("inferred_reassign", rust_code);
 }
 
+// ============================================================================
+// Construction semantics: defaults + newtype checked construction
+// ============================================================================
+
+#[test]
+fn test_constructor_field_defaults_codegen() {
+    let source = load_test_file("constructor_field_defaults");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("constructor_field_defaults", rust_code);
+}
+
+#[test]
+fn test_newtype_checked_construction_codegen() {
+    let source = load_test_file("newtype_checked_construction");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("newtype_checked_construction", rust_code);
+}
+
 // Glob-based test that auto-discovers all .incn files
 // To enable: uncomment the test below and run `cargo test --test codegen_snapshot_tests`
 //

@@ -84,6 +84,8 @@ impl AstLowering {
                 IrDeclKind::Enum(enum_ir)
             }
             ast::Declaration::Newtype(n) => {
+                // Note: newtype checked construction hook selection is done in `lower_program` when we see the full
+                // newtype declaration.
                 let struct_ir = self.lower_newtype(n)?;
                 // Register struct name for constructor detection
                 self.struct_names
@@ -205,15 +207,21 @@ impl AstLowering {
 
     /// Lower a model declaration to struct.
     pub(super) fn lower_model(&mut self, m: &ast::ModelDecl) -> Result<IrStruct, LoweringError> {
-        let fields = m
-            .fields
-            .iter()
-            .map(|f| StructField {
+        let mut fields: Vec<StructField> = Vec::new();
+        for f in &m.fields {
+            let default = f
+                .node
+                .default
+                .as_ref()
+                .map(|d| self.lower_expr_spanned(d))
+                .transpose()?;
+            fields.push(StructField {
                 name: f.node.name.clone(),
                 ty: self.lower_type(&f.node.ty.node),
                 visibility: Self::map_visibility(f.node.visibility),
-            })
-            .collect();
+                default,
+            });
+        }
 
         let mut derives = self.extract_derives(&m.decorators);
 
@@ -253,10 +261,17 @@ impl AstLowering {
 
         // Add this class's own fields
         for f in &c.fields {
+            let default = f
+                .node
+                .default
+                .as_ref()
+                .map(|d| self.lower_expr_spanned(d))
+                .transpose()?;
             fields.push(StructField {
                 name: f.node.name.clone(),
                 ty: self.lower_type(&f.node.ty.node),
                 visibility: Self::map_visibility(f.node.visibility),
+                default,
             });
         }
 
@@ -289,11 +304,13 @@ impl AstLowering {
 
     /// Recursively collect all inherited fields from parent classes.
     pub(super) fn collect_inherited_fields(
-        &self,
+        &mut self,
         class_name: &str,
         fields: &mut Vec<StructField>,
     ) -> Result<(), LoweringError> {
-        if let Some(parent_class) = self.class_decls.get(class_name) {
+        // Clone to avoid borrowing `self.class_decls` across recursive calls and expression lowering.
+        let parent_class = self.class_decls.get(class_name).cloned();
+        if let Some(parent_class) = parent_class {
             // First, collect grandparent fields if any
             if let Some(grandparent_name) = &parent_class.extends {
                 self.collect_inherited_fields(grandparent_name, fields)?;
@@ -301,10 +318,17 @@ impl AstLowering {
 
             // Then add parent's own fields
             for f in &parent_class.fields {
+                let default = f
+                    .node
+                    .default
+                    .as_ref()
+                    .map(|d| self.lower_expr_spanned(d))
+                    .transpose()?;
                 fields.push(StructField {
                     name: f.node.name.clone(),
                     ty: self.lower_type(&f.node.ty.node),
                     visibility: Self::map_visibility(f.node.visibility),
+                    default,
                 });
             }
         }
@@ -344,6 +368,7 @@ impl AstLowering {
             name: "0".to_string(),
             ty: underlying_ty.clone(),
             visibility: Visibility::Private,
+            default: None,
         }];
         // Newtypes auto-derive Debug, Clone
         // Only add Copy if underlying type is Copy (int, float, bool)
@@ -366,10 +391,15 @@ impl AstLowering {
         type_name: &str,
         methods: &[Spanned<ast::MethodDecl>],
     ) -> Result<IrImpl, LoweringError> {
-        let lowered_methods: Vec<IrFunction> = methods
+        let prev = self.current_impl_type.replace(type_name.to_string());
+        // IMPORTANT: always restore `current_impl_type` even if lowering fails, since lowering continues after
+        // collecting errors.
+        let lowered = methods
             .iter()
             .map(|m| self.lower_method(&m.node))
-            .collect::<Result<Vec<_>, LoweringError>>()?;
+            .collect::<Result<Vec<_>, LoweringError>>();
+        self.current_impl_type = prev;
+        let lowered_methods = lowered?;
 
         Ok(IrImpl {
             target_type: type_name.to_string(),
@@ -470,7 +500,15 @@ impl AstLowering {
         type_name: &str,
         methods: &[Spanned<ast::MethodDecl>],
     ) -> Result<IrImpl, LoweringError> {
-        let lowered_methods: Vec<IrFunction> = methods.iter().filter_map(|m| self.lower_method(&m.node).ok()).collect();
+        let prev = self.current_impl_type.replace(type_name.to_string());
+        // IMPORTANT: always restore `current_impl_type` even if lowering fails, since lowering
+        // continues after collecting errors.
+        let lowered = methods
+            .iter()
+            .map(|m| self.lower_method(&m.node))
+            .collect::<Result<Vec<_>, LoweringError>>();
+        self.current_impl_type = prev;
+        let lowered_methods = lowered?;
 
         Ok(IrImpl {
             target_type: type_name.to_string(),

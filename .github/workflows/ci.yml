@@ -16,11 +16,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Comment wrapping (comment_width/wrap_comments/format_code_in_doc_comments) requires nightly rustfmt.
+      # We intentionally use nightly for *formatting only*; all builds/tests remain on stable/MSRV jobs.
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo +nightly fmt --all -- --check
 
   clippy:
     name: Clippy
@@ -108,6 +110,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Install make
         run: sudo apt-get update && sudo apt-get install -y make

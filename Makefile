@@ -55,13 +55,21 @@ install:
 .PHONY: fmt  ## quality - Format Rust code
 fmt:
 	@echo "\033[1mFormatting code...\033[0m"
-	@cargo fmt --all
+	@cargo +nightly fmt --all 2>/dev/null || ( \
+		echo "\033[33m⚠ rustfmt comment wrapping requires nightly rustfmt.\033[0m"; \
+		echo "\033[33m  Install it via: rustup toolchain install nightly --component rustfmt\033[0m"; \
+		exit 1; \
+	)
 	@echo "\033[32m✓ Code formatted\033[0m"
 
 .PHONY: fmt-check  ## quality - Check formatting without changes
 fmt-check:
 	@echo "\033[1mChecking formatting...\033[0m"
-	@cargo fmt --all -- --check
+	@cargo +nightly fmt --all -- --check 2>/dev/null || ( \
+		echo "\033[33m⚠ rustfmt comment wrapping requires nightly rustfmt.\033[0m"; \
+		echo "\033[33m  Install it via: rustup toolchain install nightly --component rustfmt\033[0m"; \
+		exit 1; \
+	)
 
 .PHONY: lint  ## quality - Run clippy linter
 lint:

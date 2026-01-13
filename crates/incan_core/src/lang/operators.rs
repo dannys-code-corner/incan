@@ -7,9 +7,8 @@
 //! - Lookup via [`from_str`] is **case-sensitive**.
 //! - Some operators are spelled using reserved words (e.g. `"and"`). Those entries have
 //!   [`OperatorInfo::is_keyword_spelling`] set to `true`.
-//! - Word-operator spellings may also appear in the keyword registry
-//!   ([`crate::lang::keywords`]); use this module when you need operator semantics like
-//!   precedence.
+//! - Word-operator spellings may also appear in the keyword registry ([`crate::lang::keywords`]); use this module when
+//!   you need operator semantics like precedence.
 //!
 //! ## Examples
 //! ```rust
@@ -81,8 +80,8 @@ pub enum OperatorId {
 ///
 /// ## Notes
 /// - `spellings` may contain multiple accepted spellings for the same operator id (synonyms).
-/// - `precedence` is a relative ordering where higher binds tighter. The absolute scale is an
-///   implementation detail, but must be consistent across the parser.
+/// - `precedence` is a relative ordering where higher binds tighter. The absolute scale is an implementation detail,
+///   but must be consistent across the parser.
 #[derive(Debug, Clone, Copy)]
 pub struct OperatorInfo {
     pub id: OperatorId,

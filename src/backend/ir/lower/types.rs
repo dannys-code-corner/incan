@@ -373,8 +373,8 @@ impl AstLowering {
     /// - `left`: The type of the left operand
     /// - `right`: The type of the right operand
     /// - `op`: The binary operator
-    /// - `pow_exp_kind`: For `Pow` operations, describes whether the exponent is a non-negative
-    ///   int literal (yields `Int`) or something else (yields `Float`)
+    /// - `pow_exp_kind`: For `Pow` operations, describes whether the exponent is a non-negative int literal (yields
+    ///   `Int`) or something else (yields `Float`)
     ///
     /// ## Returns
     ///

@@ -75,9 +75,83 @@ pub struct AstLowering {
     pub(super) trait_methods: HashMap<String, Vec<String>>,
     /// Optional typechecker output used to drive lowering (avoid heuristics).
     pub(super) type_info: Option<TypeCheckInfo>,
+    /// Newtype -> chosen validated constructor method name (e.g. "from_underlying", "from_str"),
+    /// used for checked construction lowering of `T(x)` at call sites.
+    pub(super) newtype_checked_ctor: HashMap<String, String>,
+    /// When lowering methods inside an impl block, this tracks the current target type name.
+    /// Used to avoid rewriting `T(x)` inside `impl T` bodies (e.g. inside `T.from_underlying`).
+    pub(super) current_impl_type: Option<String>,
 }
 
 impl AstLowering {
+    /// Select a validated constructor method for a newtype for v0.1 checked construction.
+    ///
+    /// Heuristic (minimal hardening for #44, RFC runway):
+    /// - Prefer a static `from_underlying(underlying) -> Result[T, E]` if present and well-shaped.
+    /// - Otherwise, if there is exactly one static `from_*` method with, use it when:
+    ///     - exactly 1 parameter whose type matches the newtype underlying type (syntactic match), and
+    ///     - return type `Result[T, E]`,
+    fn select_newtype_checked_ctor(n: &ast::NewtypeDecl) -> Option<String> {
+        fn is_result_of_newtype(ty: &ast::Type, newtype_name: &str) -> bool {
+            let ast::Type::Generic(name, args) = ty else {
+                return false;
+            };
+            if name != "Result" || args.is_empty() {
+                return false;
+            }
+            matches!(&args[0].node, ast::Type::Simple(t) if t == newtype_name)
+        }
+
+        fn matches_underlying_param(m: &ast::MethodDecl, underlying: &ast::Type) -> bool {
+            if m.params.len() != 1 {
+                return false;
+            }
+            m.params[0].node.ty.node == *underlying
+        }
+
+        // Candidate: static method named from_* with (underlying) -> Result[T, E]
+        let mut candidates: Vec<&ast::MethodDecl> = n
+            .methods
+            .iter()
+            .filter_map(|m| {
+                let md = &m.node;
+                if md.receiver.is_some() {
+                    return None;
+                }
+                if !md.name.starts_with("from_") {
+                    return None;
+                }
+                if !matches_underlying_param(md, &n.underlying.node) {
+                    return None;
+                }
+                if !is_result_of_newtype(&md.return_type.node, &n.name) {
+                    return None;
+                }
+                Some(md)
+            })
+            .collect();
+
+        // Prefer from_underlying
+        if let Some(m) = candidates.iter().find(|m| m.name == "from_underlying") {
+            return Some(m.name.clone());
+        }
+
+        if candidates.len() == 1 {
+            // Safe: we just checked len() == 1
+            return candidates.pop().map(|m| m.name.clone());
+        }
+
+        if candidates.len() > 1 {
+            tracing::warn!(
+                newtype = %n.name,
+                candidates = ?candidates.iter().map(|m| &m.name).collect::<Vec<_>>(),
+                "newtype has multiple from_* methods; define explicit from_underlying for checked construction"
+            );
+        }
+
+        None
+    }
+
     /// Create a new lowering context.
     ///
     /// Initializes an empty scope chain and type registries.
@@ -90,6 +164,8 @@ impl AstLowering {
             class_decls: HashMap::new(),
             trait_methods: HashMap::new(),
             type_info: None,
+            newtype_checked_ctor: HashMap::new(),
+            current_impl_type: None,
         }
     }
 
@@ -239,6 +315,34 @@ impl AstLowering {
                                 match self.lower_trait_impl(&struct_ir.name, trait_name, &c.methods) {
                                     Ok(trait_impl) => {
                                         ir_program.declarations.push(IrDecl::new(IrDeclKind::Impl(trait_impl)));
+                                    }
+                                    Err(e) => errors.push(e),
+                                }
+                            }
+                        }
+                        Err(e) => errors.push(e),
+                    }
+                }
+                ast::Declaration::Newtype(n) => {
+                    // Track validation hook selection for checked construction lowering.
+                    if let Some(ctor) = Self::select_newtype_checked_ctor(n) {
+                        self.newtype_checked_ctor.insert(n.name.clone(), ctor);
+                    }
+
+                    // Generate struct
+                    match self.lower_newtype(n) {
+                        Ok(struct_ir) => {
+                            self.struct_names
+                                .insert(struct_ir.name.clone(), IrType::Struct(struct_ir.name.clone()));
+                            ir_program
+                                .declarations
+                                .push(IrDecl::new(IrDeclKind::Struct(struct_ir.clone())));
+
+                            // Generate impl block for newtype methods (if any).
+                            if !n.methods.is_empty() {
+                                match self.lower_model_methods(&struct_ir.name, &n.methods) {
+                                    Ok(impl_ir) => {
+                                        ir_program.declarations.push(IrDecl::new(IrDeclKind::Impl(impl_ir)));
                                     }
                                     Err(e) => errors.push(e),
                                 }

@@ -4,8 +4,8 @@
 //! Callers should avoid hard-coding derive strings and instead use [`DeriveId`] for identity.
 //!
 //! ## Notes
-//! - Derives are treated as *language vocabulary* (like keywords/operators) even though they map
-//!   to Rust traits/derive macros under the hood.
+//! - Derives are treated as *language vocabulary* (like keywords/operators) even though they map to Rust traits/derive
+//!   macros under the hood.
 //! - Matching is **case-sensitive** (Rust trait names are case-sensitive).
 
 use super::registry::{LangItemInfo, RFC, RfcId, Stability};

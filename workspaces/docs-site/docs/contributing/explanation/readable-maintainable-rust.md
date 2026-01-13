@@ -103,7 +103,8 @@ behavior.
 
 **If these are true, your Rust is both readable and maintainable:**
 
-- ✅ **Formatting & lints**: `cargo fmt --check` and `cargo clippy --deny warnings` pass; lint level tuned to project.
+- ✅ **Formatting & lints**: `cargo +nightly fmt --all -- --check` and `cargo clippy --deny warnings` pass; lint level tuned
+  to project.
 - ✅ **Boundaries**: Modules align with responsibilities; public surface area small and documented.
 - ✅ **Errors**: Clear `Result<T, E>` with actionable messages; categorized `E`.
 - ✅ **Ownership**: Minimal clones; predictable lifetimes; borrowing favored.
@@ -240,7 +241,7 @@ default = []
 ### Typical CI Steps
 
 ```bash
-cargo fmt --all -- --check
+cargo +nightly fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all --verbose
 cargo audit
