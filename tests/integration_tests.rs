@@ -266,7 +266,7 @@ mod codegen_tests {
     #[test]
     fn test_run_repro_model_traits() {
         let output = Command::new("target/debug/incan")
-            .args(["run", "__research__/repro_model_traits.incn"])
+            .args(["run", "tests/fixtures/repro_model_traits.incn"])
             // This should not require network access (workspace deps should already be available).
             .env("CARGO_NET_OFFLINE", "true")
             .output()
