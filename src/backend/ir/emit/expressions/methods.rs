@@ -155,16 +155,32 @@ impl<'a> IrEmitter<'a> {
         // This is needed for external Rust types like `Uuid`, `Instant`, `HashMap`, and also for
         // Incan-generated impl methods called in a "static" style (e.g. `User.from_json(...)`).
         if let IrExprKind::Var { name, .. } = &receiver.kind {
-            if Self::is_title_case_type_name(name) {
+            // Rewrite `Type.method(...)` to `Type::method(...)` only when we know the identifier is a type,
+            // using backend metadata (struct/enum registries). Avoid rewriting runtime variables.
+            let is_known_struct = self.struct_field_names.contains_key(name);
+            let is_known_enum = self.enum_variant_fields.keys().any(|(etype, _)| etype == name);
+            // External Rust interop types (e.g. Uuid/Instant/HashMap) don't populate our registries.
+            // In those cases the receiver typically has `Unknown` IR type (not a bound value), so fall back
+            // to a conservative TitleCase heuristic.
+            // TODO: #52 Remove this TitleCase heuristic by carrying explicit “type-name vs value-binding” metadata from
+            // the frontend/typechecker into IR. Today we only use this when `receiver.ty` is `Unknown` to support Rust
+            // interop associated fns (Uuid::new_v4, HashMap::new, Instant::now), but a TitleCase runtime variable that
+            // remains `Unknown` could be mis-emitted as `Type::method`.
+            let is_external_rust_type_like =
+                matches!(receiver.ty, IrType::Unknown) && Self::is_title_case_type_name(name);
+
+            if is_known_struct || is_known_enum || is_external_rust_type_like {
                 let type_ident = format_ident!("{}", name);
                 let m = format_ident!("{}", method);
                 // Apply Incan-style argument conversions when calling associated functions on Incan-owned types
-                // (structs/enums). This is important for `str` literals which are emitted as `&'static str`, but many
-                // Incan-level signatures expect owned `String` in Rust (e.g., newtype `from_underlying(v: str)`).
+                // (structs/enums/traits). This is important for `str` literals which are emitted as `&'static str`,
+                // but many Incan-level signatures expect owned `String` in Rust (e.g., newtype `from_underlying(v:
+                // str)`).
                 //
-                // For unknown/external types, keep the previous behavior (emit args as-is) to avoid accidental
-                // conversions for Rust APIs that truly want `&str`.
-                let apply_incan_arg_conversions = matches!(receiver.ty, IrType::Struct(_) | IrType::Enum(_));
+                // For unknown/external types, keep the previous behavior to avoid accidental conversions for Rust APIs
+                // that truly want `&str`.
+                let apply_incan_arg_conversions =
+                    matches!(receiver.ty, IrType::Struct(_) | IrType::Enum(_) | IrType::Trait(_));
 
                 let arg_tokens: Vec<TokenStream> = if apply_incan_arg_conversions {
                     args.iter()
@@ -183,7 +199,24 @@ impl<'a> IrEmitter<'a> {
 
         // Regular method call
         let m = format_ident!("{}", method);
-        let arg_tokens: Vec<TokenStream> = args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?;
+        // Apply Incan-style argument conversions for method calls on Incan-owned types (structs/enums/traits).
+        // This is important for `str` literals: we often emit `"x"` as `&'static str`, but many Incan-level method
+        // signatures expect owned `String` in Rust.
+        //
+        // For unknown/external types, keep the previous behavior to avoid accidental conversions for Rust APIs that
+        // truly want `&str`.
+        let apply_incan_arg_conversions = matches!(receiver.ty, IrType::Struct(_) | IrType::Enum(_) | IrType::Trait(_));
+        let arg_tokens: Vec<TokenStream> = if apply_incan_arg_conversions {
+            args.iter()
+                .map(|a| {
+                    let emitted = self.emit_expr(a)?;
+                    let conv = determine_conversion(a, None, ConversionContext::IncanFunctionArg);
+                    Ok(conv.apply(emitted))
+                })
+                .collect::<Result<_, _>>()?
+        } else {
+            args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?
+        };
         Ok(quote! { #r.#m(#(#arg_tokens),*) })
     }
 

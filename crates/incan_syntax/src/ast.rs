@@ -195,6 +195,8 @@ pub struct ModelDecl {
     pub decorators: Vec<Spanned<Decorator>>,
     pub name: Ident,
     pub type_params: Vec<Ident>,
+    // Traits adopted by this model via `with TraitA, TraitB`.
+    pub traits: Vec<Ident>,
     pub fields: Vec<Spanned<FieldDecl>>,
     pub methods: Vec<Spanned<MethodDecl>>,
 }

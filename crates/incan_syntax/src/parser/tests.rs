@@ -39,6 +39,50 @@ model User:
             Declaration::Model(m) => {
                 assert_eq!(m.name, "User");
                 assert_eq!(m.fields.len(), 2);
+                assert!(m.traits.is_empty());
+            }
+            _ => panic!("Expected model"),
+        }
+    }
+
+    #[test]
+    fn test_parse_model_with_traits() {
+        let source = r#"
+trait Describable:
+  def describe(self) -> str: ...
+
+model User with Describable:
+  name: str
+"#;
+        let program = parse_str(source).unwrap();
+        assert_eq!(program.declarations.len(), 2);
+        match &program.declarations[1].node {
+            Declaration::Model(m) => {
+                assert_eq!(m.name, "User");
+                assert_eq!(m.traits, vec!["Describable".to_string()]);
+            }
+            _ => panic!("Expected model"),
+        }
+    }
+
+    #[test]
+    fn test_parse_model_with_multiple_traits() {
+        let source = r#"
+trait A:
+  def a(self) -> int: ...
+
+trait B:
+  def b(self) -> int: ...
+
+model User with A, B:
+  x: int
+"#;
+        let program = parse_str(source).unwrap();
+        assert_eq!(program.declarations.len(), 3);
+        match &program.declarations[2].node {
+            Declaration::Model(m) => {
+                assert_eq!(m.name, "User");
+                assert_eq!(m.traits, vec!["A".to_string(), "B".to_string()]);
             }
             _ => panic!("Expected model"),
         }
