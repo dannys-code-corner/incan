@@ -73,6 +73,8 @@ pub struct AstLowering {
     pub(super) class_decls: HashMap<String, ast::ClassDecl>,
     /// Track trait method names for filtering trait impls
     pub(super) trait_methods: HashMap<String, Vec<String>>,
+    /// Track full trait declarations for default-method expansion into impl blocks.
+    pub(super) trait_decls: HashMap<String, ast::TraitDecl>,
     /// Optional typechecker output used to drive lowering (avoid heuristics).
     pub(super) type_info: Option<TypeCheckInfo>,
     /// Newtype -> chosen validated constructor method name (e.g. "from_underlying", "from_str"),
@@ -163,6 +165,7 @@ impl AstLowering {
             mutable_vars: HashMap::new(),
             class_decls: HashMap::new(),
             trait_methods: HashMap::new(),
+            trait_decls: HashMap::new(),
             type_info: None,
             newtype_checked_ctor: HashMap::new(),
             current_impl_type: None,
@@ -201,7 +204,7 @@ impl AstLowering {
         let mut ir_program = IrProgram::new();
         let mut errors: Vec<LoweringError> = Vec::new();
 
-        // First pass: collect class declarations and trait method names
+        // First pass: collect class declarations, trait decls, and newtype ctor selection.
         for decl in &program.declarations {
             if let ast::Declaration::Class(ref c) = decl.node {
                 self.class_decls.insert(c.name.clone(), c.clone());
@@ -209,6 +212,13 @@ impl AstLowering {
             if let ast::Declaration::Trait(ref t) = decl.node {
                 let method_names: Vec<String> = t.methods.iter().map(|m| m.node.name.clone()).collect();
                 self.trait_methods.insert(t.name.clone(), method_names);
+                self.trait_decls.insert(t.name.clone(), t.clone());
+            }
+            if let ast::Declaration::Newtype(ref n) = decl.node {
+                // Track validation hook selection for checked construction lowering.
+                if let Some(ctor) = Self::select_newtype_checked_ctor(n) {
+                    self.newtype_checked_ctor.insert(n.name.clone(), ctor);
+                }
             }
         }
 
@@ -276,6 +286,16 @@ impl AstLowering {
                                 }
                                 Err(e) => errors.push(e),
                             }
+
+                            // Generate trait impls for each trait this model implements
+                            for trait_name in &m.traits {
+                                match self.lower_trait_impl(&struct_ir.name, trait_name, &m.methods) {
+                                    Ok(trait_impl) => {
+                                        ir_program.declarations.push(IrDecl::new(IrDeclKind::Impl(trait_impl)));
+                                    }
+                                    Err(e) => errors.push(e),
+                                }
+                            }
                         }
                         Err(e) => errors.push(e),
                     }
@@ -312,7 +332,7 @@ impl AstLowering {
 
                             // Generate trait impls for each trait this class implements
                             for trait_name in &c.traits {
-                                match self.lower_trait_impl(&struct_ir.name, trait_name, &c.methods) {
+                                match self.lower_trait_impl(&struct_ir.name, trait_name, &all_methods) {
                                     Ok(trait_impl) => {
                                         ir_program.declarations.push(IrDecl::new(IrDeclKind::Impl(trait_impl)));
                                     }
@@ -324,11 +344,6 @@ impl AstLowering {
                     }
                 }
                 ast::Declaration::Newtype(n) => {
-                    // Track validation hook selection for checked construction lowering.
-                    if let Some(ctor) = Self::select_newtype_checked_ctor(n) {
-                        self.newtype_checked_ctor.insert(n.name.clone(), ctor);
-                    }
-
                     // Generate struct
                     match self.lower_newtype(n) {
                         Ok(struct_ir) => {

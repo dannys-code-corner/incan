@@ -129,6 +129,10 @@ impl TypeChecker {
         match base_ty {
             ResolvedType::Generic(name, args) => match collection_type_id(name.as_str()) {
                 Some(CollectionTypeId::List) => {
+                    // Validate slice bounds/step for lists as well (indices must be int-like).
+                    check_component(start_ty.as_ref(), slice.start.as_deref(), &mut self.errors);
+                    check_component(end_ty.as_ref(), slice.end.as_deref(), &mut self.errors);
+                    check_component(step_ty.as_ref(), slice.step.as_deref(), &mut self.errors);
                     ResolvedType::Generic(collection_name(CollectionTypeId::List).to_string(), args)
                 }
                 _ => ResolvedType::Unknown,
@@ -182,6 +186,9 @@ impl TypeChecker {
         }
 
         match &base_ty {
+            // Trait default methods typecheck against `Self`, so we cannot know adopter fields here.
+            // Field existence is enforced at adoption sites via `@requires(...)`.
+            ResolvedType::SelfType => ResolvedType::Unknown,
             ResolvedType::Tuple(elements) => {
                 if let Ok(idx) = field.parse::<usize>() {
                     if idx < elements.len() {
@@ -248,6 +255,10 @@ impl TypeChecker {
 
         // If the receiver type is Unknown, be permissive and do not error on methods.
         if matches!(base_ty, ResolvedType::Unknown) {
+            return ResolvedType::Unknown;
+        }
+        // Trait default methods typecheck against `Self`, so be permissive here too.
+        if matches!(base_ty, ResolvedType::SelfType) {
             return ResolvedType::Unknown;
         }
 
@@ -428,20 +439,35 @@ impl TypeChecker {
                         if let Some(method_info) = model.methods.get(method) {
                             return method_info.return_type.clone();
                         }
+                        for trait_name in &model.traits {
+                            if let Some(method_info) = self
+                                .symbols
+                                .lookup(trait_name)
+                                .and_then(|tid| self.symbols.get(tid))
+                                .and_then(|tsym| match &tsym.kind {
+                                    SymbolKind::Trait(trait_info) => trait_info.methods.get(method),
+                                    _ => None,
+                                })
+                            {
+                                return method_info.return_type.clone();
+                            }
+                        }
                     }
                     TypeInfo::Class(class) => {
                         if let Some(method_info) = class.methods.get(method) {
                             return method_info.return_type.clone();
                         }
                         for trait_name in &class.traits {
-                            if let Some(tid) = self.symbols.lookup(trait_name) {
-                                if let Some(tsym) = self.symbols.get(tid) {
-                                    if let SymbolKind::Trait(trait_info) = &tsym.kind {
-                                        if let Some(method_info) = trait_info.methods.get(method) {
-                                            return method_info.return_type.clone();
-                                        }
-                                    }
-                                }
+                            if let Some(method_info) = self
+                                .symbols
+                                .lookup(trait_name)
+                                .and_then(|tid| self.symbols.get(tid))
+                                .and_then(|tsym| match &tsym.kind {
+                                    SymbolKind::Trait(trait_info) => trait_info.methods.get(method),
+                                    _ => None,
+                                })
+                            {
+                                return method_info.return_type.clone();
                             }
                         }
                     }
