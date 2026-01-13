@@ -264,6 +264,30 @@ mod codegen_tests {
     }
 
     #[test]
+    fn test_run_repro_model_traits() {
+        let output = Command::new("target/debug/incan")
+            .args(["run", "tests/fixtures/repro_model_traits.incn"])
+            // This should not require network access (workspace deps should already be available).
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+            .expect("failed to run incan");
+
+        assert!(
+            output.status.success(),
+            "incan run repro_model_traits failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("[Ada] hello"),
+            "expected repro output; got:\n{}",
+            stdout
+        );
+    }
+
+    #[test]
     fn test_benchmark_quicksort_codegen_compiles() {
         let path = Path::new("benchmarks/sorting/quicksort/quicksort.incn");
         if !path.exists() {

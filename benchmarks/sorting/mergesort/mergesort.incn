@@ -6,38 +6,64 @@ def mergesort(arr: List[int]) -> List[int]:
     if n <= 1:
         return arr
 
-    mid = n / 2
-    left = mergesort(arr[0:mid])
-    right = mergesort(arr[mid:n])
+    # NOTE (Python mental model):
+    # We sort by *mutating* a local list (`out`) in place, rather than returning new sub-lists from recursive calls.
+    # This avoids `arr[a:b]` slice allocations at each recursion level.
+    #
+    # This is closer to how you'd implement a fast mergesort in Rust/C: a single scratch buffer is allocated once and
+    # reused throughout the recursion.
+    mut out = arr
 
-    return merge(left, right)
+    # Allocate scratch once (same length as `out`) and reuse it for all merges.
+    mut temp: List[int] = []
+    temp.reserve(n)
+    for _ in range(n):
+        temp.append(0)
 
-def merge(left: List[int], right: List[int]) -> List[int]:
-    mut result: List[int] = []
-    # This is an incanism: pre-allocate once to avoid repeated reallocations during many appends
-    result.reserve(len(left) + len(right))
+    # Sort the range [0, n) by mutating `out` in place (no return value).
+    mergesort_range(out, temp, 0, n)
+    return out
 
-    mut i = 0
-    mut j = 0
+def mergesort_range(mut arr: List[int], mut temp: List[int], lo: int, hi: int) -> None:
+    # Sorts arr[lo:hi) *in place* by overwriting elements of `arr`.
+    # This returns None because the result is the side effect on `arr`.
+    if hi - lo <= 1:
+        return
 
-    while i < len(left) and j < len(right):
-        if left[i] <= right[j]:
-            result.append(left[i])
+    mid = (lo + hi) // 2
+    mergesort_range(arr, temp, lo, mid)
+    mergesort_range(arr, temp, mid, hi)
+    merge_range(arr, temp, lo, mid, hi)
+
+def merge_range(mut arr: List[int], mut temp: List[int], lo: int, mid: int, hi: int) -> None:
+    # Merge arr[lo:mid) and arr[mid:hi) into temp[lo:hi), then copy back.
+    # (So `arr` is what ends up sorted.)
+    mut i = lo
+    mut j = mid
+    mut k = lo
+
+    while i < mid and j < hi:
+        if arr[i] <= arr[j]:
+            temp[k] = arr[i]
             i += 1
         else:
-            result.append(right[j])
+            temp[k] = arr[j]
             j += 1
+        k += 1
 
-    # Append remaining elements
-    while i < len(left):
-        result.append(left[i])
+    while i < mid:
+        temp[k] = arr[i]
         i += 1
-    while j < len(right):
-        result.append(right[j])
+        k += 1
+
+    while j < hi:
+        temp[k] = arr[j]
         j += 1
+        k += 1
 
-    return result
-
+    for idx in range(lo..hi):
+        arr[idx] = temp[idx]
+        
 def generate_random_array(size: int, seed: int) -> List[int]:
     mut arr: List[int] = []
     mut state = seed

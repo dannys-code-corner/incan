@@ -334,6 +334,7 @@ mod tests {
             decorators: vec![],
             name: "User".to_string(),
             type_params: vec![],
+            traits: vec![],
             fields: vec![],
             methods: vec![],
         };
@@ -532,6 +533,7 @@ mod tests {
             decorators: vec![],
             name: "User".to_string(),
             type_params: vec![],
+            traits: vec![],
             fields: vec![],
             methods: vec![],
         };

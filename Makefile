@@ -112,6 +112,11 @@ benchmarks: release
 	@echo "\033[1mRunning benchmarks...\033[0m"
 	@bash benchmarks/run_all.sh
 
+.PHONY: benchmarks-rust  ## test - Run benchmarks (Incan vs Rust only; no Python)
+benchmarks-rust: release
+	@echo "\033[1mRunning benchmarks (Incan vs Rust; no Python)...\033[0m"
+	@SKIP_PYTHON=true bash benchmarks/run_all.sh
+
 .PHONY: benchmarks-incan  ## test - Smoke-check benchmark .incn files (build only; no Python/Rust runs)
 benchmarks-incan: release
 	@echo "\033[1mChecking benchmarks (Incan build only)...\033[0m"

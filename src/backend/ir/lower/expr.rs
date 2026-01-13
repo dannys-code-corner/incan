@@ -20,7 +20,17 @@ impl AstLowering {
         let mut lowered = self.lower_expr(&expr.node)?;
         if let Some(info) = &self.type_info {
             if let Some(res_ty) = info.expr_type(expr.span) {
-                lowered.ty = self.lower_resolved_type(res_ty);
+                // Preserve reference wrappers introduced by lowering (e.g. mutable parameters are tracked as
+                // `RefMut(T)` in IR), while still benefiting from the typechecker’s inner type information.
+                //
+                // The frontend type system does not model references, so `expr_type` typically returns `T`
+                // where lowering may have already marked the same binding as `Ref(T)`/`RefMut(T)`.
+                let inner = self.lower_resolved_type(res_ty);
+                lowered.ty = match &lowered.ty {
+                    IrType::Ref(_) => IrType::Ref(Box::new(inner)),
+                    IrType::RefMut(_) => IrType::RefMut(Box::new(inner)),
+                    _ => inner,
+                };
             }
         }
         Ok(lowered)

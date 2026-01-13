@@ -338,7 +338,7 @@ impl TypeChecker {
             name: model.name.clone(),
             kind: SymbolKind::Type(TypeInfo::Model(ModelInfo {
                 type_params: model.type_params.clone(),
-                traits: Vec::new(),
+                traits: model.traits.clone(),
                 fields,
                 methods,
             })),

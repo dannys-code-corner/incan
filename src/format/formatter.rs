@@ -25,6 +25,12 @@ impl Formatter {
         self.writer.finish()
     }
 
+    fn write_visibility(&mut self, visibility: crate::frontend::ast::Visibility) {
+        if matches!(visibility, crate::frontend::ast::Visibility::Public) {
+            self.writer.write("pub ");
+        }
+    }
+
     // ========================================================================
     // Program
     // ========================================================================
@@ -73,9 +79,7 @@ impl Formatter {
     }
 
     fn format_const(&mut self, konst: &ConstDecl) {
-        if matches!(konst.visibility, crate::frontend::ast::Visibility::Public) {
-            self.writer.write("pub ");
-        }
+        self.write_visibility(konst.visibility);
         self.writer.write("const ");
         self.writer.write(&konst.name);
         if let Some(ty) = &konst.ty {
@@ -210,13 +214,20 @@ impl Formatter {
             self.format_decorator(&dec.node);
         }
 
-        // model Name[T]:
-        if matches!(model.visibility, crate::frontend::ast::Visibility::Public) {
-            self.writer.write("pub ");
-        }
+        // model Name[T] with Trait1, Trait2:
+        self.write_visibility(model.visibility);
         self.writer.write("model ");
         self.writer.write(&model.name);
         self.format_type_params(&model.type_params);
+        if !model.traits.is_empty() {
+            self.writer.write(" with ");
+            for (i, trait_name) in model.traits.iter().enumerate() {
+                if i > 0 {
+                    self.writer.write(", ");
+                }
+                self.writer.write(trait_name);
+            }
+        }
         self.writer.writeln(":");
         self.writer.indent();
 
@@ -251,9 +262,7 @@ impl Formatter {
         }
 
         // class Name[T] extends Base with Trait1:
-        if matches!(class.visibility, crate::frontend::ast::Visibility::Public) {
-            self.writer.write("pub ");
-        }
+        self.write_visibility(class.visibility);
         self.writer.write("class ");
         self.writer.write(&class.name);
         self.format_type_params(&class.type_params);
@@ -307,9 +316,7 @@ impl Formatter {
         }
 
         // trait Name[T]:
-        if matches!(tr.visibility, crate::frontend::ast::Visibility::Public) {
-            self.writer.write("pub ");
-        }
+        self.write_visibility(tr.visibility);
         self.writer.write("trait ");
         self.writer.write(&tr.name);
         self.format_type_params(&tr.type_params);
@@ -336,9 +343,7 @@ impl Formatter {
 
     fn format_enum(&mut self, en: &EnumDecl) {
         // enum Name[T]:
-        if matches!(en.visibility, crate::frontend::ast::Visibility::Public) {
-            self.writer.write("pub ");
-        }
+        self.write_visibility(en.visibility);
         self.writer.write("enum ");
         self.writer.write(&en.name);
         self.format_type_params(&en.type_params);
@@ -373,9 +378,7 @@ impl Formatter {
 
     fn format_newtype(&mut self, nt: &NewtypeDecl) {
         // type Name = newtype underlying
-        if matches!(nt.visibility, crate::frontend::ast::Visibility::Public) {
-            self.writer.write("pub ");
-        }
+        self.write_visibility(nt.visibility);
         self.writer.write("type ");
         self.writer.write(&nt.name);
         self.writer.write(" = newtype ");
@@ -400,9 +403,7 @@ impl Formatter {
         }
 
         // async def name(params) -> ReturnType:
-        if matches!(func.visibility, crate::frontend::ast::Visibility::Public) {
-            self.writer.write("pub ");
-        }
+        self.write_visibility(func.visibility);
         if func.is_async {
             self.writer.write("async ");
         }
@@ -509,9 +510,7 @@ impl Formatter {
     }
 
     fn format_field(&mut self, field: &FieldDecl) {
-        if matches!(field.visibility, crate::frontend::ast::Visibility::Public) {
-            self.writer.write("pub ");
-        }
+        self.write_visibility(field.visibility);
         self.writer.write(&field.name);
         self.writer.write(": ");
         self.format_type(&field.ty.node);

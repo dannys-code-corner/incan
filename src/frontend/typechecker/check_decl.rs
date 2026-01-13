@@ -50,6 +50,20 @@ impl TypeChecker {
             });
         }
 
+        // Check traits exist and are satisfied (models can adopt storage-free traits, RFC 000).
+        // Note: do this after defining type params so `@requires(field: T)` can resolve `T`.
+        for trait_name in &model.traits {
+            if let Some(id) = self.symbols.lookup(trait_name) {
+                if let Some(sym) = self.symbols.get(id) {
+                    if let SymbolKind::Trait(trait_info) = &sym.kind {
+                        self.check_trait_conformance_model(model, trait_info.clone(), trait_name);
+                    }
+                }
+            } else {
+                self.errors.push(errors::unknown_symbol(trait_name, Span::default()));
+            }
+        }
+
         // Define fields in scope
         for field in &model.fields {
             let ty = resolve_type(&field.node.ty.node, &self.symbols);
@@ -83,6 +97,40 @@ impl TypeChecker {
         }
 
         self.symbols.exit_scope();
+    }
+
+    fn check_trait_conformance_model(&mut self, model: &ModelDecl, trait_info: TraitInfo, trait_name: &str) {
+        // Check required fields (including types)
+        for (field_name, field_ty) in &trait_info.requires {
+            let found = model.fields.iter().find(|f| &f.node.name == field_name);
+            match found {
+                None => {
+                    self.errors
+                        .push(errors::missing_field(&model.name, field_name, Span::default()));
+                }
+                Some(f) => {
+                    let actual_ty = resolve_type(&f.node.ty.node, &self.symbols);
+                    if !self.types_compatible(&actual_ty, field_ty) {
+                        self.errors.push(errors::type_mismatch(
+                            &field_ty.to_string(),
+                            &actual_ty.to_string(),
+                            f.node.ty.span,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Check required methods (those without body)
+        for (method_name, method_info) in &trait_info.methods {
+            if !method_info.has_body {
+                let found = model.methods.iter().any(|m| &m.node.name == method_name);
+                if !found {
+                    self.errors
+                        .push(errors::missing_trait_method(trait_name, method_name, Span::default()));
+                }
+            }
+        }
     }
 
     fn check_class(&mut self, class: &ClassDecl) {
@@ -172,7 +220,10 @@ impl TypeChecker {
 
         for method in &tr.methods {
             if method.node.body.is_some() {
-                self.check_method(&method.node, &tr.name);
+                // Trait default methods are checked against `Self` (the eventual adopter type),
+                // not against the trait name itself. This allows default bodies to reference
+                // adopter fields (validated at adoption sites via `@requires`).
+                self.check_method_with_self_ty(&method.node, ResolvedType::SelfType);
             }
         }
 
@@ -244,6 +295,10 @@ impl TypeChecker {
     }
 
     pub(crate) fn check_method(&mut self, method: &MethodDecl, owner: &str) {
+        self.check_method_with_self_ty(method, ResolvedType::Named(owner.to_string()));
+    }
+
+    fn check_method_with_self_ty(&mut self, method: &MethodDecl, self_ty: ResolvedType) {
         self.symbols.enter_scope(ScopeKind::Method {
             receiver: method.receiver,
         });
@@ -257,7 +312,7 @@ impl TypeChecker {
             self.symbols.define(Symbol {
                 name: "self".to_string(),
                 kind: SymbolKind::Variable(VariableInfo {
-                    ty: ResolvedType::Named(owner.to_string()),
+                    ty: self_ty,
                     is_mutable,
                     is_used: true,
                 }),

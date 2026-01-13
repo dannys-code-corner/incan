@@ -320,6 +320,11 @@ impl<'a> Parser<'a> {
         self.expect_keyword(KeywordId::Model, "Expected 'model'")?;
         let name = self.identifier()?;
         let type_params = self.type_params()?;
+        let traits = if self.match_keyword(KeywordId::With) {
+            self.identifier_list()?
+        } else {
+            Vec::new()
+        };
         self.expect_punct(PunctuationId::Colon, "Expected ':' after model name")?;
         self.expect(&TokenKind::Newline, "Expected newline after ':'")?;
         self.expect(&TokenKind::Indent, "Expected indented block")?;
@@ -340,6 +345,7 @@ impl<'a> Parser<'a> {
             decorators,
             name,
             type_params,
+            traits,
             fields,
             methods,
         })

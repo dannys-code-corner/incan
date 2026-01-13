@@ -415,82 +415,108 @@ impl AstLowering {
         &mut self,
         type_name: &str,
         trait_name: &str,
-        class_methods: &[Spanned<ast::MethodDecl>],
+        impl_methods: &[Spanned<ast::MethodDecl>],
     ) -> Result<IrImpl, LoweringError> {
-        // Get trait method names to filter class methods
-        let trait_method_names: std::collections::HashSet<String> = self
-            .trait_methods
-            .get(trait_name)
-            .map(|v| v.iter().cloned().collect())
-            .unwrap_or_default();
+        // Avoid holding an immutable borrow of `self` across lowering calls.
+        let trait_decl = self.trait_decls.get(trait_name).cloned().ok_or_else(|| LoweringError {
+            message: format!("Unknown trait '{trait_name}'"),
+            span: IrSpan::default(),
+        })?;
+        let trait_methods = trait_decl.methods;
 
-        // Only include methods that match trait signatures
-        let methods: Vec<IrFunction> = class_methods
-            .iter()
-            .filter(|m| trait_method_names.contains(&m.node.name))
-            .map(|m| {
-                self.scopes.push(HashMap::new());
+        let mut methods: Vec<IrFunction> = Vec::new();
+        for trait_method in &trait_methods {
+            let method_name = trait_method.node.name.as_str();
 
-                // Handle receiver (self) parameter
-                let mut params = Vec::new();
-                if let Some(receiver) = &m.node.receiver {
-                    params.push(FunctionParam {
-                        name: "self".to_string(),
-                        ty: IrType::SelfType,
-                        mutability: match receiver {
-                            ast::Receiver::Immutable => Mutability::Immutable,
-                            ast::Receiver::Mutable => Mutability::Mutable,
-                        },
-                        is_self: true,
-                    });
+            // Prefer the implementing type's override, if present.
+            let mut found_override: Option<&ast::MethodDecl> = None;
+            for m in impl_methods {
+                if m.node.name == method_name {
+                    found_override = Some(&m.node);
+                    break;
                 }
+            }
+            if let Some(m) = found_override {
+                methods.push(self.lower_impl_method_for_trait(m)?);
+                continue;
+            }
 
-                // Add regular parameters
-                let other_params: Vec<FunctionParam> = m
-                    .node
-                    .params
-                    .iter()
-                    .map(|p| {
-                        let base_ty = self.lower_type(&p.node.ty.node);
-                        FunctionParam {
-                            name: p.node.name.clone(),
-                            ty: base_ty,
-                            mutability: if p.node.is_mut {
-                                Mutability::Mutable
-                            } else {
-                                Mutability::Immutable
-                            },
-                            is_self: false,
-                        }
-                    })
-                    .collect();
-                params.extend(other_params);
+            // Otherwise, expand a default method body into the impl (RFC 000: defaults may assume adopter fields).
+            if trait_method.node.body.is_some() {
+                methods.push(self.lower_impl_method_for_trait(&trait_method.node)?);
+                continue;
+            }
 
-                let return_type = self.lower_type(&m.node.return_type.node);
-                let body = if let Some(ref body_stmts) = m.node.body {
-                    self.lower_statements(body_stmts)?
-                } else {
-                    vec![]
-                };
-
-                self.scopes.pop();
-
-                Ok(IrFunction {
-                    name: m.node.name.clone(),
-                    params,
-                    return_type,
-                    body,
-                    is_async: m.node.is_async,
-                    visibility: Visibility::Private,
-                    type_params: vec![],
-                })
-            })
-            .collect::<Result<Vec<_>, LoweringError>>()?;
+            // Required trait method with no default implementation.
+            return Err(LoweringError {
+                message: format!(
+                    "Type '{type_name}' does not implement required method '{method_name}' for trait '{trait_name}'"
+                ),
+                span: IrSpan::default(),
+            });
+        }
 
         Ok(IrImpl {
             target_type: type_name.to_string(),
             trait_name: Some(trait_name.to_string()),
             methods,
+        })
+    }
+
+    fn lower_impl_method_for_trait(&mut self, m: &ast::MethodDecl) -> Result<IrFunction, LoweringError> {
+        self.scopes.push(HashMap::new());
+
+        // Handle receiver (self) parameter
+        let mut params = Vec::new();
+        if let Some(receiver) = &m.receiver {
+            params.push(FunctionParam {
+                name: "self".to_string(),
+                ty: IrType::SelfType,
+                mutability: match receiver {
+                    ast::Receiver::Immutable => Mutability::Immutable,
+                    ast::Receiver::Mutable => Mutability::Mutable,
+                },
+                is_self: true,
+            });
+        }
+
+        // Add regular parameters
+        let other_params: Vec<FunctionParam> = m
+            .params
+            .iter()
+            .map(|p| {
+                let base_ty = self.lower_type(&p.node.ty.node);
+                FunctionParam {
+                    name: p.node.name.clone(),
+                    ty: base_ty,
+                    mutability: if p.node.is_mut {
+                        Mutability::Mutable
+                    } else {
+                        Mutability::Immutable
+                    },
+                    is_self: false,
+                }
+            })
+            .collect();
+        params.extend(other_params);
+
+        let return_type = self.lower_type(&m.return_type.node);
+        let body = if let Some(ref body_stmts) = m.body {
+            self.lower_statements(body_stmts)?
+        } else {
+            vec![]
+        };
+
+        self.scopes.pop();
+
+        Ok(IrFunction {
+            name: m.name.clone(),
+            params,
+            return_type,
+            body,
+            is_async: m.is_async,
+            visibility: Visibility::Private,
+            type_params: vec![],
         })
     }
 
@@ -639,11 +665,11 @@ impl AstLowering {
                 params.extend(other_params);
 
                 let return_type = self.lower_type(&m.node.return_type.node);
-                let body = if let Some(ref body_stmts) = m.node.body {
-                    self.lower_statements(body_stmts)?
-                } else {
-                    vec![]
-                };
+                // IMPORTANT: We intentionally do NOT emit trait method bodies into the Rust trait itself.
+                // Default methods are expanded into each adopting `impl Trait for Type` block during lowering,
+                // which allows bodies to assume adopter fields (RFC 000) without generating invalid Rust
+                // trait default methods like `self.name`.
+                let body = vec![];
 
                 self.scopes.pop();
 

@@ -243,6 +243,84 @@ def foo() -> str:
 }
 
 // ========================================
+// Slicing
+// ========================================
+
+#[test]
+fn test_list_slice_rejects_non_int_bounds_and_step() {
+    let source = r#"
+def main() -> None:
+  xs: List[int] = [1, 2, 3]
+  _a = xs["bad":]
+  _b = xs[:1.2]
+  _c = xs[0:2:"nope"]
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_list_slice_accepts_int_bounds_and_step() {
+    let source = r#"
+def main() -> None:
+  xs: List[int] = [1, 2, 3]
+  _a = xs[0:]
+  _b = xs[:2]
+  _c = xs[0:2:1]
+"#;
+    assert!(check_str(source).is_ok());
+}
+
+// ========================================
+// Models implementing traits (Issue #42)
+// ========================================
+
+#[test]
+fn test_model_trait_requires_missing_field_errors() {
+    let source = r#"
+@requires(name: str)
+trait Loggable:
+  def log(self, msg: str) -> None:
+    println(f"[{self.name}] {msg}")
+
+model User with Loggable:
+  id: int
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_model_trait_requires_field_type_mismatch_errors() {
+    let source = r#"
+@requires(name: str)
+trait Loggable:
+  def log(self, msg: str) -> None:
+    println(f"[{self.name}] {msg}")
+
+model User with Loggable:
+  name: int
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_model_trait_default_method_call_typechecks() {
+    let source = r#"
+@requires(name: str)
+trait Loggable:
+  def log(self, msg: str) -> None:
+    println(f"[{self.name}] {msg}")
+
+model User with Loggable:
+  name: str
+
+def main() -> None:
+  u = User(name="Ada")
+  u.log("hello")
+"#;
+    assert!(check_str(source).is_ok());
+}
+
+// ========================================
 // Control flow
 // ========================================
 
