@@ -339,5 +339,7 @@ The compiler guarantees you handle all cases, eliminating a whole class of bugs 
 ## See Also
 
 - [Error Handling](./error_handling.md) — Using `Result` and `Option`
-- [Pattern Matching RFC](../../RFCs/done/000_core_rfc.md) — Match expression grammar
+- [Pattern Matching RFC][RFC 000] — Match expression grammar
 - [Models and Classes](./models_and_classes.md) — When to use class vs enum
+
+--8<-- "_snippets/rfcs_refs.md"

@@ -76,6 +76,9 @@ extra:
 
 extra_javascript:
   - _snippets/javascripts/mathjax.js
+  - https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js
+  - _snippets/javascripts/tablesort.js
+  - _snippets/javascripts/rfc_table_filter.js
 
 nav:
   - Home: index.md

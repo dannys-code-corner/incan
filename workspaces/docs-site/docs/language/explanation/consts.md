@@ -19,7 +19,7 @@ In Incan, `const` exists to make intent explicit and to unlock compiler guarante
 ## How do I use it?
 
 - **Syntax**: `const NAME [: Type] = <expr>`
-- **Scope**: `const` is currently **module-level only** (see [RFC 008](../../RFCs/done/008_const_bindings.md))
+- **Scope**: `const` is currently **module-level only** (see [RFC 008][RFC 008])
 - **Type annotations**: optional; if omitted, the compiler must be able to infer the type
 - **Initializer rules**: the initializer must be **const-evaluable** (no runtime calls)
 
@@ -120,4 +120,6 @@ const LIMIT: int = BASE * 2
 
 ## See also
 
-- [RFC 008: Const bindings](../../RFCs/done/008_const_bindings.md)
+- [RFC 008: Const bindings][RFC 008]
+
+--8<-- "_snippets/rfcs_refs.md"

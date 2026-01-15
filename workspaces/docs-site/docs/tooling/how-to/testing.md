@@ -2,6 +2,12 @@
 
 Incan provides a pytest-like testing experience with `incan test`.
 
+For the **testing API** (assertions, markers, fixtures, parametrization), see:
+[Language → Reference → Testing](../../language/reference/testing.md).
+
+For a guided walkthrough, see:
+[The Incan Book → Unit tests](../../language/tutorials/book/13_unit_tests.md).
+
 ## Quick Start
 
 --8<-- "_snippets/callouts/no_install_fallback.md"
@@ -14,6 +20,8 @@ Create a test file (must be named `test_*.incn` or `*_test.incn`):
 
 ```incan
 """Test file for math operations"""
+
+from testing import assert_eq
 
 def add(a: int, b: int) -> int:
     return a + b
@@ -54,19 +62,19 @@ my_project/
 
 ## Assertions
 
-Use assertion functions (not Python-style `assert expr`):
+Use assertion functions from the `testing` module (not Python-style `assert expr`):
 
 ```incan
+from testing import assert, assert_eq, assert_ne, assert_true, assert_false, fail
+
 # Equality
 assert_eq(actual, expected)
 assert_ne(actual, other)
 
 # Boolean
+assert(condition)
 assert_true(condition)
 assert_false(condition)
-
-# With custom message
-assert_eq(result, 42, "calculation was wrong")
 
 # Explicit failure
 fail("this test should not reach here")
