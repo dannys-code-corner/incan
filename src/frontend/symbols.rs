@@ -478,6 +478,7 @@ pub struct ClassInfo {
     pub type_params: Vec<String>,
     pub extends: Option<String>,
     pub traits: Vec<String>,
+    pub derives: Vec<String>,
     pub fields: HashMap<String, FieldInfo>,
     pub methods: HashMap<String, MethodInfo>,
 }
@@ -487,6 +488,7 @@ pub struct ClassInfo {
 pub struct ModelInfo {
     pub type_params: Vec<String>,
     pub traits: Vec<String>,
+    pub derives: Vec<String>,
     pub fields: HashMap<String, FieldInfo>,
     pub methods: HashMap<String, MethodInfo>,
 }

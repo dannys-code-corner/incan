@@ -495,6 +495,86 @@ pub mod errors {
         .with_note("All required trait methods must be implemented")
     }
 
+    pub fn trait_method_signature_mismatch(
+        trait_name: &str,
+        type_name: &str,
+        method: &str,
+        expected_sig: &str,
+        found_sig: &str,
+        span: Span,
+    ) -> CompileError {
+        CompileError::type_error(
+            format!(
+                "Trait '{}' requires '{}'::{} to match its signature",
+                trait_name, type_name, method
+            ),
+            span,
+        )
+        .with_note(format!("Expected: {expected_sig}"))
+        .with_note(format!("Found:    {found_sig}"))
+        .with_hint("Update the method signature to match the trait requirement")
+    }
+
+    pub fn trait_required_field_type_mismatch(
+        trait_name: &str,
+        type_name: &str,
+        field: &str,
+        expected: &str,
+        found: &str,
+        span: Span,
+    ) -> CompileError {
+        CompileError::type_error(
+            format!(
+                "Trait '{}' requires field '{}' on '{}' to have type '{}'",
+                trait_name, field, type_name, expected
+            ),
+            span,
+        )
+        .with_note(format!("Found: '{found}'"))
+        .with_hint(format!("Change '{field}' to type '{expected}'"))
+    }
+
+    pub fn validate_derive_missing_validate_method(type_name: &str, span: Span) -> CompileError {
+        CompileError::type_error(
+            format!(
+                "@derive(Validate) requires '{}' to define method 'validate(self) -> Result[Self, E]'",
+                type_name
+            ),
+            span,
+        )
+        .with_hint("Add: def validate(self) -> Result[Self, E]: ...")
+        .with_note("Validated models must define a validation hook")
+    }
+
+    pub fn validate_derive_invalid_validate_signature(
+        type_name: &str,
+        expected: &str,
+        found: &str,
+        span: Span,
+    ) -> CompileError {
+        CompileError::type_error(
+            format!(
+                "@derive(Validate) requires '{}'::validate to have a specific signature",
+                type_name
+            ),
+            span,
+        )
+        .with_note(format!("Expected: {expected}"))
+        .with_note(format!("Found:    {found}"))
+    }
+
+    pub fn validate_derive_disallows_raw_construction(type_name: &str, span: Span) -> CompileError {
+        CompileError::type_error(
+            format!(
+                "Direct construction '{}'(...) is not allowed for @derive(Validate) models",
+                type_name
+            ),
+            span,
+        )
+        .with_hint(format!("Use '{}.new(...)' instead", type_name))
+        .with_note("This model opts into validated construction")
+    }
+
     pub fn trait_not_implemented(type_name: &str, trait_name: &str, span: Span) -> CompileError {
         let mut error = CompileError::type_error(
             format!("Type '{}' does not implement trait '{}'", type_name, trait_name),
@@ -539,6 +619,10 @@ pub mod errors {
             }
             Some(DeriveId::Serialize) | Some(DeriveId::Deserialize) => {
                 error = error.with_hint(format!("Add @derive({}) for JSON/serialization support", trait_name));
+            }
+            Some(DeriveId::Validate) => {
+                error = error.with_hint("Add @derive(Validate) to enable validated construction via TypeName.new(...)");
+                error = error.with_hint("Then implement: def validate(self) -> Result[Self, E]: ...");
             }
             None => {
                 error = error.with_hint(format!(

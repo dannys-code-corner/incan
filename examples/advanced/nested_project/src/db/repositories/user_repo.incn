@@ -1,8 +1,7 @@
 """
 User repository - demonstrates deeply nested module (3 levels)
 
-Note: super:: imports work at parse-time but cross-module codegen
-is a work-in-progress. This module shows standalone functions.
+Note: This nested module is compiled and linked as part of the multi-module example; cross-module imports are supported.
 """
 
 pub def find_user_by_name(name: str) -> str:

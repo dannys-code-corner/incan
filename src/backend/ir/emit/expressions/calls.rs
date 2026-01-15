@@ -6,7 +6,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use super::super::super::conversions::{BinOpEmitKind, ConversionContext, determine_binop_plan, determine_conversion};
-use super::super::super::expr::{BinOp, IrExprKind, TypedExpr, VarAccess};
+use super::super::super::expr::{BinOp, IrCallArg, IrExprKind, TypedExpr, VarAccess};
 use super::super::super::types::{IrType, Mutability};
 use super::super::{EmitError, IrEmitter};
 
@@ -18,11 +18,12 @@ impl<'a> IrEmitter<'a> {
     pub(in super::super) fn emit_call_expr(
         &self,
         func: &TypedExpr,
-        args: &[TypedExpr],
+        args: &[IrCallArg],
     ) -> Result<TokenStream, EmitError> {
         // Handle builtin functions specially (legacy string-based path)
         if let IrExprKind::Var { name, .. } = &func.kind {
-            if let Some(result) = self.try_emit_builtin_call(name, args)? {
+            let positional: Vec<TypedExpr> = args.iter().map(|a| a.expr.clone()).collect();
+            if let Some(result) = self.try_emit_builtin_call(name, &positional)? {
                 return Ok(result);
             }
         }
@@ -36,8 +37,39 @@ impl<'a> IrEmitter<'a> {
             None
         };
 
+        // Order arguments only when keyword args are present (positional-only calls preserve previous behavior,
+        // which is important for snapshots + for default-arg lowering work that happens elsewhere).
+        let has_named_args = args.iter().any(|a| a.name.is_some());
+        let ordered_args: Vec<&TypedExpr> = if let Some(sig) = function_sig
+            && has_named_args
+        {
+            let mut positional: Vec<&TypedExpr> = Vec::new();
+            let mut named: std::collections::HashMap<&str, &TypedExpr> = std::collections::HashMap::new();
+            for a in args {
+                if let Some(name) = a.name.as_deref() {
+                    named.insert(name, &a.expr);
+                } else {
+                    positional.push(&a.expr);
+                }
+            }
+
+            let mut pos_idx = 0usize;
+            let mut out: Vec<&TypedExpr> = Vec::new();
+            for p in &sig.params {
+                if let Some(v) = named.get(p.name.as_str()) {
+                    out.push(*v);
+                } else if pos_idx < positional.len() {
+                    out.push(positional[pos_idx]);
+                    pos_idx += 1;
+                }
+            }
+            out
+        } else {
+            args.iter().map(|a| &a.expr).collect()
+        };
+
         // Handle argument passing with signature-based borrow insertion
-        let arg_tokens: Vec<TokenStream> = args
+        let arg_tokens: Vec<TokenStream> = ordered_args
             .iter()
             .enumerate()
             .map(|(idx, a)| {

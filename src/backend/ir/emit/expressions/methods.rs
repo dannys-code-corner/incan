@@ -7,7 +7,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::super::super::conversions::{ConversionContext, determine_conversion};
-use super::super::super::expr::{IrExprKind, MethodKind, TypedExpr};
+use super::super::super::expr::{IrCallArg, IrExprKind, MethodKind, TypedExpr};
 use super::super::super::types::IrType;
 use super::super::{EmitError, IrEmitter};
 
@@ -93,20 +93,21 @@ impl<'a> IrEmitter<'a> {
         &self,
         receiver: &TypedExpr,
         kind: &MethodKind,
-        args: &[TypedExpr],
+        args: &[IrCallArg],
     ) -> Result<TokenStream, EmitError> {
         let r0 = self.emit_expr(receiver)?;
         let info = ReceiverInfo::new(&receiver.ty, r0);
-        if let Some(res) = emit_string_method(self, &receiver.ty, &info, kind, args) {
+        let arg_exprs: Vec<TypedExpr> = args.iter().map(|a| a.expr.clone()).collect();
+        if let Some(res) = emit_string_method(self, &receiver.ty, &info, kind, &arg_exprs) {
             return res;
         }
-        if let Some(res) = emit_collection_method(self, receiver, &info, kind, args) {
+        if let Some(res) = emit_collection_method(self, receiver, &info, kind, &arg_exprs) {
             return res;
         }
 
         match kind {
             // ---- Internal/special methods ----
-            MethodKind::Slice => self.emit_runtime_str_slice(&info, args),
+            MethodKind::Slice => self.emit_runtime_str_slice(&info, &arg_exprs),
             _ => unreachable!("string methods are handled via emit_string_method"),
         }
     }
@@ -119,24 +120,25 @@ impl<'a> IrEmitter<'a> {
         &self,
         receiver: &TypedExpr,
         method: &str,
-        args: &[TypedExpr],
+        args: &[IrCallArg],
     ) -> Result<TokenStream, EmitError> {
         let r0 = self.emit_expr(receiver)?;
         let info = ReceiverInfo::new(&receiver.ty, r0);
         let r = &info.r;
+        let arg_exprs: Vec<TypedExpr> = args.iter().map(|a| a.expr.clone()).collect();
 
         if let Some(kind) = MethodKind::from_name(method) {
-            if let Some(res) = emit_string_method(self, &receiver.ty, &info, &kind, args) {
+            if let Some(res) = emit_string_method(self, &receiver.ty, &info, &kind, &arg_exprs) {
                 return res;
             }
-            if let Some(res) = emit_collection_method(self, receiver, &info, &kind, args) {
+            if let Some(res) = emit_collection_method(self, receiver, &info, &kind, &arg_exprs) {
                 return res;
             }
         }
 
         // Handle special methods (legacy string-based dispatch)
         if method == "__slice__" {
-            return self.emit_runtime_str_slice(&info, args);
+            return self.emit_runtime_str_slice(&info, &arg_exprs);
         }
 
         // Check if this is an enum variant construction.
@@ -146,7 +148,7 @@ impl<'a> IrEmitter<'a> {
         if let IrExprKind::Var { name, .. } = &receiver.kind {
             let key = (name.to_string(), method.to_string());
             if self.enum_variant_fields.contains_key(&key) {
-                return self.emit_enum_variant_call(name, method, args);
+                return self.emit_enum_variant_call(name, method, &arg_exprs);
             }
         }
 
@@ -179,11 +181,13 @@ impl<'a> IrEmitter<'a> {
                 //
                 // For unknown/external types, keep the previous behavior to avoid accidental conversions for Rust APIs
                 // that truly want `&str`.
-                let apply_incan_arg_conversions =
-                    matches!(receiver.ty, IrType::Struct(_) | IrType::Enum(_) | IrType::Trait(_));
+                let apply_incan_arg_conversions = is_known_struct
+                    || is_known_enum
+                    || matches!(receiver.ty, IrType::Struct(_) | IrType::Enum(_) | IrType::Trait(_));
 
                 let arg_tokens: Vec<TokenStream> = if apply_incan_arg_conversions {
-                    args.iter()
+                    arg_exprs
+                        .iter()
                         .map(|a| {
                             let emitted = self.emit_expr(a)?;
                             let conv = determine_conversion(a, None, ConversionContext::IncanFunctionArg);
@@ -191,7 +195,7 @@ impl<'a> IrEmitter<'a> {
                         })
                         .collect::<Result<_, _>>()?
                 } else {
-                    args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?
+                    arg_exprs.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?
                 };
                 return Ok(quote! { #type_ident::#m(#(#arg_tokens),*) });
             }
@@ -199,6 +203,22 @@ impl<'a> IrEmitter<'a> {
 
         // Regular method call
         let m = format_ident!("{}", method);
+        // Temporary targeted support: `app.run(port=8080)` should map to `app.run("127.0.0.1", 8080)`.
+        if method == "run" && args.iter().any(|a| a.name.as_deref() == Some("port")) {
+            let mut host: Option<TokenStream> = None;
+            let mut port: Option<TokenStream> = None;
+            for a in args {
+                match a.name.as_deref() {
+                    Some("host") => host = Some(self.emit_expr(&a.expr)?),
+                    Some("port") => port = Some(self.emit_expr(&a.expr)?),
+                    _ => {}
+                }
+            }
+            if let Some(port_tokens) = port {
+                let host_tokens = host.unwrap_or_else(|| quote! { "127.0.0.1" });
+                return Ok(quote! { #r.#m(#host_tokens, #port_tokens) });
+            }
+        }
         // Apply Incan-style argument conversions for method calls on Incan-owned types (structs/enums/traits).
         // This is important for `str` literals: we often emit `"x"` as `&'static str`, but many Incan-level method
         // signatures expect owned `String` in Rust.
@@ -207,7 +227,8 @@ impl<'a> IrEmitter<'a> {
         // truly want `&str`.
         let apply_incan_arg_conversions = matches!(receiver.ty, IrType::Struct(_) | IrType::Enum(_) | IrType::Trait(_));
         let arg_tokens: Vec<TokenStream> = if apply_incan_arg_conversions {
-            args.iter()
+            arg_exprs
+                .iter()
                 .map(|a| {
                     let emitted = self.emit_expr(a)?;
                     let conv = determine_conversion(a, None, ConversionContext::IncanFunctionArg);
@@ -215,7 +236,7 @@ impl<'a> IrEmitter<'a> {
                 })
                 .collect::<Result<_, _>>()?
         } else {
-            args.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?
+            arg_exprs.iter().map(|a| self.emit_expr(a)).collect::<Result<_, _>>()?
         };
         Ok(quote! { #r.#m(#(#arg_tokens),*) })
     }

@@ -18,7 +18,7 @@ Example:
         (0, 0, 0),
     ])
     def test_add(a: int, b: int, expected: int) -> None:
-        assert add(a, b) == expected
+        assert_eq(add(a, b), expected)
 
     @skip("not implemented")
     def test_future() -> None:
@@ -130,30 +130,32 @@ def parametrize(argnames: str, argvalues: List[Tuple]) -> None:
 # Assertion Helpers (optional, prefer plain assert)
 # =============================================================================
 
-def assert_eq[T](left: T, right: T, msg: str = "") -> None:
-    """
-    Assert two values are equal.
-
-    Prefer plain `assert left == right` for most cases.
-    Use this when you need a custom message.
-
-    Example:
-        assert_eq(result, expected, "calculation was wrong")
-    """
-    ...
-
-
-def assert_ne[T](left: T, right: T, msg: str = "") -> None:
-    """Assert two values are not equal."""
-    ...
-
-
-def assert_true(condition: bool, msg: str = "") -> None:
+def assert(condition: bool) -> None:
     """Assert condition is true."""
     ...
 
 
-def assert_false(condition: bool, msg: str = "") -> None:
+def assert_eq[T](left: T, right: T) -> None:
+    """
+    Assert two values are equal.
+
+    Example:
+        assert_eq(result, expected)
+    """
+    ...
+
+
+def assert_ne[T](left: T, right: T) -> None:
+    """Assert two values are not equal."""
+    ...
+
+
+def assert_true(condition: bool) -> None:
+    """Assert condition is true."""
+    ...
+
+
+def assert_false(condition: bool) -> None:
     """Assert condition is false."""
     ...
 
@@ -204,6 +206,6 @@ def assert_raises[E](block: () -> None, msg: str = "") -> E:
 # Test Utilities
 # =============================================================================
 
-def fail(msg: str = "test failed") -> None:
+def fail(msg: str) -> None:
     """Explicitly fail a test with a message."""
     ...

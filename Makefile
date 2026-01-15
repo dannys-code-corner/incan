@@ -127,6 +127,9 @@ smoke-test:
 	@echo "\033[1mRunning smoke-test...\033[0m"
 	@$(MAKE) build
 	@$(MAKE) test
+	@$(MAKE) test-incan-canary
+	@$(MAKE) examples-web-build
+	@$(MAKE) examples-nested-project-build
 	@$(MAKE) examples
 	@$(MAKE) benchmarks-incan
 	@echo "\033[32m✓ Smoke-test passed\033[0m"
@@ -155,6 +158,24 @@ lsp:
 	@echo "\033[1mBuilding LSP server...\033[0m"
 	@cargo build --release --bin incan-lsp
 	@echo "\033[32m✓ LSP server built: target/release/incan-lsp\033[0m"
+
+.PHONY: test-incan-canary  ## test - End-to-end Incan test canary (assertion codegen)
+test-incan-canary: release
+	@echo "\033[1mRunning Incan assertion canary...\033[0m"
+	@./target/release/incan test tests/fixtures/test_assert_canary.incn
+	@echo "\033[32m✓ Incan assertion canary passed\033[0m"
+
+.PHONY: examples-web-build  ## test - Build-only web example (no run)
+examples-web-build: release
+	@echo "\033[1mBuilding web example (build-only)...\033[0m"
+	@./target/release/incan build examples/web/hello_web.incn
+	@echo "\033[32m✓ Web example built\033[0m"
+
+.PHONY: examples-nested-project-build  ## test - Build-only nested_project example (multi-module imports)
+examples-nested-project-build: release
+	@echo "\033[1mBuilding nested_project example (build-only)...\033[0m"
+	@./target/release/incan build examples/advanced/nested_project/src/main.incn
+	@echo "\033[32m✓ Nested project example built\033[0m"
 
 .PHONY: vscode-package  ## tool - Package VS Code extension
 vscode-package:

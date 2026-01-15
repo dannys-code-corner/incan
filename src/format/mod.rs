@@ -129,25 +129,49 @@ pub fn format_diff(source: &str) -> Result<Option<String>, FormatError> {
         return Ok(None);
     }
 
-    // Simple line-by-line diff
     let mut diff = String::new();
-    let original_lines: Vec<&str> = source.lines().collect();
+    diff.push_str("--- original\n");
+    diff.push_str("+++ formatted\n");
+
+    let source_has_nl = source.ends_with('\n');
+    let formatted_has_nl = formatted.ends_with('\n');
+
+    let source_lines: Vec<&str> = source.lines().collect();
     let formatted_lines: Vec<&str> = formatted.lines().collect();
 
-    let max_lines = original_lines.len().max(formatted_lines.len());
-
+    let mut line_diffs = String::new();
+    let max_lines = source_lines.len().max(formatted_lines.len());
     for i in 0..max_lines {
-        let orig = original_lines.get(i).unwrap_or(&"");
+        let orig = source_lines.get(i).unwrap_or(&"");
         let fmt = formatted_lines.get(i).unwrap_or(&"");
 
         if orig != fmt {
             if !orig.is_empty() {
-                diff.push_str(&format!("-{:4} | {}\n", i + 1, orig));
+                line_diffs.push_str(&format!("-{:4} | {}\n", i + 1, orig));
             }
             if !fmt.is_empty() {
-                diff.push_str(&format!("+{:4} | {}\n", i + 1, fmt));
+                line_diffs.push_str(&format!("+{:4} | {}\n", i + 1, fmt));
             }
         }
+    }
+
+    // If only trailing newline differs, surface an explicit, actionable diff.
+    let trailing_newline_only = line_diffs.is_empty()
+        && source.trim_end_matches('\n') == formatted.trim_end_matches('\n')
+        && source_has_nl != formatted_has_nl;
+
+    if trailing_newline_only {
+        diff.push_str("@@ trailing-newline @@\n");
+        if !source_has_nl {
+            diff.push_str("-<no trailing newline>\n");
+        }
+        if formatted_has_nl {
+            diff.push_str("+<adds trailing newline>\n");
+        } else {
+            diff.push_str("+<no trailing newline>\n");
+        }
+    } else {
+        diff.push_str(&line_diffs);
     }
 
     Ok(Some(diff))
@@ -268,5 +292,16 @@ mod tests {
         let result = format_diff(source);
         assert!(result.is_ok());
         // The diff may or may not be Some depending on formatter behavior
+    }
+
+    #[test]
+    fn test_format_diff_trailing_newline_only_is_actionable() {
+        let source = "def foo() -> int:\n    return 42";
+        let result = format_diff(source).expect("format_diff should succeed");
+        let diff = result.expect("diff should be present for trailing-newline change");
+        assert!(
+            diff.contains("trailing-newline"),
+            "expected trailing newline hint in diff, got: {diff}"
+        );
     }
 }

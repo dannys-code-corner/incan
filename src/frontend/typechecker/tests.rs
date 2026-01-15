@@ -4,9 +4,18 @@ use super::*;
 use crate::frontend::{lexer, parser};
 
 fn check_str(source: &str) -> Result<(), Vec<CompileError>> {
-    let tokens = lexer::lex(source).map_err(|_| vec![])?;
-    let ast = parser::parse(&tokens).map_err(|_| vec![])?;
+    let tokens = lexer::lex(source)?;
+    let ast = parser::parse(&tokens)?;
     check(&ast)
+}
+
+fn assert_check_ok(source: &str) {
+    if let Err(errs) = check_str(source) {
+        for e in &errs {
+            eprintln!("typecheck error: {} @ {:?}", e.message, e.span);
+        }
+        panic!("expected Ok, got errors (see stderr)");
+    }
 }
 
 // ========================================
@@ -318,6 +327,179 @@ def main() -> None:
   u.log("hello")
 "#;
     assert!(check_str(source).is_ok());
+}
+
+#[test]
+fn test_trait_required_method_signature_mismatch_receiver() {
+    let source = r#"
+trait Inc:
+  def inc(mut self, by: int) -> int: ...
+
+class Bad with Inc:
+  value: int
+
+  def inc(self, by: int) -> int:
+    return self.value
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_trait_required_method_signature_mismatch_param_type() {
+    let source = r#"
+trait Inc:
+  def inc(mut self, by: int) -> int: ...
+
+class Bad with Inc:
+  value: int
+
+  def inc(mut self, by: str) -> int:
+    return self.value
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_trait_required_method_signature_mismatch_return_type() {
+    let source = r#"
+trait Inc:
+  def inc(mut self, by: int) -> int: ...
+
+class Bad with Inc:
+  value: int
+
+  def inc(mut self, by: int) -> None:
+    return None
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_trait_required_method_signature_mismatch_async() {
+    let source = r#"
+trait Inc:
+  async def inc(mut self, by: int) -> int: ...
+
+class Bad with Inc:
+  value: int
+
+  def inc(mut self, by: int) -> int:
+    return self.value
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_trait_conformance_allows_inherited_members() {
+    let source = r#"
+@requires(name: str)
+trait Named:
+  def get_name(self) -> str: ...
+
+class Base:
+  name: str
+
+  def get_name(self) -> str:
+    return self.name
+
+class Child extends Base with Named:
+  name: str
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_trait_requires_field_type_checked_for_class() {
+    let source = r#"
+@requires(name: str)
+trait Named:
+  def get_name(self) -> str: ...
+
+class Bad with Named:
+  name: int
+
+  def get_name(self) -> str:
+    return "x"
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_derive_validate_requires_validate_method() {
+    let source = r#"
+@derive(Validate)
+model User:
+  name: str
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_derive_validate_rejects_raw_constructor_call() {
+    let source = r#"
+@derive(Validate)
+model User:
+  name: str
+
+  def validate(self) -> Result[User, str]:
+    return Ok(self)
+
+def main() -> int:
+  let u = User(name="Ada")
+  return 0
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_derive_validate_allows_new_constructor_call() {
+    let source = r#"
+@derive(Validate)
+model User:
+  name: str
+
+  def validate(self) -> Result[User, str]:
+    return Ok(self)
+
+def build_user() -> Result[User, str]:
+  return User.new(name="Ada")
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_derive_validate_new_constructor_param_order_positional() {
+    let source = r#"
+@derive(Validate)
+model User:
+  id: int
+  email: str
+
+  def validate(self) -> Result[User, str]:
+    return Ok(self)
+
+def build_user() -> Result[User, str]:
+  return User.new(42, "a@b.com")
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_derive_validate_new_constructor_param_order_positional_mismatch() {
+    let source = r#"
+@derive(Validate)
+model User:
+  id: int
+  email: str
+
+  def validate(self) -> Result[User, str]:
+    return Ok(self)
+
+def build_user() -> Result[User, str]:
+  # Wrong order: str then int should be rejected.
+  return User.new("a@b.com", 42)
+"#;
+    assert!(check_str(source).is_err());
 }
 
 // ========================================

@@ -145,7 +145,7 @@ pub enum Command {
         /// Source file to compile
         #[arg(value_name = "FILE")]
         file: PathBuf,
-        /// Output directory (default: incan_output)
+        /// Output directory (default: target/incan/<name>)
         #[arg(value_name = "OUTPUT_DIR")]
         output_dir: Option<PathBuf>,
     },

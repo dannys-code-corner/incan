@@ -1,0 +1,29 @@
+"""
+Canary file to exercise assertion codegen end-to-end via `incan test`.
+"""
+
+from testing import assert, assert_eq, assert_ne, assert_true, assert_false, fail
+
+
+def test_assertions_work() -> None:
+    # Boolean assertions
+    assert(True)
+    assert_true(True)
+    assert_false(False)
+
+    # Equality/inequality (ints)
+    assert_eq(1, 1)
+    assert_ne(2, 3)
+    assert_eq(1 + 2 * 3, 7)
+
+    # Equality/inequality (bools)
+    assert_eq(True, True)
+    assert_ne(False, True)
+
+    # Equality/inequality (strings)
+    assert_eq("a", "a")
+    assert_ne("a", "b")
+
+    # Existence/typecheck guard: keep fail in the surface API without triggering it.
+    if False:
+        fail("unreachable")
