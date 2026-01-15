@@ -3306,6 +3306,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#closed-rfcs-implemented-superseded-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Closed RFCs (implemented / superseded / rejected)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tips-for-a-good-rfc" class="md-nav__link">
     <span class="md-ellipsis">
       Tips for a good RFC
@@ -3655,6 +3664,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#closed-rfcs-implemented-superseded-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Closed RFCs (implemented / superseded / rejected)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tips-for-a-good-rfc" class="md-nav__link">
     <span class="md-ellipsis">
       Tips for a good RFC
@@ -3743,9 +3761,19 @@
 </ol>
 <h2 id="after-acceptance">After acceptance<a class="headerlink" href="#after-acceptance" title="Permanent link">&para;</a></h2>
 <ul>
-<li>If implemented: move the RFC to <code>workspaces/docs-site/docs/RFCs/done/</code>.</li>
+<li>If implemented: move the RFC to <code>workspaces/docs-site/docs/RFCs/closed/implemented/</code>.</li>
 <li>If deferred: keep it in place but update the status to <code>Deferred</code> and summarize why.</li>
 </ul>
+<h2 id="closed-rfcs-implemented-superseded-rejected">Closed RFCs (implemented / superseded / rejected)<a class="headerlink" href="#closed-rfcs-implemented-superseded-rejected" title="Permanent link">&para;</a></h2>
+<p>RFCs are organized so contributors can see “what’s still open” at a glance:</p>
+<ul>
+<li><code>workspaces/docs-site/docs/RFCs/</code> — open RFCs (draft/planned/in progress/blocked/deferred)</li>
+<li><code>workspaces/docs-site/docs/RFCs/closed/implemented/</code> — implemented RFCs</li>
+<li><code>workspaces/docs-site/docs/RFCs/closed/superseded/</code> — superseded RFCs (replaced by a newer RFC)</li>
+<li><code>workspaces/docs-site/docs/RFCs/closed/rejected/</code> — rejected / withdrawn RFCs (“won’t do”)</li>
+</ul>
+<p>When an RFC is superseded or rejected, move it into the appropriate <code>closed/</code> folder and update its status accordingly
+(for example: <code>Superseded by RFC 018</code>).</p>
 <h2 id="tips-for-a-good-rfc">Tips for a good RFC<a class="headerlink" href="#tips-for-a-good-rfc" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Prefer concrete examples over abstract prose.</li>
@@ -3807,6 +3835,12 @@
       <script src="../../../assets/javascripts/bundle.88dd0f4e.min.js"></script>
       
         <script src="../../../_snippets/javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+      
+        <script src="../../../_snippets/javascripts/tablesort.js"></script>
+      
+        <script src="../../../_snippets/javascripts/rfc_table_filter.js"></script>
       
     
   </body>

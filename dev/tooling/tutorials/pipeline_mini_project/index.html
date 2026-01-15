@@ -3754,6 +3754,7 @@ def main() -&gt; None:
 <h2 id="step-3-test-it">Step 3: Test it<a class="headerlink" href="#step-3-test-it" title="Permanent link">&para;</a></h2>
 <p>Create <code>tests/test_pipeline_step.incn</code>:</p>
 <div class="highlight"><pre><span></span><code>from ..pipeline_step import normalize_name
+from testing import assert_eq
 
 def test_normalize_name_ok() -&gt; None:
     assert_eq(normalize_name(&quot;  Alice  &quot;), Ok(&quot;alice&quot;))
@@ -3825,6 +3826,12 @@ def test_normalize_name_err() -&gt; None:
       <script src="../../../assets/javascripts/bundle.88dd0f4e.min.js"></script>
       
         <script src="../../../_snippets/javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+      
+        <script src="../../../_snippets/javascripts/tablesort.js"></script>
+      
+        <script src="../../../_snippets/javascripts/rfc_table_filter.js"></script>
       
     
   </body>
