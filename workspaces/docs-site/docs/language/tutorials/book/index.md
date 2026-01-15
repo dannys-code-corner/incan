@@ -22,6 +22,7 @@ Goals:
 10. [Models vs classes](10_models_vs_classes.md)
 11. [Traits and derives](11_traits_and_derives.md)
 12. [Newtypes (stronger types)](12_newtypes.md)
+13. [Unit tests](13_unit_tests.md)
 
 ## Notes
 

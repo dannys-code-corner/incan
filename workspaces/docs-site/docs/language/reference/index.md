@@ -17,6 +17,7 @@ For step-by-step learning and patterns, see [Tutorials](../tutorials/book/index.
 - [Language reference (generated)](language.md): compiler-generated tables (keywords, operators, builtins, etc.)
 - [Glossary](glossary.md): canonical terminology used across the docs
 - [Imports and modules](imports_and_modules.md): import syntax, module paths, and module resolution rules
+- [Testing](testing.md): the `testing` stdlib module (assertions, markers, fixtures, parametrization)
 - [Numeric semantics](numeric_semantics.md): numeric operators, promotion rules, and edge cases
 - [Strings](strings.md): string types, formatting, and string operations
 - [Derives & traits](derives_and_traits.md): how derives and traits fit together

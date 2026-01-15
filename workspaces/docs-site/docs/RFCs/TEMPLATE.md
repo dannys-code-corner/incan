@@ -9,7 +9,19 @@ RFC NNN: \<short descriptive title\>
 
 ## Status
 
-- Status: Draft | In Progress | Implemented | Deferred
+<!-- Status descriptions:
+
+- Draft: Initial proposal, needs review.
+- Planned: Scheduled for implementation.
+- In Progress: Implementation is underway.
+- Blocked: Implementation is blocked by another RFC or issue.
+- Deferred: Implementation is deferred to a later time.
+- Done: Implementation is complete.
+- Superseded by RFC NNN: This RFC is superseded by RFC NNN.
+- Rejected: This RFC is rejected.
+ -->
+
+- Status: Draft | Planned | In Progress | Blocked | Deferred | Done | Superseded by RFC NNN | Rejected
 - Author(s): \<name/handle\>
 - Issue: \<link to issue\>
 - RFC PR: \<link to PR\>

@@ -52,8 +52,20 @@ Write an RFC when the *user-facing meaning* of the language changes, for example
 
 ## After acceptance
 
-- If implemented: move the RFC to `workspaces/docs-site/docs/RFCs/done/`.
+- If implemented: move the RFC to `workspaces/docs-site/docs/RFCs/closed/implemented/`.
 - If deferred: keep it in place but update the status to `Deferred` and summarize why.
+
+## Closed RFCs (implemented / superseded / rejected)
+
+RFCs are organized so contributors can see “what’s still open” at a glance:
+
+- `workspaces/docs-site/docs/RFCs/` — open RFCs (draft/planned/in progress/blocked/deferred)
+- `workspaces/docs-site/docs/RFCs/closed/implemented/` — implemented RFCs
+- `workspaces/docs-site/docs/RFCs/closed/superseded/` — superseded RFCs (replaced by a newer RFC)
+- `workspaces/docs-site/docs/RFCs/closed/rejected/` — rejected / withdrawn RFCs (“won’t do”)
+
+When an RFC is superseded or rejected, move it into the appropriate `closed/` folder and update its status accordingly
+(for example: `Superseded by RFC 018`).
 
 ## Tips for a good RFC
 
