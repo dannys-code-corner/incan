@@ -6,7 +6,7 @@ from typing import Iterable, Sequence
 
 from pygments.lexers import _mapping
 from pygments.lexers.python import PythonLexer
-from pygments.token import Keyword, Name
+from pygments.token import Keyword, Name, Operator, Token
 
 
 def _load_keywords_from_registry() -> list[str]:
@@ -172,6 +172,9 @@ class IncanLexer(PythonLexer):
                 continue
             if token is Name and value.startswith("assert_"):
                 yield index, Name.Function, value
+                continue
+            if token is Token.Error and value == "?":
+                yield index, Operator, value
                 continue
             if token is Name and value[:1].isupper():
                 yield index, Name.Class, value
