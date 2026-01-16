@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
 
 import mkdocs_gen_files
 from mkdocs.exceptions import ConfigurationError
+
+log = logging.getLogger("mkdocs.plugins.gen-files")
 
 DOCS_DIR = Path(__file__).resolve().parents[1] / "docs"
 RFC_DIR = DOCS_DIR / "RFCs"
@@ -208,6 +211,9 @@ def _render_table(rows: list[tuple[str, str, str, str, str]]) -> str:
 
 def main() -> None:
     """Main entry point for generating the RFCs index snippet."""
+    prefix = os.environ.get('INCAN_DOCS_BASE_PREFIX', '(unset)')
+    print(f"[gen-files] RFC Generator starting with INCAN_DOCS_BASE_PREFIX={prefix}")
+    log.info("RFC Generator starting with INCAN_DOCS_BASE_PREFIX=%s", prefix)
     rows = _collect_rows()
     content = _render_table(rows)
     refs = _render_reference_links(rows)
@@ -235,9 +241,17 @@ def main() -> None:
     
     # Log first few lines to verify prefix (visible in mkdocs build output)
     preview = "\n".join(refs.splitlines()[:5])
-    print(f"[RFC Generator] Wrote {refs_file} with DOCS_BASE_PREFIX={os.environ.get('INCAN_DOCS_BASE_PREFIX', '(unset)')}")
-    print(f"[RFC Generator] Preview:\n{preview}")
+    prefix = os.environ.get('INCAN_DOCS_BASE_PREFIX', '(unset)')
+    print(f"[gen-files] Wrote {refs_file} with DOCS_BASE_PREFIX={prefix}")
+    print(f"[gen-files] Preview:")
+    print(preview)
+    log.info("Wrote %s with DOCS_BASE_PREFIX=%s", refs_file, prefix)
+    log.info("Preview:\n%s", preview)
 
 
+# Configure logging for standalone execution
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
+
+# Always run - mkdocs-gen-files imports this script, so main() must execute at module level
+main()
