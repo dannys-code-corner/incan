@@ -1562,6 +1562,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Traits (authoring)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#requires-adopter-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      @requires(...) (adopter contract)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3879,6 +3894,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Traits (authoring)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#requires-adopter-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      @requires(...) (adopter contract)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4243,6 +4273,35 @@ So we can change the destination in one place if we move/rename sections.
 <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">p</span> <span class="o">=</span> <span class="nc">Product</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Laptop&quot;</span><span class="p">)</span>
     <span class="nb">println</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">describe</span><span class="p">())</span>
+</code></pre></div>
+<h3 id="requires-adopter-contract"><code>@requires(...)</code> (adopter contract)<a class="headerlink" href="#requires-adopter-contract" title="Permanent link">&para;</a></h3>
+<p><code>@requires(...)</code> is a decorator you can put on a <code>trait</code> to declare <strong>which adopter fields must exist</strong> (and what types
+they must have).</p>
+<p>Syntax:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@requires</span><span class="p">(</span><span class="n">field_a</span><span class="p">:</span> <span class="nc">TypeA</span><span class="p">,</span> <span class="n">field_b</span><span class="p">:</span> <span class="nc">TypeB</span><span class="p">)</span>
+<span class="k">trait</span> <span class="nc">MyTrait</span><span class="p">:</span>
+    <span class="o">...</span>
+</code></pre></div>
+<p>What the compiler enforces:</p>
+<ul>
+<li>When a <code>class</code>/<code>model</code> adopts a trait (<code>with MyTrait</code>), it must provide <strong>all required fields</strong> with compatible types.</li>
+<li>Trait default methods may access adopter fields like <code>self.field</code> <strong>only if</strong> that field is declared in <code>@requires(...)</code>.</li>
+<li>Mutating adopter fields still requires <code>mut self</code> (same as normal methods).</li>
+</ul>
+<p>Example:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@requires</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span>
+<span class="k">trait</span> <span class="nc">Loggable</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">] </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Service</span> <span class="k">with</span> <span class="nc">Loggable</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+</code></pre></div>
+<p>Example (mutation):</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@requires</span><span class="p">(</span><span class="nb">count</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span>
+<span class="k">trait</span> <span class="nc">Counter</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">bump</span><span class="p">(</span><span class="k">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="nb">count</span> <span class="o">+=</span> <span class="mi">1</span>
 </code></pre></div>
 <p>See also: <a href="#traits-authoring">Traits (authoring)</a>.</p>
 <hr />
