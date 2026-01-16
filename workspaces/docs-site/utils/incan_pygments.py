@@ -87,7 +87,7 @@ def _keywords() -> Iterable[str]:
 
 
 class IncanLexer(RegexLexer):
-    """Pygments lexer for the Incan programmi≠ng language."""
+    """Pygments lexer for the Incan programming language."""
 
     name = "Incan"
     aliases = ["incan", "incn"]

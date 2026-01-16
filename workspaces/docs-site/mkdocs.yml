@@ -16,6 +16,9 @@ validation:
 
 theme:
   name: material
+  highlightjs: false
+  pygments_style: default
+  pygments_style_dark: native
   palette:
     - media: "(prefers-color-scheme)"
       toggle:
@@ -82,6 +85,9 @@ markdown_extensions:
 extra:
   version:
     provider: mike
+
+extra_css:
+  - stylesheets/pygments.css
 
 extra_javascript:
   - _snippets/javascripts/mathjax.js

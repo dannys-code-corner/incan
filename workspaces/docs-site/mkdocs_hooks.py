@@ -10,7 +10,7 @@ def on_config(config):  # noqa: D401 - MkDocs hook signature
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-    from incan_pygments import register_incan_lexer
+    from utils.incan_pygments import register_incan_lexer
 
     register_incan_lexer()
     return config
