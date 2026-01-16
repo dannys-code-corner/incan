@@ -47,3 +47,6 @@ pnpm-debug.log*
 
 # MkDocs build output
 site/
+# Generated files - do not commit
+workspaces/docs-site/docs/_snippets/rfcs_refs.md
+workspaces/docs-site/docs/_snippets/tables/rfcs_index.md

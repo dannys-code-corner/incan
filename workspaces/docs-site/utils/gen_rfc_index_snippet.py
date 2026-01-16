@@ -243,7 +243,7 @@ def main() -> None:
     preview = "\n".join(refs.splitlines()[:5])
     prefix = os.environ.get('INCAN_DOCS_BASE_PREFIX', '(unset)')
     print(f"[gen-files] Wrote {refs_file} with DOCS_BASE_PREFIX={prefix}")
-    print(f"[gen-files] Preview:")
+    print("[gen-files] Preview:")
     print(preview)
     log.info("Wrote %s with DOCS_BASE_PREFIX=%s", refs_file, prefix)
     log.info("Preview:\n%s", preview)
