@@ -16,6 +16,9 @@ validation:
 
 theme:
   name: material
+  highlightjs: false
+  pygments_style: default
+  pygments_style_dark: native
   palette:
     - media: "(prefers-color-scheme)"
       toggle:
@@ -49,6 +52,8 @@ plugins:
   - search
   - tags:
       tags_file: tags.md
+hooks:
+  - mkdocs_hooks.py
 
 markdown_extensions:
   - admonition
@@ -57,6 +62,13 @@ markdown_extensions:
       generic: true
   - md_in_html
   - pymdownx.details
+  - pymdownx.highlight:
+      use_pygments: true
+      pygments_lang_class: true
+      extend_pygments_lang:
+        - name: incan
+          lang: incan
+  - pymdownx.inlinehilite
   - pymdownx.snippets:
       check_paths: true
       base_path:
@@ -73,6 +85,9 @@ markdown_extensions:
 extra:
   version:
     provider: mike
+
+extra_css:
+  - stylesheets/pygments.css
 
 extra_javascript:
   - _snippets/javascripts/mathjax.js
