@@ -4036,7 +4036,7 @@ behavior.</p>
 <li><code>rustfmt</code> and <code>clippy</code> are non-negotiable in CI; tune lints to project needs.</li>
 <li>Dependency hygiene: <code>cargo-audit</code>, <code>cargo-deny</code>, <code>cargo-udeps</code>; pin MSRV.</li>
 <li>
-<p>Tests include unit, integration, <strong>doctests</strong>, property-based (<code>proptest</code>), fuzzing (<code>cargo-fuzz</code>) for parsers.</p>
+<p>Tests include unit, integration, <strong>doctests</strong>, property-based (<code>proptest</code>) for parsers.</p>
 </li>
 <li>
 <p><strong>Safety &amp; invariants</strong></p>
@@ -4060,7 +4060,7 @@ behavior.</p>
 <li>✅ <strong>Boundaries</strong>: Modules align with responsibilities; public surface area small and documented.</li>
 <li>✅ <strong>Errors</strong>: Clear <code>Result&lt;T, E&gt;</code> with actionable messages; categorized <code>E</code>.</li>
 <li>✅ <strong>Ownership</strong>: Minimal clones; predictable lifetimes; borrowing favored.</li>
-<li>✅ <strong>Tests</strong>: Unit + integration + doctests exist; critical logic property-tested; parser/unsafe areas fuzzed.</li>
+<li>✅ <strong>Tests</strong>: Unit + integration + doctests exist; critical logic property-tested.</li>
 <li>✅ <strong>Docs</strong>: <code>rustdoc</code> examples compile; <code>README</code> shows usage; <code>SAFETY:</code> annotations present where needed.</li>
 <li>✅ <strong>CI</strong>: Audit, deny, udeps, MSRV checks run; semantic versioning for releases.</li>
 <li>✅ <strong>Async/concurrency</strong>: Structured, cancellable; no hidden global mutable state.</li>
