@@ -294,6 +294,7 @@ impl<'a> Parser<'a> {
                 Expr::Field(object, field) => {
                     let value = self.expression()?;
                     return Ok(Statement::FieldAssignment(FieldAssignmentStmt {
+                        target_span: expr.span,
                         object: *object,
                         field,
                         value,
@@ -340,6 +341,7 @@ impl<'a> Parser<'a> {
                     };
                     let new_value = Spanned::new(Expr::Binary(Box::new(field_expr), bin_op, Box::new(rhs)), expr.span);
                     return Ok(Statement::FieldAssignment(FieldAssignmentStmt {
+                        target_span: expr.span,
                         object: *object,
                         field,
                         value: new_value,

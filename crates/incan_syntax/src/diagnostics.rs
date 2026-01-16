@@ -382,6 +382,21 @@ pub mod errors {
         CompileError::type_error(format!("Type '{}' has no field '{}'", type_name, field), span)
     }
 
+    pub fn duplicate_trait_requires_field(field: &str, span: Span) -> CompileError {
+        CompileError::type_error(format!("Duplicate @requires entry for field '{}'", field), span).with_hint(format!(
+            "Remove the duplicate or keep a single @requires({field}: Type) entry"
+        ))
+    }
+
+    pub fn trait_requires_missing_field(trait_name: &str, field: &str, span: Span) -> CompileError {
+        CompileError::type_error(
+            format!("Trait '{}' does not declare required field '{}'", trait_name, field),
+            span,
+        )
+        .with_hint(format!("Add @requires({field}: Type) to trait '{}'", trait_name))
+        .with_note("Trait default methods may only access fields declared in @requires(...)")
+    }
+
     pub fn duplicate_constructor_field(type_name: &str, field: &str, span: Span) -> CompileError {
         CompileError::type_error(
             format!(

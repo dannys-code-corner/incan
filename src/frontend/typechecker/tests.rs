@@ -298,6 +298,20 @@ model User with Loggable:
 }
 
 #[test]
+fn test_class_trait_requires_missing_field_errors() {
+    let source = r#"
+@requires(name: str)
+trait Loggable:
+  def log(self, msg: str) -> None:
+    println(f"[{self.name}] {msg}")
+
+class Service with Loggable:
+  id: int
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
 fn test_model_trait_requires_field_type_mismatch_errors() {
     let source = r#"
 @requires(name: str)
@@ -327,6 +341,79 @@ def main() -> None:
   u.log("hello")
 "#;
     assert!(check_str(source).is_ok());
+}
+
+#[test]
+fn test_class_trait_default_method_call_typechecks() {
+    let source = r#"
+@requires(name: str)
+trait Loggable:
+  def log(self, msg: str) -> None:
+    println(f"[{self.name}] {msg}")
+
+class Service with Loggable:
+  name: str
+
+def main() -> None:
+  s = Service(name="svc")
+  s.log("hello")
+"#;
+    assert!(check_str(source).is_ok());
+}
+
+#[test]
+fn test_trait_duplicate_requires_errors() {
+    let source = r#"
+@requires(name: str, name: str)
+trait Dup:
+  def get(self) -> str:
+    return self.name
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_trait_default_method_assignment_requires_declared_field() {
+    let source = r#"
+trait Counter:
+  def bump(mut self) -> None:
+    self.count += 1
+
+class Thing with Counter:
+  count: int = 0
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_trait_default_method_requires_declared_field() {
+    let source = r#"
+trait Greeter:
+  def greet(self) -> str:
+    return self.name
+
+class User with Greeter:
+  name: str
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
+fn test_trait_default_method_allows_required_field_assignment() {
+    let source = r#"
+@requires(count: int)
+trait Counter:
+  def bump(mut self) -> None:
+    self.count = self.count + 1
+
+class CounterImpl with Counter:
+  count: int
+
+def main() -> None:
+  c = CounterImpl(count=1)
+  c.bump()
+"#;
+    assert_check_ok(source);
 }
 
 #[test]

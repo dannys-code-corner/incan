@@ -196,7 +196,7 @@ pub struct ModelDecl {
     pub name: Ident,
     pub type_params: Vec<Ident>,
     // Traits adopted by this model via `with TraitA, TraitB`.
-    pub traits: Vec<Ident>,
+    pub traits: Vec<Spanned<Ident>>,
     pub fields: Vec<Spanned<FieldDecl>>,
     pub methods: Vec<Spanned<MethodDecl>>,
 }
@@ -220,7 +220,7 @@ pub struct ClassDecl {
     pub name: Ident,
     pub type_params: Vec<Ident>,
     pub extends: Option<Ident>,
-    pub traits: Vec<Ident>,
+    pub traits: Vec<Spanned<Ident>>,
     pub fields: Vec<Spanned<FieldDecl>>,
     pub methods: Vec<Spanned<MethodDecl>>,
 }
@@ -443,6 +443,8 @@ pub struct AssignmentStmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldAssignmentStmt {
+    /// Span of the assignment target (e.g. `self.field`).
+    pub target_span: Span,
     pub object: Spanned<Expr>,
     pub field: Ident,
     pub value: Spanned<Expr>,

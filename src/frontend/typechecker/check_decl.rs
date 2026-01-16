@@ -6,6 +6,7 @@ use crate::frontend::symbols::*;
 
 use super::TypeChecker;
 use incan_core::lang::derives::{self, DeriveId};
+use std::collections::HashMap;
 
 impl TypeChecker {
     fn method_sig_string_named(&self, method_name: &str, m: &MethodInfo) -> String {
@@ -97,15 +98,16 @@ impl TypeChecker {
 
         // Check traits exist and are satisfied (models can adopt storage-free traits, RFC 000).
         // Note: do this after defining type params so `@requires(field: T)` can resolve `T`.
-        for trait_name in &model.traits {
+        for trait_ref in &model.traits {
+            let trait_name = trait_ref.node.as_str();
             if let Some(id) = self.symbols.lookup(trait_name) {
                 if let Some(sym) = self.symbols.get(id) {
                     if let SymbolKind::Trait(trait_info) = &sym.kind {
-                        self.check_trait_conformance_model(model, trait_info.clone(), trait_name);
+                        self.check_trait_conformance_model(model, trait_info.clone(), trait_name, trait_ref.span);
                     }
                 }
             } else {
-                self.errors.push(errors::unknown_symbol(trait_name, Span::default()));
+                self.errors.push(errors::unknown_symbol(trait_name, trait_ref.span));
             }
         }
 
@@ -206,14 +208,20 @@ impl TypeChecker {
             ));
         }
     }
-    fn check_trait_conformance_model(&mut self, model: &ModelDecl, trait_info: TraitInfo, trait_name: &str) {
+    fn check_trait_conformance_model(
+        &mut self,
+        model: &ModelDecl,
+        trait_info: TraitInfo,
+        trait_name: &str,
+        adoption_span: Span,
+    ) {
         // Check required fields (including types)
         for (field_name, field_ty) in &trait_info.requires {
             let found = model.fields.iter().find(|f| &f.node.name == field_name);
             match found {
                 None => {
                     self.errors
-                        .push(errors::missing_field(&model.name, field_name, Span::default()));
+                        .push(errors::missing_field(&model.name, field_name, adoption_span));
                 }
                 Some(f) => {
                     let actual_ty = resolve_type(&f.node.ty.node, &self.symbols);
@@ -243,10 +251,9 @@ impl TypeChecker {
 
                 if let Some(mi) = model_info {
                     match mi.methods.get(method_name) {
-                        None => {
-                            self.errors
-                                .push(errors::missing_trait_method(trait_name, method_name, Span::default()))
-                        }
+                        None => self
+                            .errors
+                            .push(errors::missing_trait_method(trait_name, method_name, adoption_span)),
                         Some(found) => {
                             if !self.method_sigs_compatible(method_info, found) {
                                 let expected_sig = self.method_sig_string_named(method_name, method_info);
@@ -257,7 +264,7 @@ impl TypeChecker {
                                     method_name,
                                     &expected_sig,
                                     &found_sig,
-                                    Span::default(),
+                                    adoption_span,
                                 ));
                             }
                         }
@@ -267,7 +274,7 @@ impl TypeChecker {
                     let found = model.methods.iter().any(|m| &m.node.name == method_name);
                     if !found {
                         self.errors
-                            .push(errors::missing_trait_method(trait_name, method_name, Span::default()));
+                            .push(errors::missing_trait_method(trait_name, method_name, adoption_span));
                     }
                 }
             }
@@ -288,15 +295,16 @@ impl TypeChecker {
         }
 
         // Check traits exist and are satisfied
-        for trait_name in &class.traits {
+        for trait_ref in &class.traits {
+            let trait_name = trait_ref.node.as_str();
             if let Some(id) = self.symbols.lookup(trait_name) {
                 if let Some(sym) = self.symbols.get(id) {
                     if let SymbolKind::Trait(trait_info) = &sym.kind {
-                        self.check_trait_conformance(class, trait_info.clone(), trait_name);
+                        self.check_trait_conformance(class, trait_info.clone(), trait_name, trait_ref.span);
                     }
                 }
             } else {
-                self.errors.push(errors::unknown_symbol(trait_name, Span::default()));
+                self.errors.push(errors::unknown_symbol(trait_name, trait_ref.span));
             }
         }
 
@@ -334,7 +342,13 @@ impl TypeChecker {
         self.symbols.exit_scope();
     }
 
-    fn check_trait_conformance(&mut self, class: &ClassDecl, trait_info: TraitInfo, trait_name: &str) {
+    fn check_trait_conformance(
+        &mut self,
+        class: &ClassDecl,
+        trait_info: TraitInfo,
+        trait_name: &str,
+        adoption_span: Span,
+    ) {
         // Use the effective members view (own + inherited) from the symbol table.
         let class_info = self
             .symbols
@@ -350,7 +364,7 @@ impl TypeChecker {
             match class_info.as_ref().and_then(|ci| ci.fields.get(field_name)) {
                 None => {
                     self.errors
-                        .push(errors::missing_field(&class.name, field_name, Span::default()));
+                        .push(errors::missing_field(&class.name, field_name, adoption_span));
                 }
                 Some(found) => {
                     if !self.types_compatible(&found.ty, field_ty) {
@@ -360,7 +374,7 @@ impl TypeChecker {
                             field_name,
                             &field_ty.to_string(),
                             &found.ty.to_string(),
-                            Span::default(),
+                            adoption_span,
                         ));
                     }
                 }
@@ -373,7 +387,7 @@ impl TypeChecker {
                 match class_info.as_ref().and_then(|ci| ci.methods.get(method_name)) {
                     None => self
                         .errors
-                        .push(errors::missing_trait_method(trait_name, method_name, Span::default())),
+                        .push(errors::missing_trait_method(trait_name, method_name, adoption_span)),
                     Some(found) => {
                         if !self.method_sigs_compatible(method_info, found) {
                             let expected_sig = self.method_sig_string_named(method_name, method_info);
@@ -384,7 +398,7 @@ impl TypeChecker {
                                 method_name,
                                 &expected_sig,
                                 &found_sig,
-                                Span::default(),
+                                adoption_span,
                             ));
                         }
                     }
@@ -396,15 +410,41 @@ impl TypeChecker {
     fn check_trait(&mut self, tr: &TraitDecl) {
         self.symbols.enter_scope(ScopeKind::Trait);
 
+        let requires_map: HashMap<String, ResolvedType> = self
+            .symbols
+            .lookup(&tr.name)
+            .and_then(|id| self.symbols.get(id))
+            .and_then(|sym| match &sym.kind {
+                SymbolKind::Trait(info) => Some(info.requires.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .fold(HashMap::new(), |mut acc, (name, ty)| {
+                acc.entry(name).or_insert(ty);
+                acc
+            });
+        let prev_trait_requires = self.current_trait_requires.take();
+        let prev_trait_name = self.current_trait_name.take();
+        let prev_missing_emitted = self.current_trait_missing_requires_emitted.take();
+        self.current_trait_requires = Some(requires_map);
+        self.current_trait_name = Some(tr.name.clone());
+
         for method in &tr.methods {
             if method.node.body.is_some() {
+                let prev_method_seen = self.current_trait_missing_requires_emitted.take();
+                self.current_trait_missing_requires_emitted = Some(std::collections::HashSet::new());
                 // Trait default methods are checked against `Self` (the eventual adopter type),
                 // not against the trait name itself. This allows default bodies to reference
                 // adopter fields (validated at adoption sites via `@requires`).
                 self.check_method_with_self_ty(&method.node, ResolvedType::SelfType);
+                self.current_trait_missing_requires_emitted = prev_method_seen;
             }
         }
 
+        self.current_trait_requires = prev_trait_requires;
+        self.current_trait_name = prev_trait_name;
+        self.current_trait_missing_requires_emitted = prev_missing_emitted;
         self.symbols.exit_scope();
     }
 

@@ -247,6 +247,18 @@ impl TypeChecker {
 
         // Verify field exists on object and value type matches field type
         match &obj_ty {
+            ResolvedType::SelfType => {
+                if let Some(expected_ty) = self.trait_required_field_type(field, field_assign.target_span) {
+                    if !self.types_compatible(&value_ty, &expected_ty) {
+                        self.errors.push(errors::field_type_mismatch(
+                            field,
+                            &expected_ty.to_string(),
+                            &value_ty.to_string(),
+                            field_assign.value.span,
+                        ));
+                    }
+                }
+            }
             ResolvedType::Named(type_name) => {
                 // TODO: lots of nested ifs here, we should refactor this to be more readable.
                 if let Some(id) = self.symbols.lookup(type_name) {

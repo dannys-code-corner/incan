@@ -242,9 +242,11 @@ impl TypeChecker {
         }
 
         match &base_ty {
-            // Trait default methods typecheck against `Self`, so we cannot know adopter fields here.
-            // Field existence is enforced at adoption sites via `@requires(...)`.
-            ResolvedType::SelfType => ResolvedType::Unknown,
+            // Trait default methods typecheck against `Self`, but field access must be declared via
+            // `@requires(...)` on the trait.
+            ResolvedType::SelfType => self
+                .trait_required_field_type(field, span)
+                .unwrap_or(ResolvedType::Unknown),
             ResolvedType::Tuple(elements) => {
                 if let Ok(idx) = field.parse::<usize>() {
                     if idx < elements.len() {

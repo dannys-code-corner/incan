@@ -21,6 +21,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn identifier_spanned(&mut self) -> Result<Spanned<Ident>, CompileError> {
+        match &self.peek().kind {
+            TokenKind::Ident(name) => {
+                let span = self.current_span();
+                let name = name.clone();
+                self.advance();
+                Ok(Spanned::new(name, span))
+            }
+            _ => Err(CompileError::syntax(
+                format!("Expected identifier, found {:?}", self.peek().kind),
+                self.current_span(),
+            )),
+        }
+    }
+
     /// Parse an identifier, allowing certain keywords in specific contexts (like enum variants).
     fn identifier_or_keyword(&mut self) -> Result<Ident, CompileError> {
         match &self.peek().kind {
@@ -45,6 +60,14 @@ impl<'a> Parser<'a> {
         let mut idents = vec![self.identifier()?];
         while self.match_token(&TokenKind::Punctuation(PunctuationId::Comma)) {
             idents.push(self.identifier()?);
+        }
+        Ok(idents)
+    }
+
+    fn identifier_list_spanned(&mut self) -> Result<Vec<Spanned<Ident>>, CompileError> {
+        let mut idents = vec![self.identifier_spanned()?];
+        while self.match_token(&TokenKind::Punctuation(PunctuationId::Comma)) {
+            idents.push(self.identifier_spanned()?);
         }
         Ok(idents)
     }
