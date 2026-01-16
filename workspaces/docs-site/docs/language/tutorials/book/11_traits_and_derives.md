@@ -39,6 +39,11 @@ Traits let you define a shared contract. In a trait, a method can either:
     **Traits** are like a typed interface (represented in Python by a `Protocol` or `abc.ABC`): “anything that implements
     these methods can be treated as this capability”.
 
+### Default methods and adopter fields (`@requires`)
+
+If a trait default method accesses adopter fields directly (for example `self.name`), the trait must declare those fields
+in `@requires(...)`. Mutating fields still requires `mut self` (same as normal methods).
+
 Example:
 
 ```incan
@@ -59,6 +64,22 @@ model User with Greetable:
 def main() -> None:
     u = User(username="alice")
     println(u.greet())  # outputs: Hello, alice!
+```
+
+Mutation uses `mut self` (and the field must be declared via `@requires(...)`):
+
+```incan
+@requires(count: int)
+trait Counter:
+    def bump(mut self) -> None:
+        self.count += 1
+
+class Thing with Counter:
+    count: int = 0
+
+def main() -> None:
+    t = Thing()
+    t.bump()
 ```
 
 ## Try it

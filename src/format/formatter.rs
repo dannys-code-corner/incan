@@ -225,7 +225,7 @@ impl Formatter {
                 if i > 0 {
                     self.writer.write(", ");
                 }
-                self.writer.write(trait_name);
+                self.writer.write(&trait_name.node);
             }
         }
         self.writer.writeln(":");
@@ -278,7 +278,7 @@ impl Formatter {
                 if i > 0 {
                     self.writer.write(", ");
                 }
-                self.writer.write(trait_name);
+                self.writer.write(&trait_name.node);
             }
         }
 

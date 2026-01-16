@@ -321,7 +321,7 @@ impl<'a> Parser<'a> {
         let name = self.identifier()?;
         let type_params = self.type_params()?;
         let traits = if self.match_keyword(KeywordId::With) {
-            self.identifier_list()?
+            self.identifier_list_spanned()?
         } else {
             Vec::new()
         };
@@ -368,7 +368,7 @@ impl<'a> Parser<'a> {
         };
 
         let traits = if self.match_keyword(KeywordId::With) {
-            self.identifier_list()?
+            self.identifier_list_spanned()?
         } else {
             Vec::new()
         };

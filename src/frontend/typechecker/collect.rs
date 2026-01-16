@@ -441,7 +441,7 @@ impl TypeChecker {
             name: model.name.clone(),
             kind: SymbolKind::Type(TypeInfo::Model(ModelInfo {
                 type_params: model.type_params.clone(),
-                traits: model.traits.clone(),
+                traits: model.traits.iter().map(|t| t.node.clone()).collect(),
                 derives,
                 fields,
                 methods,
@@ -470,7 +470,7 @@ impl TypeChecker {
             kind: SymbolKind::Type(TypeInfo::Class(ClassInfo {
                 type_params: class.type_params.clone(),
                 extends: class.extends.clone(),
-                traits: class.traits.clone(),
+                traits: class.traits.iter().map(|t| t.node.clone()).collect(),
                 derives,
                 fields,
                 methods,
@@ -579,18 +579,22 @@ impl TypeChecker {
     }
 
     /// Extract `@requires` constraints from decorators as `(name, type)` pairs.
-    fn extract_requires(&self, decorators: &[Spanned<Decorator>]) -> Vec<(String, ResolvedType)> {
-        decorators_named(decorators, "requires")
-            .flat_map(|dec| {
-                dec.node.args.iter().filter_map(|arg| {
-                    if let DecoratorArg::Named(name, DecoratorArgValue::Type(ty)) = arg {
-                        Some((name.clone(), resolve_type(&ty.node, &self.symbols)))
-                    } else {
-                        None
+    fn extract_requires(&mut self, decorators: &[Spanned<Decorator>]) -> Vec<(String, ResolvedType)> {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut requires: Vec<(String, ResolvedType)> = Vec::new();
+
+        for dec in decorators_named(decorators, "requires") {
+            for arg in &dec.node.args {
+                if let DecoratorArg::Named(name, DecoratorArgValue::Type(ty)) = arg {
+                    if !seen.insert(name.clone()) {
+                        self.errors.push(errors::duplicate_trait_requires_field(name, ty.span));
+                        continue;
                     }
-                })
-            })
-            .collect()
+                    requires.push((name.clone(), resolve_type(&ty.node, &self.symbols)));
+                }
+            }
+        }
+        requires
     }
 
     /// Extract derive names from @derive decorators.

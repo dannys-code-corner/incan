@@ -56,7 +56,7 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 
 use crate::frontend::ast::*;
-use crate::frontend::diagnostics::CompileError;
+use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::module::{ExportedSymbol, exported_symbols};
 use crate::frontend::symbols::*;
 use helpers::{collection_type_id, stringlike_type_id};
@@ -118,6 +118,12 @@ pub struct TypeChecker {
     pub(crate) mutable_bindings: HashSet<String>,
     /// Current function's error type for `?` operator compatibility.
     pub(crate) current_return_error_type: Option<ResolvedType>,
+    /// Active trait @requires context for default method bodies.
+    pub(crate) current_trait_requires: Option<HashMap<String, ResolvedType>>,
+    /// Active trait name for default method diagnostics.
+    pub(crate) current_trait_name: Option<String>,
+    /// Deduplicate missing-`@requires` diagnostics within a single trait default method body.
+    pub(crate) current_trait_missing_requires_emitted: Option<HashSet<String>>,
     /// Collected module-level const declarations (for rich const-eval + cycle detection).
     pub(crate) const_decls: HashMap<String, (ConstDecl, Span)>,
     /// Const evaluation state machine.
@@ -137,6 +143,9 @@ impl TypeChecker {
             errors: Vec::new(),
             mutable_bindings: HashSet::new(),
             current_return_error_type: None,
+            current_trait_requires: None,
+            current_trait_name: None,
+            current_trait_missing_requires_emitted: None,
             const_decls: HashMap::new(),
             const_eval_state: HashMap::new(),
             const_eval_cache: HashMap::new(),
@@ -175,6 +184,28 @@ impl TypeChecker {
             SymbolKind::Type(info) => Some(info),
             _ => None,
         }
+    }
+
+    /// Resolve a required field type for the active trait default method, if any.
+    ///
+    /// Emits a dedicated diagnostic if a trait body accesses an undeclared required field.
+    pub(crate) fn trait_required_field_type(&mut self, field: &str, span: Span) -> Option<ResolvedType> {
+        let requires = self.current_trait_requires.as_ref()?;
+        if let Some(ty) = requires.get(field) {
+            return Some(ty.clone());
+        }
+        if let Some(seen) = self.current_trait_missing_requires_emitted.as_ref() {
+            if seen.contains(field) {
+                return None;
+            }
+        }
+        let trait_name = self.current_trait_name.as_deref().unwrap_or("<trait>");
+        self.errors
+            .push(errors::trait_requires_missing_field(trait_name, field, span));
+        if let Some(seen) = self.current_trait_missing_requires_emitted.as_mut() {
+            seen.insert(field.to_string());
+        }
+        None
     }
 
     /// Check a program and return errors if any.

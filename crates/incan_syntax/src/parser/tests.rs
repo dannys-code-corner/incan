@@ -59,7 +59,8 @@ model User with Describable:
         match &program.declarations[1].node {
             Declaration::Model(m) => {
                 assert_eq!(m.name, "User");
-                assert_eq!(m.traits, vec!["Describable".to_string()]);
+                assert_eq!(m.traits.len(), 1);
+                assert_eq!(m.traits[0].node, "Describable");
             }
             _ => panic!("Expected model"),
         }
@@ -82,7 +83,9 @@ model User with A, B:
         match &program.declarations[2].node {
             Declaration::Model(m) => {
                 assert_eq!(m.name, "User");
-                assert_eq!(m.traits, vec!["A".to_string(), "B".to_string()]);
+                assert_eq!(m.traits.len(), 2);
+                assert_eq!(m.traits[0].node, "A");
+                assert_eq!(m.traits[1].node, "B");
             }
             _ => panic!("Expected model"),
         }

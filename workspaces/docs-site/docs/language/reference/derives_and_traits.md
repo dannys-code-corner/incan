@@ -165,6 +165,46 @@ def main() -> None:
     println(p.describe())
 ```
 
+### `@requires(...)` (adopter contract)
+
+`@requires(...)` is a decorator you can put on a `trait` to declare **which adopter fields must exist** (and what types
+they must have).
+
+Syntax:
+
+```incan
+@requires(field_a: TypeA, field_b: TypeB)
+trait MyTrait:
+    ...
+```
+
+What the compiler enforces:
+
+- When a `class`/`model` adopts a trait (`with MyTrait`), it must provide **all required fields** with compatible types.
+- Trait default methods may access adopter fields like `self.field` **only if** that field is declared in `@requires(...)`.
+- Mutating adopter fields still requires `mut self` (same as normal methods).
+
+Example:
+
+```incan
+@requires(name: str)
+trait Loggable:
+    def log(self, msg: str) -> None:
+        println(f"[{self.name}] {msg}")
+
+class Service with Loggable:
+    name: str
+```
+
+Example (mutation):
+
+```incan
+@requires(count: int)
+trait Counter:
+    def bump(mut self) -> None:
+        self.count += 1
+```
+
 See also: [Traits (authoring)][traits-doc].
 
 ---

@@ -288,8 +288,8 @@ impl AstLowering {
                             }
 
                             // Generate trait impls for each trait this model implements
-                            for trait_name in &m.traits {
-                                match self.lower_trait_impl(&struct_ir.name, trait_name, &m.methods) {
+                            for trait_ref in &m.traits {
+                                match self.lower_trait_impl(&struct_ir.name, trait_ref.node.as_str(), &m.methods) {
                                     Ok(trait_impl) => {
                                         ir_program.declarations.push(IrDecl::new(IrDeclKind::Impl(trait_impl)));
                                     }
@@ -331,8 +331,8 @@ impl AstLowering {
                             }
 
                             // Generate trait impls for each trait this class implements
-                            for trait_name in &c.traits {
-                                match self.lower_trait_impl(&struct_ir.name, trait_name, &all_methods) {
+                            for trait_ref in &c.traits {
+                                match self.lower_trait_impl(&struct_ir.name, trait_ref.node.as_str(), &all_methods) {
                                     Ok(trait_impl) => {
                                         ir_program.declarations.push(IrDecl::new(IrDeclKind::Impl(trait_impl)));
                                     }
