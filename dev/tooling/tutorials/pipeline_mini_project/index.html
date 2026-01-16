@@ -3711,31 +3711,31 @@
 </ul>
 <h2 id="step-1-create-a-file">Step 1: Create a file<a class="headerlink" href="#step-1-create-a-file" title="Permanent link">&para;</a></h2>
 <p>Create this small project layout:</p>
-<div class="highlight"><pre><span></span><code>my_project/
+<div class="language-text highlight"><pre><span></span><code>my_project/
 ├── pipeline_step.incn
 └── tests/
     └── test_pipeline_step.incn
 </code></pre></div>
 <p>Run the commands below from <code>my_project/</code> (this matters for module resolution).</p>
 <p>Create <code>pipeline_step.incn</code>:</p>
-<div class="highlight"><pre><span></span><code>&quot;&quot;&quot;
-A tiny step-style function that validates input and returns a typed error.
-&quot;&quot;&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">A tiny step-style function that validates input and returns a typed error.</span>
+<span class="s2">&quot;&quot;&quot;</span>
 
-def normalize_name(name: str) -&gt; Result[str, str]:
-    if len(name.strip()) == 0:
-        return Err(&quot;name must not be empty&quot;)
-    return Ok(name.strip().lower())
+<span class="k">def</span> <span class="n">normalize_name</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">())</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;name must not be empty&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">lower</span><span class="p">())</span>
 
 
-def main() -&gt; None:
-    result = normalize_name(&quot;  Alice  &quot;)
-    match result:
-        case Ok(value): println(f&quot;ok: {value}&quot;)
-        case Err(e): println(f&quot;err: {e}&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">)</span>
+    <span class="k">match</span> <span class="n">result</span><span class="p">:</span>
+        <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ok: {value}&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;err: {e}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="step-2-run-it">Step 2: Run it<a class="headerlink" href="#step-2-run-it" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>pipeline_step.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>pipeline_step.incn
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">No-install fallback</p>
@@ -3743,27 +3743,27 @@ def main() -&gt; None:
 <ul>
 <li>from the repository root:</li>
 </ul>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
 </code></pre></div>
 <ul>
 <li>or via an absolute path (from anywhere):</li>
 </ul>
-<div class="highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 </div>
 <h2 id="step-3-test-it">Step 3: Test it<a class="headerlink" href="#step-3-test-it" title="Permanent link">&para;</a></h2>
 <p>Create <code>tests/test_pipeline_step.incn</code>:</p>
-<div class="highlight"><pre><span></span><code>from ..pipeline_step import normalize_name
-from testing import assert_eq
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="p">..</span><span class="n">pipeline_step</span> <span class="k">import</span> <span class="n">normalize_name</span>
+<span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span>
 
-def test_normalize_name_ok() -&gt; None:
-    assert_eq(normalize_name(&quot;  Alice  &quot;), Ok(&quot;alice&quot;))
+<span class="k">def</span> <span class="n">test_normalize_name_ok</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">),</span> <span class="n">Ok</span><span class="p">(</span><span class="s2">&quot;alice&quot;</span><span class="p">))</span>
 
-def test_normalize_name_err() -&gt; None:
-    assert_eq(normalize_name(&quot;   &quot;), Err(&quot;name must not be empty&quot;))
+<span class="k">def</span> <span class="n">test_normalize_name_err</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;   &quot;</span><span class="p">),</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;name must not be empty&quot;</span><span class="p">))</span>
 </code></pre></div>
 <p>Run:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>tests/
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>tests/
 </code></pre></div>
 <h2 id="next">Next<a class="headerlink" href="#next" title="Permanent link">&para;</a></h2>
 <ul>

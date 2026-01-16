@@ -3733,28 +3733,28 @@
 <p>This page is a reference for the <code>Path</code> and <code>File</code> APIs and the common <code>IoError</code> variants.</p>
 <p>For task-oriented examples, see <a href="../../how-to/file_io/">File I/O (how-to)</a>.</p>
 <h2 id="path-methods-and-properties">Path methods and properties<a class="headerlink" href="#path-methods-and-properties" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code># Create from string
-p = Path(&quot;data/config.toml&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Create from string</span>
+<span class="c1">p = Path(&quot;data/config.toml&quot;)</span>
 
-# Join paths with /
-cfg = Path(&quot;config&quot;) / &quot;app.toml&quot;
+<span class="c1"># Join paths with /</span>
+<span class="c1">cfg = Path(&quot;config&quot;) / &quot;app.toml&quot;</span>
 
-# Queries
-p.exists()
-p.is_file()
-p.is_dir()
-p.is_absolute()
+<span class="c1"># Queries</span>
+<span class="c1">p.exists()</span>
+<span class="c1">p.is_file()</span>
+<span class="c1">p.is_dir()</span>
+<span class="c1">p.is_absolute()</span>
 
-# Components
-p.name
-p.stem
-p.suffix
-p.parent
-p.parts
+<span class="c1"># Components</span>
+<span class="c1">p.name</span>
+<span class="c1">p.stem</span>
+<span class="c1">p.suffix</span>
+<span class="c1">p.parent</span>
+<span class="c1">p.parts</span>
 
-# Derive new paths
-p.with_suffix(&quot;.tmp&quot;)
-p.with_name(&quot;summary.txt&quot;)
+<span class="c1"># Derive new paths</span>
+<span class="c1">p.with_suffix(&quot;.tmp&quot;)</span>
+<span class="c1">p.with_name(&quot;summary.txt&quot;)</span>
 </code></pre></div>
 <h3 id="path-constructors-joins-queries-and-components">Path constructors, joins, queries, and components<a class="headerlink" href="#path-constructors-joins-queries-and-components" title="Permanent link">&para;</a></h3>
 <table>
@@ -3959,13 +3959,13 @@ p.with_name(&quot;summary.txt&quot;)
 </table>
 <h2 id="ioerror">IoError<a class="headerlink" href="#ioerror" title="Permanent link">&para;</a></h2>
 <p>File operations return <code>Result[T, IoError]</code>. Common error variants:</p>
-<div class="highlight"><pre><span></span><code>enum IoError:
-    NotFound(path: Path)
-    PermissionDenied(path: Path)
-    AlreadyExists(path: Path)
-    IsDirectory(path: Path)
-    NotDirectory(path: Path)
-    Other(message: str)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">IoError</span><span class="p">:</span>
+    <span class="n">NotFound</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
+    <span class="n">PermissionDenied</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
+    <span class="n">AlreadyExists</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
+    <span class="n">IsDirectory</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
+    <span class="n">NotDirectory</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
+    <span class="n">Other</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="raii-automatic-resource-cleanup">RAII: Automatic resource cleanup<a class="headerlink" href="#raii-automatic-resource-cleanup" title="Permanent link">&para;</a></h2>
 <p>Incan uses RAII (Resource Acquisition Is Initialization) for file handles. When a <code>File</code> goes out of scope, it’s

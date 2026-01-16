@@ -4036,12 +4036,12 @@
 <ul>
 <li>from the repository root:</li>
 </ul>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
 </code></pre></div>
 <ul>
 <li>or via an absolute path (from anywhere):</li>
 </ul>
-<div class="highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 </div>
 <div class="admonition note">
@@ -4050,25 +4050,25 @@
 If it still looks like a bug, please <a href="https://github.com/dannys-code-corner/incan/issues">file an issue on GitHub</a>.</p>
 </div>
 <p>Create a test file (must be named <code>test_*.incn</code> or <code>*_test.incn</code>):</p>
-<div class="highlight"><pre><span></span><code>&quot;&quot;&quot;Test file for math operations&quot;&quot;&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="s2">&quot;&quot;&quot;Test file for math operations&quot;&quot;&quot;</span>
 
-from testing import assert_eq
+<span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span>
 
-def add(a: int, b: int) -&gt; int:
-    return a + b
-
-
-def test_addition() -&gt; None:
-    result = add(2, 3)
-    assert_eq(result, 5)
+<span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
 
-def test_subtraction() -&gt; None:
-    result = 10 - 3
-    assert_eq(result, 7)
+<span class="k">def</span> <span class="n">test_addition</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">add</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">)</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="m">5</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="n">test_subtraction</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="m">10</span> <span class="o">-</span> <span class="m">3</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="m">7</span><span class="p">)</span>
 </code></pre></div>
 <p>Run tests:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>tests/
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>tests/
 </code></pre></div>
 <h2 id="test-discovery">Test Discovery<a class="headerlink" href="#test-discovery" title="Permanent link">&para;</a></h2>
 <p>Tests are discovered automatically:</p>
@@ -4076,7 +4076,7 @@ def test_subtraction() -&gt; None:
 <li><strong>Files</strong>: Named <code>test_*.incn</code> or <code>*_test.incn</code></li>
 <li><strong>Functions</strong>: Named <code>def test_*()</code></li>
 </ul>
-<div class="highlight"><pre><span></span><code>my_project/
+<div class="language-bash highlight"><pre><span></span><code>my_project/
 ├──<span class="w"> </span>src/
 │<span class="w">   </span>└──<span class="w"> </span>main.incn
 └──<span class="w"> </span>tests/
@@ -4086,43 +4086,43 @@ def test_subtraction() -&gt; None:
 </code></pre></div>
 <h2 id="assertions">Assertions<a class="headerlink" href="#assertions" title="Permanent link">&para;</a></h2>
 <p>Use assertion functions from the <code>testing</code> module (not Python-style <code>assert expr</code>):</p>
-<div class="highlight"><pre><span></span><code>from testing import assert, assert_eq, assert_ne, assert_true, assert_false, fail
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert</span><span class="p">,</span> <span class="n">assert_eq</span><span class="p">,</span> <span class="n">assert_ne</span><span class="p">,</span> <span class="n">assert_true</span><span class="p">,</span> <span class="n">assert_false</span><span class="p">,</span> <span class="n">fail</span>
 
-# Equality
-assert_eq(actual, expected)
-assert_ne(actual, other)
+<span class="c1"># Equality</span>
+<span class="c1">assert_eq(actual, expected)</span>
+<span class="c1">assert_ne(actual, other)</span>
 
-# Boolean
-assert(condition)
-assert_true(condition)
-assert_false(condition)
+<span class="c1"># Boolean</span>
+<span class="c1">assert(condition)</span>
+<span class="c1">assert_true(condition)</span>
+<span class="c1">assert_false(condition)</span>
 
-# Explicit failure
-fail(&quot;this test should not reach here&quot;)
+<span class="c1"># Explicit failure</span>
+<span class="c1">fail(&quot;this test should not reach here&quot;)</span>
 </code></pre></div>
 <h2 id="markers">Markers<a class="headerlink" href="#markers" title="Permanent link">&para;</a></h2>
 <h3 id="skip-skip-a-test">@skip - Skip a test<a class="headerlink" href="#skip-skip-a-test" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>@skip(&quot;not implemented yet&quot;)
-def test_future_feature() -&gt; None:
-    pass
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;not implemented yet&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="n">test_future_feature</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">pass</span>
 </code></pre></div>
 <p>Output: <code>test_future_feature SKIPPED (not implemented yet)</code></p>
 <h3 id="xfail-expected-failure">@xfail - Expected failure<a class="headerlink" href="#xfail-expected-failure" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>@xfail(&quot;known bug #123&quot;)
-def test_known_issue() -&gt; None:
-    assert_eq(buggy_function(), &quot;fixed&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">xfail</span><span class="p">(</span><span class="s2">&quot;known bug #123&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="n">test_known_issue</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">buggy_function</span><span class="p">(),</span> <span class="s2">&quot;fixed&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>If test fails: <code>XFAIL</code> (expected)
 If test passes: <code>XPASS</code> (unexpected - reported as failure)</p>
 <h3 id="slow-mark-slow-tests">@slow - Mark slow tests<a class="headerlink" href="#slow-mark-slow-tests" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>@slow
-def test_integration() -&gt; None:
-    # Long-running test
-    pass
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">slow</span>
+<span class="k">def</span> <span class="n">test_integration</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="c1"># Long-running test</span>
+<span class="c1">    pass</span>
 </code></pre></div>
 <p>Slow tests are excluded by default. Include with <code>--slow</code>.</p>
 <h2 id="cli-options">CLI Options<a class="headerlink" href="#cli-options" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="c1"># Run all tests in directory</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Run all tests in directory</span>
 incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>tests/
 
 <span class="c1"># Run specific file</span>
@@ -4141,7 +4141,7 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--slow
 </code></pre></div>
 <h2 id="output-format">Output Format<a class="headerlink" href="#output-format" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="o">===================</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>session<span class="w"> </span><span class="nv">starts</span><span class="w"> </span><span class="o">===================</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="o">===================</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>session<span class="w"> </span><span class="nv">starts</span><span class="w"> </span><span class="o">===================</span>
 collected<span class="w"> </span><span class="m">4</span><span class="w"> </span>item<span class="o">(</span>s<span class="o">)</span>
 
 test_math.incn::test_addition<span class="w"> </span>PASSED
@@ -4180,120 +4180,120 @@ ___________<span class="w"> </span>test_division<span class="w"> </span>________
 </tbody>
 </table>
 <h2 id="ci-integration">CI Integration<a class="headerlink" href="#ci-integration" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="c1"># GitHub Actions</span>
+<div class="language-yaml highlight"><pre><span></span><code><span class="c1"># GitHub Actions</span>
 <span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Run tests</span>
 <span class="w">  </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">incan test tests/</span>
 </code></pre></div>
 <h2 id="fixtures">Fixtures<a class="headerlink" href="#fixtures" title="Permanent link">&para;</a></h2>
 <p>Fixtures provide setup/teardown and dependency injection for tests.</p>
 <h3 id="basic-fixture">Basic Fixture<a class="headerlink" href="#basic-fixture" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>from testing import fixture
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span>
 
-@fixture
-def database() -&gt; Database:
-    &quot;&quot;&quot;Provides a test database.&quot;&quot;&quot;
-    db = Database.connect(&quot;test.db&quot;)
-    yield db          # Test runs here
-    db.close()        # Teardown (always runs, even on failure)
+<span class="err">@</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="n">database</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Database</span><span class="p">:</span>
+    <span class="s2">&quot;&quot;&quot;Provides a test database.&quot;&quot;&quot;</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="n">Database</span><span class="p">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">db</span>          <span class="c1"># Test runs here</span>
+<span class="c1">    db.close()        # Teardown (always runs, even on failure)</span>
 
-def test_insert(database: Database) -&gt; None:
-    database.insert(&quot;key&quot;, &quot;value&quot;)
-    assert_eq(database.get(&quot;key&quot;), &quot;value&quot;)
+<span class="c1">def test_insert(database: Database) -&gt; None:</span>
+<span class="c1">    database.insert(&quot;key&quot;, &quot;value&quot;)</span>
+<span class="c1">    assert_eq(database.get(&quot;key&quot;), &quot;value&quot;)</span>
 </code></pre></div>
 <h3 id="fixture-scopes">Fixture Scopes<a class="headerlink" href="#fixture-scopes" title="Permanent link">&para;</a></h3>
 <p>Control when fixtures are created/destroyed:</p>
-<div class="highlight"><pre><span></span><code>@fixture(scope=&quot;function&quot;)  # Default: new per test
-def temp_file() -&gt; str:
-    ...
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>  <span class="c1"># Default: new per test</span>
+<span class="c1">def temp_file() -&gt; str:</span>
+<span class="c1">    ...</span>
 
-@fixture(scope=&quot;module&quot;)    # Shared across file
-def shared_client() -&gt; Client:
-    ...
+<span class="c1">@fixture(scope=&quot;module&quot;)    # Shared across file</span>
+<span class="c1">def shared_client() -&gt; Client:</span>
+<span class="c1">    ...</span>
 
-@fixture(scope=&quot;session&quot;)   # Shared across entire run
-def global_config() -&gt; Config:
-    ...
+<span class="c1">@fixture(scope=&quot;session&quot;)   # Shared across entire run</span>
+<span class="c1">def global_config() -&gt; Config:</span>
+<span class="c1">    ...</span>
 </code></pre></div>
 <h3 id="fixture-dependencies">Fixture Dependencies<a class="headerlink" href="#fixture-dependencies" title="Permanent link">&para;</a></h3>
 <p>Fixtures can depend on other fixtures:</p>
-<div class="highlight"><pre><span></span><code>@fixture
-def config() -&gt; Config:
-    return Config.load(&quot;test.toml&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="n">config</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Config</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">Config</span><span class="p">.</span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;test.toml&quot;</span><span class="p">)</span>
 
-@fixture
-def database(config: Config) -&gt; Database:
-    # config fixture is automatically injected
-    return Database.connect(config.db_url)
+<span class="err">@</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="n">database</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">Config</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Database</span><span class="p">:</span>
+    <span class="c1"># config fixture is automatically injected</span>
+<span class="c1">    return Database.connect(config.db_url)</span>
 
-def test_query(database: Database) -&gt; None:
-    result = database.query(&quot;SELECT 1&quot;)
-    assert_eq(result, 1)
+<span class="c1">def test_query(database: Database) -&gt; None:</span>
+<span class="c1">    result = database.query(&quot;SELECT 1&quot;)</span>
+<span class="c1">    assert_eq(result, 1)</span>
 </code></pre></div>
 <h3 id="autouse-fixtures">Autouse Fixtures<a class="headerlink" href="#autouse-fixtures" title="Permanent link">&para;</a></h3>
 <p>Auto-apply fixtures to all tests in scope:</p>
-<div class="highlight"><pre><span></span><code>@fixture(autouse=true)
-def setup_logging() -&gt; None:
-    &quot;&quot;&quot;Automatically applied to all tests in this file.&quot;&quot;&quot;
-    logging.set_level(&quot;DEBUG&quot;)
-    yield
-    logging.set_level(&quot;INFO&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">fixture</span><span class="p">(</span><span class="n">autouse</span><span class="o">=</span><span class="k">true</span><span class="p">)</span>
+<span class="k">def</span> <span class="n">setup_logging</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="s2">&quot;&quot;&quot;Automatically applied to all tests in this file.&quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="p">.</span><span class="n">set_level</span><span class="p">(</span><span class="s2">&quot;DEBUG&quot;</span><span class="p">)</span>
+    <span class="k">yield</span>
+    <span class="n">logging</span><span class="p">.</span><span class="n">set_level</span><span class="p">(</span><span class="s2">&quot;INFO&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="parametrize">Parametrize<a class="headerlink" href="#parametrize" title="Permanent link">&para;</a></h2>
 <p>Run a test with multiple parameter sets:</p>
-<div class="highlight"><pre><span></span><code>from testing import parametrize
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">parametrize</span>
 
-@parametrize(&quot;a, b, expected&quot;, [
-    (1, 2, 3),
-    (0, 0, 0),
-    (-1, 1, 0),
-    (100, 200, 300),
-])
-def test_add(a: int, b: int, expected: int) -&gt; None:
-    assert_eq(add(a, b), expected)
+<span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;a, b, expected&quot;</span><span class="p">,</span> <span class="p">[</span>
+    <span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">),</span>
+    <span class="p">(</span><span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">),</span>
+    <span class="p">(</span><span class="o">-</span><span class="m">1</span><span class="p">,</span> <span class="m">1</span><span class="p">,</span> <span class="m">0</span><span class="p">),</span>
+    <span class="p">(</span><span class="m">100</span><span class="p">,</span> <span class="m">200</span><span class="p">,</span> <span class="m">300</span><span class="p">),</span>
+<span class="p">])</span>
+<span class="k">def</span> <span class="n">test_add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">expected</span><span class="p">)</span>
 </code></pre></div>
 <p>Output:</p>
-<div class="highlight"><pre><span></span><code>test_math.incn::test_add<span class="o">[</span><span class="m">1</span>-2-3<span class="o">]</span><span class="w"> </span>PASSED
+<div class="language-bash highlight"><pre><span></span><code>test_math.incn::test_add<span class="o">[</span><span class="m">1</span>-2-3<span class="o">]</span><span class="w"> </span>PASSED
 test_math.incn::test_add<span class="o">[</span><span class="m">0</span>-0-0<span class="o">]</span><span class="w"> </span>PASSED
 test_math.incn::test_add<span class="o">[</span>-1-1-0<span class="o">]</span><span class="w"> </span>PASSED
 test_math.incn::test_add<span class="o">[</span><span class="m">100</span>-200-300<span class="o">]</span><span class="w"> </span>PASSED
 </code></pre></div>
 <h3 id="named-test-ids">Named Test IDs<a class="headerlink" href="#named-test-ids" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>@parametrize(&quot;input, expected&quot;, [
-    (&quot;hello&quot;, &quot;HELLO&quot;),
-    (&quot;World&quot;, &quot;WORLD&quot;),
-    (&quot;&quot;, &quot;&quot;),
-], ids=[&quot;lowercase&quot;, &quot;mixed&quot;, &quot;empty&quot;])
-def test_upper(input: str, expected: str) -&gt; None:
-    assert_eq(input.upper(), expected)
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;input, expected&quot;</span><span class="p">,</span> <span class="p">[</span>
+    <span class="p">(</span><span class="s2">&quot;hello&quot;</span><span class="p">,</span> <span class="s2">&quot;HELLO&quot;</span><span class="p">),</span>
+    <span class="p">(</span><span class="s2">&quot;World&quot;</span><span class="p">,</span> <span class="s2">&quot;WORLD&quot;</span><span class="p">),</span>
+    <span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+<span class="p">],</span> <span class="n">ids</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;lowercase&quot;</span><span class="p">,</span> <span class="s2">&quot;mixed&quot;</span><span class="p">,</span> <span class="s2">&quot;empty&quot;</span><span class="p">])</span>
+<span class="k">def</span> <span class="n">test_upper</span><span class="p">(</span><span class="n">input</span><span class="p">:</span> <span class="n">str</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">input</span><span class="p">.</span><span class="n">upper</span><span class="p">(),</span> <span class="n">expected</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="combining-fixtures-and-parametrize">Combining Fixtures and Parametrize<a class="headerlink" href="#combining-fixtures-and-parametrize" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>@fixture
-def database() -&gt; Database:
-    db = Database.connect(&quot;test.db&quot;)
-    yield db
-    db.close()
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="n">database</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Database</span><span class="p">:</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="n">Database</span><span class="p">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">db</span>
+    <span class="n">db</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
 
-@parametrize(&quot;key, value&quot;, [
-    (&quot;name&quot;, &quot;Alice&quot;),
-    (&quot;age&quot;, &quot;30&quot;),
-])
-def test_insert(database: Database, key: str, value: str) -&gt; None:
-    database.insert(key, value)
-    assert_eq(database.get(key), value)
+<span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;key, value&quot;</span><span class="p">,</span> <span class="p">[</span>
+    <span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="s2">&quot;Alice&quot;</span><span class="p">),</span>
+    <span class="p">(</span><span class="s2">&quot;age&quot;</span><span class="p">,</span> <span class="s2">&quot;30&quot;</span><span class="p">),</span>
+<span class="p">])</span>
+<span class="k">def</span> <span class="n">test_insert</span><span class="p">(</span><span class="n">database</span><span class="p">:</span> <span class="n">Database</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">str</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">database</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">database</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">),</span> <span class="n">value</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="async-tests-coming-soon">Async Tests (Coming Soon)<a class="headerlink" href="#async-tests-coming-soon" title="Permanent link">&para;</a></h2>
 <p>Support for async test functions and fixtures with Tokio:</p>
-<div class="highlight"><pre><span></span><code>from testing import fixture
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span>
 
-@fixture
-async def http_server() -&gt; ServerHandle:
-    server = await start_server(port=0)
-    yield server
-    await server.shutdown()
+<span class="err">@</span><span class="n">fixture</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">http_server</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ServerHandle</span><span class="p">:</span>
+    <span class="n">server</span> <span class="o">=</span> <span class="k">await</span> <span class="n">start_server</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="m">0</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">server</span>
+    <span class="k">await</span> <span class="n">server</span><span class="p">.</span><span class="n">shutdown</span><span class="p">()</span>
 
-async def test_endpoint(http_server: ServerHandle) -&gt; None:
-    response = await fetch(f&quot;http://localhost:{http_server.port}/health&quot;)
-    assert_eq(response.status, 200)
+<span class="k">async</span> <span class="k">def</span> <span class="n">test_endpoint</span><span class="p">(</span><span class="n">http_server</span><span class="p">:</span> <span class="n">ServerHandle</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetch</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;http://localhost:{http_server.port}/health&quot;</span><span class="p">)</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">response</span><span class="p">.</span><span class="n">status</span><span class="p">,</span> <span class="m">200</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h2>
 <ol>

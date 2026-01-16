@@ -3666,17 +3666,17 @@
 <h1 id="closures-arrow-functions">Closures (Arrow Functions)<a class="headerlink" href="#closures-arrow-functions" title="Permanent link">&para;</a></h1>
 <p>Incan supports anonymous functions using arrow syntax, inspired by Rust and JavaScript (rather than Python).</p>
 <h2 id="incan-arrow-syntax">Incan Arrow Syntax<a class="headerlink" href="#incan-arrow-syntax" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code># No parameters (parentheses required)
-get_value = () =&gt; 42
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># No parameters (parentheses required)</span>
+<span class="c1">get_value = () =&gt; 42</span>
 
-# Single parameter (parentheses required)
-double = (x) =&gt; x * 2
+<span class="c1"># Single parameter (parentheses required)</span>
+<span class="c1">double = (x) =&gt; x * 2</span>
 
-# Multiple parameters  
-add = (x, y) =&gt; x + y
+<span class="c1"># Multiple parameters  </span>
+<span class="c1">add = (x, y) =&gt; x + y</span>
 
-# With expressions
-is_positive = (n) =&gt; n &gt; 0
+<span class="c1"># With expressions</span>
+<span class="c1">is_positive = (n) =&gt; n &gt; 0</span>
 </code></pre></div>
 <h2 id="when-to-use-closures">When to Use Closures<a class="headerlink" href="#when-to-use-closures" title="Permanent link">&para;</a></h2>
 <p>Closures are ideal for:</p>
@@ -3685,29 +3685,29 @@ is_positive = (n) =&gt; n &gt; 0
 <li>Callbacks  </li>
 <li>Simple transformations in comprehensions or map/filter operations</li>
 </ul>
-<div class="highlight"><pre><span></span><code># Good use of closure
-numbers = [1, 2, 3, 4, 5]
-doubled = numbers.map((x) =&gt; x * 2)
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Good use of closure</span>
+<span class="c1">numbers = [1, 2, 3, 4, 5]</span>
+<span class="c1">doubled = numbers.map((x) =&gt; x * 2)</span>
 </code></pre></div>
 <p>For complex logic with multiple statements, prefer named functions:</p>
-<div class="highlight"><pre><span></span><code># Better as a named function
-def process_user(user: User) -&gt; Result[str, str]:
-    if not user.is_active:
-        return Err(&quot;User inactive&quot;)
-    # ... more logic
-    return Ok(user.name)
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Better as a named function</span>
+<span class="c1">def process_user(user: User) -&gt; Result[str, str]:</span>
+<span class="c1">    if not user.is_active:</span>
+<span class="c1">        return Err(&quot;User inactive&quot;)</span>
+<span class="c1">    # ... more logic</span>
+<span class="c1">    return Ok(user.name)</span>
 </code></pre></div>
 <h2 id="type-inference">Type Inference<a class="headerlink" href="#type-inference" title="Permanent link">&para;</a></h2>
 <p>Closure parameters use type inference — the compiler determines types from context:</p>
-<div class="highlight"><pre><span></span><code># Types inferred from usage
-add = (x, y) =&gt; x + y
-result = add(3, 4)  # x and y inferred as int
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Types inferred from usage</span>
+<span class="c1">add = (x, y) =&gt; x + y</span>
+<span class="c1">result = add(3, 4)  # x and y inferred as int</span>
 </code></pre></div>
 <p>For explicit typing, use a named function instead.</p>
 <div class="admonition note">
 <p class="admonition-title">Why Not Python's <code>lambda</code>?</p>
 <p>Python's lambda syntax has limitations:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Python lambda - single expression only, awkward syntax</span>
+<div class="language-python highlight"><pre><span></span><code><span class="c1"># Python lambda - single expression only, awkward syntax</span>
 <span class="n">add</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">x</span> <span class="o">+</span> <span class="n">y</span>
 <span class="n">square</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="o">**</span> <span class="mi">2</span>
 </code></pre></div>

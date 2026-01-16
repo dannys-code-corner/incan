@@ -3695,13 +3695,13 @@
 <li><code>__class_name__() -&gt; str</code></li>
 </ul>
 <p>Example:</p>
-<div class="highlight"><pre><span></span><code>model User:
-    name: str
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
 
-def main() -&gt; None:
-    u = User(name=&quot;Alice&quot;)
-    println(u.__class_name__())
-    println(u.__fields__())
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="n">u</span><span class="p">.</span><span class="n">__class_name__</span><span class="p">())</span>
+    <span class="n">println</span><span class="p">(</span><span class="n">u</span><span class="p">.</span><span class="n">__fields__</span><span class="p">())</span>
 </code></pre></div>
 
 

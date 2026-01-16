@@ -3767,18 +3767,18 @@ to Rust using traits like <code>IntoIterator</code>, <code>Index</code>, and <co
 <p>The important idea is that the <em>syntax</em> stays simple, while the <em>behavior</em> is defined by traits.</p>
 <h2 id="example-indexing-is-a-hook">Example: indexing is a hook<a class="headerlink" href="#example-indexing-is-a-hook" title="Permanent link">&para;</a></h2>
 <p>When you write:</p>
-<div class="highlight"><pre><span></span><code>value = xs[i]
+<div class="language-incan highlight"><pre><span></span><code><span class="n">value</span> <span class="o">=</span> <span class="n">xs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
 </code></pre></div>
 <p>Think:</p>
-<div class="highlight"><pre><span></span><code>value = xs.__getitem__(i)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">value</span> <span class="o">=</span> <span class="n">xs</span><span class="p">.</span><span class="n">__getitem__</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
 </code></pre></div>
 <p>So if you want a custom type to support <code>[]</code>, you implement the indexing hook method (and the corresponding trait
 requirements as defined in the stdlib trait docs):</p>
-<div class="highlight"><pre><span></span><code>model Grid:
-    data: list[int]
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Grid</span><span class="p">:</span>
+    <span class="n">data</span><span class="p">:</span> <span class="n">list</span><span class="p">[</span><span class="n">int</span><span class="p">]</span>
 
-    def __getitem__(self, idx: int) -&gt; int:
-        return self.data[idx]
+    <span class="k">def</span> <span class="n">__getitem__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">data</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
 </code></pre></div>
 <p>Rust analogy: <code>xs[i]</code> is powered by <code>std::ops::Index</code>, but the idea is the same: syntax → a trait-defined hook.</p>
 <h2 id="how-this-is-rust-like-not-python-magic">How this is Rust-like (not Python-magic)<a class="headerlink" href="#how-this-is-rust-like-not-python-magic" title="Permanent link">&para;</a></h2>

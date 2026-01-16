@@ -4010,7 +4010,7 @@ every case.</p>
 hierarchies and <code>isinstance(...)</code> checks, which are not exhaustive and are easy to break during refactors.</p>
 <p>Here’s one representative before/after:</p>
 <p><strong>Python (common workaround)</strong>:</p>
-<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Shape</span><span class="p">:</span>
+<div class="language-python highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Shape</span><span class="p">:</span>
     <span class="k">pass</span>
 
 <span class="k">class</span><span class="w"> </span><span class="nc">Circle</span><span class="p">(</span><span class="n">Shape</span><span class="p">):</span>
@@ -4033,14 +4033,14 @@ hierarchies and <code>isinstance(...)</code> checks, which are not exhaustive an
 <p>Note: Python 3.10+ has <code>match</code>/<code>case</code>, but it still won’t enforce exhaustiveness the way Incan does.</p>
 </blockquote>
 <p><strong>Incan (enum + exhaustive <code>match</code>)</strong>:</p>
-<div class="highlight"><pre><span></span><code>enum Shape:
-    Circle(float)
-    Rectangle(float, float)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Shape</span><span class="p">:</span>
+    <span class="n">Circle</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>
+    <span class="n">Rectangle</span><span class="p">(</span><span class="n">float</span><span class="p">,</span> <span class="n">float</span><span class="p">)</span>
 
-def area(shape: Shape) -&gt; float:
-    match shape:
-        Circle(r) =&gt; return 3.14159 * r * r
-        Rectangle(w, h) =&gt; return w * h
+<span class="k">def</span> <span class="n">area</span><span class="p">(</span><span class="n">shape</span><span class="p">:</span> <span class="n">Shape</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">float</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">shape</span><span class="p">:</span>
+        <span class="n">Circle</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="m">3.14159</span> <span class="o">*</span> <span class="n">r</span> <span class="o">*</span> <span class="n">r</span>
+        <span class="n">Rectangle</span><span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="n">h</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">w</span> <span class="o">*</span> <span class="n">h</span>
 </code></pre></div>
 <p>If you add a new variant later, the compiler will point you at the <code>match</code> sites that must be updated.</p>
 </details>
@@ -4052,132 +4052,132 @@ def area(shape: Shape) -&gt; float:
 - Construction uses Incan’s syntax (e.g. <code>Status.Active</code> / <code>Message.Move(1, 2)</code>), rather than Rust’s <code>Type::Variant(...)</code>.</p>
 </details>
 <h2 id="a-motivating-example">A motivating example<a class="headerlink" href="#a-motivating-example" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>enum Shape:
-    Circle(float)          # radius
-    Rectangle(float, float)  # width, height
-    Triangle(float, float)   # base, height
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Shape</span><span class="p">:</span>
+    <span class="n">Circle</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>          <span class="c1"># radius</span>
+<span class="c1">    Rectangle(float, float)  # width, height</span>
+<span class="c1">    Triangle(float, float)   # base, height</span>
 
-def area(shape: Shape) -&gt; float:
-    match shape:
-        Circle(r) =&gt; return 3.14159 * r * r
-        Rectangle(w, h) =&gt; return w * h
-        Triangle(b, h) =&gt; return 0.5 * b * h
+<span class="c1">def area(shape: Shape) -&gt; float:</span>
+<span class="c1">    match shape:</span>
+<span class="c1">        Circle(r) =&gt; return 3.14159 * r * r</span>
+<span class="c1">        Rectangle(w, h) =&gt; return w * h</span>
+<span class="c1">        Triangle(b, h) =&gt; return 0.5 * b * h</span>
 </code></pre></div>
 <p>If you add a new variant later, the compiler will point you at the <code>match</code> sites that must be updated.</p>
 <h2 id="basic-syntax">Basic syntax<a class="headerlink" href="#basic-syntax" title="Permanent link">&para;</a></h2>
 <h3 id="simple-enum-no-data">Simple Enum (No Data)<a class="headerlink" href="#simple-enum-no-data" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>enum Status:
-    Pending
-    Active
-    Completed
-    Cancelled
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Status</span><span class="p">:</span>
+    <span class="n">Pending</span>
+    <span class="n">Active</span>
+    <span class="n">Completed</span>
+    <span class="n">Cancelled</span>
 </code></pre></div>
 <p>Usage:</p>
-<div class="highlight"><pre><span></span><code>status = Status.Active
+<div class="language-incan highlight"><pre><span></span><code><span class="n">status</span> <span class="o">=</span> <span class="n">Status</span><span class="p">.</span><span class="n">Active</span>
 
-match status:
-    Pending =&gt; println(&quot;Waiting...&quot;)
-    Active =&gt; println(&quot;In progress&quot;)
-    Completed =&gt; println(&quot;Done!&quot;)
-    Cancelled =&gt; println(&quot;Aborted&quot;)
+<span class="k">match</span> <span class="n">status</span><span class="p">:</span>
+    <span class="n">Pending</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Waiting...&quot;</span><span class="p">)</span>
+    <span class="n">Active</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;In progress&quot;</span><span class="p">)</span>
+    <span class="n">Completed</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Done!&quot;</span><span class="p">)</span>
+    <span class="n">Cancelled</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Aborted&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="enum-with-data-variants">Enum with Data (Variants)<a class="headerlink" href="#enum-with-data-variants" title="Permanent link">&para;</a></h3>
 <p>Each variant can carry different types and amounts of data:</p>
-<div class="highlight"><pre><span></span><code>enum Message:
-    Quit                           # No data
-    Move(int, int)                 # Two ints (x, y)
-    Write(str)                     # A string
-    ChangeColor(int, int, int)     # RGB values
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Message</span><span class="p">:</span>
+    <span class="n">Quit</span>                           <span class="c1"># No data</span>
+<span class="c1">    Move(int, int)                 # Two ints (x, y)</span>
+<span class="c1">    Write(str)                     # A string</span>
+<span class="c1">    ChangeColor(int, int, int)     # RGB values</span>
 </code></pre></div>
 <p>Usage:</p>
-<div class="highlight"><pre><span></span><code>msg = Message.Move(10, 20)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">msg</span> <span class="o">=</span> <span class="n">Message</span><span class="p">.</span><span class="n">Move</span><span class="p">(</span><span class="m">10</span><span class="p">,</span> <span class="m">20</span><span class="p">)</span>
 
-match msg:
-    Quit =&gt; println(&quot;Goodbye&quot;)
-    Move(x, y) =&gt; println(f&quot;Moving to ({x}, {y})&quot;)
-    Write(text) =&gt; println(f&quot;Message: {text}&quot;)
-    ChangeColor(r, g, b) =&gt; println(f&quot;RGB({r}, {g}, {b})&quot;)
+<span class="k">match</span> <span class="n">msg</span><span class="p">:</span>
+    <span class="n">Quit</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Goodbye&quot;</span><span class="p">)</span>
+    <span class="n">Move</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Moving to ({x}, {y})&quot;</span><span class="p">)</span>
+    <span class="n">Write</span><span class="p">(</span><span class="n">text</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Message: {text}&quot;</span><span class="p">)</span>
+    <span class="n">ChangeColor</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">g</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;RGB({r}, {g}, {b})&quot;</span><span class="p">)</span>
 </code></pre></div>
 <hr />
 <h2 id="generic-enums">Generic enums<a class="headerlink" href="#generic-enums" title="Permanent link">&para;</a></h2>
 <p>Enums can be generic — parameterized over types:</p>
-<div class="highlight"><pre><span></span><code>enum Option[T]:
-    Some(T)
-    None
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
+    <span class="n">Some</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
+    <span class="k">None</span>
 
-enum Result[T, E]:
-    Ok(T)
-    Err(E)
+<span class="k">enum</span> <span class="n">Result</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">]:</span>
+    <span class="n">Ok</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
+    <span class="n">Err</span><span class="p">(</span><span class="n">E</span><span class="p">)</span>
 </code></pre></div>
 <blockquote>
 <p>Note: These are Incan's built-in types for handling optional values and errors.</p>
 </blockquote>
 <h3 id="custom-generic-enum">Custom Generic Enum<a class="headerlink" href="#custom-generic-enum" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>enum Tree[T]:
-    Leaf(T)
-    Node(Tree[T], Tree[T])
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Tree</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
+    <span class="n">Leaf</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
+    <span class="n">Node</span><span class="p">(</span><span class="n">Tree</span><span class="p">[</span><span class="n">T</span><span class="p">],</span> <span class="n">Tree</span><span class="p">[</span><span class="n">T</span><span class="p">])</span>
 
-# A binary tree of integers
-tree = Node(
-    Leaf(1),
-    Node(Leaf(2), Leaf(3))
-)
+<span class="c1"># A binary tree of integers</span>
+<span class="c1">tree = Node(</span>
+<span class="c1">    Leaf(1),</span>
+<span class="c1">    Node(Leaf(2), Leaf(3))</span>
+<span class="c1">)</span>
 </code></pre></div>
 <hr />
 <h2 id="pattern-matching">Pattern matching<a class="headerlink" href="#pattern-matching" title="Permanent link">&para;</a></h2>
 <p>The <code>match</code> expression is how you work with enums. It's exhaustive — the compiler ensures you handle all variants.</p>
 <h3 id="basic-match">Basic Match<a class="headerlink" href="#basic-match" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>enum Direction:
-    North
-    South
-    East
-    West
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Direction</span><span class="p">:</span>
+    <span class="n">North</span>
+    <span class="n">South</span>
+    <span class="n">East</span>
+    <span class="n">West</span>
 
-def describe(dir: Direction) -&gt; str:
-    match dir:
-        North =&gt; return &quot;Going up&quot;
-        South =&gt; return &quot;Going down&quot;
-        East =&gt; return &quot;Going right&quot;
-        West =&gt; return &quot;Going left&quot;
+<span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="n">dir</span><span class="p">:</span> <span class="n">Direction</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">dir</span><span class="p">:</span>
+        <span class="n">North</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going up&quot;</span>
+        <span class="n">South</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going down&quot;</span>
+        <span class="n">East</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going right&quot;</span>
+        <span class="n">West</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going left&quot;</span>
 </code></pre></div>
 <h3 id="extracting-data">Extracting Data<a class="headerlink" href="#extracting-data" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>enum ApiResponse:
-    Success(str, int)        # (data, status_code)
-    Error(str)               # error message
-    Loading
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">ApiResponse</span><span class="p">:</span>
+    <span class="n">Success</span><span class="p">(</span><span class="n">str</span><span class="p">,</span> <span class="n">int</span><span class="p">)</span>        <span class="c1"># (data, status_code)</span>
+<span class="c1">    Error(str)               # error message</span>
+<span class="c1">    Loading</span>
 
-def handle(response: ApiResponse) -&gt; None:
-    match response:
-        Success(data, code) =&gt;
-            println(f&quot;Got {code}: {data}&quot;)
-        Error(msg) =&gt;
-            println(f&quot;Failed: {msg}&quot;)
-        Loading =&gt;
-            println(&quot;Please wait...&quot;)
+<span class="c1">def handle(response: ApiResponse) -&gt; None:</span>
+<span class="c1">    match response:</span>
+<span class="c1">        Success(data, code) =&gt;</span>
+<span class="c1">            println(f&quot;Got {code}: {data}&quot;)</span>
+<span class="c1">        Error(msg) =&gt;</span>
+<span class="c1">            println(f&quot;Failed: {msg}&quot;)</span>
+<span class="c1">        Loading =&gt;</span>
+<span class="c1">            println(&quot;Please wait...&quot;)</span>
 </code></pre></div>
 <h3 id="wildcard-pattern">Wildcard Pattern<a class="headerlink" href="#wildcard-pattern" title="Permanent link">&para;</a></h3>
 <p>Use <code>_</code> to match any remaining variants:</p>
-<div class="highlight"><pre><span></span><code>match status:
-    Active =&gt; println(&quot;Working on it&quot;)
-    _ =&gt; println(&quot;Not active&quot;)  # Matches Pending, Completed, Cancelled
+<div class="language-incan highlight"><pre><span></span><code><span class="k">match</span> <span class="n">status</span><span class="p">:</span>
+    <span class="n">Active</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Working on it&quot;</span><span class="p">)</span>
+    <span class="n">_</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Not active&quot;</span><span class="p">)</span>  <span class="c1"># Matches Pending, Completed, Cancelled</span>
 </code></pre></div>
 <blockquote>
 <p><strong>Warning</strong>: Wildcards can hide bugs when you add new variants. Prefer explicit matches.</p>
 </blockquote>
 <h3 id="guards">Guards<a class="headerlink" href="#guards" title="Permanent link">&para;</a></h3>
 <p>Add conditions to patterns:</p>
-<div class="highlight"><pre><span></span><code>enum Temperature:
-    Celsius(float)
-    Fahrenheit(float)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Temperature</span><span class="p">:</span>
+    <span class="n">Celsius</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>
+    <span class="n">Fahrenheit</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>
 
-def describe(temp: Temperature) -&gt; str:
-    match temp:
-        Celsius(c) if c &gt; 30 =&gt; return &quot;Hot (Celsius)&quot;
-        Celsius(c) if c &lt; 10 =&gt; return &quot;Cold (Celsius)&quot;
-        Celsius(_) =&gt; return &quot;Moderate (Celsius)&quot;
-        Fahrenheit(f) if f &gt; 86 =&gt; return &quot;Hot (Fahrenheit)&quot;
-        Fahrenheit(f) if f &lt; 50 =&gt; return &quot;Cold (Fahrenheit)&quot;
-        Fahrenheit(_) =&gt; return &quot;Moderate (Fahrenheit)&quot;
+<span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="n">temp</span><span class="p">:</span> <span class="n">Temperature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">temp</span><span class="p">:</span>
+        <span class="n">Celsius</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">if</span> <span class="n">c</span> <span class="o">&gt;</span> <span class="m">30</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Hot (Celsius)&quot;</span>
+        <span class="n">Celsius</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">if</span> <span class="n">c</span> <span class="o">&lt;</span> <span class="m">10</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Cold (Celsius)&quot;</span>
+        <span class="n">Celsius</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Moderate (Celsius)&quot;</span>
+        <span class="n">Fahrenheit</span><span class="p">(</span><span class="n">f</span><span class="p">)</span> <span class="k">if</span> <span class="n">f</span> <span class="o">&gt;</span> <span class="m">86</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Hot (Fahrenheit)&quot;</span>
+        <span class="n">Fahrenheit</span><span class="p">(</span><span class="n">f</span><span class="p">)</span> <span class="k">if</span> <span class="n">f</span> <span class="o">&lt;</span> <span class="m">50</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Cold (Fahrenheit)&quot;</span>
+        <span class="n">Fahrenheit</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Moderate (Fahrenheit)&quot;</span>
 </code></pre></div>
 <hr />
 <h2 id="common-patterns">Common patterns<a class="headerlink" href="#common-patterns" title="Permanent link">&para;</a></h2>
@@ -4253,23 +4253,23 @@ def describe(temp: Temperature) -&gt; str:
 </tr>
 </tbody>
 </table>
-<div class="highlight"><pre><span></span><code># Enum: closed set, exhaustive matching
-enum PaymentMethod:
-    CreditCard(str, str)     # number, expiry
-    PayPal(str)              # email
-    BankTransfer(str, str)   # account, routing
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Enum: closed set, exhaustive matching</span>
+<span class="c1">enum PaymentMethod:</span>
+<span class="c1">    CreditCard(str, str)     # number, expiry</span>
+<span class="c1">    PayPal(str)              # email</span>
+<span class="c1">    BankTransfer(str, str)   # account, routing</span>
 
-# Model: data-first, serialization
-@derive(Serialize, Deserialize)
-model PaymentRequest:
-    method: PaymentMethod
-    amount: float
-    currency: str = &quot;USD&quot;
+<span class="c1"># Model: data-first, serialization</span>
+<span class="c1">@derive(Serialize, Deserialize)</span>
+<span class="c1">model PaymentRequest:</span>
+<span class="c1">    method: PaymentMethod</span>
+<span class="c1">    amount: float</span>
+<span class="c1">    currency: str = &quot;USD&quot;</span>
 
-# Class: behavior-first, inheritance
-class PaymentProcessor:
-    def process(self, amount: float) -&gt; Result[Receipt, Error]:
-        ...
+<span class="c1"># Class: behavior-first, inheritance</span>
+<span class="c1">class PaymentProcessor:</span>
+<span class="c1">    def process(self, amount: float) -&gt; Result[Receipt, Error]:</span>
+<span class="c1">        ...</span>
 </code></pre></div>
 <p>See also: <a href="../models_and_classes/">Models and Classes Guide</a></p>
 <hr />
@@ -4277,24 +4277,24 @@ class PaymentProcessor:
 <p>Incan provides these enums in the standard library:</p>
 <h3 id="optiont">Option[T]<a class="headerlink" href="#optiont" title="Permanent link">&para;</a></h3>
 <p>Represents an optional value:</p>
-<div class="highlight"><pre><span></span><code>enum Option[T]:
-    Some(T)
-    None
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
+    <span class="n">Some</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
+    <span class="k">None</span>
 </code></pre></div>
 <p>See: <a href="../error_handling/">Error Handling Guide</a></p>
 <h3 id="resultt-e">Result[T, E]<a class="headerlink" href="#resultt-e" title="Permanent link">&para;</a></h3>
 <p>Represents success or failure:</p>
-<div class="highlight"><pre><span></span><code>enum Result[T, E]:
-    Ok(T)
-    Err(E)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Result</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">]:</span>
+    <span class="n">Ok</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
+    <span class="n">Err</span><span class="p">(</span><span class="n">E</span><span class="p">)</span>
 </code></pre></div>
 <p>See: <a href="../error_handling/">Error Handling Guide</a></p>
 <h3 id="ordering">Ordering<a class="headerlink" href="#ordering" title="Permanent link">&para;</a></h3>
 <p>Comparison result:</p>
-<div class="highlight"><pre><span></span><code>enum Ordering:
-    Less
-    Equal
-    Greater
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Ordering</span><span class="p">:</span>
+    <span class="n">Less</span>
+    <span class="n">Equal</span>
+    <span class="n">Greater</span>
 </code></pre></div>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
 <table>

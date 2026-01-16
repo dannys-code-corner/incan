@@ -3743,14 +3743,14 @@ depends on current codegen and library behavior.</p>
 </ul>
 <h2 id="profile-your-program">Profile your program<a class="headerlink" href="#profile-your-program" title="Permanent link">&para;</a></h2>
 <h3 id="build-a-release-binary-generated-project">Build a release binary (generated project)<a class="headerlink" href="#build-a-release-binary-generated-project" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>myprogram.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>myprogram.incn
 </code></pre></div>
 <h3 id="profile-on-macos-instruments">Profile on macOS (Instruments)<a class="headerlink" href="#profile-on-macos-instruments" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>xcrun<span class="w"> </span>xctrace<span class="w"> </span>record<span class="w"> </span>--template<span class="w"> </span><span class="s2">&quot;Time Profiler&quot;</span><span class="w"> </span><span class="se">\</span>
+<div class="language-bash highlight"><pre><span></span><code>xcrun<span class="w"> </span>xctrace<span class="w"> </span>record<span class="w"> </span>--template<span class="w"> </span><span class="s2">&quot;Time Profiler&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--launch<span class="w"> </span>./target/incan/myprogram/target/release/myprogram
 </code></pre></div>
 <h3 id="profile-on-linux-perf">Profile on Linux (perf)<a class="headerlink" href="#profile-on-linux-perf" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>perf<span class="w"> </span>record<span class="w"> </span>./target/incan/myprogram/target/release/myprogram
+<div class="language-bash highlight"><pre><span></span><code>perf<span class="w"> </span>record<span class="w"> </span>./target/incan/myprogram/target/release/myprogram
 perf<span class="w"> </span>report
 </code></pre></div>
 <h2 id="optimization-tips-practical">Optimization tips (practical)<a class="headerlink" href="#optimization-tips-practical" title="Permanent link">&para;</a></h2>

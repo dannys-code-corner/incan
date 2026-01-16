@@ -3976,16 +3976,16 @@ Incan uses <code>model</code> instead because:</p>
 <li>Prefix a declaration with <code>pub</code> (publicly visible) to make it importable from other modules.</li>
 <li>For <code>model</code> and <code>class</code>, <code>pub</code> also makes fields public by default.</li>
 </ul>
-<div class="highlight"><pre><span></span><code>model User:           # private by default
-    name: str
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>           <span class="c1"># private by default</span>
+<span class="c1">    name: str</span>
 
-pub model PublicUser: # public model, fields are now public by default
-    name: str
+<span class="c1">pub model PublicUser: # public model, fields are now public by default</span>
+<span class="c1">    name: str</span>
 
-class Service:        # private by default
-    repo: Repo
-    def work(self) -&gt; None:
-        ...
+<span class="c1">class Service:        # private by default</span>
+<span class="c1">    repo: Repo</span>
+<span class="c1">    def work(self) -&gt; None:</span>
+<span class="c1">        ...</span>
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">Coming from Python?</p>
@@ -3995,23 +3995,23 @@ You have to specifically opt-in to make items public.</p>
 </div>
 <h2 id="model-data-first">Model: Data-First<a class="headerlink" href="#model-data-first" title="Permanent link">&para;</a></h2>
 <p>Models are for <strong>data containers</strong> — types where the fields are the primary concern.</p>
-<div class="highlight"><pre><span></span><code># Simple data model
-model Point:
-    x: int
-    y: int
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Simple data model</span>
+<span class="c1">model Point:</span>
+<span class="c1">    x: int</span>
+<span class="c1">    y: int</span>
 
-# With derives for common behaviors
-@derive(Eq, Hash, Serialize)
-model User:
-    id: int
-    name: str
-    email: str
+<span class="c1"># With derives for common behaviors</span>
+<span class="c1">@derive(Eq, Hash, Serialize)</span>
+<span class="c1">model User:</span>
+<span class="c1">    id: int</span>
+<span class="c1">    name: str</span>
+<span class="c1">    email: str</span>
 
-# With default values
-model Config:
-    host: str = &quot;localhost&quot;
-    port: int = 8080
-    debug: bool = false
+<span class="c1"># With default values</span>
+<span class="c1">model Config:</span>
+<span class="c1">    host: str = &quot;localhost&quot;</span>
+<span class="c1">    port: int = 8080</span>
+<span class="c1">    debug: bool = false</span>
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">Coming from Python?</p>
@@ -4019,14 +4019,14 @@ model Config:
 </div>
 <h3 id="what-models-get-automatically">What Models Get Automatically<a class="headerlink" href="#what-models-get-automatically" title="Permanent link">&para;</a></h3>
 <p>By default, models (and classes) get <code>Debug</code> and <code>Clone</code>. Use <code>@derive(...)</code> to add additional behavior.</p>
-<div class="highlight"><pre><span></span><code># Debug + Clone are implicit:
-model User:
-    name: str
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Debug + Clone are implicit:</span>
+<span class="c1">model User:</span>
+<span class="c1">    name: str</span>
 
-# You only need @derive(...) when you want extra traits:
-@derive(Eq, Hash, Serialize)
-model User:
-    name: str
+<span class="c1"># You only need @derive(...) when you want extra traits:</span>
+<span class="c1">@derive(Eq, Hash, Serialize)</span>
+<span class="c1">model User:</span>
+<span class="c1">    name: str</span>
 </code></pre></div>
 <h3 id="models-cannot-inherit">Models Cannot Inherit<a class="headerlink" href="#models-cannot-inherit" title="Permanent link">&para;</a></h3>
 <p>Models intentionally do not support inheritance. Incan keeps <code>model</code> as a <strong>data-first</strong> construct: </p>
@@ -4036,89 +4036,89 @@ model User:
 <li>introduces override-style complexity that belongs in <code>class</code>.</li>
 </ul>
 <p>Prefer <strong>composition</strong> to keep the structure explicit and tooling predictable.</p>
-<div class="highlight"><pre><span></span><code>model Base:
-    id: int
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Base</span><span class="p">:</span>
+    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
 
-<span class="hll"># ❌ Inheritance is NOT allowed
-</span><span class="hll">model Child extends Base:  # Error!
-</span>    name: str
+<span class="hll"><span class="c1"># ❌ Inheritance is NOT allowed</span>
+</span><span class="hll"><span class="c1">model Child extends Base:  # Error!</span>
+</span><span class="c1">    name: str</span>
 
-model Child:
-<span class="hll">    base: Base  # ✅ Use composition instead
-</span>    name: str
+<span class="c1">model Child:</span>
+<span class="hll"><span class="c1">    base: Base  # ✅ Use composition instead</span>
+</span><span class="c1">    name: str</span>
 </code></pre></div>
 <h2 id="class-behavior-first">Class: Behavior-First<a class="headerlink" href="#class-behavior-first" title="Permanent link">&para;</a></h2>
 <p>Classes are for <strong>objects with behavior</strong> — types where methods are the primary concern.</p>
-<div class="highlight"><pre><span></span><code>trait Loggable:
-    def log(self, msg: str) -&gt; None: ...
+<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="n">Loggable</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">log</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span> <span class="p">...</span>
 
-class UserService with Loggable:
-    repo: UserRepository
-    logger_name: str
+<span class="k">class</span> <span class="n">UserService</span> <span class="k">with</span> <span class="n">Loggable</span><span class="p">:</span>
+    <span class="n">repo</span><span class="p">:</span> <span class="n">UserRepository</span>
+    <span class="n">logger_name</span><span class="p">:</span> <span class="n">str</span>
 
-    def log(self, msg: str) -&gt; None:
-        println(f&quot;[{self.logger_name}] {msg}&quot;)
+    <span class="k">def</span> <span class="n">log</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+        <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[{self.logger_name}] {msg}&quot;</span><span class="p">)</span>
 
-    def create_user(self, name: str, email: str) -&gt; Result[User, ServiceError]:
-        self.log(f&quot;Creating user: {name}&quot;)
-        user = User(id=next_id(), name=name, email=email)
-        return self.repo.save(user)
+    <span class="k">def</span> <span class="n">create_user</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">,</span> <span class="n">email</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">ServiceError</span><span class="p">]:</span>
+        <span class="k">self</span><span class="p">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Creating user: {name}&quot;</span><span class="p">)</span>
+        <span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">id</span><span class="o">=</span><span class="n">next_id</span><span class="p">(),</span> <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="n">email</span><span class="p">)</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">repo</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
 
-    def find_user(self, id: int) -&gt; Option[User]:
-        return self.repo.find_by_id(id)
+    <span class="k">def</span> <span class="n">find_user</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">User</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">repo</span><span class="p">.</span><span class="n">find_by_id</span><span class="p">(</span><span class="n">id</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="classes-support-inheritance">Classes Support Inheritance<a class="headerlink" href="#classes-support-inheritance" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>class Animal:
-    name: str
+<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span> <span class="n">Animal</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
 
-    def speak(self) -&gt; str:
-        return &quot;...&quot;
+    <span class="k">def</span> <span class="n">speak</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;...&quot;</span>
 
-<span class="hll">class Dog extends Animal:
-</span>    breed: str
+<span class="hll"><span class="k">class</span> <span class="n">Dog</span> <span class="k">extends</span> <span class="n">Animal</span><span class="p">:</span>
+</span>    <span class="n">breed</span><span class="p">:</span> <span class="n">str</span>
 
-    def speak(self) -&gt; str:
-        return &quot;Woof!&quot;
+    <span class="k">def</span> <span class="n">speak</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;Woof!&quot;</span>
 
-<span class="hll">class Cat extends Animal:
-</span>    indoor: bool
+<span class="hll"><span class="k">class</span> <span class="n">Cat</span> <span class="k">extends</span> <span class="n">Animal</span><span class="p">:</span>
+</span>    <span class="n">indoor</span><span class="p">:</span> <span class="n">bool</span>
 
-    def speak(self) -&gt; str:
-        return &quot;Meow!&quot;
+    <span class="k">def</span> <span class="n">speak</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;Meow!&quot;</span>
 </code></pre></div>
 <h3 id="mutable-methods">Mutable Methods<a class="headerlink" href="#mutable-methods" title="Permanent link">&para;</a></h3>
 <p>Use <code>mut self</code> when a method modifies the object:</p>
-<div class="highlight"><pre><span></span><code>class Counter:
-    value: int
+<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span> <span class="n">Counter</span><span class="p">:</span>
+    <span class="n">value</span><span class="p">:</span> <span class="n">int</span>
 
-    def get(self) -&gt; int:
-        return self.value
+    <span class="k">def</span> <span class="n">get</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">value</span>
 
-<span class="hll">    def increment(mut self) -&gt; None:
-</span><span class="hll">        self.value = self.value + 1
+<span class="hll">    <span class="k">def</span> <span class="n">increment</span><span class="p">(</span><span class="k">mut</span> <span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+</span><span class="hll">        <span class="k">self</span><span class="p">.</span><span class="n">value</span> <span class="o">=</span> <span class="k">self</span><span class="p">.</span><span class="n">value</span> <span class="o">+</span> <span class="m">1</span>
 </span>
-<span class="hll">    def add(mut self, n: int) -&gt; None:
-</span><span class="hll">        self.value = self.value + n
+<span class="hll">    <span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="k">mut</span> <span class="k">self</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+</span><span class="hll">        <span class="k">self</span><span class="p">.</span><span class="n">value</span> <span class="o">=</span> <span class="k">self</span><span class="p">.</span><span class="n">value</span> <span class="o">+</span> <span class="n">n</span>
 </span></code></pre></div>
 <h2 id="both-can-implement-traits">Both Can Implement Traits<a class="headerlink" href="#both-can-implement-traits" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>trait Describable:
-    def describe(self) -&gt; str: ...
+<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="n">Describable</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span> <span class="p">...</span>
 
-<span class="hll"># Model implementing a trait
-</span><span class="hll">model Product with Describable:
-</span>    name: str
-    price: float
+<span class="hll"><span class="c1"># Model implementing a trait</span>
+</span><span class="hll"><span class="c1">model Product with Describable:</span>
+</span><span class="c1">    name: str</span>
+<span class="c1">    price: float</span>
 
-    def describe(self) -&gt; str:
-        return f&quot;{self.name}: ${self.price}&quot;
+<span class="c1">    def describe(self) -&gt; str:</span>
+<span class="c1">        return f&quot;{self.name}: ${self.price}&quot;</span>
 
-<span class="hll"># Class implementing a trait
-</span><span class="hll">class Employee with Describable:
-</span>    name: str
-    title: str
+<span class="hll"><span class="c1"># Class implementing a trait</span>
+</span><span class="hll"><span class="c1">class Employee with Describable:</span>
+</span><span class="c1">    name: str</span>
+<span class="c1">    title: str</span>
 
-    def describe(self) -&gt; str:
-        return f&quot;{self.name}, {self.title}&quot;
+<span class="c1">    def describe(self) -&gt; str:</span>
+<span class="c1">        return f&quot;{self.name}, {self.title}&quot;</span>
 </code></pre></div>
 <h2 id="design-philosophy">Design Philosophy<a class="headerlink" href="#design-philosophy" title="Permanent link">&para;</a></h2>
 <p>Incan's type system follows the principle: <strong>Python's vocabulary, Rust's guarantees</strong>.</p>

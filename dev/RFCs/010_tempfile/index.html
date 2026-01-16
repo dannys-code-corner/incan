@@ -3840,7 +3840,7 @@ they go out of scope.</p>
 Rust has the widely-used <code>tempfile</code> crate.
 Incan should provide similar ergonomic temporary file handling.</p>
 <h3 id="python-comparison">Python Comparison<a class="headerlink" href="#python-comparison" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">tempfile</span>
+<div class="language-python highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">tempfile</span>
 
 <span class="c1"># Python - context manager pattern</span>
 <span class="k">with</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">(</span><span class="n">delete</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
@@ -3856,61 +3856,61 @@ Incan should provide similar ergonomic temporary file handling.</p>
 <p>Incan should provide this with RAII instead of context managers.</p>
 <h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
 <h3 id="tempfile">TempFile<a class="headerlink" href="#tempfile" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># Create a temporary file
-temp = TempFile.new()?
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Create a temporary file</span>
+<span class="c1">temp = TempFile.new()?</span>
 
-# Write to it
-temp.write_text(&quot;some data&quot;)?
+<span class="c1"># Write to it</span>
+<span class="c1">temp.write_text(&quot;some data&quot;)?</span>
 
-# Get the path (for passing to other functions)
-path = temp.path()
-process_file(path)
+<span class="c1"># Get the path (for passing to other functions)</span>
+<span class="c1">path = temp.path()</span>
+<span class="c1">process_file(path)</span>
 
-# File is automatically deleted when `temp` goes out of scope
+<span class="c1"># File is automatically deleted when `temp` goes out of scope</span>
 </code></pre></div>
 <h3 id="tempdir">TempDir<a class="headerlink" href="#tempdir" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># Create a temporary directory
-temp_dir = TempDir.new()?
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Create a temporary directory</span>
+<span class="c1">temp_dir = TempDir.new()?</span>
 
-# Create files inside it
-config = temp_dir.path() / &quot;config.toml&quot;
-config.write_text(default_config)?
+<span class="c1"># Create files inside it</span>
+<span class="c1">config = temp_dir.path() / &quot;config.toml&quot;</span>
+<span class="c1">config.write_text(default_config)?</span>
 
-data_dir = temp_dir.path() / &quot;data&quot;
-data_dir.mkdir()?
+<span class="c1">data_dir = temp_dir.path() / &quot;data&quot;</span>
+<span class="c1">data_dir.mkdir()?</span>
 
-# Entire directory tree deleted when `temp_dir` goes out of scope
+<span class="c1"># Entire directory tree deleted when `temp_dir` goes out of scope</span>
 </code></pre></div>
 <h3 id="named-temporary-files">Named Temporary Files<a class="headerlink" href="#named-temporary-files" title="Permanent link">&para;</a></h3>
 <p>For cases where you need a specific suffix/prefix:</p>
-<div class="highlight"><pre><span></span><code># With custom suffix
-temp = TempFile.with_suffix(&quot;.json&quot;)?
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># With custom suffix</span>
+<span class="c1">temp = TempFile.with_suffix(&quot;.json&quot;)?</span>
 
-# With custom prefix
-temp = TempFile.with_prefix(&quot;download_&quot;)?
+<span class="c1"># With custom prefix</span>
+<span class="c1">temp = TempFile.with_prefix(&quot;download_&quot;)?</span>
 
-# With both
-temp = TempFile.builder()
-    .prefix(&quot;report_&quot;)
-    .suffix(&quot;.pdf&quot;)
-    .build()?
+<span class="c1"># With both</span>
+<span class="c1">temp = TempFile.builder()</span>
+<span class="c1">    .prefix(&quot;report_&quot;)</span>
+<span class="c1">    .suffix(&quot;.pdf&quot;)</span>
+<span class="c1">    .build()?</span>
 </code></pre></div>
 <h3 id="persistence-keep-on-drop">Persistence (Keep on Drop)<a class="headerlink" href="#persistence-keep-on-drop" title="Permanent link">&para;</a></h3>
 <p>Sometimes you want to create a temp file but keep it:</p>
-<div class="highlight"><pre><span></span><code>temp = TempFile.new()?
-temp.write_text(data)?
+<div class="language-incan highlight"><pre><span></span><code><span class="n">temp</span> <span class="o">=</span> <span class="n">TempFile</span><span class="p">.</span><span class="n">new</span><span class="p">()</span><span class="err">?</span>
+<span class="n">temp</span><span class="p">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="err">?</span>
 
-# Keep the file - returns the Path and prevents deletion
-final_path = temp.persist()?
-println(f&quot;Saved to: {final_path}&quot;)
+<span class="c1"># Keep the file - returns the Path and prevents deletion</span>
+<span class="c1">final_path = temp.persist()?</span>
+<span class="c1">println(f&quot;Saved to: {final_path}&quot;)</span>
 </code></pre></div>
 <h3 id="explicit-location">Explicit Location<a class="headerlink" href="#explicit-location" title="Permanent link">&para;</a></h3>
 <p>Create temp files in a specific directory:</p>
-<div class="highlight"><pre><span></span><code># In a specific directory
-temp = TempFile.in_dir(Path(&quot;/var/cache/myapp&quot;))?
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># In a specific directory</span>
+<span class="c1">temp = TempFile.in_dir(Path(&quot;/var/cache/myapp&quot;))?</span>
 
-# In system temp directory (default)
-temp = TempFile.new()?  # Uses system temp dir
+<span class="c1"># In system temp directory (default)</span>
+<span class="c1">temp = TempFile.new()?  # Uses system temp dir</span>
 </code></pre></div>
 <h2 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h2>
 <h3 id="tempfile-methods">TempFile Methods<a class="headerlink" href="#tempfile-methods" title="Permanent link">&para;</a></h3>
@@ -4024,60 +4024,60 @@ This RFC introduces new surface types and methods, so the canonical spellings sh
 </ul>
 <p>Add <code>tempfile</code> to generated <code>Cargo.toml</code> when these types are used.</p>
 <h3 id="generated-code">Generated Code<a class="headerlink" href="#generated-code" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>temp = TempFile.new()?
-temp.write_text(&quot;data&quot;)?
+<div class="language-incan highlight"><pre><span></span><code><span class="n">temp</span> <span class="o">=</span> <span class="n">TempFile</span><span class="p">.</span><span class="n">new</span><span class="p">()</span><span class="err">?</span>
+<span class="n">temp</span><span class="p">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">)</span><span class="err">?</span>
 </code></pre></div>
 <p>Generates:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">temp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tempfile</span><span class="p">::</span><span class="n">NamedTempFile</span><span class="p">::</span><span class="n">new</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">temp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tempfile</span><span class="p">::</span><span class="n">NamedTempFile</span><span class="p">::</span><span class="n">new</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
 <span class="n">std</span><span class="p">::</span><span class="n">fs</span><span class="p">::</span><span class="n">write</span><span class="p">(</span><span class="n">temp</span><span class="p">.</span><span class="n">path</span><span class="p">(),</span><span class="w"> </span><span class="s">&quot;data&quot;</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 </code></pre></div>
 <h2 id="use-cases">Use Cases<a class="headerlink" href="#use-cases" title="Permanent link">&para;</a></h2>
 <h3 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>def test_config_loading():
-    temp = TempFile.with_suffix(&quot;.toml&quot;)?
-    temp.write_text(&quot;&quot;&quot;
-        [server]
-        host = &quot;localhost&quot;
-        port = 8080
-    &quot;&quot;&quot;)?
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">test_config_loading</span><span class="p">():</span>
+    <span class="n">temp</span> <span class="o">=</span> <span class="n">TempFile</span><span class="p">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.toml&quot;</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">temp</span><span class="p">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        [server]</span>
+<span class="s2">        host = &quot;</span><span class="n">localhost</span><span class="s2">&quot;</span>
+<span class="s2">        port = 8080</span>
+<span class="s2">    &quot;&quot;&quot;</span><span class="p">)</span><span class="err">?</span>
 
-    config = load_config(temp.path())?
-    assert config.server.port == 8080
-    # temp file cleaned up after test
+    <span class="n">config</span> <span class="o">=</span> <span class="n">load_config</span><span class="p">(</span><span class="n">temp</span><span class="p">.</span><span class="n">path</span><span class="p">())</span><span class="err">?</span>
+    <span class="n">assert</span> <span class="n">config</span><span class="p">.</span><span class="n">server</span><span class="p">.</span><span class="n">port</span> <span class="o">==</span> <span class="m">8080</span>
+    <span class="c1"># temp file cleaned up after test</span>
 </code></pre></div>
 <h3 id="safe-file-updates">Safe File Updates<a class="headerlink" href="#safe-file-updates" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>def safe_save(path: Path, content: str) -&gt; Result[None, IoError]:
-    # Write to temp file first
-    temp = TempFile.in_dir(path.parent())?
-    temp.write_text(content)?
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">safe_save</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">content</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="k">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
+    <span class="c1"># Write to temp file first</span>
+<span class="c1">    temp = TempFile.in_dir(path.parent())?</span>
+<span class="c1">    temp.write_text(content)?</span>
 
-    # Atomic rename (same filesystem)
-    temp.persist()?.rename(path)?
-    return Ok(None)
+<span class="c1">    # Atomic rename (same filesystem)</span>
+<span class="c1">    temp.persist()?.rename(path)?</span>
+<span class="c1">    return Ok(None)</span>
 </code></pre></div>
 <h3 id="download-with-cleanup">Download with Cleanup<a class="headerlink" href="#download-with-cleanup" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>async def process_download(url: str) -&gt; Result[Data, AppError]:
-    temp = TempFile.with_suffix(&quot;.zip&quot;)?
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">process_download</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Data</span><span class="p">,</span> <span class="n">AppError</span><span class="p">]:</span>
+    <span class="n">temp</span> <span class="o">=</span> <span class="n">TempFile</span><span class="p">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.zip&quot;</span><span class="p">)</span><span class="err">?</span>
 
-    # Download to temp file
-    await download_to(url, temp.path())?
+    <span class="c1"># Download to temp file</span>
+<span class="c1">    await download_to(url, temp.path())?</span>
 
-    # Process
-    data = extract_and_parse(temp.path())?
+<span class="c1">    # Process</span>
+<span class="c1">    data = extract_and_parse(temp.path())?</span>
 
-    return Ok(data)
-    # temp file deleted even if extraction fails
+<span class="c1">    return Ok(data)</span>
+<span class="c1">    # temp file deleted even if extraction fails</span>
 </code></pre></div>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-functions-instead-of-types">1. Functions Instead of Types<a class="headerlink" href="#1-functions-instead-of-types" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>path = create_temp_file()?
-# ... use path ...
-remove(path)?  # Manual cleanup
+<div class="language-incan highlight"><pre><span></span><code><span class="n">path</span> <span class="o">=</span> <span class="n">create_temp_file</span><span class="p">()</span><span class="err">?</span>
+<span class="c1"># ... use path ...</span>
+<span class="c1">remove(path)?  # Manual cleanup</span>
 </code></pre></div>
 <p>Rejected: Easy to forget cleanup, especially on error paths.</p>
 <h3 id="2-context-manager-syntax">2. Context Manager Syntax<a class="headerlink" href="#2-context-manager-syntax" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>with TempFile.new() as temp:
-    temp.write_text(&quot;data&quot;)?
+<div class="language-incan highlight"><pre><span></span><code><span class="k">with</span> <span class="n">TempFile</span><span class="p">.</span><span class="n">new</span><span class="p">()</span> <span class="k">as</span> <span class="n">temp</span><span class="p">:</span>
+    <span class="n">temp</span><span class="p">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">)</span><span class="err">?</span>
 </code></pre></div>
 <p>Rejected: Incan prefers RAII over explicit context managers.
 The type-based approach is more Rust-like and ensures cleanup even without <code>with</code>.</p>

@@ -3657,8 +3657,8 @@
 <strong>Implemented:</strong> 2025-12-23  </p>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
 <p>Introduce explicit constant bindings in Incan using the industry-standard declaration form:</p>
-<div class="highlight"><pre><span></span><code>const PI: float = 3.14
-const HOST = &quot;127.0.0.1&quot;  # type may be inferred when obvious
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">PI</span><span class="p">:</span> <span class="n">float</span> <span class="o">=</span> <span class="m">3.14</span>
+<span class="k">const</span> <span class="n">HOST</span> <span class="o">=</span> <span class="s2">&quot;127.0.0.1&quot;</span>  <span class="c1"># type may be inferred when obvious</span>
 </code></pre></div>
 <p>The goal is to let users declare compile-time constants with clear intent and to allow codegen to emit Rust <code>const</code> where possible.</p>
 <h2 id="goals">Goals<a class="headerlink" href="#goals" title="Permanent link">&para;</a></h2>
@@ -3677,12 +3677,12 @@ const HOST = &quot;127.0.0.1&quot;  # type may be inferred when obvious
 </ul>
 <h2 id="syntax">Syntax<a class="headerlink" href="#syntax" title="Permanent link">&para;</a></h2>
 <p>Module-level bindings:</p>
-<div class="highlight"><pre><span></span><code>const PI: float = 3.14159
-const APP_NAME: str = &quot;incan&quot;
-const MAX_RETRIES: int = 5
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">PI</span><span class="p">:</span> <span class="n">float</span> <span class="o">=</span> <span class="m">3.14159</span>
+<span class="k">const</span> <span class="n">APP_NAME</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;incan&quot;</span>
+<span class="k">const</span> <span class="n">MAX_RETRIES</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">5</span>
 
-# With type inference when the literal is unambiguous
-const DEFAULT_PORT = 8080
+<span class="c1"># With type inference when the literal is unambiguous</span>
+<span class="c1">const DEFAULT_PORT = 8080</span>
 </code></pre></div>
 <p>Rules (initial):</p>
 <ul>
@@ -3725,16 +3725,16 @@ const DEFAULT_PORT = 8080
 <li>Allowing a limited set of pure builtins in const context (e.g., length of const literals).</li>
 </ul>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>const VERSION: str = &quot;0.1.0&quot;
-const DEFAULT_TIMEOUT_SECS: float = 2.5
-const GREETING = &quot;hello&quot; + &quot; world&quot;
-const PORTS = [80, 443]
-const HEADERS = {&quot;User-Agent&quot;: &quot;incan&quot;}
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">VERSION</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;0.1.0&quot;</span>
+<span class="k">const</span> <span class="n">DEFAULT_TIMEOUT_SECS</span><span class="p">:</span> <span class="n">float</span> <span class="o">=</span> <span class="m">2.5</span>
+<span class="k">const</span> <span class="n">GREETING</span> <span class="o">=</span> <span class="s2">&quot;hello&quot;</span> <span class="o">+</span> <span class="s2">&quot; world&quot;</span>
+<span class="k">const</span> <span class="n">PORTS</span> <span class="o">=</span> <span class="p">[</span><span class="m">80</span><span class="p">,</span> <span class="m">443</span><span class="p">]</span>
+<span class="k">const</span> <span class="n">HEADERS</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;User-Agent&quot;</span><span class="p">:</span> <span class="s2">&quot;incan&quot;</span><span class="p">}</span>
 </code></pre></div>
 <p>Invalid (should error):</p>
-<div class="highlight"><pre><span></span><code>const NOW = time.now()            # function call
-const HOST = env(&quot;HOST&quot;)          # runtime dependency
-const STEP = 1 + x                # depends on non-const symbol
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">NOW</span> <span class="o">=</span> <span class="n">time</span><span class="p">.</span><span class="n">now</span><span class="p">()</span>            <span class="c1"># function call</span>
+<span class="c1">const HOST = env(&quot;HOST&quot;)          # runtime dependency</span>
+<span class="c1">const STEP = 1 + x                # depends on non-const symbol</span>
 </code></pre></div>
 <h2 id="checklist">Checklist<a class="headerlink" href="#checklist" title="Permanent link">&para;</a></h2>
 <ul>

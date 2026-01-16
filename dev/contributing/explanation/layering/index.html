@@ -3743,31 +3743,31 @@ inside tests, add them under <code>[dev-dependencies]</code> only.</p>
 </ul>
 <h2 id="what-goes-where-contracts-vs-implementations">What goes where (contracts vs implementations)<a class="headerlink" href="#what-goes-where-contracts-vs-implementations" title="Permanent link">&para;</a></h2>
 <p><strong><code>incan_core</code></strong>:</p>
-<pre><code>- Pure helpers that define *meaning/policy* (e.g., string indexing/slicing rules, numeric promotion, canonical error
+<div class="language-text highlight"><pre><span></span><code>- Pure helpers that define *meaning/policy* (e.g., string indexing/slicing rules, numeric promotion, canonical error
   message constants).
 - Must be deterministic and side-effect free.
 - Should not depend on compiler internals (AST, spans, lexer/parser state).
-</code></pre>
+</code></pre></div>
 <p><strong><code>incan_stdlib</code></strong>:</p>
-<pre><code>- Runtime helpers used by generated Rust code.
+<div class="language-text highlight"><pre><span></span><code>- Runtime helpers used by generated Rust code.
 - Should delegate behavior to `incan_core` for policy/consistency, and implement runtime-only actions (like
   panicking) using the shared error messages/taxonomy.
-</code></pre>
+</code></pre></div>
 <p><strong><code>incan</code> (compiler)</strong>:</p>
-<pre><code>- Parsing, typing, lowering, codegen, diagnostics.
+<div class="language-text highlight"><pre><span></span><code>- Parsing, typing, lowering, codegen, diagnostics.
 - May use `incan_core` to implement checks/const-eval and to keep error text aligned.
 - Must not use `incan_stdlib` in normal builds; only in tests for parity.
-</code></pre>
+</code></pre></div>
 <h2 id="allowed-forbidden-dependencies">Allowed / forbidden dependencies<a class="headerlink" href="#allowed-forbidden-dependencies" title="Permanent link">&para;</a></h2>
 <p><strong>Allowed</strong>:</p>
-<pre><code>- `incan` → `incan_core` (normal dependency)
+<div class="language-text highlight"><pre><span></span><code>- `incan` → `incan_core` (normal dependency)
 - `incan_stdlib` → `incan_core` (normal dependency)
 - `incan` → `incan_stdlib` (dev-dependency only, for tests)
-</code></pre>
+</code></pre></div>
 <p><strong>*Forbidden</strong>:</p>
-<pre><code>- `incan` → `incan_stdlib` in `[dependencies]` (this breaks layering)
+<div class="language-text highlight"><pre><span></span><code>- `incan` → `incan_stdlib` in `[dependencies]` (this breaks layering)
 - `incan_core` → `incan` or `incan_stdlib`
-</code></pre>
+</code></pre></div>
 <h2 id="common-pitfalls">Common pitfalls<a class="headerlink" href="#common-pitfalls" title="Permanent link">&para;</a></h2>
 <ul>
 <li>

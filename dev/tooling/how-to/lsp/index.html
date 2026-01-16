@@ -3994,16 +3994,16 @@
 </table>
 <h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h2>
 <h3 id="1-build-the-lsp-server">1. Build the LSP Server<a class="headerlink" href="#1-build-the-lsp-server" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/path/to/incan-programming-language
+<div class="language-bash highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/path/to/incan-programming-language
 make<span class="w"> </span>lsp
 </code></pre></div>
 <h3 id="2-add-to-path">2. Add to PATH<a class="headerlink" href="#2-add-to-path" title="Permanent link">&para;</a></h3>
 <p>Add the binary to your PATH:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Add to .bashrc, .zshrc, or your shell profile</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Add to .bashrc, .zshrc, or your shell profile</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$PATH</span><span class="s2">:/path/to/incan-programming-language/target/release&quot;</span>
 </code></pre></div>
 <p>Or symlink it:</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>ln<span class="w"> </span>-s<span class="w"> </span>/path/to/incan-programming-language/target/release/incan-lsp<span class="w"> </span>/usr/local/bin/
+<div class="language-bash highlight"><pre><span></span><code>sudo<span class="w"> </span>ln<span class="w"> </span>-s<span class="w"> </span>/path/to/incan-programming-language/target/release/incan-lsp<span class="w"> </span>/usr/local/bin/
 </code></pre></div>
 <h3 id="3-install-vs-code-extension">3. Install VS Code Extension<a class="headerlink" href="#3-install-vs-code-extension" title="Permanent link">&para;</a></h3>
 <p>See <a href="../editor_setup/">Editor Setup</a> for VS Code/Cursor extension installation.</p>
@@ -4011,7 +4011,7 @@ make<span class="w"> </span>lsp
 <p>Once installed, the LSP activates automatically when you open <code>.incn</code> files.</p>
 <h3 id="real-time-diagnostics">Real-time Diagnostics<a class="headerlink" href="#real-time-diagnostics" title="Permanent link">&para;</a></h3>
 <p>Errors appear as you type with helpful hints:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">type</span><span class="w"> </span>error:<span class="w"> </span>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;Result[str, str]&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;str&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="nb">type</span><span class="w"> </span>error:<span class="w"> </span>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;Result[str, str]&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;str&#39;</span>
 <span class="w">  </span>--&gt;<span class="w"> </span>file.incn:8:5
 
 note:<span class="w"> </span>In<span class="w"> </span>Incan,<span class="w"> </span>functions<span class="w"> </span>that<span class="w"> </span>can<span class="w"> </span>fail<span class="w"> </span><span class="k">return</span><span class="w"> </span>Result<span class="o">[</span>T,<span class="w"> </span>E<span class="o">]</span>
@@ -4019,7 +4019,7 @@ hint:<span class="w"> </span>Wrap<span class="w"> </span>the<span class="w"> </s
 </code></pre></div>
 <h3 id="hover-information">Hover Information<a class="headerlink" href="#hover-information" title="Permanent link">&para;</a></h3>
 <p>Hover over any symbol to see its type:</p>
-<div class="highlight"><pre><span></span><code>def process(data: List[str]) -&gt; Result[int, Error]
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">process</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">int</span><span class="p">,</span> <span class="n">Error</span><span class="p">]</span>
 </code></pre></div>
 <h3 id="go-to-definition">Go-to-Definition<a class="headerlink" href="#go-to-definition" title="Permanent link">&para;</a></h3>
 <ul>
@@ -4049,7 +4049,7 @@ hint:<span class="w"> </span>Wrap<span class="w"> </span>the<span class="w"> </s
 </ul>
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
 <h3 id="vs-code-settings">VS Code Settings<a class="headerlink" href="#vs-code-settings" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<div class="language-json highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;incan.lsp.enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;incan.lsp.path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/incan-lsp&quot;</span>
 <span class="p">}</span>
@@ -4080,7 +4080,7 @@ hint:<span class="w"> </span>Wrap<span class="w"> </span>the<span class="w"> </s
 <ol>
 <li>
 <p><strong>Check binary exists:</strong></p>
-<div class="highlight"><pre><span></span><code>which<span class="w"> </span>incan-lsp
+<div class="language-bash highlight"><pre><span></span><code>which<span class="w"> </span>incan-lsp
 <span class="c1"># or</span>
 incan-lsp<span class="w"> </span>--version
 </code></pre></div>

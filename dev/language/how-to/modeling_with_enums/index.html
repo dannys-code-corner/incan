@@ -3709,54 +3709,54 @@ expression trees.</p>
 a closed set of variants with typed payloads, and <code>match</code> for case handling.</p>
 <p><strong>Example</strong>:</p>
 <p>=== <em>Typescript</em></p>
-<pre><code>```typescript
+<div class="language-text highlight"><pre><span></span><code>```typescript
 type Event =
-| { kind: "click"; x: number; y: number }
-| { kind: "key"; key: string };
+| { kind: &quot;click&quot;; x: number; y: number }
+| { kind: &quot;key&quot;; key: string };
 
 function handle(e: Event) {
     switch (e.kind) {
-        case "click": return `${e.x},${e.y}`;
-        case "key": return e.key;
+        case &quot;click&quot;: return `${e.x},${e.y}`;
+        case &quot;key&quot;: return e.key;
     }
 }
 ```
-</code></pre>
+</code></pre></div>
 <p>===<em>Incan</em></p>
-<pre><code>```incan
+<div class="language-text highlight"><pre><span></span><code>```incan
 enum Event:
     Click(x: int, y: int)
     Key(key: str)
 
 def handle(e: Event) -&gt; str:
     match e:
-        Click(x, y) =&gt; return f"{x},{y}"
+        Click(x, y) =&gt; return f&quot;{x},{y}&quot;
         Key(key) =&gt; return key
 ```
-</code></pre>
+</code></pre></div>
 </details>
 <h2 id="pattern-1-state-machines">Pattern 1: State machines<a class="headerlink" href="#pattern-1-state-machines" title="Permanent link">&para;</a></h2>
 <p>Use this when a value progresses through a <strong>closed</strong> set of states and you want transitions to be explicit and checked.</p>
-<div class="highlight"><pre><span></span><code>enum ConnectionState:
-    Disconnected
-    Connecting(str)          # URL being connected to
-    Connected(Connection)
-    Error(str)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">ConnectionState</span><span class="p">:</span>
+    <span class="n">Disconnected</span>
+    <span class="n">Connecting</span><span class="p">(</span><span class="n">str</span><span class="p">)</span>          <span class="c1"># URL being connected to</span>
+<span class="c1">    Connected(Connection)</span>
+<span class="c1">    Error(str)</span>
 
-def handle_state(state: ConnectionState) -&gt; ConnectionState:
-    match state:
-        Disconnected =&gt;
-            return ConnectionState.Connecting(&quot;https://api.example.com&quot;)
-        Connecting(url) =&gt;
-            match try_connect(url):
-                Ok(conn) =&gt; return ConnectionState.Connected(conn)
-                Err(e) =&gt; return ConnectionState.Error(e)
-        Connected(_) =&gt;
-            # Stay connected
-            return state
-        Error(msg) =&gt;
-            println(f&quot;Error: {msg}&quot;)
-            return ConnectionState.Disconnected
+<span class="c1">def handle_state(state: ConnectionState) -&gt; ConnectionState:</span>
+<span class="c1">    match state:</span>
+<span class="c1">        Disconnected =&gt;</span>
+<span class="c1">            return ConnectionState.Connecting(&quot;https://api.example.com&quot;)</span>
+<span class="c1">        Connecting(url) =&gt;</span>
+<span class="c1">            match try_connect(url):</span>
+<span class="c1">                Ok(conn) =&gt; return ConnectionState.Connected(conn)</span>
+<span class="c1">                Err(e) =&gt; return ConnectionState.Error(e)</span>
+<span class="c1">        Connected(_) =&gt;</span>
+<span class="c1">            # Stay connected</span>
+<span class="c1">            return state</span>
+<span class="c1">        Error(msg) =&gt;</span>
+<span class="c1">            println(f&quot;Error: {msg}&quot;)</span>
+<span class="c1">            return ConnectionState.Disconnected</span>
 </code></pre></div>
 <p>Tips:</p>
 <ul>
@@ -3765,22 +3765,22 @@ def handle_state(state: ConnectionState) -&gt; ConnectionState:
 </ul>
 <h2 id="pattern-2-commands-actions">Pattern 2: Commands / actions<a class="headerlink" href="#pattern-2-commands-actions" title="Permanent link">&para;</a></h2>
 <p>Use this when your program receives a <strong>finite set</strong> of commands and each command has its own payload.</p>
-<div class="highlight"><pre><span></span><code>enum Command:
-    Create(str, str)         # (name, content)
-    Update(int, str)         # (id, new_content)
-    Delete(int)              # id
-    List
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Command</span><span class="p">:</span>
+    <span class="n">Create</span><span class="p">(</span><span class="n">str</span><span class="p">,</span> <span class="n">str</span><span class="p">)</span>         <span class="c1"># (name, content)</span>
+<span class="c1">    Update(int, str)         # (id, new_content)</span>
+<span class="c1">    Delete(int)              # id</span>
+<span class="c1">    List</span>
 
-def execute(cmd: Command) -&gt; Result[str, str]:
-    match cmd:
-        Create(name, content) =&gt;
-            return create_item(name, content)
-        Update(id, content) =&gt;
-            return update_item(id, content)
-        Delete(id) =&gt;
-            return delete_item(id)
-        List =&gt;
-            return Ok(list_items())
+<span class="c1">def execute(cmd: Command) -&gt; Result[str, str]:</span>
+<span class="c1">    match cmd:</span>
+<span class="c1">        Create(name, content) =&gt;</span>
+<span class="c1">            return create_item(name, content)</span>
+<span class="c1">        Update(id, content) =&gt;</span>
+<span class="c1">            return update_item(id, content)</span>
+<span class="c1">        Delete(id) =&gt;</span>
+<span class="c1">            return delete_item(id)</span>
+<span class="c1">        List =&gt;</span>
+<span class="c1">            return Ok(list_items())</span>
 </code></pre></div>
 <p>Tips:</p>
 <ul>
@@ -3790,27 +3790,27 @@ def execute(cmd: Command) -&gt; Result[str, str]:
 </ul>
 <h2 id="pattern-3-error-hierarchies">Pattern 3: Error hierarchies<a class="headerlink" href="#pattern-3-error-hierarchies" title="Permanent link">&para;</a></h2>
 <p>Use this when you want rich, typed errors but still keep exhaustiveness and structure.</p>
-<div class="highlight"><pre><span></span><code>enum DatabaseError:
-    ConnectionFailed(str)
-    QueryFailed(str, int)    # (query, error_code)
-    NotFound(str)            # table/record name
-    PermissionDenied
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">DatabaseError</span><span class="p">:</span>
+    <span class="n">ConnectionFailed</span><span class="p">(</span><span class="n">str</span><span class="p">)</span>
+    <span class="n">QueryFailed</span><span class="p">(</span><span class="n">str</span><span class="p">,</span> <span class="n">int</span><span class="p">)</span>    <span class="c1"># (query, error_code)</span>
+<span class="c1">    NotFound(str)            # table/record name</span>
+<span class="c1">    PermissionDenied</span>
 
-enum AppError:
-    Database(DatabaseError)  # Nested enum
-    Validation(str)
-    NotAuthenticated
+<span class="c1">enum AppError:</span>
+<span class="c1">    Database(DatabaseError)  # Nested enum</span>
+<span class="c1">    Validation(str)</span>
+<span class="c1">    NotAuthenticated</span>
 
-def handle_error(err: AppError) -&gt; str:
-    match err:
-        Database(db_err) =&gt;
-            match db_err:
-                ConnectionFailed(host) =&gt; return f&quot;Can&#39;t reach {host}&quot;
-                QueryFailed(q, code) =&gt; return f&quot;Query error {code}: {q}&quot;
-                NotFound(name) =&gt; return f&quot;Not found: {name}&quot;
-                PermissionDenied =&gt; return &quot;Access denied&quot;
-        Validation(msg) =&gt; return f&quot;Invalid: {msg}&quot;
-        NotAuthenticated =&gt; return &quot;Please log in&quot;
+<span class="c1">def handle_error(err: AppError) -&gt; str:</span>
+<span class="c1">    match err:</span>
+<span class="c1">        Database(db_err) =&gt;</span>
+<span class="c1">            match db_err:</span>
+<span class="c1">                ConnectionFailed(host) =&gt; return f&quot;Can&#39;t reach {host}&quot;</span>
+<span class="c1">                QueryFailed(q, code) =&gt; return f&quot;Query error {code}: {q}&quot;</span>
+<span class="c1">                NotFound(name) =&gt; return f&quot;Not found: {name}&quot;</span>
+<span class="c1">                PermissionDenied =&gt; return &quot;Access denied&quot;</span>
+<span class="c1">        Validation(msg) =&gt; return f&quot;Invalid: {msg}&quot;</span>
+<span class="c1">        NotAuthenticated =&gt; return &quot;Please log in&quot;</span>
 </code></pre></div>
 <p>Tips:</p>
 <ul>
@@ -3819,25 +3819,25 @@ def handle_error(err: AppError) -&gt; str:
 </ul>
 <h2 id="pattern-4-expression-trees-asts">Pattern 4: Expression trees (ASTs)<a class="headerlink" href="#pattern-4-expression-trees-asts" title="Permanent link">&para;</a></h2>
 <p>Use this when you want to represent recursive structure (expressions, queries, filters) and interpret/transform it.</p>
-<div class="highlight"><pre><span></span><code>enum Expr:
-    Number(int)
-    Add(Expr, Expr)
-    Mul(Expr, Expr)
-    Neg(Expr)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Expr</span><span class="p">:</span>
+    <span class="n">Number</span><span class="p">(</span><span class="n">int</span><span class="p">)</span>
+    <span class="n">Add</span><span class="p">(</span><span class="n">Expr</span><span class="p">,</span> <span class="n">Expr</span><span class="p">)</span>
+    <span class="n">Mul</span><span class="p">(</span><span class="n">Expr</span><span class="p">,</span> <span class="n">Expr</span><span class="p">)</span>
+    <span class="n">Neg</span><span class="p">(</span><span class="n">Expr</span><span class="p">)</span>
 
-def eval(expr: Expr) -&gt; int:
-    match expr:
-        Number(n) =&gt; return n
-        Add(a, b) =&gt; return eval(a) + eval(b)
-        Mul(a, b) =&gt; return eval(a) * eval(b)
-        Neg(e) =&gt; return -eval(e)
+<span class="k">def</span> <span class="n">eval</span><span class="p">(</span><span class="n">expr</span><span class="p">:</span> <span class="n">Expr</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">expr</span><span class="p">:</span>
+        <span class="n">Number</span><span class="p">(</span><span class="n">n</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">n</span>
+        <span class="n">Add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">eval</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">+</span> <span class="n">eval</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+        <span class="n">Mul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">eval</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">*</span> <span class="n">eval</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+        <span class="n">Neg</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="o">-</span><span class="n">eval</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
 
-# (3 + 4) * -2 = -14
-expr = Expr.Mul(
-    Expr.Add(Expr.Number(3), Expr.Number(4)),
-    Expr.Neg(Expr.Number(2)),
-)
-result = eval(expr)  # -14
+<span class="c1"># (3 + 4) * -2 = -14</span>
+<span class="c1">expr = Expr.Mul(</span>
+<span class="c1">    Expr.Add(Expr.Number(3), Expr.Number(4)),</span>
+<span class="c1">    Expr.Neg(Expr.Number(2)),</span>
+<span class="c1">)</span>
+<span class="c1">result = eval(expr)  # -14</span>
 </code></pre></div>
 <p>Tips:</p>
 <ul>

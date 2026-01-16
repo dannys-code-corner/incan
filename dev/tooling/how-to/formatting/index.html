@@ -3949,12 +3949,12 @@
 <ul>
 <li>from the repository root:</li>
 </ul>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
 </code></pre></div>
 <ul>
 <li>or via an absolute path (from anywhere):</li>
 </ul>
-<div class="highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 </div>
 <div class="admonition note">
@@ -3964,7 +3964,7 @@
 <li>Use <code>make fmt</code> to format the Rust compiler/tooling code in this repository.</li>
 </ul>
 </div>
-<div class="highlight"><pre><span></span><code><span class="c1"># Format a single file</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Format a single file</span>
 incan<span class="w"> </span>fmt<span class="w"> </span>myfile.incn
 
 <span class="c1"># Format all .incn files in a directory</span>
@@ -3987,10 +3987,10 @@ obvious change even though <code>incan fmt</code> would update the file.</p>
 <li><strong>4 spaces</strong> per indentation level</li>
 <li>No tabs</li>
 </ul>
-<div class="highlight"><pre><span></span><code>def calculate(x: int) -&gt; int:
-    if x &gt; 0:
-        return x * 2
-    return 0
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">calculate</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">x</span> <span class="o">*</span> <span class="m">2</span>
+    <span class="k">return</span> <span class="m">0</span>
 </code></pre></div>
 <h3 id="line-length">Line Length<a class="headerlink" href="#line-length" title="Permanent link">&para;</a></h3>
 <ul>
@@ -4003,23 +4003,23 @@ obvious change even though <code>incan fmt</code> would update the file.</p>
 <li><strong>2 blank lines</strong> between top-level declarations (functions, classes, models, traits)</li>
 <li><strong>1 blank line</strong> between methods within a class/model</li>
 </ul>
-<div class="highlight"><pre><span></span><code>def first_function() -&gt; None:
-    pass
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">first_function</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">pass</span>
 
 
-def second_function() -&gt; None:
-    pass
+<span class="k">def</span> <span class="n">second_function</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">pass</span>
 
 
-model User:
-    name: str
-    age: int
+<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
 
-    def greet(self) -&gt; str:
-        return f&quot;Hello, {self.name}&quot;
+    <span class="k">def</span> <span class="n">greet</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Hello, {self.name}&quot;</span>
 
-    def is_adult(self) -&gt; bool:
-        return self.age &gt;= 18
+    <span class="k">def</span> <span class="n">is_adult</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">age</span> <span class="o">&gt;=</span> <span class="m">18</span>
 </code></pre></div>
 <h3 id="spacing">Spacing<a class="headerlink" href="#spacing" title="Permanent link">&para;</a></h3>
 <ul>
@@ -4043,11 +4043,11 @@ model User:
 <li>Single-line docstrings on one line: <code>"""Brief description"""</code></li>
 <li>Multi-line docstrings with content on separate lines:</li>
 </ul>
-<div class="highlight"><pre><span></span><code>&quot;&quot;&quot;
-This is a longer docstring.
+<div class="language-incan highlight"><pre><span></span><code><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">This is a longer docstring.</span>
 
-It can span multiple lines.
-&quot;&quot;&quot;
+<span class="s2">It can span multiple lines.</span>
+<span class="s2">&quot;&quot;&quot;</span>
 </code></pre></div>
 <h2 id="cli-options">CLI Options<a class="headerlink" href="#cli-options" title="Permanent link">&para;</a></h2>
 <table>
@@ -4093,7 +4093,7 @@ It can span multiple lines.
 </table>
 <h2 id="ci-integration">CI Integration<a class="headerlink" href="#ci-integration" title="Permanent link">&para;</a></h2>
 <p>Add to your CI pipeline to enforce consistent formatting:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># GitHub Actions example</span>
+<div class="language-yaml highlight"><pre><span></span><code><span class="c1"># GitHub Actions example</span>
 <span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Check formatting</span>
 <span class="w">  </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">incan fmt --check .</span>
 </code></pre></div>
@@ -4113,7 +4113,7 @@ Configuration file support (e.g., <code>incan.toml</code>) is planned for future
 Unlike some formatters that can handle partial/broken code, <code>incan fmt</code> operates on the parsed AST
 and cannot format files with syntax errors.</p>
 <p>If a file has errors, you'll see:</p>
-<div class="highlight"><pre><span></span><code>Error<span class="w"> </span>formatting<span class="w"> </span>myfile.incn:<span class="w"> </span>Parser<span class="w"> </span>error:<span class="w"> </span><span class="o">[</span>...<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code>Error<span class="w"> </span>formatting<span class="w"> </span>myfile.incn:<span class="w"> </span>Parser<span class="w"> </span>error:<span class="w"> </span><span class="o">[</span>...<span class="o">]</span>
 </code></pre></div>
 <p>Fix syntax errors before formatting.</p>
 <h3 id="line-length-is-best-effort">Line length is best-effort<a class="headerlink" href="#line-length-is-best-effort" title="Permanent link">&para;</a></h3>

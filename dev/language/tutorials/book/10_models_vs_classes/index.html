@@ -3716,26 +3716,26 @@ fields (as shown below), and you can give fields default values in the declarati
 construction, write a separate helper/factory function (often returning <code>Result</code>).</p>
 </div>
 <h2 id="a-simple-model">A simple model<a class="headerlink" href="#a-simple-model" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>model User:
-    name: str
-    age: int
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
 
-def main() -&gt; None:
-    u = User(name=&quot;Alice&quot;, age=30)
-    println(f&quot;{u.name} age={u.age}&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">age</span><span class="o">=</span><span class="m">30</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{u.name} age={u.age}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="a-simple-class">A simple class<a class="headerlink" href="#a-simple-class" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>class Counter:
-    value: int
+<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span> <span class="n">Counter</span><span class="p">:</span>
+    <span class="n">value</span><span class="p">:</span> <span class="n">int</span>
 
-    def increment(mut self) -&gt; None:
-        self.value += 1
+    <span class="k">def</span> <span class="n">increment</span><span class="p">(</span><span class="k">mut</span> <span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+        <span class="k">self</span><span class="p">.</span><span class="n">value</span> <span class="o">+=</span> <span class="m">1</span>
 
-def main() -&gt; None:
-    c = Counter(value=0)
-    c.increment()
-    c.increment()
-    println(f&quot;value={c.value}&quot;)  # outputs: value=2
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">Counter</span><span class="p">(</span><span class="n">value</span><span class="o">=</span><span class="m">0</span><span class="p">)</span>
+    <span class="n">c</span><span class="p">.</span><span class="n">increment</span><span class="p">()</span>
+    <span class="n">c</span><span class="p">.</span><span class="n">increment</span><span class="p">()</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;value={c.value}&quot;</span><span class="p">)</span>  <span class="c1"># outputs: value=2</span>
 </code></pre></div>
 <h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
 <ol>
@@ -3745,25 +3745,25 @@ def main() -&gt; None:
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="highlight"><pre><span></span><code>model Product:
-    name: str
-    price: float
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Product</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">price</span><span class="p">:</span> <span class="n">float</span>
 
-class Cart:
-    items: list[Product]
+<span class="k">class</span> <span class="n">Cart</span><span class="p">:</span>
+    <span class="n">items</span><span class="p">:</span> <span class="n">list</span><span class="p">[</span><span class="n">Product</span><span class="p">]</span>
 
-    def total(self) -&gt; float:
-        total = 0.0
-        for item in self.items:
-            total = total + item.price
-        return total
+    <span class="k">def</span> <span class="n">total</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">float</span><span class="p">:</span>
+        <span class="n">total</span> <span class="o">=</span> <span class="m">0.0</span>
+        <span class="k">for</span> <span class="n">item</span> <span class="k">in</span> <span class="k">self</span><span class="p">.</span><span class="n">items</span><span class="p">:</span>
+            <span class="n">total</span> <span class="o">=</span> <span class="n">total</span> <span class="o">+</span> <span class="n">item</span><span class="p">.</span><span class="n">price</span>
+        <span class="k">return</span> <span class="n">total</span>
 
-def main() -&gt; None:
-    cart = Cart(items=[
-        Product(name=&quot;Book&quot;, price=10.0),
-        Product(name=&quot;Pen&quot;, price=2.5),
-    ])
-    println(f&quot;total={cart.total()}&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">cart</span> <span class="o">=</span> <span class="n">Cart</span><span class="p">(</span><span class="n">items</span><span class="o">=</span><span class="p">[</span>
+        <span class="n">Product</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Book&quot;</span><span class="p">,</span> <span class="n">price</span><span class="o">=</span><span class="m">10.0</span><span class="p">),</span>
+        <span class="n">Product</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Pen&quot;</span><span class="p">,</span> <span class="n">price</span><span class="o">=</span><span class="m">2.5</span><span class="p">),</span>
+    <span class="p">])</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;total={cart.total()}&quot;</span><span class="p">)</span>
 </code></pre></div>
 </details>
 <h2 id="where-to-learn-more">Where to learn more<a class="headerlink" href="#where-to-learn-more" title="Permanent link">&para;</a></h2>

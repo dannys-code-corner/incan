@@ -3949,7 +3949,7 @@
 <p>This document describes the internal architecture of the Incan compiler.</p>
 <h2 id="compilation-pipeline">Compilation Pipeline<a class="headerlink" href="#compilation-pipeline" title="Permanent link">&para;</a></h2>
 <p>This diagram shows the compilation pipeline of the Incan compiler in high level.</p>
-<div class="highlight"><pre><span></span><code>┌─────────────────────────────────────────────────────────────────────────────┐
+<div class="language-bash highlight"><pre><span></span><code>┌─────────────────────────────────────────────────────────────────────────────┐
 │<span class="w">                                </span>FRONTEND<span class="w">                                     </span>│
 ├─────────────────────────────────────────────────────────────────────────────┤
 │<span class="w">                                                                             </span>│
@@ -4074,7 +4074,7 @@
 
 <h2 id="walkthrough-incan-build">Walkthrough: <code>incan build</code><a class="headerlink" href="#walkthrough-incan-build" title="Permanent link">&para;</a></h2>
 <p>This section describes what happens internally when you run <code>incan build path/to/main.incn</code>.</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>file.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>file.incn
 <span class="w">  </span>│
 <span class="w">  </span>├──▶<span class="w"> </span><span class="m">1</span><span class="o">)</span><span class="w"> </span>Collect<span class="w"> </span>modules<span class="w"> </span><span class="o">(</span>imports<span class="o">)</span>
 <span class="w">  </span>│<span class="w">       </span>-<span class="w"> </span>Parse<span class="w"> </span>the<span class="w"> </span>entry<span class="w"> </span>file<span class="w"> </span>and<span class="w"> </span>any<span class="w"> </span>imported<span class="w"> </span><span class="nb">local</span><span class="w"> </span>modules
@@ -4111,7 +4111,7 @@
 <li><strong>Runtime boundary</strong>: Generated programs depend on <code>incan_stdlib</code> and <code>incan_derive</code>, but the compiler does not (see <code>crates/</code>).</li>
 </ul>
 <h2 id="module-layout">Module Layout<a class="headerlink" href="#module-layout" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>Frontend<span class="w"> </span><span class="o">(</span>turns<span class="w"> </span><span class="nb">source</span><span class="w"> </span>text<span class="w"> </span>into<span class="w"> </span>a<span class="w"> </span>typed<span class="w"> </span>AST<span class="o">)</span>
+<div class="language-bash highlight"><pre><span></span><code>Frontend<span class="w"> </span><span class="o">(</span>turns<span class="w"> </span><span class="nb">source</span><span class="w"> </span>text<span class="w"> </span>into<span class="w"> </span>a<span class="w"> </span>typed<span class="w"> </span>AST<span class="o">)</span>
 <span class="w">  </span>├──▶<span class="w"> </span>Lexing<span class="w"> </span>+<span class="w"> </span>parsing
 <span class="w">  </span>│<span class="w">     </span>-<span class="w"> </span>Converts<span class="w"> </span><span class="sb">`</span>.incn<span class="sb">`</span><span class="w"> </span>text<span class="w"> </span>into<span class="w"> </span>an<span class="w"> </span>AST
 <span class="w">  </span>│<span class="w">     </span>-<span class="w"> </span>Attaches<span class="w"> </span>spans<span class="w"> </span><span class="k">for</span><span class="w"> </span>precise<span class="w"> </span>diagnostics
@@ -4407,7 +4407,7 @@ This provides compile-time exhaustiveness checking and makes it easier to add ne
 </tbody>
 </table>
 <h2 id="key-data-types">Key Data Types<a class="headerlink" href="#key-data-types" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>AST (frontend)          IR (backend)              Rust (output)
+<div class="language-text highlight"><pre><span></span><code>AST (frontend)          IR (backend)              Rust (output)
 ─────────────────       ──────────────────        ─────────────────
 ast::Program       ──►  IrProgram            ──►  TokenStream
 ast::Declaration   ──►  IrDecl               ──►  (syn Items)

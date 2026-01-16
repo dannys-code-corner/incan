@@ -3753,22 +3753,22 @@
 <p>Once your program is more than one file, you’ll split it into modules and import what you need.</p>
 <h2 id="a-tiny-multi-file-project">A tiny multi-file project<a class="headerlink" href="#a-tiny-multi-file-project" title="Permanent link">&para;</a></h2>
 <p>Create a folder:</p>
-<div class="highlight"><pre><span></span><code>my_project/
+<div class="language-text highlight"><pre><span></span><code>my_project/
 ├── main.incn
 └── strings.incn
 </code></pre></div>
 <p><code>strings.incn</code>:</p>
-<div class="highlight"><pre><span></span><code>pub def shout(s: str) -&gt; str:
-    return s.strip().upper()
+<div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="k">def</span> <span class="n">shout</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">s</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">upper</span><span class="p">()</span>
 </code></pre></div>
 <p><code>main.incn</code>:</p>
-<div class="highlight"><pre><span></span><code>from strings import shout
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">strings</span> <span class="k">import</span> <span class="n">shout</span>
 
-def main() -&gt; None:
-    println(shout(&quot;  hello  &quot;))
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">println</span><span class="p">(</span><span class="n">shout</span><span class="p">(</span><span class="s2">&quot;  hello  &quot;</span><span class="p">))</span>
 </code></pre></div>
 <p>Run from <code>my_project/</code>:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>main.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>main.incn
 </code></pre></div>
 <h3 id="visibility-exporting-with-pub">Visibility: exporting with <code>pub</code><a class="headerlink" href="#visibility-exporting-with-pub" title="Permanent link">&para;</a></h3>
 <p>By default, definitions are <strong>module-private</strong> (only usable inside the same <code>.incn</code> file).
@@ -3781,11 +3781,11 @@ In Incan, you typically make the intended “public API” of a module explicit 
 <p>For more detail on <code>pub</code> (including how it affects <code>model</code>/<code>class</code> fields), see: <a href="../../../explanation/models_and_classes/">Models &amp; Classes</a>.</p>
 <h2 id="import-styles">Import styles<a class="headerlink" href="#import-styles" title="Permanent link">&para;</a></h2>
 <p>Incan supports two styles you can mix:</p>
-<div class="highlight"><pre><span></span><code># Python-style
-from strings import shout
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Python-style</span>
+<span class="c1">from strings import shout</span>
 
-# Rust-style
-import strings::shout
+<span class="c1"># Rust-style</span>
+<span class="c1">import strings::shout</span>
 </code></pre></div>
 <h2 id="navigating-folders-super-crate">Navigating folders (<code>..</code>, <code>super</code>, <code>crate</code>)<a class="headerlink" href="#navigating-folders-super-crate" title="Permanent link">&para;</a></h2>
 <p>The reference documents how parent/root paths work:</p>
@@ -3802,19 +3802,19 @@ import strings::shout
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="highlight"><pre><span></span><code># strings.incn
-pub def shout(s: str) -&gt; str:
-    return s.strip().upper()
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># strings.incn</span>
+<span class="c1">pub def shout(s: str) -&gt; str:</span>
+<span class="c1">    return s.strip().upper()</span>
 
-pub def whisper(s: str) -&gt; str:
-    return s.strip().lower()
+<span class="c1">pub def whisper(s: str) -&gt; str:</span>
+<span class="c1">    return s.strip().lower()</span>
 
-# main.incn
-from strings import shout, whisper
+<span class="c1"># main.incn</span>
+<span class="c1">from strings import shout, whisper</span>
 
-def main() -&gt; None:
-    println(shout(&quot;  hello  &quot;))    # outputs: HELLO
-    println(whisper(&quot;  HELLO  &quot;))  # outputs: hello
+<span class="c1">def main() -&gt; None:</span>
+<span class="c1">    println(shout(&quot;  hello  &quot;))    # outputs: HELLO</span>
+<span class="c1">    println(whisper(&quot;  HELLO  &quot;))  # outputs: hello</span>
 </code></pre></div>
 </details>
 <h2 id="what-to-learn-next">What to learn next<a class="headerlink" href="#what-to-learn-next" title="Permanent link">&para;</a></h2>

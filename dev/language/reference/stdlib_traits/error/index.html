@@ -3673,38 +3673,38 @@
 <li>optional error chaining (<code>source()</code>)</li>
 </ul>
 <h2 id="definition">Definition<a class="headerlink" href="#definition" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>trait Error:
-    def message(self) -&gt; str:
-        &quot;&quot;&quot;Return a human-readable error message&quot;&quot;&quot;
-        ...
+<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="n">Error</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">message</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+        <span class="s2">&quot;&quot;&quot;Return a human-readable error message&quot;&quot;&quot;</span>
+        <span class="p">...</span>
 
-    def source(self) -&gt; Option[str]:
-        &quot;&quot;&quot;Optional: Return the underlying cause of this error&quot;&quot;&quot;
-        return None
+    <span class="k">def</span> <span class="n">source</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">str</span><span class="p">]:</span>
+        <span class="s2">&quot;&quot;&quot;Optional: Return the underlying cause of this error&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="k">None</span>
 </code></pre></div>
 <h2 id="example-simple-structured-error">Example: simple structured error<a class="headerlink" href="#example-simple-structured-error" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>model ValidationError with Error:
-    field: str
-    msg: str
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">ValidationError</span> <span class="k">with</span> <span class="n">Error</span><span class="p">:</span>
+    <span class="n">field</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">msg</span><span class="p">:</span> <span class="n">str</span>
 
-    def message(self) -&gt; str:
-        return f&quot;Validation failed for &#39;{self.field}&#39;: {self.msg}&quot;
+    <span class="k">def</span> <span class="n">message</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Validation failed for &#39;{self.field}&#39;: {self.msg}&quot;</span>
 
-def validate_age(age: int) -&gt; Result[int, ValidationError]:
-    if age &lt; 0:
-        return Err(ValidationError(field=&quot;age&quot;, msg=&quot;cannot be negative&quot;))
-    return Ok(age)
+<span class="k">def</span> <span class="n">validate_age</span><span class="p">(</span><span class="n">age</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">int</span><span class="p">,</span> <span class="n">ValidationError</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">age</span> <span class="o">&lt;</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="n">ValidationError</span><span class="p">(</span><span class="n">field</span><span class="o">=</span><span class="s2">&quot;age&quot;</span><span class="p">,</span> <span class="n">msg</span><span class="o">=</span><span class="s2">&quot;cannot be negative&quot;</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">age</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="example-chaining-with-source">Example: chaining with <code>source()</code><a class="headerlink" href="#example-chaining-with-source" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>model DatabaseError with Error:
-    query: str
-    cause: Option[str]
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">DatabaseError</span> <span class="k">with</span> <span class="n">Error</span><span class="p">:</span>
+    <span class="n">query</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">cause</span><span class="p">:</span> <span class="n">Option</span><span class="p">[</span><span class="n">str</span><span class="p">]</span>
 
-    def message(self) -&gt; str:
-        return f&quot;Database query failed: {self.query}&quot;
+    <span class="k">def</span> <span class="n">message</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Database query failed: {self.query}&quot;</span>
 
-    def source(self) -&gt; Option[str]:
-        return self.cause
+    <span class="k">def</span> <span class="n">source</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">str</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">cause</span>
 </code></pre></div>
 
 

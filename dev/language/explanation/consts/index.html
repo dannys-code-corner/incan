@@ -3911,21 +3911,21 @@ a safe API”.</p>
 </div>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
 <h3 id="rust-native-consts">Rust-native consts<a class="headerlink" href="#rust-native-consts" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>const MAX_RETRIES: int = 5
-const TIMEOUT_SECS: float = 2.5
-const IS_DEBUG: bool = False
-const PORT = 8080  # type may be inferred
-const GREETING = &quot;hello&quot; + &quot; world&quot;  # string concatenation is allowed
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">MAX_RETRIES</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">5</span>
+<span class="k">const</span> <span class="n">TIMEOUT_SECS</span><span class="p">:</span> <span class="n">float</span> <span class="o">=</span> <span class="m">2.5</span>
+<span class="k">const</span> <span class="n">IS_DEBUG</span><span class="p">:</span> <span class="n">bool</span> <span class="o">=</span> <span class="n">False</span>
+<span class="k">const</span> <span class="n">PORT</span> <span class="o">=</span> <span class="m">8080</span>  <span class="c1"># type may be inferred</span>
+<span class="c1">const GREETING = &quot;hello&quot; + &quot; world&quot;  # string concatenation is allowed</span>
 </code></pre></div>
 <h3 id="frozen-consts-deeply-immutable">Frozen consts (deeply immutable)<a class="headerlink" href="#frozen-consts-deeply-immutable" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>const GREETING: FrozenStr = &quot;hello&quot;
-const NUMS: FrozenList[int] = [1, 2, 3]
-const HEADERS: FrozenDict[FrozenStr, FrozenStr] = {&quot;User-Agent&quot;: &quot;incan&quot;}
-const DATA: FrozenBytes = b&quot;\x00\x01&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">GREETING</span><span class="p">:</span> <span class="n">FrozenStr</span> <span class="o">=</span> <span class="s2">&quot;hello&quot;</span>
+<span class="k">const</span> <span class="n">NUMS</span><span class="p">:</span> <span class="n">FrozenList</span><span class="p">[</span><span class="n">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">]</span>
+<span class="k">const</span> <span class="n">HEADERS</span><span class="p">:</span> <span class="n">FrozenDict</span><span class="p">[</span><span class="n">FrozenStr</span><span class="p">,</span> <span class="n">FrozenStr</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;User-Agent&quot;</span><span class="p">:</span> <span class="s2">&quot;incan&quot;</span><span class="p">}</span>
+<span class="k">const</span> <span class="n">DATA</span><span class="p">:</span> <span class="n">FrozenBytes</span> <span class="o">=</span> <span class="n">b</span><span class="err">&quot;\</span><span class="n">x00</span><span class="err">\</span><span class="n">x01</span><span class="err">&quot;</span>
 </code></pre></div>
 <h3 id="consts-can-reference-other-consts">Consts can reference other consts<a class="headerlink" href="#consts-can-reference-other-consts" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>const BASE: int = 10
-const LIMIT: int = BASE * 2
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">BASE</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">10</span>
+<span class="k">const</span> <span class="n">LIMIT</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="n">BASE</span> <span class="o">*</span> <span class="m">2</span>
 </code></pre></div>
 <h2 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h2>
 <ul>

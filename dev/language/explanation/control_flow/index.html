@@ -3684,35 +3684,35 @@
 <h1 id="control-flow">Control flow<a class="headerlink" href="#control-flow" title="Permanent link">&para;</a></h1>
 <p>This page explains branching and looping constructs in Incan.</p>
 <h2 id="branching-with-if">Branching with <code>if</code><a class="headerlink" href="#branching-with-if" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>def classify(n: int) -&gt; str:
-    if n &lt; 0:
-        return &quot;negative&quot;
-    elif n == 0:
-        return &quot;zero&quot;
-    else:
-        return &quot;positive&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">classify</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;negative&quot;</span>
+    <span class="k">elif</span> <span class="n">n</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;zero&quot;</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;positive&quot;</span>
 </code></pre></div>
 <h2 id="pattern-matching-with-match">Pattern matching with <code>match</code><a class="headerlink" href="#pattern-matching-with-match" title="Permanent link">&para;</a></h2>
 <p>Use <code>match</code> to branch on enum values like <code>Result</code> and <code>Option</code>.</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    result = parse_port(&quot;8080&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">parse_port</span><span class="p">(</span><span class="s2">&quot;8080&quot;</span><span class="p">)</span>
 
-    match result:
-        case Ok(port): println(f&quot;port={port}&quot;)
-        case Err(e): println(f&quot;error: {e}&quot;)
+    <span class="k">match</span> <span class="n">result</span><span class="p">:</span>
+        <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">port</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;port={port}&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: {e}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="looping-with-for">Looping with <code>for</code><a class="headerlink" href="#looping-with-for" title="Permanent link">&para;</a></h2>
 <p>Incan supports Python-like <code>for</code> loops:</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    items = [&quot;Alice&quot;, &quot;Bob&quot;, &quot;Cara&quot;]
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">items</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Cara&quot;</span><span class="p">]</span>
 
-    for name in items:
-        println(name)
+    <span class="k">for</span> <span class="n">name</span> <span class="k">in</span> <span class="n">items</span><span class="p">:</span>
+        <span class="n">println</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
 </code></pre></div>
 <p>Break early when needed:</p>
-<div class="highlight"><pre><span></span><code>for name in items:
-    if name == &quot;Bob&quot;:
-        break
+<div class="language-incan highlight"><pre><span></span><code><span class="k">for</span> <span class="n">name</span> <span class="k">in</span> <span class="n">items</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">&quot;Bob&quot;</span><span class="p">:</span>
+        <span class="k">break</span>
 </code></pre></div>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>

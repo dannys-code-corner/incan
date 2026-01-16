@@ -3678,7 +3678,7 @@ If it still looks like a bug, please <a href="https://github.com/dannys-code-cor
 <li>GitHub: <code>https://github.com/dannys-code-corner/incan/blob/main/examples/web/hello_web.incn</code></li>
 </ul>
 <p>Build it:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>examples/web/hello_web.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>examples/web/hello_web.incn
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">No-install fallback</p>
@@ -3686,21 +3686,21 @@ If it still looks like a bug, please <a href="https://github.com/dannys-code-cor
 <ul>
 <li>from the repository root:</li>
 </ul>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
 </code></pre></div>
 <ul>
 <li>or via an absolute path (from anywhere):</li>
 </ul>
-<div class="highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 </div>
 <p>Note: the first build may download Rust crates via Cargo (can take minutes) and requires internet access.</p>
 <p>Run the compiled binary:</p>
-<div class="highlight"><pre><span></span><code>./target/incan/hello_web/target/release/hello_web
+<div class="language-bash highlight"><pre><span></span><code>./target/incan/hello_web/target/release/hello_web
 </code></pre></div>
 <h2 id="step-2-hit-the-endpoints">Step 2: Hit the endpoints<a class="headerlink" href="#step-2-hit-the-endpoints" title="Permanent link">&para;</a></h2>
 <p>In another terminal:</p>
-<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>http://localhost:8080/
+<div class="language-bash highlight"><pre><span></span><code>curl<span class="w"> </span>http://localhost:8080/
 curl<span class="w"> </span>http://localhost:8080/api/greet/World
 curl<span class="w"> </span>http://localhost:8080/api/user/42
 curl<span class="w"> </span>http://localhost:8080/health

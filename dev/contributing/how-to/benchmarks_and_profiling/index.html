@@ -3853,7 +3853,7 @@
 </tbody>
 </table>
 <h3 id="running-benchmarks">Running benchmarks<a class="headerlink" href="#running-benchmarks" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># Prerequisites (macOS)</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Prerequisites (macOS)</span>
 brew<span class="w"> </span>install<span class="w"> </span>hyperfine<span class="w"> </span>jq<span class="w"> </span>bc
 
 <span class="c1"># Build the compiler</span>
@@ -3866,7 +3866,7 @@ make<span class="w"> </span>benchmarks
 ./benchmarks/run_all.sh
 </code></pre></div>
 <h3 id="running-an-individual-benchmark">Running an individual benchmark<a class="headerlink" href="#running-an-individual-benchmark" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>benchmarks/compute/fib
+<div class="language-bash highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>benchmarks/compute/fib
 
 <span class="c1"># Build Incan version</span>
 ../../../target/release/incan<span class="w"> </span>build<span class="w"> </span>fib.incn
@@ -3885,7 +3885,7 @@ hyperfine<span class="w"> </span>--warmup<span class="w"> </span><span class="m"
 <p>For current measured results, see <code>benchmarks/results/results.md</code> in the repository.</p>
 <h2 id="profiling">Profiling<a class="headerlink" href="#profiling" title="Permanent link">&para;</a></h2>
 <h3 id="profiling-generated-code-your-benchmarkprogram">Profiling generated code (your benchmark/program)<a class="headerlink" href="#profiling-generated-code-your-benchmarkprogram" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># Build (incan always builds the generated project in release mode today)</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Build (incan always builds the generated project in release mode today)</span>
 incan<span class="w"> </span>build<span class="w"> </span>myprogram.incn
 
 <span class="c1"># Profile with Instruments (macOS)</span>
@@ -3897,7 +3897,7 @@ perf<span class="w"> </span>record<span class="w"> </span>./target/incan/myprogr
 perf<span class="w"> </span>report
 </code></pre></div>
 <h3 id="profiling-the-compiler">Profiling the compiler<a class="headerlink" href="#profiling-the-compiler" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># Profile compilation itself</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Profile compilation itself</span>
 cargo<span class="w"> </span>flamegraph<span class="w"> </span>--bin<span class="w"> </span>incan<span class="w"> </span>--<span class="w"> </span>build<span class="w"> </span>examples/advanced/async_await.incn
 
 <span class="c1"># Or with samply (macOS)</span>

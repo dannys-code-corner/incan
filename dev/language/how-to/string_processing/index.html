@@ -3684,26 +3684,26 @@
 <h1 id="string-processing">String processing<a class="headerlink" href="#string-processing" title="Permanent link">&para;</a></h1>
 <p>This page collects practical recipes for working with <code>str</code> and <code>bytes</code>.</p>
 <h2 id="split-and-index-safely">Split and index safely<a class="headerlink" href="#split-and-index-safely" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>line = &quot;alice,30,engineer&quot;
-parts = line.split(&quot;,&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">line</span> <span class="o">=</span> <span class="s2">&quot;alice,30,engineer&quot;</span>
+<span class="n">parts</span> <span class="o">=</span> <span class="n">line</span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
 
-name = parts[0]
-age = parts[1]
-role = parts[2]
+<span class="n">name</span> <span class="o">=</span> <span class="n">parts</span><span class="p">[</span><span class="m">0</span><span class="p">]</span>
+<span class="n">age</span> <span class="o">=</span> <span class="n">parts</span><span class="p">[</span><span class="m">1</span><span class="p">]</span>
+<span class="n">role</span> <span class="o">=</span> <span class="n">parts</span><span class="p">[</span><span class="m">2</span><span class="p">]</span>
 </code></pre></div>
 <blockquote>
 <p>Note: Indexing panics if out of range. If you need fallible parsing, validate the length before indexing (or use a
 <code>Result</code>-returning helper function).</p>
 </blockquote>
 <h2 id="build-strings">Build strings<a class="headerlink" href="#build-strings" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>words = [&quot;hello&quot;, &quot;world&quot;]
-sentence = &quot; &quot;.join(words)
-println(sentence.upper())  # HELLO WORLD
+<div class="language-incan highlight"><pre><span></span><code><span class="n">words</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;hello&quot;</span><span class="p">,</span> <span class="s2">&quot;world&quot;</span><span class="p">]</span>
+<span class="n">sentence</span> <span class="o">=</span> <span class="s2">&quot; &quot;</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">words</span><span class="p">)</span>
+<span class="n">println</span><span class="p">(</span><span class="n">sentence</span><span class="p">.</span><span class="n">upper</span><span class="p">())</span>  <span class="c1"># HELLO WORLD</span>
 </code></pre></div>
 <h2 id="clean-input">Clean input<a class="headerlink" href="#clean-input" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>raw_input = &quot;  user@example.com  &quot;
-email = raw_input.strip().lower()
-println(email)  # user@example.com
+<div class="language-incan highlight"><pre><span></span><code><span class="n">raw_input</span> <span class="o">=</span> <span class="s2">&quot;  user@example.com  &quot;</span>
+<span class="n">email</span> <span class="o">=</span> <span class="n">raw_input</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">lower</span><span class="p">()</span>
+<span class="n">println</span><span class="p">(</span><span class="n">email</span><span class="p">)</span>  <span class="c1"># user@example.com</span>
 </code></pre></div>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>

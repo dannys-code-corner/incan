@@ -3721,13 +3721,13 @@ setup/teardown and participate in fixture dependency injection.</p>
 </ul>
 <h2 id="proposed-design">Proposed Design<a class="headerlink" href="#proposed-design" title="Permanent link">&para;</a></h2>
 <h3 id="syntax">Syntax<a class="headerlink" href="#syntax" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>from testing import fixture
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span>
 
-@fixture(scope=&quot;function&quot;)
-async def http_server() -&gt; ServerHandle:
-    server = await start_server(port=0)
-    yield server
-    await server.shutdown()
+<span class="err">@</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">http_server</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ServerHandle</span><span class="p">:</span>
+    <span class="n">server</span> <span class="o">=</span> <span class="k">await</span> <span class="n">start_server</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="m">0</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">server</span>
+    <span class="k">await</span> <span class="n">server</span><span class="p">.</span><span class="n">shutdown</span><span class="p">()</span>
 </code></pre></div>
 <h4 id="teardown-guarantee">Teardown guarantee<a class="headerlink" href="#teardown-guarantee" title="Permanent link">&para;</a></h4>
 <p>The test runner ensures fixture teardowns run even if the test panics or is cancelled.
@@ -3763,26 +3763,26 @@ For async fixtures, teardown is awaited before proceeding to dependent teardowns
 </ul>
 <h2 id="implementation-phases">Implementation Phases<a class="headerlink" href="#implementation-phases" title="Permanent link">&para;</a></h2>
 <p>1) Parser/AST</p>
-<pre><code>- Add `Yield` expression support inside `async def`.
+<div class="language-text highlight"><pre><span></span><code>- Add `Yield` expression support inside `async def`.
 - Validate single `yield` per fixture function.
-</code></pre>
+</code></pre></div>
 <p>2) Test Runner</p>
-<pre><code>- Create shared Tokio runtime for the run.
+<div class="language-text highlight"><pre><span></span><code>- Create shared Tokio runtime for the run.
 - Resolve fixture graph; support async setup/teardown with scopes.
 - Ensure teardown runs on panic using `catch_unwind` + `DropGuard`-like patterns.
-</code></pre>
+</code></pre></div>
 <p>3) Codegen</p>
-<pre><code>- Emit Rust async fixtures as async functions returning the yielded value.
+<div class="language-text highlight"><pre><span></span><code>- Emit Rust async fixtures as async functions returning the yielded value.
 - Generate await points for setup/teardown.
 - Enforce scoping caches for module/session fixtures.
-</code></pre>
+</code></pre></div>
 <p>4) Parametrize Integration</p>
-<pre><code>- Expand parametrized tests first, then resolve fixtures per case.
+<div class="language-text highlight"><pre><span></span><code>- Expand parametrized tests first, then resolve fixtures per case.
 - Ensure async fixtures are awaited per case (function scope) or cached (module/session).
-</code></pre>
+</code></pre></div>
 <p>5) Documentation &amp; Examples</p>
-<pre><code>- Add examples for async HTTP server fixture, DB pool fixture, and queue client fixture.
-</code></pre>
+<div class="language-text highlight"><pre><span></span><code>- Add examples for async HTTP server fixture, DB pool fixture, and queue client fixture.
+</code></pre></div>
 <h2 id="open-questions">Open Questions<a class="headerlink" href="#open-questions" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Cancellation semantics: how do we handle long-running fixtures on test abort?</li>

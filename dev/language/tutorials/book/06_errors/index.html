@@ -3741,17 +3741,17 @@
 <p>Incan uses explicit error values (<code>Result</code> and <code>Option</code>) instead of Python-style exceptions.</p>
 <h2 id="resultt-e"><code>Result[T, E]</code><a class="headerlink" href="#resultt-e" title="Permanent link">&para;</a></h2>
 <p>Use <code>Result</code> for operations that can fail.</p>
-<div class="highlight"><pre><span></span><code>def read_username() -&gt; Result[str, str]:
-    name = input(&quot;Name: &quot;).strip()
-    if len(name) == 0:
-        return Err(&quot;name must not be empty&quot;)
-    return Ok(name)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">read_username</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">input</span><span class="p">(</span><span class="s2">&quot;Name: &quot;</span><span class="p">).</span><span class="n">strip</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;name must not be empty&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
 </code></pre></div>
 <p>Handle it with <code>match</code>:</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    match read_username():
-        case Ok(name): println(f&quot;hello, {name}&quot;)
-        case Err(e): println(f&quot;error: {e}&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">read_username</span><span class="p">():</span>
+        <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">name</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hello, {name}&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: {e}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="optiont"><code>Option[T]</code><a class="headerlink" href="#optiont" title="Permanent link">&para;</a></h2>
 <p>Use <code>Option</code> for “value may be absent”:</p>
@@ -3761,21 +3761,21 @@
 <li><code>None</code> — value is absent</li>
 </ul>
 <p>You create a present value by wrapping it: <code>Some(x)</code>.</p>
-<div class="highlight"><pre><span></span><code>def first(items: List[str]) -&gt; Option[str]:
-    if len(items) == 0:
-        return None
-    return Some(items[0])
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">first</span><span class="p">(</span><span class="n">items</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">None</span>
+    <span class="k">return</span> <span class="n">Some</span><span class="p">(</span><span class="n">items</span><span class="p">[</span><span class="m">0</span><span class="p">])</span>
 </code></pre></div>
 <p>You handle it with <code>match</code> by destructuring <code>Some(...)</code>.</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    match first([&quot;a&quot;, &quot;b&quot;]):
-        case Some(x): println(f&quot;first={x}&quot;)
-        case None: println(&quot;empty&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">first</span><span class="p">([</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">]):</span>
+        <span class="k">case</span> <span class="n">Some</span><span class="p">(</span><span class="n">x</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;first={x}&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="k">None</span><span class="p">:</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;empty&quot;</span><span class="p">)</span>
 </code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">Coming from Python?</p>
 <p>In Python typing, you’d usually express “may be missing” as:</p>
-<p><div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
+<p><div class="language-python highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">first</span><span class="p">(</span><span class="n">items</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
     <span class="k">return</span> <span class="n">items</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="n">items</span> <span class="k">else</span> <span class="kc">None</span>
@@ -3785,21 +3785,21 @@ In Incan, <code>Option[T]</code> is an explicit enum that the compiler can reaso
 </div>
 <h2 id="propagating-errors-with">Propagating errors with <code>?</code><a class="headerlink" href="#propagating-errors-with" title="Permanent link">&para;</a></h2>
 <p>The <code>?</code> operator returns early on <code>Err</code>, otherwise unwraps the <code>Ok</code> value:</p>
-<div class="highlight"><pre><span></span><code>def greet_user() -&gt; Result[None, str]:
-    name = read_username()?
-    println(f&quot;hello, {name}&quot;)
-    return Ok(None)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">greet_user</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="k">None</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">read_username</span><span class="p">()</span><span class="err">?</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hello, {name}&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="k">None</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="structured-errors-recommended">Structured errors (recommended)<a class="headerlink" href="#structured-errors-recommended" title="Permanent link">&para;</a></h2>
 <p>Prefer structured errors over strings when the caller should branch on error kinds:</p>
-<div class="highlight"><pre><span></span><code>enum NameError:
-    Empty
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">NameError</span><span class="p">:</span>
+    <span class="n">Empty</span>
 
-def normalize(name: str) -&gt; Result[str, NameError]:
-    cleaned = name.strip()
-    if len(cleaned) == 0:
-        return Err(NameError.Empty)
-    return Ok(cleaned.lower())
+<span class="k">def</span> <span class="n">normalize</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">NameError</span><span class="p">]:</span>
+    <span class="n">cleaned</span> <span class="o">=</span> <span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">cleaned</span><span class="p">)</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="n">NameError</span><span class="p">.</span><span class="n">Empty</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">cleaned</span><span class="p">.</span><span class="n">lower</span><span class="p">())</span>
 </code></pre></div>
 <h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
 <ol>
@@ -3810,28 +3810,28 @@ def normalize(name: str) -&gt; Result[str, NameError]:
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="highlight"><pre><span></span><code>def safe_div(a: float, b: float) -&gt; Result[float, str]:
-    if b == 0.0:
-        return Err(&quot;division by zero&quot;)
-    return Ok(a / b)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">safe_div</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">float</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">float</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">b</span> <span class="o">==</span> <span class="m">0.0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;division by zero&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">a</span> <span class="o">/</span> <span class="n">b</span><span class="p">)</span>
 
-def first(items: List[str]) -&gt; Option[str]:
-    if len(items) == 0:
-        return None
-    return Some(items[0])
+<span class="k">def</span> <span class="n">first</span><span class="p">(</span><span class="n">items</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">None</span>
+    <span class="k">return</span> <span class="n">Some</span><span class="p">(</span><span class="n">items</span><span class="p">[</span><span class="m">0</span><span class="p">])</span>
 
-def parse_and_divide(n: float, s: str) -&gt; Result[float, str]:
-    denom = float(s)?
-    return safe_div(n, denom)
+<span class="k">def</span> <span class="n">parse_and_divide</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="n">float</span><span class="p">,</span> <span class="n">s</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">float</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="n">denom</span> <span class="o">=</span> <span class="n">float</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">return</span> <span class="n">safe_div</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">denom</span><span class="p">)</span>
 
-def main() -&gt; None:
-    match first([&quot;a&quot;, &quot;b&quot;]):
-        case Some(x): println(f&quot;first={x}&quot;)
-        case None: println(&quot;empty&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">first</span><span class="p">([</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">]):</span>
+        <span class="k">case</span> <span class="n">Some</span><span class="p">(</span><span class="n">x</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;first={x}&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="k">None</span><span class="p">:</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;empty&quot;</span><span class="p">)</span>
 
-    match parse_and_divide(10.0, &quot;2.0&quot;):
-        case Ok(x): println(f&quot;10 / 2 = {x}&quot;)
-        case Err(e): println(f&quot;error: {e}&quot;)
+    <span class="k">match</span> <span class="n">parse_and_divide</span><span class="p">(</span><span class="m">10.0</span><span class="p">,</span> <span class="s2">&quot;2.0&quot;</span><span class="p">):</span>
+        <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">x</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;10 / 2 = {x}&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: {e}&quot;</span><span class="p">)</span>
 </code></pre></div>
 </details>
 <h2 id="what-to-learn-next">What to learn next<a class="headerlink" href="#what-to-learn-next" title="Permanent link">&para;</a></h2>

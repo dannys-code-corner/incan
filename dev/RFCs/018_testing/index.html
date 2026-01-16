@@ -3888,7 +3888,7 @@ independently while still sharing precise invariants.</p>
 then implement in dependency order.</p>
 <h3 id="the-testing-module">The <code>testing</code> module<a class="headerlink" href="#the-testing-module" title="Permanent link">&para;</a></h3>
 <p>Testing utilities are normal functions/decorators imported from the <code>testing</code> module:</p>
-<div class="highlight"><pre><span></span><code>from testing import assert_eq, assert_true, assert_false, fail
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span><span class="p">,</span> <span class="n">assert_true</span><span class="p">,</span> <span class="n">assert_false</span><span class="p">,</span> <span class="n">fail</span>
 </code></pre></div>
 <p>This RFC only specifies how these names are <em>resolved</em> (gated behind <code>testing</code>) and how <code>assert</code> maps to the
 <code>testing.assert_*</code> surface. Execution semantics for fixtures, parametrization, markers, and CLI options are defined in
@@ -3896,9 +3896,9 @@ RFC 019.</p>
 <h3 id="assertions-assert-keyword">Assertions: <code>assert ...</code> (keyword)<a class="headerlink" href="#assertions-assert-keyword" title="Permanent link">&para;</a></h3>
 <p>This RFC introduces an <code>assert</code> keyword that can be used <strong>anywhere</strong> (tests or production code) without importing
 anything:</p>
-<div class="highlight"><pre><span></span><code>assert 1 + 2 == 3
-assert 2 &lt; 3
-assert user is Some(_), &quot;user must be present&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="n">assert</span> <span class="m">1</span> <span class="o">+</span> <span class="m">2</span> <span class="o">==</span> <span class="m">3</span>
+<span class="n">assert</span> <span class="m">2</span> <span class="o">&lt;</span> <span class="m">3</span>
+<span class="n">assert</span> <span class="n">user</span> <span class="k">is</span> <span class="n">Some</span><span class="p">(</span><span class="n">_</span><span class="p">),</span> <span class="s2">&quot;user must be present&quot;</span>
 </code></pre></div>
 <p>It is syntax sugar for a <strong>language-level assertion primitive</strong> with the same user-facing behavior as the <code>testing</code>
 module’s assertion functions. See the reference-level table below for the full, exhaustive mapping.</p>
@@ -3925,62 +3925,62 @@ part of implementing this RFC.</p>
 <p><code>assert</code> accepts any expression that type-checks to <code>bool</code>. In practice, users will write assertions across a handful of
 common shapes.</p>
 <p>Equality / inequality (special-cased to <code>assert_eq</code> / <code>assert_ne</code>):</p>
-<div class="highlight"><pre><span></span><code>assert a == b
-assert actual != unexpected
-assert user.name == &quot;alice&quot;
-assert len(items) == 3
+<div class="language-incan highlight"><pre><span></span><code><span class="n">assert</span> <span class="n">a</span> <span class="o">==</span> <span class="n">b</span>
+<span class="n">assert</span> <span class="n">actual</span> <span class="o">!=</span> <span class="n">unexpected</span>
+<span class="n">assert</span> <span class="n">user</span><span class="p">.</span><span class="n">name</span> <span class="o">==</span> <span class="s2">&quot;alice&quot;</span>
+<span class="n">assert</span> <span class="n">len</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="o">==</span> <span class="m">3</span>
 
-# Optional message (shown on failure)
-assert user.name == &quot;alice&quot;, &quot;expected alice user&quot;
+<span class="c1"># Optional message (shown on failure)</span>
+<span class="c1">assert user.name == &quot;alice&quot;, &quot;expected alice user&quot;</span>
 </code></pre></div>
 <h4 id="expected-failure-output-illustrative">Expected failure output (illustrative)<a class="headerlink" href="#expected-failure-output-illustrative" title="Permanent link">&para;</a></h4>
 <p>Exact formatting is implementation-defined, but failures should be understandable.</p>
 <p>At minimum, failed <code>assert</code> statements should be reported as an <code>AssertionError</code> (Python-inspired), with the optional
 message rendered as <code>AssertionError: &lt;msg&gt;</code>.</p>
 <p>Minimum examples:</p>
-<div class="highlight"><pre><span></span><code># assert x &gt; 0, &quot;x must be positive&quot;
+<div class="language-text highlight"><pre><span></span><code># assert x &gt; 0, &quot;x must be positive&quot;
 FAILED: AssertionError: x must be positive
   assertion failed: x &gt; 0
   x = -1
 </code></pre></div>
-<div class="highlight"><pre><span></span><code># assert x &gt; 0
+<div class="language-text highlight"><pre><span></span><code># assert x &gt; 0
 FAILED: AssertionError
   assertion failed: x &gt; 0
   x = -1
 </code></pre></div>
-<div class="highlight"><pre><span></span><code># assert a == b, &quot;values must match&quot;
+<div class="language-text highlight"><pre><span></span><code># assert a == b, &quot;values must match&quot;
 FAILED: AssertionError: values must match
   assertion failed: left != right
   left:  2
   right: 3
 </code></pre></div>
 <p>Ordering comparisons:</p>
-<div class="highlight"><pre><span></span><code>assert x &gt; 0
-assert x &gt;= 0
-assert start &lt;= end
+<div class="language-incan highlight"><pre><span></span><code><span class="n">assert</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="m">0</span>
+<span class="n">assert</span> <span class="n">x</span> <span class="o">&gt;=</span> <span class="m">0</span>
+<span class="n">assert</span> <span class="n">start</span> <span class="o">&lt;=</span> <span class="n">end</span>
 
-# Incan does not support Python-style chained comparisons like `0 &lt; x &lt; 10` (at least not as part of this RFC).
-# Use `and` explicitly:
-assert 0 &lt; x and x &lt; 10
+<span class="c1"># Incan does not support Python-style chained comparisons like `0 &lt; x &lt; 10` (at least not as part of this RFC).</span>
+<span class="c1"># Use `and` explicitly:</span>
+<span class="c1">assert 0 &lt; x and x &lt; 10</span>
 </code></pre></div>
 <p>Boolean logic:</p>
-<div class="highlight"><pre><span></span><code>assert True
-assert not True
-assert a and b
-assert a or b
-assert (a and b) or c
+<div class="language-incan highlight"><pre><span></span><code><span class="n">assert</span> <span class="n">True</span>
+<span class="n">assert</span> <span class="k">not</span> <span class="n">True</span>
+<span class="n">assert</span> <span class="n">a</span> <span class="k">and</span> <span class="n">b</span>
+<span class="n">assert</span> <span class="n">a</span> <span class="k">or</span> <span class="n">b</span>
+<span class="n">assert</span> <span class="p">(</span><span class="n">a</span> <span class="k">and</span> <span class="n">b</span><span class="p">)</span> <span class="k">or</span> <span class="n">c</span>
 </code></pre></div>
 <p>Option / Result checks (recommended to be explicit; <code>Option</code>/<code>Result</code> are not implicitly truthy):</p>
-<div class="highlight"><pre><span></span><code>assert user.is_some()
-assert user.is_none()
+<div class="language-incan highlight"><pre><span></span><code><span class="n">assert</span> <span class="n">user</span><span class="p">.</span><span class="n">is_some</span><span class="p">()</span>
+<span class="n">assert</span> <span class="n">user</span><span class="p">.</span><span class="n">is_none</span><span class="p">()</span>
 
-assert result.is_ok()
-assert result.is_err()
+<span class="n">assert</span> <span class="n">result</span><span class="p">.</span><span class="n">is_ok</span><span class="p">()</span>
+<span class="n">assert</span> <span class="n">result</span><span class="p">.</span><span class="n">is_err</span><span class="p">()</span>
 </code></pre></div>
 <p>Pattern matching with <code>is</code> (note: <strong><code>is</code> is pattern matching</strong>, not identity):</p>
-<div class="highlight"><pre><span></span><code>assert user is Some(_)
-assert result is Ok(_)
-assert result is Err(_)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">assert</span> <span class="n">user</span> <span class="k">is</span> <span class="n">Some</span><span class="p">(</span><span class="n">_</span><span class="p">)</span>
+<span class="n">assert</span> <span class="n">result</span> <span class="k">is</span> <span class="n">Ok</span><span class="p">(</span><span class="n">_</span><span class="p">)</span>
+<span class="n">assert</span> <span class="n">result</span> <span class="k">is</span> <span class="n">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span>
 </code></pre></div>
 <p>Binding notes (important semantic commitment):</p>
 <ul>
@@ -3995,29 +3995,29 @@ assert result is Err(_)
   general pattern-matching system is specified).</li>
 </ul>
 <p>“Contains” / membership style checks:</p>
-<div class="highlight"><pre><span></span><code>assert name != &quot;&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="n">assert</span> <span class="n">name</span> <span class="o">!=</span> <span class="s2">&quot;&quot;</span>
 
-# If the type exposes an API (e.g. `contains(...)`) this works naturally:
-assert tags.contains(&quot;release&quot;)
+<span class="c1"># If the type exposes an API (e.g. `contains(...)`) this works naturally:</span>
+<span class="c1">assert tags.contains(&quot;release&quot;)</span>
 </code></pre></div>
 <p>Identity checks (Python’s <code>is</code>) are intentionally <strong>not</strong> part of <code>assert</code> in this RFC, because <code>is</code> already has a
 different meaning (pattern matching). If/when Incan adds a reference-identity operation, it should be spelled
 explicitly (e.g. <code>ref_eq(a, b)</code>), not overloaded onto <code>is</code>.</p>
 <h3 id="inline-test-only-module-blocks">Inline test-only module blocks<a class="headerlink" href="#inline-test-only-module-blocks" title="Permanent link">&para;</a></h3>
 <p>Inline tests live next to production code, but inside a <strong>test-only module block</strong>:</p>
-<div class="highlight"><pre><span></span><code>def add(a: int, b: int) -&gt; int:
-    return a + b
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
 
-module tests:
-    from testing import assert_eq, test
+<span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
+    <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span><span class="p">,</span> <span class="n">test</span>
 
-    def test_addition() -&gt; None:
-        assert add(2, 3) == 5
+    <span class="k">def</span> <span class="n">test_addition</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+        <span class="n">assert</span> <span class="n">add</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">)</span> <span class="o">==</span> <span class="m">5</span>
 
-    @test  # explicitly marked as a test (name doesn&#39;t need to start with test_)
-    def explicit_test() -&gt; None:
-        assert add(2, 3) == 5
+    <span class="err">@</span><span class="n">test</span>  <span class="c1"># explicitly marked as a test (name doesn&#39;t need to start with test_)</span>
+<span class="c1">    def explicit_test() -&gt; None:</span>
+<span class="c1">        assert add(2, 3) == 5</span>
 </code></pre></div>
 <p>This keeps helpers/fixtures/test imports scoped to the test module and allows the compiler to strip all test-only code
 from <code>incan build</code> and <code>incan run</code>.</p>
@@ -4158,16 +4158,16 @@ assertion failure output.</p>
 </tbody>
 </table>
 <p>Full signatures (required <code>testing</code> API surface for this RFC):</p>
-<div class="highlight"><pre><span></span><code>assert(condition: bool, msg: str = &quot;&quot;) -&gt; None
-assert_true(condition: bool, msg: str = &quot;&quot;) -&gt; None
-assert_false(condition: bool, msg: str = &quot;&quot;) -&gt; None
-assert_eq[T](left: T, right: T, msg: str = &quot;&quot;) -&gt; None
-assert_ne[T](left: T, right: T, msg: str = &quot;&quot;) -&gt; None
-assert_is_some[T](option: Option[T], msg: str = &quot;&quot;) -&gt; T
-assert_is_none[T](option: Option[T], msg: str = &quot;&quot;) -&gt; None
-assert_is_ok[T, E](result: Result[T, E], msg: str = &quot;&quot;) -&gt; T
-assert_is_err[T, E](result: Result[T, E], msg: str = &quot;&quot;) -&gt; E
-assert_raises[E](block: () -&gt; None, msg: str = &quot;&quot;) -&gt; E
+<div class="language-incan highlight"><pre><span></span><code><span class="n">assert</span><span class="p">(</span><span class="n">condition</span><span class="p">:</span> <span class="n">bool</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span>
+<span class="n">assert_true</span><span class="p">(</span><span class="n">condition</span><span class="p">:</span> <span class="n">bool</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span>
+<span class="n">assert_false</span><span class="p">(</span><span class="n">condition</span><span class="p">:</span> <span class="n">bool</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span>
+<span class="n">assert_eq</span><span class="p">[</span><span class="n">T</span><span class="p">](</span><span class="n">left</span><span class="p">:</span> <span class="n">T</span><span class="p">,</span> <span class="n">right</span><span class="p">:</span> <span class="n">T</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span>
+<span class="n">assert_ne</span><span class="p">[</span><span class="n">T</span><span class="p">](</span><span class="n">left</span><span class="p">:</span> <span class="n">T</span><span class="p">,</span> <span class="n">right</span><span class="p">:</span> <span class="n">T</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span>
+<span class="n">assert_is_some</span><span class="p">[</span><span class="n">T</span><span class="p">](</span><span class="n">option</span><span class="p">:</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span>
+<span class="n">assert_is_none</span><span class="p">[</span><span class="n">T</span><span class="p">](</span><span class="n">option</span><span class="p">:</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span>
+<span class="n">assert_is_ok</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">](</span><span class="n">result</span><span class="p">:</span> <span class="n">Result</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span>
+<span class="n">assert_is_err</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">](</span><span class="n">result</span><span class="p">:</span> <span class="n">Result</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">E</span>
+<span class="n">assert_raises</span><span class="p">[</span><span class="n">E</span><span class="p">](</span><span class="n">block</span><span class="p">:</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">E</span>
 </code></pre></div>
 <p>Desugaring rule used by the compiler:</p>
 <p>Let the optional message be <code>msg</code> when present (i.e. <code>assert &lt;expr&gt;, msg</code>).</p>

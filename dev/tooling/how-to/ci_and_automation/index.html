@@ -3735,24 +3735,24 @@
 <h2 id="recommended-commands">Recommended commands<a class="headerlink" href="#recommended-commands" title="Permanent link">&para;</a></h2>
 <h3 id="type-check-fast-gate">Type check (fast gate)<a class="headerlink" href="#type-check-fast-gate" title="Permanent link">&para;</a></h3>
 <p>Type-check a program without building/running it (default action when no subcommand is provided):</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>path/to/main.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>path/to/main.incn
 </code></pre></div>
 <h3 id="format-ci-mode">Format (CI mode)<a class="headerlink" href="#format-ci-mode" title="Permanent link">&para;</a></h3>
 <p>Check formatting without modifying files:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>fmt<span class="w"> </span>--check<span class="w"> </span>.
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>fmt<span class="w"> </span>--check<span class="w"> </span>.
 </code></pre></div>
 <p>See also: <a href="../formatting/">Formatting</a> and <a href="../../reference/cli_reference/">CLI reference</a>.</p>
 <h3 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h3>
 <p>Run all tests:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>.
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>.
 </code></pre></div>
 <p>See also: <a href="../testing/">Testing</a> and <a href="../../reference/cli_reference/">CLI reference</a>.</p>
 <h3 id="run-an-incn-file">Run an incn file<a class="headerlink" href="#run-an-incn-file" title="Permanent link">&para;</a></h3>
 <p>Run a program and use its exit code as the CI result:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>path/to/main.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>path/to/main.incn
 </code></pre></div>
 <h2 id="github-actions-example">GitHub Actions example<a class="headerlink" href="#github-actions-example" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Type check</span>
+<div class="language-yaml highlight"><pre><span></span><code><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Type check</span>
 <span class="w">  </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">incan path/to/main.incn</span>
 
 <span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Format (CI)</span>

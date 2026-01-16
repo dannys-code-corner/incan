@@ -3954,12 +3954,12 @@
 <li>Define <code>__str__(self) -&gt; str</code> on your <code>model</code>/<code>class</code>.</li>
 <li>Do not also <code>@derive(Display)</code> (that’s a conflict).</li>
 </ol>
-<div class="highlight"><pre><span></span><code>model User:
-    name: str
-    email: str
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">email</span><span class="p">:</span> <span class="n">str</span>
 
-    def __str__(self) -&gt; str:
-        return f&quot;{self.name} &lt;{self.email}&gt;&quot;
+    <span class="k">def</span> <span class="n">__str__</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;{self.name} &lt;{self.email}&gt;&quot;</span>
 </code></pre></div>
 <hr />
 <h2 id="custom-equality">Custom equality (<code>==</code>)<a class="headerlink" href="#custom-equality" title="Permanent link">&para;</a></h2>
@@ -3970,12 +3970,12 @@
 <li>Define <code>__eq__(self, other: Self) -&gt; bool</code>.</li>
 <li>Do not also <code>@derive(Eq)</code>.</li>
 </ol>
-<div class="highlight"><pre><span></span><code>model User:
-    id: int
-    name: str
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
 
-    def __eq__(self, other: User) -&gt; bool:
-        return self.id == other.id
+    <span class="k">def</span> <span class="n">__eq__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">id</span> <span class="o">==</span> <span class="n">other</span><span class="p">.</span><span class="n">id</span>
 </code></pre></div>
 <hr />
 <h2 id="custom-ordering-sorted">Custom ordering (<code>sorted(...)</code>)<a class="headerlink" href="#custom-ordering-sorted" title="Permanent link">&para;</a></h2>
@@ -3986,12 +3986,12 @@
 <li>Define <code>__lt__(self, other: Self) -&gt; bool</code>.</li>
 <li>Do not also <code>@derive(Ord)</code>.</li>
 </ol>
-<div class="highlight"><pre><span></span><code>model Task:
-    priority: int
-    title: str
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Task</span><span class="p">:</span>
+    <span class="n">priority</span><span class="p">:</span> <span class="n">int</span>
+    <span class="n">title</span><span class="p">:</span> <span class="n">str</span>
 
-    def __lt__(self, other: Task) -&gt; bool:
-        return self.priority &lt; other.priority
+    <span class="k">def</span> <span class="n">__lt__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">Task</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">priority</span> <span class="o">&lt;</span> <span class="n">other</span><span class="p">.</span><span class="n">priority</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Why <code>__lt__</code>?</p>
@@ -4009,15 +4009,15 @@
 <li>Ensure it matches equality: if <code>a == b</code>, their hashes must match.</li>
 <li>Do not also <code>@derive(Hash)</code>.</li>
 </ol>
-<div class="highlight"><pre><span></span><code>model User:
-    id: int
-    name: str
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
 
-    def __eq__(self, other: User) -&gt; bool:
-        return self.id == other.id
+    <span class="k">def</span> <span class="n">__eq__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">id</span> <span class="o">==</span> <span class="n">other</span><span class="p">.</span><span class="n">id</span>
 
-    def __hash__(self) -&gt; int:
-        return self.id.__hash__()
+    <span class="k">def</span> <span class="n">__hash__</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">__hash__</span><span class="p">()</span>
 </code></pre></div>
 <hr />
 <h2 id="field-defaults-make-construction-ergonomic">Field defaults: make construction ergonomic<a class="headerlink" href="#field-defaults-make-construction-ergonomic" title="Permanent link">&para;</a></h2>
@@ -4028,9 +4028,9 @@
 <li>Put defaults on the fields (<code>field: T = expr</code>).</li>
 <li>Any field with no default must still be provided.</li>
 </ol>
-<div class="highlight"><pre><span></span><code>model Settings:
-    theme: str = &quot;dark&quot;
-    font_size: int = 14
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Settings</span><span class="p">:</span>
+    <span class="n">theme</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;dark&quot;</span>
+    <span class="n">font_size</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">14</span>
 </code></pre></div>
 
 

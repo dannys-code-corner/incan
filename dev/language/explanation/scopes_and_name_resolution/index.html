@@ -3890,35 +3890,35 @@ the current scope).</p>
 <li>top-level function definitions, models/classes/enums, etc.</li>
 </ul>
 <p>For example:</p>
-<div class="highlight"><pre><span></span><code>from math import sqrt            # module-scope binding
-const PI: float = 3.14159        # module-scope binding
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">math</span> <span class="k">import</span> <span class="n">sqrt</span>            <span class="c1"># module-scope binding</span>
+<span class="c1">const PI: float = 3.14159        # module-scope binding</span>
 
-def area(r: float) -&gt; float:     # module-scope binding (function)
-    return PI * r * r            # uses module-scope name
+<span class="c1">def area(r: float) -&gt; float:     # module-scope binding (function)</span>
+<span class="c1">    return PI * r * r            # uses module-scope name</span>
 
-model Circle:                    # module-scope binding (type)
-    radius: float
+<span class="c1">model Circle:                    # module-scope binding (type)</span>
+<span class="c1">    radius: float</span>
 
-def demo() -&gt; float:
-    c = Circle(radius=2.0)
-    return sqrt(area(c.radius))  # `Circle`, `sqrt`, `area` resolved from module scope
+<span class="c1">def demo() -&gt; float:</span>
+<span class="c1">    c = Circle(radius=2.0)</span>
+<span class="c1">    return sqrt(area(c.radius))  # `Circle`, `sqrt`, `area` resolved from module scope</span>
 </code></pre></div>
 <p>In this example, the names <code>sqrt</code>, <code>PI</code>, <code>area</code>, and <code>Circle</code> are all resolved from the module scope.</p>
 <h3 id="function-method-scope">Function / method scope<a class="headerlink" href="#function-method-scope" title="Permanent link">&para;</a></h3>
 <p>Each <code>def ...:</code> body is a <strong>function scope</strong>.</p>
 <p>Methods also have a function-like scope and define <code>self</code> (and <code>mut self</code>) for the method body.</p>
 <p>For example:</p>
-<div class="highlight"><pre><span></span><code>const PI: float = 3.14159  # module scope
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">PI</span><span class="p">:</span> <span class="n">float</span> <span class="o">=</span> <span class="m">3.14159</span>  <span class="c1"># module scope</span>
 
-def area_scaled(r: float, scale: float) -&gt; float:
-    let base = PI * r * r        # PI: module, r: parameter, base: local
-    return base * scale          # scale: parameter
+<span class="c1">def area_scaled(r: float, scale: float) -&gt; float:</span>
+<span class="c1">    let base = PI * r * r        # PI: module, r: parameter, base: local</span>
+<span class="c1">    return base * scale          # scale: parameter</span>
 
-model Circle:
-    radius: float
+<span class="c1">model Circle:</span>
+<span class="c1">    radius: float</span>
 
-    def area(self) -&gt; float:
-        return PI * self.radius * self.radius  # self: method scope, PI: module scope
+<span class="c1">    def area(self) -&gt; float:</span>
+<span class="c1">        return PI * self.radius * self.radius  # self: method scope, PI: module scope</span>
 </code></pre></div>
 <p>In these examples:</p>
 <ul>
@@ -3959,22 +3959,22 @@ model Circle:
 <li>Shadowing an outer name is done with <code>let</code> (a new binding in the inner scope).</li>
 </ul>
 <p>Example:</p>
-<div class="highlight"><pre><span></span><code>def reassigns_outer() -&gt; int:
-    mut x = 1
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">reassigns_outer</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">mut</span> <span class="n">x</span> <span class="o">=</span> <span class="m">1</span>
 
-    if true:
-        x = 2
+    <span class="k">if</span> <span class="k">true</span><span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="m">2</span>
 
-    return x  # 2
+    <span class="k">return</span> <span class="n">x</span>  <span class="c1"># 2</span>
 </code></pre></div>
 <p>Shadowing example (block-local):</p>
-<div class="highlight"><pre><span></span><code>def shadows_in_block() -&gt; int:
-    let x = 1
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">shadows_in_block</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">let</span> <span class="n">x</span> <span class="o">=</span> <span class="m">1</span>
 
-    if true:
-        let x = 2  # new binding in the block scope (shadows outer x)
+    <span class="k">if</span> <span class="k">true</span><span class="p">:</span>
+        <span class="k">let</span> <span class="n">x</span> <span class="o">=</span> <span class="m">2</span>  <span class="c1"># new binding in the block scope (shadows outer x)</span>
 
-    return x  # still 1
+<span class="c1">    return x  # still 1</span>
 </code></pre></div>
 <p>Notes on <code>let</code>:</p>
 <ul>
@@ -3985,40 +3985,40 @@ model Circle:
   introduced with <code>mut</code>).</li>
 </ul>
 <p>You get an error if you write this:</p>
-<div class="highlight"><pre><span></span><code>def errors_without_mut() -&gt; Unit:
-    let x = 1
-    if true:
-        x = 2  # error: cannot reassign immutable variable &#39;x&#39;
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">errors_without_mut</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Unit</span><span class="p">:</span>
+    <span class="k">let</span> <span class="n">x</span> <span class="o">=</span> <span class="m">1</span>
+    <span class="k">if</span> <span class="k">true</span><span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="m">2</span>  <span class="c1"># error: cannot reassign immutable variable &#39;x&#39;</span>
 </code></pre></div>
 <p>That’s because plain <code>x = 2</code> is treated as a reassignment (since <code>x</code> already exists), and the outer <code>x</code> is immutable.</p>
 <h3 id="prefer-explicit-let-mut">Prefer explicit <code>let</code> / <code>mut</code><a class="headerlink" href="#prefer-explicit-let-mut" title="Permanent link">&para;</a></h3>
 <p>Use <code>let</code>/<code>mut</code> when you care about whether you’re shadowing or reassigning; it avoids surprises and matches what you
 intended.</p>
 <p>Example:</p>
-<div class="highlight"><pre><span></span><code>def shadow_vs_reassign() -&gt; int:
-    mut x = 10
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">shadow_vs_reassign</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">mut</span> <span class="n">x</span> <span class="o">=</span> <span class="m">10</span>
 
-    if true:
-        x = 11      # reassigns the *outer* x (because x already exists)
-        mut x = 12  # creates a new mutable block-local x (shadows outer x in this block)
-        x = 13      # reassigns the *inner* x (still in the block scope)
+    <span class="k">if</span> <span class="k">true</span><span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="m">11</span>      <span class="c1"># reassigns the *outer* x (because x already exists)</span>
+<span class="c1">        mut x = 12  # creates a new mutable block-local x (shadows outer x in this block)</span>
+<span class="c1">        x = 13      # reassigns the *inner* x (still in the block scope)</span>
 
-    return x  # still returns 11, as the x = 13 was assigned to a new x local to the if-block
+<span class="c1">    return x  # still returns 11, as the x = 13 was assigned to a new x local to the if-block</span>
 </code></pre></div>
 <h2 id="closures-and-capturing">Closures and capturing<a class="headerlink" href="#closures-and-capturing" title="Permanent link">&para;</a></h2>
 <p>Incan closures use arrow syntax:</p>
-<div class="highlight"><pre><span></span><code>add1 = (x) =&gt; x + 1
+<div class="language-incan highlight"><pre><span></span><code><span class="n">add1</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">x</span> <span class="o">+</span> <span class="m">1</span>
 </code></pre></div>
 <p>Closures introduce their own function scope (parameters are local to the closure body). Names from outer scopes can be
 <strong>read</strong> by normal lexical lookup.</p>
 <p>Plain assignment inside a closure behaves the same as elsewhere: if the name exists already, it’s treated as a reassignment
 (so it requires the outer binding to be <code>mut</code>). Shadow with <code>let</code> if you want a closure-local name.</p>
 <p>Example:</p>
-<div class="highlight"><pre><span></span><code>def closure_capture() -&gt; int:
-    mut x = 1
-    inc = () =&gt; x = x + 1  # reassigns outer x (so outer x must be mut)
-    inc()
-    return x  # 2
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">closure_capture</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">mut</span> <span class="n">x</span> <span class="o">=</span> <span class="m">1</span>
+    <span class="n">inc</span> <span class="o">=</span> <span class="p">()</span> <span class="o">=&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="m">1</span>  <span class="c1"># reassigns outer x (so outer x must be mut)</span>
+<span class="c1">    inc()</span>
+<span class="c1">    return x  # 2</span>
 </code></pre></div>
 <blockquote>
 <p>Note: Incan does not expose Python-style <code>global</code> / <code>nonlocal</code> declarations.</p>

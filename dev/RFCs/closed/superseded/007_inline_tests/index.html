@@ -3902,7 +3902,7 @@ with Rust's proximity benefits. Test functions are automatically stripped from p
 </ol>
 <h3 id="rusts-solution">Rust's Solution<a class="headerlink" href="#rusts-solution" title="Permanent link">&para;</a></h3>
 <p>Rust embeds unit tests in the same file:</p>
-<div class="highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="p">}</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="p">}</span>
 
 <span class="cp">#[cfg(test)]</span>
 <span class="k">mod</span><span class="w"> </span><span class="nn">tests</span><span class="w"> </span><span class="p">{</span>
@@ -3917,34 +3917,34 @@ with Rust's proximity benefits. Test functions are automatically stripped from p
 <p>This is stripped from release builds via <code>#[cfg(test)]</code>.</p>
 <h3 id="incans-opportunity">Incan's Opportunity<a class="headerlink" href="#incans-opportunity" title="Permanent link">&para;</a></h3>
 <p>Combine Python's ergonomics with Rust's proximity:</p>
-<div class="highlight"><pre><span></span><code>def add(a: int, b: int) -&gt; int:
-    return a + b
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-@test
-def test_add() -&gt; None:
-    assert_eq(add(1, 2), 3)
+<span class="err">@</span><span class="n">test</span>
+<span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">),</span> <span class="m">3</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
 <h3 id="basic-syntax">Basic Syntax<a class="headerlink" href="#basic-syntax" title="Permanent link">&para;</a></h3>
 <p>Any function decorated with <code>@test</code> is a test function:</p>
-<div class="highlight"><pre><span></span><code># src/math.incn
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/math.incn</span>
 
-def factorial(n: int) -&gt; int:
-    if n &lt;= 1:
-        return 1
-    return n * factorial(n - 1)
+<span class="c1">def factorial(n: int) -&gt; int:</span>
+<span class="c1">    if n &lt;= 1:</span>
+<span class="c1">        return 1</span>
+<span class="c1">    return n * factorial(n - 1)</span>
 
-@test
-def test_factorial_base() -&gt; None:
-    assert_eq(factorial(0), 1)
-    assert_eq(factorial(1), 1)
+<span class="c1">@test</span>
+<span class="c1">def test_factorial_base() -&gt; None:</span>
+<span class="c1">    assert_eq(factorial(0), 1)</span>
+<span class="c1">    assert_eq(factorial(1), 1)</span>
 
-@test
-def test_factorial_recursive() -&gt; None:
-    assert_eq(factorial(5), 120)
+<span class="c1">@test</span>
+<span class="c1">def test_factorial_recursive() -&gt; None:</span>
+<span class="c1">    assert_eq(factorial(5), 120)</span>
 </code></pre></div>
 <h3 id="running-tests">Running Tests<a class="headerlink" href="#running-tests" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># Run tests in a specific file</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Run tests in a specific file</span>
 incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>src/math.incn
 
 <span class="c1"># Run all tests in directory (finds @test in all .incn files)</span>
@@ -3982,52 +3982,52 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 </table>
 <h3 id="inline-tests-with-fixtures">Inline Tests with Fixtures<a class="headerlink" href="#inline-tests-with-fixtures" title="Permanent link">&para;</a></h3>
 <p>Fixtures work naturally with inline tests:</p>
-<div class="highlight"><pre><span></span><code># src/database.incn
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/database.incn</span>
 
-class Database:
-    def connect(url: str) -&gt; Database:
-        ...
+<span class="c1">class Database:</span>
+<span class="c1">    def connect(url: str) -&gt; Database:</span>
+<span class="c1">        ...</span>
 
-    def query(self, sql: str) -&gt; List[Row]:
-        ...
+<span class="c1">    def query(self, sql: str) -&gt; List[Row]:</span>
+<span class="c1">        ...</span>
 
-@fixture
-def test_db() -&gt; Database:
-    db = Database.connect(&quot;sqlite::memory:&quot;)
-    yield db
-    db.close()
+<span class="c1">@fixture</span>
+<span class="c1">def test_db() -&gt; Database:</span>
+<span class="c1">    db = Database.connect(&quot;sqlite::memory:&quot;)</span>
+<span class="c1">    yield db</span>
+<span class="c1">    db.close()</span>
 
-@test
-def test_query(test_db: Database) -&gt; None:
-    result = test_db.query(&quot;SELECT 1&quot;)
-    assert_eq(len(result), 1)
+<span class="c1">@test</span>
+<span class="c1">def test_query(test_db: Database) -&gt; None:</span>
+<span class="c1">    result = test_db.query(&quot;SELECT 1&quot;)</span>
+<span class="c1">    assert_eq(len(result), 1)</span>
 </code></pre></div>
 <h3 id="private-function-testing">Private Function Testing<a class="headerlink" href="#private-function-testing" title="Permanent link">&para;</a></h3>
 <p>Inline tests can access private (non-<code>pub</code>) functions:</p>
-<div class="highlight"><pre><span></span><code># src/parser.incn
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/parser.incn</span>
 
-def parse(source: str) -&gt; AST:
-    tokens = _tokenize(source)  # private helper
-    return _build_ast(tokens)
+<span class="c1">def parse(source: str) -&gt; AST:</span>
+<span class="c1">    tokens = _tokenize(source)  # private helper</span>
+<span class="c1">    return _build_ast(tokens)</span>
 
-def _tokenize(source: str) -&gt; List[Token]:
-    # Private implementation detail
-    ...
+<span class="c1">def _tokenize(source: str) -&gt; List[Token]:</span>
+<span class="c1">    # Private implementation detail</span>
+<span class="c1">    ...</span>
 
-def _build_ast(tokens: List[Token]) -&gt; AST:
-    # Private implementation detail
-    ...
+<span class="c1">def _build_ast(tokens: List[Token]) -&gt; AST:</span>
+<span class="c1">    # Private implementation detail</span>
+<span class="c1">    ...</span>
 
-# Tests can access private functions!
-@test
-def test_tokenize() -&gt; None:
-    tokens = _tokenize(&quot;1 + 2&quot;)
-    assert_eq(len(tokens), 3)
+<span class="c1"># Tests can access private functions!</span>
+<span class="c1">@test</span>
+<span class="c1">def test_tokenize() -&gt; None:</span>
+<span class="c1">    tokens = _tokenize(&quot;1 + 2&quot;)</span>
+<span class="c1">    assert_eq(len(tokens), 3)</span>
 </code></pre></div>
 <p>This mirrors Rust's <code>use super::*</code> pattern where inline tests access module internals.</p>
 <h3 id="mixing-inline-and-separate-tests">Mixing Inline and Separate Tests<a class="headerlink" href="#mixing-inline-and-separate-tests" title="Permanent link">&para;</a></h3>
 <p>Both approaches coexist:</p>
-<div class="highlight"><pre><span></span><code>project/
+<div class="language-bash highlight"><pre><span></span><code>project/
 ├──<span class="w"> </span>src/
 │<span class="w">   </span>├──<span class="w"> </span>math.incn<span class="w">           </span><span class="c1"># Has @test functions inline</span>
 │<span class="w">   </span>└──<span class="w"> </span>complex_module.incn<span class="w"> </span><span class="c1"># No inline tests</span>
@@ -4037,7 +4037,7 @@ def test_tokenize() -&gt; None:
 <h2 id="compilation-strategy">Compilation Strategy<a class="headerlink" href="#compilation-strategy" title="Permanent link">&para;</a></h2>
 <h3 id="detection">Detection<a class="headerlink" href="#detection" title="Permanent link">&para;</a></h3>
 <p>During parsing, track which functions have <code>@test</code> decorator:</p>
-<div class="highlight"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">FunctionDecl</span><span class="w"> </span><span class="p">{</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">FunctionDecl</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
 <span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">is_test</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w">  </span><span class="c1">// true if @test decorated</span>
 <span class="w">    </span><span class="c1">// ...</span>
@@ -4045,7 +4045,7 @@ def test_tokenize() -&gt; None:
 </code></pre></div>
 <h3 id="conditional-compilation">Conditional Compilation<a class="headerlink" href="#conditional-compilation" title="Permanent link">&para;</a></h3>
 <p>In codegen, check compilation mode:</p>
-<div class="highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">emit_function</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">func</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">FunctionDecl</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">emit_function</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">func</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">FunctionDecl</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// Skip @test functions in production builds</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">func</span><span class="p">.</span><span class="n">is_test</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="bp">self</span><span class="p">.</span><span class="n">test_mode</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="k">return</span><span class="p">;</span>
@@ -4061,21 +4061,21 @@ def test_tokenize() -&gt; None:
 </code></pre></div>
 <h3 id="generated-rust">Generated Rust<a class="headerlink" href="#generated-rust" title="Permanent link">&para;</a></h3>
 <p><strong>Incan:</strong></p>
-<div class="highlight"><pre><span></span><code>def add(a: int, b: int) -&gt; int:
-    return a + b
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-@test
-def test_add() -&gt; None:
-    assert_eq(add(1, 2), 3)
+<span class="err">@</span><span class="n">test</span>
+<span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">),</span> <span class="m">3</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Production build (<code>incan build</code>):</strong></p>
-<div class="highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">{</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span>
 <span class="p">}</span>
 <span class="c1">// test_add is NOT emitted</span>
 </code></pre></div>
 <p><strong>Test build (<code>incan test</code>):</strong></p>
-<div class="highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">{</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span>
 <span class="p">}</span>
 
@@ -4086,59 +4086,59 @@ def test_add() -&gt; None:
 </code></pre></div>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
 <h3 id="simple-unit-tests">Simple Unit Tests<a class="headerlink" href="#simple-unit-tests" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># src/strings.incn
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/strings.incn</span>
 
-def reverse(s: str) -&gt; str:
-    return s[::-1]
+<span class="c1">def reverse(s: str) -&gt; str:</span>
+<span class="c1">    return s[::-1]</span>
 
-def is_palindrome(s: str) -&gt; bool:
-    return s == reverse(s)
+<span class="c1">def is_palindrome(s: str) -&gt; bool:</span>
+<span class="c1">    return s == reverse(s)</span>
 
-@test
-def test_reverse() -&gt; None:
-    assert_eq(reverse(&quot;hello&quot;), &quot;olleh&quot;)
-    assert_eq(reverse(&quot;&quot;), &quot;&quot;)
+<span class="c1">@test</span>
+<span class="c1">def test_reverse() -&gt; None:</span>
+<span class="c1">    assert_eq(reverse(&quot;hello&quot;), &quot;olleh&quot;)</span>
+<span class="c1">    assert_eq(reverse(&quot;&quot;), &quot;&quot;)</span>
 
-@test
-def test_palindrome() -&gt; None:
-    assert_true(is_palindrome(&quot;radar&quot;))
-    assert_false(is_palindrome(&quot;hello&quot;))
+<span class="c1">@test</span>
+<span class="c1">def test_palindrome() -&gt; None:</span>
+<span class="c1">    assert_true(is_palindrome(&quot;radar&quot;))</span>
+<span class="c1">    assert_false(is_palindrome(&quot;hello&quot;))</span>
 </code></pre></div>
 <h3 id="with-parametrize">With Parametrize<a class="headerlink" href="#with-parametrize" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># src/validators.incn
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/validators.incn</span>
 
-def is_valid_email(email: str) -&gt; bool:
-    return &quot;@&quot; in email and &quot;.&quot; in email
+<span class="c1">def is_valid_email(email: str) -&gt; bool:</span>
+<span class="c1">    return &quot;@&quot; in email and &quot;.&quot; in email</span>
 
-@test
-@parametrize(&quot;email, expected&quot;, [
-    (&quot;user@example.com&quot;, true),
-    (&quot;invalid&quot;, false),
-    (&quot;no-at.com&quot;, false),
-    (&quot;user@domain&quot;, false),
-])
-def test_email_validation(email: str, expected: bool) -&gt; None:
-    assert_eq(is_valid_email(email), expected)
+<span class="c1">@test</span>
+<span class="c1">@parametrize(&quot;email, expected&quot;, [</span>
+<span class="c1">    (&quot;user@example.com&quot;, true),</span>
+<span class="c1">    (&quot;invalid&quot;, false),</span>
+<span class="c1">    (&quot;no-at.com&quot;, false),</span>
+<span class="c1">    (&quot;user@domain&quot;, false),</span>
+<span class="c1">])</span>
+<span class="c1">def test_email_validation(email: str, expected: bool) -&gt; None:</span>
+<span class="c1">    assert_eq(is_valid_email(email), expected)</span>
 </code></pre></div>
 <h3 id="error-case-testing">Error Case Testing<a class="headerlink" href="#error-case-testing" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># src/division.incn
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/division.incn</span>
 
-def safe_divide(a: int, b: int) -&gt; Result[int, str]:
-    if b == 0:
-        return Err(&quot;division by zero&quot;)
-    return Ok(a / b)
+<span class="c1">def safe_divide(a: int, b: int) -&gt; Result[int, str]:</span>
+<span class="c1">    if b == 0:</span>
+<span class="c1">        return Err(&quot;division by zero&quot;)</span>
+<span class="c1">    return Ok(a / b)</span>
 
-@test
-def test_divide_success() -&gt; None:
-    result = safe_divide(10, 2)
-    assert_true(result.is_ok())
-    assert_eq(result.unwrap(), 5)
+<span class="c1">@test</span>
+<span class="c1">def test_divide_success() -&gt; None:</span>
+<span class="c1">    result = safe_divide(10, 2)</span>
+<span class="c1">    assert_true(result.is_ok())</span>
+<span class="c1">    assert_eq(result.unwrap(), 5)</span>
 
-@test
-def test_divide_by_zero() -&gt; None:
-    result = safe_divide(10, 0)
-    assert_true(result.is_err())
-    assert_eq(result.unwrap_err(), &quot;division by zero&quot;)
+<span class="c1">@test</span>
+<span class="c1">def test_divide_by_zero() -&gt; None:</span>
+<span class="c1">    result = safe_divide(10, 0)</span>
+<span class="c1">    assert_true(result.is_err())</span>
+<span class="c1">    assert_eq(result.unwrap_err(), &quot;division by zero&quot;)</span>
 </code></pre></div>
 <h2 id="test-discovery">Test Discovery<a class="headerlink" href="#test-discovery" title="Permanent link">&para;</a></h2>
 <p>The test runner discovers tests by:</p>
@@ -4148,7 +4148,7 @@ def test_divide_by_zero() -&gt; None:
 <li><strong>Filtering</strong> — Apply <code>-k</code> pattern if provided</li>
 <li><strong>Executing</strong> — Run matching tests</li>
 </ol>
-<div class="highlight"><pre><span></span><code>$<span class="w"> </span>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>src/
+<div class="language-bash highlight"><pre><span></span><code>$<span class="w"> </span>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>src/
 
 Discovered<span class="w"> </span><span class="m">12</span><span class="w"> </span>tests<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="m">4</span><span class="w"> </span>files:
 <span class="w">  </span>src/math.incn:<span class="w"> </span><span class="m">3</span><span class="w"> </span>tests
@@ -4165,22 +4165,22 @@ Running<span class="w"> </span>tests...
 </code></pre></div>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-rust-style-test-module">1. Rust-style <code>test</code> Module<a class="headerlink" href="#1-rust-style-test-module" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>def add(a: int, b: int) -&gt; int:
-    return a + b
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-@test_module
-module tests:
-    def test_add() -&gt; None:
-        assert_eq(add(1, 2), 3)
+<span class="err">@</span><span class="n">test_module</span>
+<span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+        <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">),</span> <span class="m">3</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Rejected:</strong> More syntax to learn, less Pythonic. The <code>@test</code> decorator is simpler.</p>
 <h3 id="2-doctest-only">2. Doctest Only<a class="headerlink" href="#2-doctest-only" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>def add(a: int, b: int) -&gt; int:
-    &quot;&quot;&quot;
-    &gt;&gt;&gt; add(1, 2)
-    3
-    &quot;&quot;&quot;
-    return a + b
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">    &gt;&gt;&gt; add(1, 2)</span>
+<span class="s2">    3</span>
+<span class="s2">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 </code></pre></div>
 <p><strong>Rejected:</strong> Good for simple examples, but insufficient for complex tests with setup/teardown.</p>
 <h3 id="3-separate-files-only-python-style">3. Separate Files Only (Python-style)<a class="headerlink" href="#3-separate-files-only-python-style" title="Permanent link">&para;</a></h3>

@@ -3690,28 +3690,28 @@
 <ul>
 <li>from the repository root:</li>
 </ul>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
 </code></pre></div>
 <ul>
 <li>or via an absolute path (from anywhere):</li>
 </ul>
-<div class="highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 </div>
 <h2 id="simple-multi-file-project">Simple multi-file project<a class="headerlink" href="#simple-multi-file-project" title="Permanent link">&para;</a></h2>
 <p>Recommended structure:</p>
-<div class="highlight"><pre><span></span><code>myproject/
+<div class="language-text highlight"><pre><span></span><code>myproject/
 ├── main.incn
 ├── models.incn
 └── utils.incn
 </code></pre></div>
 <p>Example imports:</p>
-<div class="highlight"><pre><span></span><code>from models import User
-import utils::format_currency
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">models</span> <span class="k">import</span> <span class="n">User</span>
+<span class="k">import</span> <span class="n">utils</span><span class="p">::</span><span class="n">format_currency</span>
 </code></pre></div>
 <h2 id="nested-projects">Nested projects<a class="headerlink" href="#nested-projects" title="Permanent link">&para;</a></h2>
 <p>Recommended structure:</p>
-<div class="highlight"><pre><span></span><code>myproject/
+<div class="language-text highlight"><pre><span></span><code>myproject/
 └── src/
     ├── main.incn
     ├── db/
@@ -3720,8 +3720,8 @@ import utils::format_currency
         └── utils.incn
 </code></pre></div>
 <p>Example imports:</p>
-<div class="highlight"><pre><span></span><code>from db.models import User
-import shared::utils::format_date
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">db</span><span class="p">.</span><span class="n">models</span> <span class="k">import</span> <span class="n">User</span>
+<span class="k">import</span> <span class="n">shared</span><span class="p">::</span><span class="n">utils</span><span class="p">::</span><span class="n">format_date</span>
 </code></pre></div>
 <h2 id="how-module-discovery-works-practical-view">How module discovery works (practical view)<a class="headerlink" href="#how-module-discovery-works-practical-view" title="Permanent link">&para;</a></h2>
 <p>When you import a local module, the compiler:</p>
@@ -3736,13 +3736,13 @@ import shared::utils::format_date
 <li>Multi-file example: <code>examples/advanced/multifile/</code></li>
 </ul>
 <p>Run:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>examples/advanced/multifile/main.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>examples/advanced/multifile/main.incn
 </code></pre></div>
 <ul>
 <li>Nested project example: <code>examples/advanced/nested_project/</code></li>
 </ul>
 <p>Run:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>examples/advanced/nested_project/src/main.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>examples/advanced/nested_project/src/main.incn
 </code></pre></div>
 <p>If you prefer browsing first, see the examples directory on GitHub:
 <code>https://github.com/dannys-code-corner/incan/tree/main/examples</code>.</p>

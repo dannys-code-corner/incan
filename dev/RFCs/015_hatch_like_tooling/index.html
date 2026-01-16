@@ -3811,7 +3811,7 @@ so we don’t bake policy into ad-hoc scripts.</p>
 <h2 id="project-metadata">Project Metadata<a class="headerlink" href="#project-metadata" title="Permanent link">&para;</a></h2>
 <p>Add <code>incan.toml</code> at repo root (similar to <code>pyproject.toml</code>), as the canonical metadata source.</p>
 <p>Example:</p>
-<div class="highlight"><pre><span></span><code><span class="k">[project]</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[project]</span>
 <span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;hello_incan&quot;</span>
 <span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.1.0-alpha.1&quot;</span>
 <span class="n">entrypoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;src/main.incn&quot;</span>
@@ -3913,7 +3913,7 @@ so we don’t bake policy into ad-hoc scripts.</p>
 <h3 id="matrix-execution">Matrix execution<a class="headerlink" href="#matrix-execution" title="Permanent link">&para;</a></h3>
 <p>Matrix is defined either in <code>incan.toml</code> or via CLI:</p>
 <p>Config:</p>
-<div class="highlight"><pre><span></span><code><span class="k">[tool.incan.matrix]</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[tool.incan.matrix]</span>
 <span class="n">axes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">profile</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;debug&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;release&quot;</span><span class="p">],</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;default&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;json&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 
 <span class="k">[[tool.incan.matrix.include]]</span>

@@ -4066,7 +4066,7 @@ behavior.</p>
 <hr />
 <h2 id="idiomatic-examples">Idiomatic Examples<a class="headerlink" href="#idiomatic-examples" title="Permanent link">&para;</a></h2>
 <h3 id="1-errors-internal-vs-external">1) Errors: Internal vs External<a class="headerlink" href="#1-errors-internal-vs-external" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="c1">// External API error (stable, documented)</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="c1">// External API error (stable, documented)</span>
 <span class="k">use</span><span class="w"> </span><span class="n">thiserror</span><span class="p">::</span><span class="n">Error</span><span class="p">;</span>
 
 <span class="cp">#[derive(Debug, Error)]</span>
@@ -4087,7 +4087,7 @@ behavior.</p>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="2-public-api-trait-oriented-minimal-exposure">2) Public API: Trait-Oriented, Minimal Exposure<a class="headerlink" href="#2-public-api-trait-oriented-minimal-exposure" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">Storage</span><span class="w"> </span><span class="p">{</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">Storage</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">put</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">,</span><span class="w"> </span><span class="n">bytes</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="kt">u8</span><span class="p">])</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="n">StorageError</span><span class="o">&gt;</span><span class="p">;</span>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">StorageError</span><span class="o">&gt;</span><span class="p">;</span>
 <span class="p">}</span>
@@ -4111,18 +4111,18 @@ behavior.</p>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="3-ownership-clarity-borrow-when-possible">3) Ownership Clarity: Borrow When Possible<a class="headerlink" href="#3-ownership-clarity-borrow-when-possible" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">normalize</span><span class="p">(</span><span class="n">input</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">normalize</span><span class="p">(</span><span class="n">input</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">input</span><span class="p">.</span><span class="n">trim</span><span class="p">().</span><span class="n">to_lowercase</span><span class="p">()</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>Avoid:</p>
-<div class="highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">normalize</span><span class="p">(</span><span class="n">input</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">normalize</span><span class="p">(</span><span class="n">input</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// Forces ownership and can cause unnecessary clones elsewhere</span>
 <span class="w">    </span><span class="n">input</span><span class="p">.</span><span class="n">trim</span><span class="p">().</span><span class="n">to_lowercase</span><span class="p">()</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="4-macro-discipline">4) Macro Discipline<a class="headerlink" href="#4-macro-discipline" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="sd">/// Generates simple enum Display impls.</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="sd">/// Generates simple enum Display impls.</span>
 <span class="sd">/// Use sparingly; document the expansion in examples.</span>
 <span class="cp">#[macro_export]</span>
 <span class="fm">macro_rules!</span><span class="w"> </span><span class="n">impl_display</span><span class="w"> </span><span class="p">{</span>
@@ -4140,17 +4140,17 @@ behavior.</p>
 <hr />
 <h2 id="project-scaffolding">Project Scaffolding<a class="headerlink" href="#project-scaffolding" title="Permanent link">&para;</a></h2>
 <h3 id="librs-and-mainrs">lib.rs and main.rs<a class="headerlink" href="#librs-and-mainrs" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="cp">#![forbid(unsafe_code)]</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="cp">#![forbid(unsafe_code)]</span>
 <span class="cp">#![deny(clippy::all, clippy::cargo)]</span>
 <span class="cp">#![warn(clippy::pedantic)]</span>
 <span class="cp">#![allow(clippy::module_name_repetitions)]</span><span class="w"> </span><span class="c1">// tune to taste</span>
 </code></pre></div>
 <h3 id="rustfmttoml"><code>rustfmt.toml</code><a class="headerlink" href="#rustfmttoml" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">edition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2024&quot;</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="n">edition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2024&quot;</span>
 <span class="n">max_width</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">120</span>
 </code></pre></div>
 <h3 id="cargotoml"><code>Cargo.toml</code><a class="headerlink" href="#cargotoml" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="k">[package]</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[package]</span>
 <span class="n">edition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2024&quot;</span>
 <span class="n">rust-version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;1.85&quot;</span><span class="w"> </span><span class="c1"># MSRV pinned (keep in sync with CI)</span>
 
@@ -4161,7 +4161,7 @@ behavior.</p>
 <span class="n">default</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
 </code></pre></div>
 <h3 id="typical-ci-steps">Typical CI Steps<a class="headerlink" href="#typical-ci-steps" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>cargo<span class="w"> </span>+nightly<span class="w"> </span>fmt<span class="w"> </span>--all<span class="w"> </span>--<span class="w"> </span>--check
+<div class="language-bash highlight"><pre><span></span><code>cargo<span class="w"> </span>+nightly<span class="w"> </span>fmt<span class="w"> </span>--all<span class="w"> </span>--<span class="w"> </span>--check
 cargo<span class="w"> </span>clippy<span class="w"> </span>--all-targets<span class="w"> </span>--all-features<span class="w"> </span>--<span class="w"> </span>-D<span class="w"> </span>warnings
 cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--all<span class="w"> </span>--verbose
 cargo<span class="w"> </span>audit

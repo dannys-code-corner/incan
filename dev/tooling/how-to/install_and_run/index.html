@@ -3692,14 +3692,14 @@
 <p>These instructions assume a Unix-like shell environment (macOS/Linux). If you’re on Windows, use WSL or adapt the commands.</p>
 <h2 id="get-the-repo-run-from-repo-root">Get the repo (run from repo root)<a class="headerlink" href="#get-the-repo-run-from-repo-root" title="Permanent link">&para;</a></h2>
 <p>Run the commands on this page from the repository root (the directory containing <code>Makefile</code>):</p>
-<div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/dannys-code-corner/incan.git
+<div class="language-bash highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/dannys-code-corner/incan.git
 <span class="nb">cd</span><span class="w"> </span>incan
 </code></pre></div>
 <h2 id="canonical-command-flow">Canonical command flow<a class="headerlink" href="#canonical-command-flow" title="Permanent link">&para;</a></h2>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Recommended: install to PATH</label><label for="__tabbed_1_2">Fallback: no install</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
-<div class="highlight"><pre><span></span><code>make<span class="w"> </span>install
+<div class="language-bash highlight"><pre><span></span><code>make<span class="w"> </span>install
 incan<span class="w"> </span>--version
 </code></pre></div>
 <p>Notes:</p>
@@ -3709,7 +3709,7 @@ incan<span class="w"> </span>--version
 </ul>
 </div>
 <div class="tabbed-block">
-<div class="highlight"><pre><span></span><code>make<span class="w"> </span>release
+<div class="language-bash highlight"><pre><span></span><code>make<span class="w"> </span>release
 ./target/release/incan<span class="w"> </span>--version
 </code></pre></div>
 </div>
@@ -3717,10 +3717,10 @@ incan<span class="w"> </span>--version
 </div>
 <h2 id="run-a-file">Run a file<a class="headerlink" href="#run-a-file" title="Permanent link">&para;</a></h2>
 <p>If you used <code>make install</code>:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>hello.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>hello.incn
 </code></pre></div>
 <p>If you used the no-install fallback:</p>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>run<span class="w"> </span>hello.incn
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>run<span class="w"> </span>hello.incn
 </code></pre></div>
 
 

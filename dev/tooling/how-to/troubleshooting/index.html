@@ -3725,16 +3725,16 @@
 <li>Ensure <code>~/.cargo/bin</code> is on your <code>PATH</code>.</li>
 </ul>
 <p>Check:</p>
-<div class="highlight"><pre><span></span><code>ls<span class="w"> </span>-la<span class="w"> </span>~/.cargo/bin/incan
+<div class="language-bash highlight"><pre><span></span><code>ls<span class="w"> </span>-la<span class="w"> </span>~/.cargo/bin/incan
 <span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PATH</span><span class="s2">&quot;</span>
 which<span class="w"> </span>incan<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
 </code></pre></div>
 <h2 id="i-didnt-run-make-install-no-install-fallback">I didn’t run <code>make install</code> (no-install fallback)<a class="headerlink" href="#i-didnt-run-make-install-no-install-fallback" title="Permanent link">&para;</a></h2>
 <p>If you’re using the no-install fallback, run commands from the repository root and invoke:</p>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
 </code></pre></div>
 <p>If <code>./target/release/incan</code> does not exist yet, build it first:</p>
-<div class="highlight"><pre><span></span><code>make<span class="w"> </span>release
+<div class="language-bash highlight"><pre><span></span><code>make<span class="w"> </span>release
 </code></pre></div>
 <h2 id="builds-are-slow-the-first-time">Builds are slow the first time<a class="headerlink" href="#builds-are-slow-the-first-time" title="Permanent link">&para;</a></h2>
 <p>The first <code>make release</code> (or first <code>incan build</code>) will compile Rust dependencies and can take a few minutes.</p>
@@ -3743,7 +3743,7 @@ which<span class="w"> </span>incan<span class="w"> </span><span class="o">||</sp
 proxy/mirror).</p>
 <h2 id="macos-toolchainlinker-issues">macOS: toolchain/linker issues<a class="headerlink" href="#macos-toolchainlinker-issues" title="Permanent link">&para;</a></h2>
 <p>If you see errors about a missing C toolchain or linker, install Xcode Command Line Tools:</p>
-<div class="highlight"><pre><span></span><code>xcode-select<span class="w"> </span>--install
+<div class="language-bash highlight"><pre><span></span><code>xcode-select<span class="w"> </span>--install
 </code></pre></div>
 <h2 id="still-stuck">Still stuck?<a class="headerlink" href="#still-stuck" title="Permanent link">&para;</a></h2>
 <p>If you’re still stuck, please <a href="https://github.com/dannys-code-corner/incan/issues">open an issue</a> and include:</p>

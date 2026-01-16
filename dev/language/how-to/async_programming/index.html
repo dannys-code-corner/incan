@@ -4424,76 +4424,76 @@ work the same way.</p>
 with Rust-level async performance.</p>
 </div>
 <h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>async def fetch_data() -&gt; str:
-    await sleep(1.0)  # Wait 1 second
-    return &quot;data&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">fetch_data</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">1.0</span><span class="p">)</span>  <span class="c1"># Wait 1 second</span>
+<span class="c1">    return &quot;data&quot;</span>
 
-def main() -&gt; None:
-    # When async is used, main automatically gets #[tokio::main]
-    println(&quot;Starting...&quot;)
+<span class="c1">def main() -&gt; None:</span>
+<span class="c1">    # When async is used, main automatically gets #[tokio::main]</span>
+<span class="c1">    println(&quot;Starting...&quot;)</span>
 </code></pre></div>
 <h2 id="core-concepts">Core Concepts<a class="headerlink" href="#core-concepts" title="Permanent link">&para;</a></h2>
 <h3 id="async-functions">Async Functions<a class="headerlink" href="#async-functions" title="Permanent link">&para;</a></h3>
 <p>Declare async functions with <code>async def</code>:</p>
-<div class="highlight"><pre><span></span><code>async def do_work() -&gt; int:
-    await sleep(0.5)
-    return 42
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">do_work</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">0.5</span><span class="p">)</span>
+    <span class="k">return</span> <span class="m">42</span>
 </code></pre></div>
 <h3 id="await">Await<a class="headerlink" href="#await" title="Permanent link">&para;</a></h3>
 <p>Use <code>await</code> to wait for an async operation:</p>
-<div class="highlight"><pre><span></span><code>async def process() -&gt; str:
-    data = await fetch_data()
-    result = await transform(data)
-    return result
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">process</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetch_data</span><span class="p">()</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">transform</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">result</span>
 </code></pre></div>
 <h2 id="time-primitives">Time Primitives<a class="headerlink" href="#time-primitives" title="Permanent link">&para;</a></h2>
 <h3 id="sleep">sleep<a class="headerlink" href="#sleep" title="Permanent link">&para;</a></h3>
 <p>Pause execution for a duration:</p>
-<div class="highlight"><pre><span></span><code>await sleep(1.5)      # Sleep 1.5 seconds
-await sleep_ms(500)   # Sleep 500 milliseconds
+<div class="language-incan highlight"><pre><span></span><code><span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">1.5</span><span class="p">)</span>      <span class="c1"># Sleep 1.5 seconds</span>
+<span class="c1">await sleep_ms(500)   # Sleep 500 milliseconds</span>
 </code></pre></div>
 <h3 id="timeout">timeout<a class="headerlink" href="#timeout" title="Permanent link">&para;</a></h3>
 <p>Run an operation with a time limit:</p>
-<div class="highlight"><pre><span></span><code>result = await timeout(5.0, slow_operation)
-match result:
-    case Ok(value): println(f&quot;Success: {value}&quot;)
-    case Err(e): println(&quot;Operation timed out&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">timeout</span><span class="p">(</span><span class="m">5.0</span><span class="p">,</span> <span class="n">slow_operation</span><span class="p">)</span>
+<span class="k">match</span> <span class="n">result</span><span class="p">:</span>
+    <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Success: {value}&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Operation timed out&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="task-spawning">Task Spawning<a class="headerlink" href="#task-spawning" title="Permanent link">&para;</a></h2>
 <h3 id="spawn">spawn<a class="headerlink" href="#spawn" title="Permanent link">&para;</a></h3>
 <p>Run a task concurrently:</p>
-<div class="highlight"><pre><span></span><code>async def background_work() -&gt; int:
-    await sleep(2.0)
-    return 42
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">background_work</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">2.0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="m">42</span>
 
-# Spawn returns immediately
-handle = spawn(background_work)
+<span class="c1"># Spawn returns immediately</span>
+<span class="c1">handle = spawn(background_work)</span>
 
-# Do other work...
-println(&quot;Working on other things...&quot;)
+<span class="c1"># Do other work...</span>
+<span class="c1">println(&quot;Working on other things...&quot;)</span>
 
-# Wait for the spawned task
-result = await handle
-println(f&quot;Background task returned: {result}&quot;)
+<span class="c1"># Wait for the spawned task</span>
+<span class="c1">result = await handle</span>
+<span class="c1">println(f&quot;Background task returned: {result}&quot;)</span>
 </code></pre></div>
 <h3 id="spawn_blocking">spawn_blocking<a class="headerlink" href="#spawn_blocking" title="Permanent link">&para;</a></h3>
 <p>Run CPU-intensive or blocking code on a dedicated thread:</p>
-<div class="highlight"><pre><span></span><code>def heavy_computation() -&gt; int:
-    result = 0
-    for i in range(1_000_000):
-        result = result + i
-    return result
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">heavy_computation</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="m">0</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="m">1_000_000</span><span class="p">):</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">result</span> <span class="o">+</span> <span class="n">i</span>
+    <span class="k">return</span> <span class="n">result</span>
 
-# Won&#39;t block the async runtime
-result = await spawn_blocking(heavy_computation)
+<span class="c1"># Won&#39;t block the async runtime</span>
+<span class="c1">result = await spawn_blocking(heavy_computation)</span>
 </code></pre></div>
 <h3 id="yield_now">yield_now<a class="headerlink" href="#yield_now" title="Permanent link">&para;</a></h3>
 <p>Cooperatively yield to let other tasks run:</p>
-<div class="highlight"><pre><span></span><code>async def cooperative_loop() -&gt; None:
-    for i in range(10000):
-        # Do some work...
-        if i % 100 == 0:
-            await yield_now()  # Let other tasks run
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">cooperative_loop</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="m">10000</span><span class="p">):</span>
+        <span class="c1"># Do some work...</span>
+<span class="c1">        if i % 100 == 0:</span>
+<span class="c1">            await yield_now()  # Let other tasks run</span>
 </code></pre></div>
 <h2 id="channels">Channels<a class="headerlink" href="#channels" title="Permanent link">&para;</a></h2>
 <p>Channels enable safe message passing between concurrent tasks.
@@ -4533,44 +4533,44 @@ They're the primary way to communicate between async tasks without shared mutabl
 </tbody>
 </table>
 <p><strong>Bounded channel</strong> (recommended):</p>
-<div class="highlight"><pre><span></span><code># Create channel with buffer size 32
-tx, rx = channel[str](32)
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Create channel with buffer size 32</span>
+<span class="c1">tx, rx = channel[str](32)</span>
 
-# Sender - blocks if buffer is full (backpressure)
-async def producer() -&gt; None:
-    await tx.send(&quot;hello&quot;)  # Waits if buffer full
-    await tx.send(&quot;world&quot;)
+<span class="c1"># Sender - blocks if buffer is full (backpressure)</span>
+<span class="c1">async def producer() -&gt; None:</span>
+<span class="c1">    await tx.send(&quot;hello&quot;)  # Waits if buffer full</span>
+<span class="c1">    await tx.send(&quot;world&quot;)</span>
 
-# Receiver - blocks until message available
-async def consumer() -&gt; None:
-    while True:
-        match await rx.recv():
-            case Some(msg): println(f&quot;Got: {msg}&quot;)
-            case None: break  # All senders dropped, channel closed
+<span class="c1"># Receiver - blocks until message available</span>
+<span class="c1">async def consumer() -&gt; None:</span>
+<span class="c1">    while True:</span>
+<span class="c1">        match await rx.recv():</span>
+<span class="c1">            case Some(msg): println(f&quot;Got: {msg}&quot;)</span>
+<span class="c1">            case None: break  # All senders dropped, channel closed</span>
 </code></pre></div>
 <p><strong>Multiple producers</strong> (clone the sender):</p>
-<div class="highlight"><pre><span></span><code>tx, rx = channel[int](100)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="n">channel</span><span class="p">[</span><span class="n">int</span><span class="p">](</span><span class="m">100</span><span class="p">)</span>
 
-# Clone sender for each producer
-tx1 = tx.clone()
-tx2 = tx.clone()
+<span class="c1"># Clone sender for each producer</span>
+<span class="c1">tx1 = tx.clone()</span>
+<span class="c1">tx2 = tx.clone()</span>
 
-spawn(async () -&gt; None:
-    await tx1.send(1)
-    await tx1.send(2)
-)
+<span class="c1">spawn(async () -&gt; None:</span>
+<span class="c1">    await tx1.send(1)</span>
+<span class="c1">    await tx1.send(2)</span>
+<span class="c1">)</span>
 
-spawn(async () -&gt; None:
-    await tx2.send(100)
-    await tx2.send(200)
-)
+<span class="c1">spawn(async () -&gt; None:</span>
+<span class="c1">    await tx2.send(100)</span>
+<span class="c1">    await tx2.send(200)</span>
+<span class="c1">)</span>
 
-# Single consumer receives from all producers
-async def consume() -&gt; None:
-    while True:
-        match await rx.recv():
-            case Some(n): println(f&quot;Received: {n}&quot;)
-            case None: break
+<span class="c1"># Single consumer receives from all producers</span>
+<span class="c1">async def consume() -&gt; None:</span>
+<span class="c1">    while True:</span>
+<span class="c1">        match await rx.recv():</span>
+<span class="c1">            case Some(n): println(f&quot;Received: {n}&quot;)</span>
+<span class="c1">            case None: break</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Coming from Python?</p>
@@ -4610,18 +4610,18 @@ when producers finish.</p>
 </table>
 <h3 id="unbounded-channel">Unbounded Channel<a class="headerlink" href="#unbounded-channel" title="Permanent link">&para;</a></h3>
 <p><code>send</code> never blocks, but use with caution — if producers outpace consumers, memory grows without limit:</p>
-<div class="highlight"><pre><span></span><code># No capacity limit - send always succeeds immediately
-tx, rx = unbounded_channel[int]()
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># No capacity limit - send always succeeds immediately</span>
+<span class="c1">tx, rx = unbounded_channel[int]()</span>
 
-# These never block
-tx.send(1)
-tx.send(2)
-tx.send(3)
+<span class="c1"># These never block</span>
+<span class="c1">tx.send(1)</span>
+<span class="c1">tx.send(2)</span>
+<span class="c1">tx.send(3)</span>
 
-# Consumer still blocks waiting for messages
-match await rx.recv():
-    case Some(n): println(f&quot;Got: {n}&quot;)
-    case None: println(&quot;Channel closed&quot;)
+<span class="c1"># Consumer still blocks waiting for messages</span>
+<span class="c1">match await rx.recv():</span>
+<span class="c1">    case Some(n): println(f&quot;Got: {n}&quot;)</span>
+<span class="c1">    case None: println(&quot;Channel closed&quot;)</span>
 </code></pre></div>
 <p><strong>When unbounded is OK:</strong></p>
 <ul>
@@ -4661,36 +4661,36 @@ This is perfect for "request-response" patterns where you spawn a task and wait 
 </tbody>
 </table>
 <p><strong>Basic usage:</strong></p>
-<div class="highlight"><pre><span></span><code>tx, rx = oneshot[int]()
+<div class="language-incan highlight"><pre><span></span><code><span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="n">oneshot</span><span class="p">[</span><span class="n">int</span><span class="p">]()</span>
 
-spawn(async () -&gt; None:
-    result = expensive_computation()
-    tx.send(result)  # Consumes sender - can only send once
-)
+<span class="n">spawn</span><span class="p">(</span><span class="k">async</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">expensive_computation</span><span class="p">()</span>
+    <span class="n">tx</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>  <span class="c1"># Consumes sender - can only send once</span>
+<span class="c1">)</span>
 
-# Wait for the result
-match await rx.recv():
-    case Ok(value): println(f&quot;Got result: {value}&quot;)
-    case Err(e): println(&quot;Sender dropped without sending&quot;)
+<span class="c1"># Wait for the result</span>
+<span class="c1">match await rx.recv():</span>
+<span class="c1">    case Ok(value): println(f&quot;Got result: {value}&quot;)</span>
+<span class="c1">    case Err(e): println(&quot;Sender dropped without sending&quot;)</span>
 </code></pre></div>
 <p><strong>Common pattern - returning results from spawned tasks:</strong></p>
-<div class="highlight"><pre><span></span><code>async def compute_in_background(input: Data) -&gt; Result[Output, ComputeError]:
-    # Create oneshot for the result
-    tx, rx = oneshot[Result[Output, ComputeError]]()
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">compute_in_background</span><span class="p">(</span><span class="n">input</span><span class="p">:</span> <span class="n">Data</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Output</span><span class="p">,</span> <span class="n">ComputeError</span><span class="p">]:</span>
+    <span class="c1"># Create oneshot for the result</span>
+<span class="c1">    tx, rx = oneshot[Result[Output, ComputeError]]()</span>
 
-    # Spawn the computation
-    spawn(async () -&gt; None:
-        result = heavy_computation(input)
-        tx.send(result)
-    )
+<span class="c1">    # Spawn the computation</span>
+<span class="c1">    spawn(async () -&gt; None:</span>
+<span class="c1">        result = heavy_computation(input)</span>
+<span class="c1">        tx.send(result)</span>
+<span class="c1">    )</span>
 
-    # Do other work while computation runs...
-    do_other_stuff()
+<span class="c1">    # Do other work while computation runs...</span>
+<span class="c1">    do_other_stuff()</span>
 
-    # Wait for result
-    match await rx.recv():
-        case Ok(result): return result
-        case Err(_): return Err(ComputeError.TaskFailed)
+<span class="c1">    # Wait for result</span>
+<span class="c1">    match await rx.recv():</span>
+<span class="c1">        case Ok(result): return result</span>
+<span class="c1">        case Err(_): return Err(ComputeError.TaskFailed)</span>
 </code></pre></div>
 <p><strong>Key differences from regular channels:</strong></p>
 <ul>
@@ -4750,19 +4750,19 @@ while Python's Lock is just a lock you use alongside your data.</p>
 <li><code>guard.set(new_value)</code> — Write a new value</li>
 <li>Guard auto-releases when it goes out of scope</li>
 </ul>
-<div class="highlight"><pre><span></span><code>shared_counter = Mutex(0)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">shared_counter</span> <span class="o">=</span> <span class="n">Mutex</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
 
-async def increment() -&gt; None:
-    guard = await shared_counter.lock()  # Blocks until lock acquired
-    current = guard.get()
-    guard.set(current + 1)
-    # Lock released when guard goes out of scope
+<span class="k">async</span> <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">guard</span> <span class="o">=</span> <span class="k">await</span> <span class="n">shared_counter</span><span class="p">.</span><span class="n">lock</span><span class="p">()</span>  <span class="c1"># Blocks until lock acquired</span>
+<span class="c1">    current = guard.get()</span>
+<span class="c1">    guard.set(current + 1)</span>
+<span class="c1">    # Lock released when guard goes out of scope</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Python comparison</p>
 <p>Python uses a lock separate from the data. Incan wraps the data (<code>Mutex[T]</code>), so the lock and value are kept together.</p>
 </div>
-<div class="highlight"><pre><span></span><code><span class="c1"># Python - lock is separate from data</span>
+<div class="language-python highlight"><pre><span></span><code><span class="c1"># Python - lock is separate from data</span>
 <span class="n">lock</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">Lock</span><span class="p">()</span>
 <span class="n">counter</span> <span class="o">=</span> <span class="mi">0</span>
 
@@ -4770,12 +4770,12 @@ async def increment() -&gt; None:
     <span class="k">async</span> <span class="k">with</span> <span class="n">lock</span><span class="p">:</span>
         <span class="n">counter</span> <span class="o">+=</span> <span class="mi">1</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code># Incan - lock wraps the data
-counter = Mutex(0)
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Incan - lock wraps the data</span>
+<span class="c1">counter = Mutex(0)</span>
 
-async def increment() -&gt; None:
-    guard = await counter.lock()
-    guard.set(guard.get() + 1)
+<span class="c1">async def increment() -&gt; None:</span>
+<span class="c1">    guard = await counter.lock()</span>
+<span class="c1">    guard.set(guard.get() + 1)</span>
 </code></pre></div>
 <h3 id="rwlock">RwLock<a class="headerlink" href="#rwlock" title="Permanent link">&para;</a></h3>
 <p>Reader-writer lock — allows <strong>multiple readers</strong> OR a <strong>single writer</strong>, but not both simultaneously.
@@ -4789,15 +4789,15 @@ More efficient than Mutex when reads are frequent.</p>
 <li><code>guard.get()</code> — Read the value</li>
 <li><code>guard.set(new_value)</code> — Write (only on write guard)</li>
 </ul>
-<div class="highlight"><pre><span></span><code>config = RwLock(Config(debug=False))
+<div class="language-incan highlight"><pre><span></span><code><span class="n">config</span> <span class="o">=</span> <span class="n">RwLock</span><span class="p">(</span><span class="n">Config</span><span class="p">(</span><span class="n">debug</span><span class="o">=</span><span class="n">False</span><span class="p">))</span>
 
-async def read_config() -&gt; bool:
-    guard = await config.read()  # Multiple readers allowed simultaneously
-    return guard.get().debug
+<span class="k">async</span> <span class="k">def</span> <span class="n">read_config</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
+    <span class="n">guard</span> <span class="o">=</span> <span class="k">await</span> <span class="n">config</span><span class="p">.</span><span class="n">read</span><span class="p">()</span>  <span class="c1"># Multiple readers allowed simultaneously</span>
+<span class="c1">    return guard.get().debug</span>
 
-async def update_config(debug: bool) -&gt; None:
-    guard = await config.write()  # Waits for all readers, then exclusive
-    guard.set(Config(debug=debug))
+<span class="c1">async def update_config(debug: bool) -&gt; None:</span>
+<span class="c1">    guard = await config.write()  # Waits for all readers, then exclusive</span>
+<span class="c1">    guard.set(Config(debug=debug))</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Coming from Python?</p>
@@ -4813,14 +4813,14 @@ async def update_config(debug: bool) -&gt; None:
 <li><code>await sem.acquire()</code> — Wait for and acquire a permit</li>
 <li>Permit auto-releases when it goes out of scope</li>
 </ul>
-<div class="highlight"><pre><span></span><code># Allow max 3 concurrent connections
-connection_limit = Semaphore(3)
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Allow max 3 concurrent connections</span>
+<span class="c1">connection_limit = Semaphore(3)</span>
 
-async def make_request() -&gt; Response:
-    permit = await connection_limit.acquire()  # Blocks if no permits
-    response = await http_get(url)
-    # Permit released automatically when permit goes out of scope
-    return response
+<span class="c1">async def make_request() -&gt; Response:</span>
+<span class="c1">    permit = await connection_limit.acquire()  # Blocks if no permits</span>
+<span class="c1">    response = await http_get(url)</span>
+<span class="c1">    # Permit released automatically when permit goes out of scope</span>
+<span class="c1">    return response</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Python equivalent</p>
@@ -4834,15 +4834,15 @@ async def make_request() -&gt; Response:
 <li><code>Barrier(n)</code> — Create barrier for n tasks</li>
 <li><code>await barrier.wait()</code> — Wait until all n tasks reach this point</li>
 </ul>
-<div class="highlight"><pre><span></span><code>barrier = Barrier(3)  # Wait for 3 tasks
+<div class="language-incan highlight"><pre><span></span><code><span class="n">barrier</span> <span class="o">=</span> <span class="n">Barrier</span><span class="p">(</span><span class="m">3</span><span class="p">)</span>  <span class="c1"># Wait for 3 tasks</span>
 
-async def worker(id: int) -&gt; None:
-    println(f&quot;Worker {id} starting phase 1&quot;)
-    # ... do phase 1 work ...
+<span class="c1">async def worker(id: int) -&gt; None:</span>
+<span class="c1">    println(f&quot;Worker {id} starting phase 1&quot;)</span>
+<span class="c1">    # ... do phase 1 work ...</span>
 
-    await barrier.wait()  # All 3 must reach here before anyone continues
+<span class="c1">    await barrier.wait()  # All 3 must reach here before anyone continues</span>
 
-    println(f&quot;Worker {id} starting phase 2&quot;)  # All start phase 2 together
+<span class="c1">    println(f&quot;Worker {id} starting phase 2&quot;)  # All start phase 2 together</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Python equivalent</p>
@@ -4854,105 +4854,105 @@ for a runnable demo of all four primitives.</p>
 <h2 id="select-racing-futures">Select (Racing Futures)<a class="headerlink" href="#select-racing-futures" title="Permanent link">&para;</a></h2>
 <h3 id="select2">select2<a class="headerlink" href="#select2" title="Permanent link">&para;</a></h3>
 <p>Race two futures, get whichever completes first:</p>
-<div class="highlight"><pre><span></span><code>async def fast() -&gt; str:
-    await sleep(0.1)
-    return &quot;fast&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">fast</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">0.1</span><span class="p">)</span>
+    <span class="k">return</span> <span class="s2">&quot;fast&quot;</span>
 
-async def slow() -&gt; str:
-    await sleep(1.0)
-    return &quot;slow&quot;
+<span class="k">async</span> <span class="k">def</span> <span class="n">slow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">1.0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="s2">&quot;slow&quot;</span>
 
-match await select2(fast, slow):
-    case Either.Left(result): println(f&quot;Fast won: {result}&quot;)
-    case Either.Right(result): println(f&quot;Slow won: {result}&quot;)
+<span class="k">match</span> <span class="k">await</span> <span class="n">select2</span><span class="p">(</span><span class="n">fast</span><span class="p">,</span> <span class="n">slow</span><span class="p">):</span>
+    <span class="k">case</span> <span class="n">Either</span><span class="p">.</span><span class="n">Left</span><span class="p">(</span><span class="n">result</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Fast won: {result}&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="n">Either</span><span class="p">.</span><span class="n">Right</span><span class="p">(</span><span class="n">result</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Slow won: {result}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="select3">select3<a class="headerlink" href="#select3" title="Permanent link">&para;</a></h3>
 <p>Race three futures:</p>
-<div class="highlight"><pre><span></span><code>result = await select3(op1, op2, op3)
-match result:
-    case Either3.First(v): println(&quot;op1 won&quot;)
-    case Either3.Second(v): println(&quot;op2 won&quot;)  
-    case Either3.Third(v): println(&quot;op3 won&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">select3</span><span class="p">(</span><span class="n">op1</span><span class="p">,</span> <span class="n">op2</span><span class="p">,</span> <span class="n">op3</span><span class="p">)</span>
+<span class="k">match</span> <span class="n">result</span><span class="p">:</span>
+    <span class="k">case</span> <span class="n">Either3</span><span class="p">.</span><span class="n">First</span><span class="p">(</span><span class="n">v</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;op1 won&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="n">Either3</span><span class="p">.</span><span class="n">Second</span><span class="p">(</span><span class="n">v</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;op2 won&quot;</span><span class="p">)</span>  
+    <span class="k">case</span> <span class="n">Either3</span><span class="p">.</span><span class="n">Third</span><span class="p">(</span><span class="n">v</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;op3 won&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="select_timeout">select_timeout<a class="headerlink" href="#select_timeout" title="Permanent link">&para;</a></h3>
 <p>Simplified timeout returning Option:</p>
-<div class="highlight"><pre><span></span><code>match await select_timeout(2.0, slow_operation):
-    case Some(result): println(f&quot;Got: {result}&quot;)
-    case None: println(&quot;Timed out, using default&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">match</span> <span class="k">await</span> <span class="n">select_timeout</span><span class="p">(</span><span class="m">2.0</span><span class="p">,</span> <span class="n">slow_operation</span><span class="p">):</span>
+    <span class="k">case</span> <span class="n">Some</span><span class="p">(</span><span class="n">result</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Got: {result}&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="k">None</span><span class="p">:</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Timed out, using default&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="runtime-integration">Runtime Integration<a class="headerlink" href="#runtime-integration" title="Permanent link">&para;</a></h2>
 <h3 id="automatic-tokio-main">Automatic Tokio Main<a class="headerlink" href="#automatic-tokio-main" title="Permanent link">&para;</a></h3>
 <p>When your program uses async features, the <code>main()</code> function is automatically wrapped with <code>#[tokio::main]</code>:</p>
 <p>Tokio is Rust's async runtime: see the <a href="https://tokio.rs/">Tokio project</a> for a high-level overview.</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    # This becomes async main() under the hood
-    # when async primitives are used
-    result = await fetch_data()
-    println(f&quot;Result: {result}&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="c1"># This becomes async main() under the hood</span>
+<span class="c1">    # when async primitives are used</span>
+<span class="c1">    result = await fetch_data()</span>
+<span class="c1">    println(f&quot;Result: {result}&quot;)</span>
 </code></pre></div>
 <h3 id="generated-dependencies">Generated Dependencies<a class="headerlink" href="#generated-dependencies" title="Permanent link">&para;</a></h3>
 <p>The compiler automatically adds tokio to your Cargo.toml:</p>
-<div class="highlight"><pre><span></span><code><span class="k">[dependencies]</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[dependencies]</span>
 <span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;rt-multi-thread&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;macros&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;time&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;sync&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h2>
 <h3 id="1-dont-block-the-runtime">1. Don't Block the Runtime<a class="headerlink" href="#1-dont-block-the-runtime" title="Permanent link">&para;</a></h3>
 <p>Avoid blocking operations in async code:</p>
-<div class="highlight"><pre><span></span><code># BAD: Blocks the async runtime
-async def bad() -&gt; None:
-    std_thread_sleep(1.0)  # Don&#39;t do this!
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># BAD: Blocks the async runtime</span>
+<span class="c1">async def bad() -&gt; None:</span>
+<span class="c1">    std_thread_sleep(1.0)  # Don&#39;t do this!</span>
 
-# GOOD: Use async sleep
-async def good() -&gt; None:
-    await sleep(1.0)
+<span class="c1"># GOOD: Use async sleep</span>
+<span class="c1">async def good() -&gt; None:</span>
+<span class="c1">    await sleep(1.0)</span>
 </code></pre></div>
 <h3 id="2-use-spawn_blocking-for-cpu-work">2. Use spawn_blocking for CPU Work<a class="headerlink" href="#2-use-spawn_blocking-for-cpu-work" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># BAD: CPU work on async runtime
-async def bad() -&gt; int:
-    return heavy_computation()
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># BAD: CPU work on async runtime</span>
+<span class="c1">async def bad() -&gt; int:</span>
+<span class="c1">    return heavy_computation()</span>
 
-# GOOD: Offload to blocking pool
-async def good() -&gt; int:
-    return await spawn_blocking(heavy_computation)
+<span class="c1"># GOOD: Offload to blocking pool</span>
+<span class="c1">async def good() -&gt; int:</span>
+<span class="c1">    return await spawn_blocking(heavy_computation)</span>
 </code></pre></div>
 <h3 id="3-use-bounded-channels">3. Use Bounded Channels<a class="headerlink" href="#3-use-bounded-channels" title="Permanent link">&para;</a></h3>
 <p>Prefer bounded channels to prevent memory issues:</p>
-<div class="highlight"><pre><span></span><code># Prefer this:
-tx, rx = channel[Data](100)
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Prefer this:</span>
+<span class="c1">tx, rx = channel[Data](100)</span>
 
-# Over this (unbounded can grow forever):
-tx, rx = unbounded_channel[Data]()
+<span class="c1"># Over this (unbounded can grow forever):</span>
+<span class="c1">tx, rx = unbounded_channel[Data]()</span>
 </code></pre></div>
 <h3 id="4-handle-cancellation">4. Handle Cancellation<a class="headerlink" href="#4-handle-cancellation" title="Permanent link">&para;</a></h3>
 <p>Tasks can be cancelled when their handles are dropped:</p>
-<div class="highlight"><pre><span></span><code>async def cancellable_work() -&gt; str:
-    await sleep(10.0)
-    return &quot;done&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">cancellable_work</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">10.0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="s2">&quot;done&quot;</span>
 
-handle = spawn(cancellable_work)
-# If we don&#39;t await handle, the task is cancelled!
-# Always await or explicitly ignore:
-_ = handle  # Explicit ignore (task continues)
+<span class="n">handle</span> <span class="o">=</span> <span class="n">spawn</span><span class="p">(</span><span class="n">cancellable_work</span><span class="p">)</span>
+<span class="c1"># If we don&#39;t await handle, the task is cancelled!</span>
+<span class="c1"># Always await or explicitly ignore:</span>
+<span class="c1">_ = handle  # Explicit ignore (task continues)</span>
 </code></pre></div>
 <h2 id="error-handling">Error Handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
 <h3 id="timeout-errors">Timeout Errors<a class="headerlink" href="#timeout-errors" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>result = await timeout(1.0, slow_task)
-match result:
-    case Ok(value): process(value)
-    case Err(e): println(f&quot;Timed out: {e}&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">timeout</span><span class="p">(</span><span class="m">1.0</span><span class="p">,</span> <span class="n">slow_task</span><span class="p">)</span>
+<span class="k">match</span> <span class="n">result</span><span class="p">:</span>
+    <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">process</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+    <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Timed out: {e}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="channel-closed">Channel Closed<a class="headerlink" href="#channel-closed" title="Permanent link">&para;</a></h3>
 <p>When sending fails because the receiver was dropped, <code>SendError[T]</code> contains the value that couldn't be sent in its
 <code>.value</code> field:</p>
-<div class="highlight"><pre><span></span><code>async def sender(tx: Sender[Message]) -&gt; None:
-    msg = Message(id=1, content=&quot;important data&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">sender</span><span class="p">(</span><span class="n">tx</span><span class="p">:</span> <span class="n">Sender</span><span class="p">[</span><span class="n">Message</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">msg</span> <span class="o">=</span> <span class="n">Message</span><span class="p">(</span><span class="n">id</span><span class="o">=</span><span class="m">1</span><span class="p">,</span> <span class="n">content</span><span class="o">=</span><span class="s2">&quot;important data&quot;</span><span class="p">)</span>
 
-    match await tx.send(msg):
-        case Ok(_): println(&quot;Sent successfully&quot;)
-        case Err(e):
-            # Recover the unsent value - it&#39;s not lost!
-            println(f&quot;Channel closed, saving for retry: {e.value:?}&quot;)
-            save_for_later(e.value)
+    <span class="k">match</span> <span class="k">await</span> <span class="n">tx</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">msg</span><span class="p">):</span>
+        <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">_</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Sent successfully&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span>
+            <span class="c1"># Recover the unsent value - it&#39;s not lost!</span>
+<span class="c1">            println(f&quot;Channel closed, saving for retry: {e.value:?}&quot;)</span>
+<span class="c1">            save_for_later(e.value)</span>
 </code></pre></div>
 <p>This pattern is important for reliability.
 If a channel closes unexpectedly, you can recover and handle the data that failed to send.</p>

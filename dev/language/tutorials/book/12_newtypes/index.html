@@ -3761,24 +3761,24 @@ let you accidentally mix up.</p>
 <h2 id="why-newtypes">Why newtypes?<a class="headerlink" href="#why-newtypes" title="Permanent link">&para;</a></h2>
 <p>If two values share the same underlying type (like <code>int</code>), it’s easy to mix them up by accident.</p>
 <p>With newtypes, the compiler helps you keep them straight:</p>
-<div class="highlight"><pre><span></span><code>type UserId = newtype int
-type ProductId = newtype int
+<div class="language-incan highlight"><pre><span></span><code><span class="k">type</span> <span class="n">UserId</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">int</span>
+<span class="k">type</span> <span class="n">ProductId</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">int</span>
 
-def get_user_name(user_id: UserId) -&gt; str:
-    return f&quot;user={user_id.0}&quot;
+<span class="k">def</span> <span class="n">get_user_name</span><span class="p">(</span><span class="n">user_id</span><span class="p">:</span> <span class="n">UserId</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;user={user_id.0}&quot;</span>
 
-def get_product_name(product_id: ProductId) -&gt; str:
-    return f&quot;product={product_id.0}&quot;
+<span class="k">def</span> <span class="n">get_product_name</span><span class="p">(</span><span class="n">product_id</span><span class="p">:</span> <span class="n">ProductId</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;product={product_id.0}&quot;</span>
 
-def main() -&gt; None:
-    user_id = UserId(42)
-    product_id = ProductId(100)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">user_id</span> <span class="o">=</span> <span class="n">UserId</span><span class="p">(</span><span class="m">42</span><span class="p">)</span>
+    <span class="n">product_id</span> <span class="o">=</span> <span class="n">ProductId</span><span class="p">(</span><span class="m">100</span><span class="p">)</span>
 
-    println(get_user_name(user_id))
-    println(get_product_name(product_id))
+    <span class="n">println</span><span class="p">(</span><span class="n">get_user_name</span><span class="p">(</span><span class="n">user_id</span><span class="p">))</span>
+    <span class="n">println</span><span class="p">(</span><span class="n">get_product_name</span><span class="p">(</span><span class="n">product_id</span><span class="p">))</span>
 
-    # If you accidentally swap them, the compiler can catch it:
-    # println(get_user_name(product_id))
+    <span class="c1"># If you accidentally swap them, the compiler can catch it:</span>
+<span class="c1">    # println(get_user_name(product_id))</span>
 </code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">Coming from Python?</p>
@@ -3789,47 +3789,47 @@ better static checking.</p>
 <p>You construct a newtype by calling it like a function: <code>UserId(42)</code>.</p>
 <h2 id="validated-construction">Validated construction<a class="headerlink" href="#validated-construction" title="Permanent link">&para;</a></h2>
 <p>Newtypes can optionally define a reserved validation hook:</p>
-<div class="highlight"><pre><span></span><code>type Attempts = newtype int:
-    def from_underlying(n: int) -&gt; Result[Attempts, str]:
-        if n &lt;= 0:
-            return Err(&quot;attempts must be &gt;= 1&quot;)
-        return Ok(Attempts(n))
+<div class="language-incan highlight"><pre><span></span><code><span class="k">type</span> <span class="n">Attempts</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">from_underlying</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Attempts</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;=</span> <span class="m">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;attempts must be &gt;= 1&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">Attempts</span><span class="p">(</span><span class="n">n</span><span class="p">))</span>
 </code></pre></div>
 <p>If a newtype defines <code>from_underlying</code>, then calling it like <code>Attempts(5)</code> performs <strong>checked construction</strong>
 (it calls <code>Attempts.from_underlying(5)</code> and panics if it returns <code>Err(...)</code>). This is a stepping stone toward the full
 v0.2 RFC behavior.</p>
 <p>To access the wrapped value, use <code>.0</code>:</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    user_id = UserId(42)
-    println(f&quot;{user_id.0}&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">user_id</span> <span class="o">=</span> <span class="n">UserId</span><span class="p">(</span><span class="m">42</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{user_id.0}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="validation-with-result">Validation with <code>Result</code><a class="headerlink" href="#validation-with-result" title="Permanent link">&para;</a></h2>
 <p>Newtypes are great for values that should satisfy an invariant (like “must be positive”).</p>
 <p>One common pattern is to provide a constructor helper that returns <code>Result</code>:</p>
-<div class="highlight"><pre><span></span><code>type UserId = newtype int
+<div class="language-incan highlight"><pre><span></span><code><span class="k">type</span> <span class="n">UserId</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">int</span>
 
-def make_positive_id(n: int) -&gt; Result[UserId, str]:
-    if n &gt; 0:
-        return Ok(UserId(n))
-    return Err(&quot;ID must be positive&quot;)
+<span class="k">def</span> <span class="n">make_positive_id</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">UserId</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">n</span> <span class="o">&gt;</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">UserId</span><span class="p">(</span><span class="n">n</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;ID must be positive&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>You can then use <code>match</code> (or <code>?</code> if you’re inside a function returning <code>Result</code>) to handle failures.</p>
 <h2 id="methods-on-newtypes">Methods on newtypes<a class="headerlink" href="#methods-on-newtypes" title="Permanent link">&para;</a></h2>
 <p>Newtypes can also define methods:</p>
-<div class="highlight"><pre><span></span><code>enum EmailError:
-    MissingAt
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">EmailError</span><span class="p">:</span>
+    <span class="n">MissingAt</span>
 
-type Email = newtype str:
-    def from_underlying(v: str) -&gt; Result[Email, EmailError]:
-        &quot;&quot;&quot;Validate an email address by checking for the presence of an @ symbol&quot;&quot;&quot;
-        if &quot;@&quot; not in v:
-            return Err(EmailError.MissingAt)
-        return Ok(Email(v.lower()))
+<span class="k">type</span> <span class="n">Email</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">from_underlying</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Email</span><span class="p">,</span> <span class="n">EmailError</span><span class="p">]:</span>
+        <span class="s2">&quot;&quot;&quot;Validate an email address by checking for the presence of an @ symbol&quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="k">not</span> <span class="k">in</span> <span class="n">v</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="n">EmailError</span><span class="p">.</span><span class="n">MissingAt</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">Email</span><span class="p">(</span><span class="n">v</span><span class="p">.</span><span class="n">lower</span><span class="p">()))</span>
 
-def main() -&gt; None:
-    match Email.from_underlying(&quot;Alice@Example.com&quot;):
-        Ok(email) =&gt; println(f&quot;email={email.0}&quot;)
-        Err(_) =&gt; println(&quot;invalid email&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">Email</span><span class="p">.</span><span class="n">from_underlying</span><span class="p">(</span><span class="s2">&quot;Alice@Example.com&quot;</span><span class="p">):</span>
+        <span class="n">Ok</span><span class="p">(</span><span class="n">email</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;email={email.0}&quot;</span><span class="p">)</span>
+        <span class="n">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;invalid email&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
 <ol>
@@ -3839,21 +3839,21 @@ def main() -&gt; None:
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="highlight"><pre><span></span><code>type CartItems = newtype List[str]
+<div class="language-incan highlight"><pre><span></span><code><span class="k">type</span> <span class="n">CartItems</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">List</span><span class="p">[</span><span class="n">str</span><span class="p">]</span>
 
-def non_empty(items: List[str]) -&gt; Result[CartItems, str]:
-    if len(items) == 0:
-        return Err(&quot;must not be empty&quot;)
-    return Ok(CartItems(items))
+<span class="k">def</span> <span class="n">non_empty</span><span class="p">(</span><span class="n">items</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">CartItems</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;must not be empty&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">CartItems</span><span class="p">(</span><span class="n">items</span><span class="p">))</span>
 
-def main() -&gt; None:
-    match non_empty([]):
-        Ok(items) =&gt; println(f&quot;first={items.0[0]}&quot;)
-        Err(e) =&gt; println(f&quot;error: {e}&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">non_empty</span><span class="p">([]):</span>
+        <span class="n">Ok</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;first={items.0[0]}&quot;</span><span class="p">)</span>
+        <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: {e}&quot;</span><span class="p">)</span>
 
-    match non_empty([&quot;a&quot;]):
-        Ok(items) =&gt; println(f&quot;first={items.0[0]}&quot;)
-        Err(e) =&gt; println(f&quot;error: {e}&quot;)
+    <span class="k">match</span> <span class="n">non_empty</span><span class="p">([</span><span class="s2">&quot;a&quot;</span><span class="p">]):</span>
+        <span class="n">Ok</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;first={items.0[0]}&quot;</span><span class="p">)</span>
+        <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: {e}&quot;</span><span class="p">)</span>
 </code></pre></div>
 </details>
 <h2 id="where-to-learn-more">Where to learn more<a class="headerlink" href="#where-to-learn-more" title="Permanent link">&para;</a></h2>

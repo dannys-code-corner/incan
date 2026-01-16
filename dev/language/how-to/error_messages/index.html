@@ -3823,7 +3823,7 @@
 <p>Incan’s compiler errors are designed to be <strong>actionable</strong>: they show you what went wrong,
 where it happened, and what to do next.</p>
 <h2 id="reading-error-output">Reading Error Output<a class="headerlink" href="#reading-error-output" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="nb">type</span><span class="w"> </span>error:<span class="w"> </span>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;Result[str, str]&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;str&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="nb">type</span><span class="w"> </span>error:<span class="w"> </span>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;Result[str, str]&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;str&#39;</span>
 <span class="w">  </span>--&gt;<span class="w"> </span>examples/demo.incn:8:5
 <span class="w">    </span><span class="p">|</span>
 <span class="w">  </span><span class="m">8</span><span class="w"> </span><span class="p">|</span><span class="w">     </span><span class="k">return</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span>
@@ -3844,105 +3844,105 @@ where it happened, and what to do next.</p>
 <h2 id="common-errors-and-solutions">Common Errors and Solutions<a class="headerlink" href="#common-errors-and-solutions" title="Permanent link">&para;</a></h2>
 <h3 id="result-type-mismatches">Result Type Mismatches<a class="headerlink" href="#result-type-mismatches" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
-<div class="highlight"><pre><span></span><code>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;Result[User, Error]&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;User&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;Result[User, Error]&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;User&#39;</span>
 </code></pre></div>
 <p><strong>Problem:</strong> Function returns <code>Result</code> but you're returning a plain value.</p>
 <p><strong>Solution:</strong></p>
-<div class="highlight"><pre><span></span><code># Wrong
-def get_user(id: int) -&gt; Result[User, Error]:
-<span class="hll">    return User(name=&quot;Alice&quot;)  # ❌ Missing Ok()
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
+<span class="c1">def get_user(id: int) -&gt; Result[User, Error]:</span>
+<span class="hll"><span class="c1">    return User(name=&quot;Alice&quot;)  # ❌ Missing Ok()</span>
 </span>
-# Right
-def get_user(id: int) -&gt; Result[User, Error]:
-<span class="hll">    return Ok(User(name=&quot;Alice&quot;))  # ✅
+<span class="c1"># Right</span>
+<span class="c1">def get_user(id: int) -&gt; Result[User, Error]:</span>
+<span class="hll"><span class="c1">    return Ok(User(name=&quot;Alice&quot;))  # ✅</span>
 </span></code></pre></div>
 <hr />
 <p><strong>Error:</strong></p>
-<div class="highlight"><pre><span></span><code>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;str&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;Result[str, Error]&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;str&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;Result[str, Error]&#39;</span>
 </code></pre></div>
 <p><strong>Problem:</strong> Using a <code>Result</code> where a plain value is expected.</p>
 <p><strong>Solution:</strong></p>
-<div class="highlight"><pre><span></span><code># Wrong
-def greet() -&gt; str:
-    name = get_name()  # Returns Result[str, Error]
-<span class="hll">    return name  # ❌ name is still Result
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
+<span class="c1">def greet() -&gt; str:</span>
+<span class="c1">    name = get_name()  # Returns Result[str, Error]</span>
+<span class="hll"><span class="c1">    return name  # ❌ name is still Result</span>
 </span>
-# Right - use ? to unwrap
-def greet() -&gt; Result[str, Error]:
-<span class="hll">    name = get_name()?  # ✅ Unwraps Ok, returns Err early
-</span>    return Ok(f&quot;Hello, {name}&quot;)
+<span class="c1"># Right - use ? to unwrap</span>
+<span class="c1">def greet() -&gt; Result[str, Error]:</span>
+<span class="hll"><span class="c1">    name = get_name()?  # ✅ Unwraps Ok, returns Err early</span>
+</span><span class="c1">    return Ok(f&quot;Hello, {name}&quot;)</span>
 
-# Or handle explicitly
-def greet_safe() -&gt; str:
-    match get_name():
-        case Ok(name): return f&quot;Hello, {name}&quot;
-        case Err(_): return &quot;Hello, stranger&quot;
+<span class="c1"># Or handle explicitly</span>
+<span class="c1">def greet_safe() -&gt; str:</span>
+<span class="c1">    match get_name():</span>
+<span class="c1">        case Ok(name): return f&quot;Hello, {name}&quot;</span>
+<span class="c1">        case Err(_): return &quot;Hello, stranger&quot;</span>
 </code></pre></div>
 <h3 id="the-operator">The <code>?</code> Operator<a class="headerlink" href="#the-operator" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
-<div class="highlight"><pre><span></span><code>Cannot<span class="w"> </span>use<span class="w"> </span><span class="s1">&#39;?&#39;</span><span class="w"> </span>on<span class="w"> </span><span class="nb">type</span><span class="w"> </span><span class="s1">&#39;int&#39;</span><span class="w"> </span>-<span class="w"> </span>expected<span class="w"> </span>Result<span class="o">[</span>T,<span class="w"> </span>E<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code>Cannot<span class="w"> </span>use<span class="w"> </span><span class="s1">&#39;?&#39;</span><span class="w"> </span>on<span class="w"> </span><span class="nb">type</span><span class="w"> </span><span class="s1">&#39;int&#39;</span><span class="w"> </span>-<span class="w"> </span>expected<span class="w"> </span>Result<span class="o">[</span>T,<span class="w"> </span>E<span class="o">]</span>
 </code></pre></div>
 <p><strong>Problem:</strong> The <code>?</code> operator only works on <code>Result</code> types.</p>
 <p><strong>Solution:</strong></p>
-<div class="highlight"><pre><span></span><code># Wrong
-def double(x: int) -&gt; int:
-<span class="hll">    return x?  # ❌ x is not a Result
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
+<span class="c1">def double(x: int) -&gt; int:</span>
+<span class="hll"><span class="c1">    return x?  # ❌ x is not a Result</span>
 </span>
-# Right
-def double(x: int) -&gt; int:
-<span class="hll">    return x * 2  # ✅ No ? needed
+<span class="c1"># Right</span>
+<span class="c1">def double(x: int) -&gt; int:</span>
+<span class="hll"><span class="c1">    return x * 2  # ✅ No ? needed</span>
 </span></code></pre></div>
 <h3 id="mutability-errors">Mutability Errors<a class="headerlink" href="#mutability-errors" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
-<div class="highlight"><pre><span></span><code>Cannot<span class="w"> </span>mutate<span class="w"> </span><span class="s1">&#39;count&#39;</span><span class="w"> </span>-<span class="w"> </span>variable<span class="w"> </span>is<span class="w"> </span>immutable
+<div class="language-bash highlight"><pre><span></span><code>Cannot<span class="w"> </span>mutate<span class="w"> </span><span class="s1">&#39;count&#39;</span><span class="w"> </span>-<span class="w"> </span>variable<span class="w"> </span>is<span class="w"> </span>immutable
 </code></pre></div>
 <p><strong>Problem:</strong> Trying to change a variable declared without <code>mut</code>.</p>
 <p><strong>Why:</strong> Incan variables are immutable by default for safety and clarity.</p>
 <p><strong>Solution:</strong></p>
-<div class="highlight"><pre><span></span><code># Wrong
-def counter() -&gt; int:
-    let count = 0
-<span class="hll">    count = count + 1  # ❌ count is immutable
-</span>    return count
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
+<span class="c1">def counter() -&gt; int:</span>
+<span class="c1">    let count = 0</span>
+<span class="hll"><span class="c1">    count = count + 1  # ❌ count is immutable</span>
+</span><span class="c1">    return count</span>
 
-# Right
-def counter() -&gt; int:
-<span class="hll">    mut count = 0      # ✅ Declare as mutable
-</span>    count = count + 1
-    return count
+<span class="c1"># Right</span>
+<span class="c1">def counter() -&gt; int:</span>
+<span class="hll"><span class="c1">    mut count = 0      # ✅ Declare as mutable</span>
+</span><span class="c1">    count = count + 1</span>
+<span class="c1">    return count</span>
 </code></pre></div>
 <h3 id="self-mutation">Self Mutation<a class="headerlink" href="#self-mutation" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
-<div class="highlight"><pre><span></span><code>Cannot<span class="w"> </span>mutate<span class="w"> </span>self<span class="w"> </span>-<span class="w"> </span>method<span class="w"> </span>takes<span class="w"> </span>immutable<span class="w"> </span>self
+<div class="language-bash highlight"><pre><span></span><code>Cannot<span class="w"> </span>mutate<span class="w"> </span>self<span class="w"> </span>-<span class="w"> </span>method<span class="w"> </span>takes<span class="w"> </span>immutable<span class="w"> </span>self
 </code></pre></div>
 <p><strong>Problem:</strong> Method modifies <code>self</code> but doesn't declare <code>mut self</code>.</p>
 <p><strong>Solution:</strong></p>
-<div class="highlight"><pre><span></span><code>model Counter:
-    value: int
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Counter</span><span class="p">:</span>
+    <span class="n">value</span><span class="p">:</span> <span class="n">int</span>
 
-    # Wrong
-<span class="hll">    def increment(self) -&gt; None:
-</span>        self.value += 1  # ❌ self is immutable
+    <span class="c1"># Wrong</span>
+<span class="hll"><span class="c1">    def increment(self) -&gt; None:</span>
+</span><span class="c1">        self.value += 1  # ❌ self is immutable</span>
 
-<span class="hll">    # Right
-</span>    def increment(mut self) -&gt; None:  # ✅ mut self
-        self.value += 1
+<span class="hll"><span class="c1">    # Right</span>
+</span><span class="c1">    def increment(mut self) -&gt; None:  # ✅ mut self</span>
+<span class="c1">        self.value += 1</span>
 </code></pre></div>
 <h3 id="missing-traits">Missing Traits<a class="headerlink" href="#missing-traits" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
-<div class="highlight"><pre><span></span><code>Type<span class="w"> </span><span class="s1">&#39;Point&#39;</span><span class="w"> </span>does<span class="w"> </span>not<span class="w"> </span>implement<span class="w"> </span>trait<span class="w"> </span><span class="s1">&#39;Eq&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code>Type<span class="w"> </span><span class="s1">&#39;Point&#39;</span><span class="w"> </span>does<span class="w"> </span>not<span class="w"> </span>implement<span class="w"> </span>trait<span class="w"> </span><span class="s1">&#39;Eq&#39;</span>
 </code></pre></div>
 <p><strong>Problem:</strong> Using <code>==</code> on a type without equality support.</p>
 <p><strong>Solution:</strong></p>
-<div class="highlight"><pre><span></span><code># Add @derive(Eq) to enable ==
-@derive(Eq)
-model Point:
-    x: int
-    y: int
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Add @derive(Eq) to enable ==</span>
+<span class="c1">@derive(Eq)</span>
+<span class="c1">model Point:</span>
+<span class="c1">    x: int</span>
+<span class="c1">    y: int</span>
 
-# Now this works
-if p1 == p2:
-    println(&quot;Same point!&quot;)
+<span class="c1"># Now this works</span>
+<span class="c1">if p1 == p2:</span>
+<span class="c1">    println(&quot;Same point!&quot;)</span>
 </code></pre></div>
 <p><strong>Common derives:</strong></p>
 <table>
@@ -3980,23 +3980,23 @@ if p1 == p2:
 </blockquote>
 <h3 id="option-handling">Option Handling<a class="headerlink" href="#option-handling" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
-<div class="highlight"><pre><span></span><code>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;bool&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;Option[User]&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code>Type<span class="w"> </span>mismatch:<span class="w"> </span>expected<span class="w"> </span><span class="s1">&#39;bool&#39;</span>,<span class="w"> </span>found<span class="w"> </span><span class="s1">&#39;Option[User]&#39;</span>
 </code></pre></div>
 <p><strong>Problem:</strong> Using <code>Option</code> directly in a condition.</p>
 <p><strong>Solution:</strong></p>
-<div class="highlight"><pre><span></span><code># Wrong
-let user = find_user(id)
-<span class="hll">if user:  # ❌ Can&#39;t use Option as bool
-</span>    ...
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
+<span class="c1">let user = find_user(id)</span>
+<span class="hll"><span class="c1">if user:  # ❌ Can&#39;t use Option as bool</span>
+</span><span class="c1">    ...</span>
 
-# Right - use pattern matching
-<span class="hll">if user is Some(u):  # ✅
-</span>    println(u.name)
+<span class="c1"># Right - use pattern matching</span>
+<span class="hll"><span class="c1">if user is Some(u):  # ✅</span>
+</span><span class="c1">    println(u.name)</span>
 
-# Or check explicitly
-if user.is_some():
-<span class="hll">    let u = user.unwrap()
-</span>    println(u.name)
+<span class="c1"># Or check explicitly</span>
+<span class="c1">if user.is_some():</span>
+<span class="hll"><span class="c1">    let u = user.unwrap()</span>
+</span><span class="c1">    println(u.name)</span>
 </code></pre></div>
 <h2 id="philosophy-explicit-is-better">Philosophy: Explicit is Better<a class="headerlink" href="#philosophy-explicit-is-better" title="Permanent link">&para;</a></h2>
 <p>Incan intentionally requires explicit handling of:</p>

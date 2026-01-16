@@ -3746,12 +3746,12 @@ registry.</p>
 <p>If you try to do <em>both</em> for the same capability, that’s a <strong>conflict</strong> and should be treated as an error: the compiler
 must not have to guess which implementation “wins”.</p>
 <p>Example conflicts:</p>
-<div class="highlight"><pre><span></span><code>@derive(Eq)
-model User:
-    id: int
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Eq</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
 
-    def __eq__(self, other: User) -&gt; bool:
-        return self.id == other.id
+    <span class="k">def</span> <span class="n">__eq__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">id</span> <span class="o">==</span> <span class="n">other</span><span class="p">.</span><span class="n">id</span>
 </code></pre></div>
 <p>The authoritative rule set (including the full conflict list) lives in:</p>
 <ul>
@@ -3768,10 +3768,10 @@ model User:
 </ul>
 <h3 id="resource-management-without-context-managers">Resource management without context managers<a class="headerlink" href="#resource-management-without-context-managers" title="Permanent link">&para;</a></h3>
 <p>Incan’s default approach is: allocate the resource, use it, and let scope end handle cleanup.</p>
-<div class="highlight"><pre><span></span><code>def process_file() -&gt; Result[str, str]:
-    file = File.open(&quot;data.txt&quot;)?
-    content = file.read_all()?
-    return Ok(content)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">process_file</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="n">file</span> <span class="o">=</span> <span class="n">File</span><span class="p">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;data.txt&quot;</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">content</span> <span class="o">=</span> <span class="n">file</span><span class="p">.</span><span class="n">read_all</span><span class="p">()</span><span class="err">?</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
 </code></pre></div>
 
 

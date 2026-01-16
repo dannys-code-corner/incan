@@ -3979,15 +3979,15 @@
 <p>Incan compiles to Rust, which means you can import from Rust crates and interoperate with Rust types.</p>
 <h2 id="importing-rust-crates">Importing Rust Crates<a class="headerlink" href="#importing-rust-crates" title="Permanent link">&para;</a></h2>
 <p>Use the <code>rust::</code> prefix to import from Rust crates:</p>
-<div class="highlight"><pre><span></span><code># Import entire crate
-import rust::serde_json as json
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Import entire crate</span>
+<span class="c1">import rust::serde_json as json</span>
 
-# Import specific items
-from rust::time import Instant, Duration
-from rust::std::collections import HashMap, HashSet
+<span class="c1"># Import specific items</span>
+<span class="c1">from rust::time import Instant, Duration</span>
+<span class="c1">from rust::std::collections import HashMap, HashSet</span>
 
-# Import nested items
-import rust::serde_json::Value
+<span class="c1"># Import nested items</span>
+<span class="c1">import rust::serde_json::Value</span>
 </code></pre></div>
 <h2 id="automatic-dependency-management">Automatic Dependency Management<a class="headerlink" href="#automatic-dependency-management" title="Permanent link">&para;</a></h2>
 <p>When you use <code>import rust::crate_name</code>, Incan automatically adds the dependency to your generated <code>Cargo.toml</code>.</p>
@@ -4110,7 +4110,7 @@ that resolve to different versions at different times.</p>
 </table>
 <h3 id="using-unknown-crates">Using Unknown Crates<a class="headerlink" href="#using-unknown-crates" title="Permanent link">&para;</a></h3>
 <p><strong>Current behavior</strong>: If you try to import a crate not in the known-good list, you'll see an error:</p>
-<div class="highlight"><pre><span></span><code>Error:<span class="w"> </span>unknown<span class="w"> </span>Rust<span class="w"> </span>crate<span class="w"> </span><span class="sb">`</span>my_crate<span class="sb">`</span>:<span class="w"> </span>no<span class="w"> </span>known-good<span class="w"> </span>version<span class="w"> </span>mapping<span class="w"> </span>exists.
+<div class="language-bash highlight"><pre><span></span><code>Error:<span class="w"> </span>unknown<span class="w"> </span>Rust<span class="w"> </span>crate<span class="w"> </span><span class="sb">`</span>my_crate<span class="sb">`</span>:<span class="w"> </span>no<span class="w"> </span>known-good<span class="w"> </span>version<span class="w"> </span>mapping<span class="w"> </span>exists.
 
 To<span class="w"> </span>use<span class="w"> </span>this<span class="w"> </span>crate<span class="w"> </span>today,<span class="w"> </span>request<span class="w"> </span>that<span class="w"> </span><span class="sb">`</span>my_crate<span class="sb">`</span><span class="w"> </span>be<span class="w"> </span>added<span class="w"> </span>to<span class="w"> </span>the<span class="w"> </span>known-good<span class="w"> </span>list<span class="w"> </span>by<span class="w"> </span>opening<span class="w"> </span>an<span class="w"> </span>issue/PR.
 </code></pre></div>
@@ -4134,11 +4134,11 @@ project configuration, and lock files for full flexibility.</p>
 <p>The maintainers will test the crate and add it to <code>src/backend/project.rs</code>.</p>
 <h3 id="coming-soon-version-annotations-and-incantoml">Coming Soon: Version Annotations and <code>incan.toml</code><a class="headerlink" href="#coming-soon-version-annotations-and-incantoml" title="Permanent link">&para;</a></h3>
 <p><a href="../../../RFCs/013_rust_crate_dependencies/">RFC 013</a> defines a comprehensive dependency system that will allow:</p>
-<div class="highlight"><pre><span></span><code># Inline version annotations (planned)
-import rust::my_crate @ &quot;1.0&quot;
-import rust::tokio @ &quot;1.35&quot; with [&quot;full&quot;]
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Inline version annotations (planned)</span>
+<span class="c1">import rust::my_crate @ &quot;1.0&quot;</span>
+<span class="c1">import rust::tokio @ &quot;1.35&quot; with [&quot;full&quot;]</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><span class="c1"># incan.toml project configuration (planned)</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="c1"># incan.toml project configuration (planned)</span>
 <span class="k">[project]</span>
 <span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;my_app&quot;</span>
 <span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.1.0&quot;</span>
@@ -4150,71 +4150,71 @@ import rust::tokio @ &quot;1.35&quot; with [&quot;full&quot;]
 <p>This will enable any Rust crate while maintaining reproducibility.</p>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
 <h3 id="working-with-json-serde_json">Working with JSON (serde_json)<a class="headerlink" href="#working-with-json-serde_json" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>import rust::serde_json as json
-from rust::serde_json import Value
+<div class="language-incan highlight"><pre><span></span><code><span class="k">import</span> <span class="k">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">as</span> <span class="n">json</span>
+<span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">import</span> <span class="n">Value</span>
 
-def parse_json(data: str) -&gt; Value:
-    return json.from_str(data).unwrap()
+<span class="k">def</span> <span class="n">parse_json</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Value</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">json</span><span class="p">.</span><span class="n">from_str</span><span class="p">(</span><span class="n">data</span><span class="p">).</span><span class="n">unwrap</span><span class="p">()</span>
 
-def main() -&gt; None:
-    data = &#39;{&quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 30}&#39;
-    parsed = parse_json(data)
-    println(f&quot;Name: {parsed[&#39;name&#39;]}&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="s1">&#39;{&quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 30}&#39;</span>
+    <span class="n">parsed</span> <span class="o">=</span> <span class="n">parse_json</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Name: {parsed[&#39;name&#39;]}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="working-with-time">Working with Time<a class="headerlink" href="#working-with-time" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>from rust::time import Instant, Duration
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">time</span> <span class="k">import</span> <span class="n">Instant</span><span class="p">,</span> <span class="n">Duration</span>
 
-def measure_operation() -&gt; None:
-    start = Instant.now()
+<span class="k">def</span> <span class="n">measure_operation</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">start</span> <span class="o">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">now</span><span class="p">()</span>
 
-    # Do some work
-    for i in range(1000000):
-        pass
+    <span class="c1"># Do some work</span>
+<span class="c1">    for i in range(1000000):</span>
+<span class="c1">        pass</span>
 
-    elapsed = start.elapsed()
-    println(f&quot;Operation took: {elapsed}&quot;)
+<span class="c1">    elapsed = start.elapsed()</span>
+<span class="c1">    println(f&quot;Operation took: {elapsed}&quot;)</span>
 </code></pre></div>
 <h3 id="http-requests-reqwest">HTTP Requests (reqwest)<a class="headerlink" href="#http-requests-reqwest" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>import rust::reqwest
+<div class="language-incan highlight"><pre><span></span><code><span class="k">import</span> <span class="k">rust</span><span class="p">::</span><span class="n">reqwest</span>
 
-async def fetch_data(url: str) -&gt; str:
-    response = await reqwest.get(url)
-    return await response.text()
+<span class="k">async</span> <span class="k">def</span> <span class="n">fetch_data</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">reqwest</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
+    <span class="k">return</span> <span class="k">await</span> <span class="n">response</span><span class="p">.</span><span class="n">text</span><span class="p">()</span>
 
-async def main() -&gt; None:
-    data = await fetch_data(&quot;https://api.example.com/data&quot;)
-    println(data)
+<span class="k">async</span> <span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetch_data</span><span class="p">(</span><span class="s2">&quot;https://api.example.com/data&quot;</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="using-collections">Using Collections<a class="headerlink" href="#using-collections" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>from rust::std::collections import HashMap, HashSet
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">std</span><span class="p">::</span><span class="n">collections</span> <span class="k">import</span> <span class="n">HashMap</span><span class="p">,</span> <span class="n">HashSet</span>
 
-def count_words(text: str) -&gt; HashMap[str, int]:
-    counts = HashMap.new()
-    for word in text.split():
-        count = counts.get(word).unwrap_or(0)
-        counts.insert(word, count + 1)
-    return counts
+<span class="k">def</span> <span class="n">count_words</span><span class="p">(</span><span class="n">text</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">HashMap</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">int</span><span class="p">]:</span>
+    <span class="n">counts</span> <span class="o">=</span> <span class="n">HashMap</span><span class="p">.</span><span class="n">new</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">word</span> <span class="k">in</span> <span class="n">text</span><span class="p">.</span><span class="n">split</span><span class="p">():</span>
+        <span class="n">count</span> <span class="o">=</span> <span class="n">counts</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">word</span><span class="p">).</span><span class="n">unwrap_or</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
+        <span class="n">counts</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">word</span><span class="p">,</span> <span class="n">count</span> <span class="o">+</span> <span class="m">1</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">counts</span>
 </code></pre></div>
 <h3 id="random-numbers">Random Numbers<a class="headerlink" href="#random-numbers" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>from rust::rand import Rng, thread_rng
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">rand</span> <span class="k">import</span> <span class="n">Rng</span><span class="p">,</span> <span class="n">thread_rng</span>
 
-def random_int(min: int, max: int) -&gt; int:
-    rng = thread_rng()
-    return rng.gen_range(min..max)
+<span class="k">def</span> <span class="n">random_int</span><span class="p">(</span><span class="n">min</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">max</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="n">rng</span> <span class="o">=</span> <span class="n">thread_rng</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">rng</span><span class="p">.</span><span class="n">gen_range</span><span class="p">(</span><span class="n">min</span><span class="p">..</span><span class="n">max</span><span class="p">)</span>
 
-def main() -&gt; None:
-    for _ in range(5):
-        println(f&quot;Random: {random_int(1, 100)}&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="m">5</span><span class="p">):</span>
+        <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Random: {random_int(1, 100)}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="uuids">UUIDs<a class="headerlink" href="#uuids" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>from rust::uuid import Uuid
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">uuid</span> <span class="k">import</span> <span class="n">Uuid</span>
 
-def generate_id() -&gt; str:
-    return Uuid.new_v4().to_string()
+<span class="k">def</span> <span class="n">generate_id</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">Uuid</span><span class="p">.</span><span class="n">new_v4</span><span class="p">().</span><span class="n">to_string</span><span class="p">()</span>
 
-def main() -&gt; None:
-    id = generate_id()
-    println(f&quot;Generated ID: {id}&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">id</span> <span class="o">=</span> <span class="n">generate_id</span><span class="p">()</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Generated ID: {id}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="type-mapping">Type Mapping<a class="headerlink" href="#type-mapping" title="Permanent link">&para;</a></h2>
 <p>Incan types map to Rust types:</p>
@@ -4299,15 +4299,15 @@ def main() -&gt; None:
 </li>
 <li>
 <p><strong>Handle Results</strong>: Rust crate functions often return <code>Result</code>. Use <code>?</code> or explicit matching:</p>
-<div class="highlight"><pre><span></span><code>def safe_parse(s: str) -&gt; Result[int, str]:
-    return s.parse()  # Returns Result
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">safe_parse</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">int</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="k">return</span> <span class="n">s</span><span class="p">.</span><span class="n">parse</span><span class="p">()</span>  <span class="c1"># Returns Result</span>
 
-def main() -&gt; None:
-    match safe_parse(&quot;42&quot;):
-        case Ok(n):
-            println(f&quot;Parsed: {n}&quot;)
-        case Err(e):
-            println(f&quot;Error: {e}&quot;)
+<span class="c1">def main() -&gt; None:</span>
+<span class="c1">    match safe_parse(&quot;42&quot;):</span>
+<span class="c1">        case Ok(n):</span>
+<span class="c1">            println(f&quot;Parsed: {n}&quot;)</span>
+<span class="c1">        case Err(e):</span>
+<span class="c1">            println(f&quot;Error: {e}&quot;)</span>
 </code></pre></div>
 </li>
 <li>
@@ -4315,11 +4315,11 @@ def main() -&gt; None:
 </li>
 <li>
 <p><strong>Error types</strong>: Rust's error types can be complex. Consider using <code>anyhow</code> for simple error handling:</p>
-<div class="highlight"><pre><span></span><code>from rust::anyhow import Result, Context
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">anyhow</span> <span class="k">import</span> <span class="n">Result</span><span class="p">,</span> <span class="n">Context</span>
 
-def read_config(path: str) -&gt; Result[Config]:
-    content = fs.read_to_string(path).context(&quot;Failed to read config&quot;)?
-    return parse_config(content)
+<span class="k">def</span> <span class="n">read_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">]:</span>
+    <span class="n">content</span> <span class="o">=</span> <span class="n">fs</span><span class="p">.</span><span class="n">read_to_string</span><span class="p">(</span><span class="n">path</span><span class="p">).</span><span class="n">context</span><span class="p">(</span><span class="s2">&quot;Failed to read config&quot;</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">return</span> <span class="n">parse_config</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
 </code></pre></div>
 </li>
 </ol>

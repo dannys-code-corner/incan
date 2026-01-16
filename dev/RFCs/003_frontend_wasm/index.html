@@ -4097,7 +4097,7 @@ This positions Incan as a full-stack alternative to JavaScript frameworks like R
 <h3 id="the-python-full-stack-problem">The Python Full-Stack Problem<a class="headerlink" href="#the-python-full-stack-problem" title="Permanent link">&para;</a></h3>
 <p>Python developers building full-stack applications face a common frustration:
 <strong>Python for backend, JavaScript for frontend</strong>. The typical stack looks like:</p>
-<div class="highlight"><pre><span></span><code>Backend:<span class="w"> </span>Python<span class="w"> </span><span class="o">(</span>FastAPI,<span class="w"> </span>Django,<span class="w"> </span>Flask<span class="o">)</span>
+<div class="language-bash highlight"><pre><span></span><code>Backend:<span class="w"> </span>Python<span class="w"> </span><span class="o">(</span>FastAPI,<span class="w"> </span>Django,<span class="w"> </span>Flask<span class="o">)</span>
 <span class="w">    </span>↕<span class="w"> </span>API<span class="w"> </span>calls<span class="w"> </span>↕
 Frontend:<span class="w"> </span>JavaScript/TypeScript<span class="w"> </span><span class="o">(</span>React,<span class="w"> </span>Vue,<span class="w"> </span>Angular<span class="o">)</span>
 </code></pre></div>
@@ -4170,7 +4170,7 @@ But Python developers face a steeper learning curve.</p>
 <h3 id="incans-opportunity">Incan's Opportunity<a class="headerlink" href="#incans-opportunity" title="Permanent link">&para;</a></h3>
 <p><strong>Full-stack Python without JavaScript</strong> — one language for backend APIs, frontend UIs, and 3D graphics,
 all compiling to native performance:</p>
-<div class="highlight"><pre><span></span><code>Incan<span class="w"> </span><span class="o">(</span>Python-like<span class="w"> </span>syntax<span class="o">)</span>
+<div class="language-bash highlight"><pre><span></span><code>Incan<span class="w"> </span><span class="o">(</span>Python-like<span class="w"> </span>syntax<span class="o">)</span>
 <span class="w">    </span>↓<span class="w"> </span>compiles<span class="w"> </span>to
 Rust<span class="w"> </span><span class="o">(</span>backend<span class="o">)</span><span class="w"> </span>+<span class="w"> </span>Rust/WASM<span class="w"> </span><span class="o">(</span>frontend<span class="o">)</span>
 <span class="w">    </span>↓<span class="w"> </span>produces
@@ -4187,7 +4187,7 @@ Native<span class="w"> </span>binary<span class="w"> </span><span class="o">(</s
 <h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
 <h3 id="part-1-wasm-compilation-target">Part 1: WASM Compilation Target<a class="headerlink" href="#part-1-wasm-compilation-target" title="Permanent link">&para;</a></h3>
 <p>Add a <code>--target wasm</code> flag to the Incan compiler:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>wasm<span class="w"> </span>app.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>wasm<span class="w"> </span>app.incn
 </code></pre></div>
 <p>This generates:</p>
 <ul>
@@ -4196,7 +4196,7 @@ Native<span class="w"> </span>binary<span class="w"> </span><span class="o">(</s
 <li>Build artifacts ready for browser deployment</li>
 </ul>
 <h4 id="generated-structure">Generated Structure<a class="headerlink" href="#generated-structure" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>target/wasm/my_app/
+<div class="language-bash highlight"><pre><span></span><code>target/wasm/my_app/
 ├──<span class="w"> </span>Cargo.toml
 ├──<span class="w"> </span>src/
 │<span class="w">   </span>└──<span class="w"> </span>lib.rs<span class="w">          </span><span class="c1"># Generated Rust + wasm-bindgen</span>
@@ -4262,26 +4262,26 @@ Native<span class="w"> </span>binary<span class="w"> </span><span class="o">(</s
 <h3 id="part-2-ui-framework-react-alternative">Part 2: UI Framework (React Alternative)<a class="headerlink" href="#part-2-ui-framework-react-alternative" title="Permanent link">&para;</a></h3>
 <p>A reactive component model for building web UIs.</p>
 <h4 id="component-syntax">Component Syntax<a class="headerlink" href="#component-syntax" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.ui import component, signal, html, Element
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">ui</span> <span class="k">import</span> <span class="n">component</span><span class="p">,</span> <span class="n">signal</span><span class="p">,</span> <span class="n">html</span><span class="p">,</span> <span class="n">Element</span>
 
-@component
-def counter(initial: int = 0) -&gt; Element:
-    &quot;&quot;&quot;A simple counter component.&quot;&quot;&quot;
-    count, set_count = signal(initial)
+<span class="err">@</span><span class="n">component</span>
+<span class="k">def</span> <span class="n">counter</span><span class="p">(</span><span class="n">initial</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Element</span><span class="p">:</span>
+    <span class="s2">&quot;&quot;&quot;A simple counter component.&quot;&quot;&quot;</span>
+    <span class="n">count</span><span class="p">,</span> <span class="n">set_count</span> <span class="o">=</span> <span class="n">signal</span><span class="p">(</span><span class="n">initial</span><span class="p">)</span>
 
-    def increment() -&gt; None:
-        set_count(count + 1)
+    <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+        <span class="n">set_count</span><span class="p">(</span><span class="n">count</span> <span class="o">+</span> <span class="m">1</span><span class="p">)</span>
 
-    def decrement() -&gt; None:
-        set_count(count - 1)
+    <span class="k">def</span> <span class="n">decrement</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+        <span class="n">set_count</span><span class="p">(</span><span class="n">count</span> <span class="o">-</span> <span class="m">1</span><span class="p">)</span>
 
-    return html(&quot;&quot;&quot;
-        &lt;div class=&quot;counter&quot;&gt;
-            &lt;span&gt;Count: {count}&lt;/span&gt;
-            &lt;button on:click={increment}&gt;+&lt;/button&gt;
-            &lt;button on:click={decrement}&gt;-&lt;/button&gt;
-        &lt;/div&gt;
-    &quot;&quot;&quot;)
+    <span class="k">return</span> <span class="n">html</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        &lt;div class=&quot;</span><span class="n">counter</span><span class="s2">&quot;&gt;</span>
+<span class="s2">            &lt;span&gt;Count: {count}&lt;/span&gt;</span>
+<span class="s2">            &lt;button on:click={increment}&gt;+&lt;/button&gt;</span>
+<span class="s2">            &lt;button on:click={decrement}&gt;-&lt;/button&gt;</span>
+<span class="s2">        &lt;/div&gt;</span>
+<span class="s2">    &quot;&quot;&quot;</span><span class="p">)</span>
 </code></pre></div>
 <blockquote>
 <p><strong>Note</strong>: For simple inline handlers, arrow syntax is also supported:
@@ -4289,110 +4289,110 @@ def counter(initial: int = 0) -&gt; Element:
 </blockquote>
 <h4 id="reactive-state-signals">Reactive State: Signals<a class="headerlink" href="#reactive-state-signals" title="Permanent link">&para;</a></h4>
 <p>Signals provide fine-grained reactivity (like SolidJS/Leptos):</p>
-<div class="highlight"><pre><span></span><code>from incan.ui import signal, computed, effect
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">ui</span> <span class="k">import</span> <span class="n">signal</span><span class="p">,</span> <span class="n">computed</span><span class="p">,</span> <span class="n">effect</span>
 
-# Create reactive state
-name, set_name = signal(&quot;World&quot;)
+<span class="c1"># Create reactive state</span>
+<span class="c1">name, set_name = signal(&quot;World&quot;)</span>
 
-# Derived state (auto-updates when dependencies change)
-greeting = computed(() =&gt; f&quot;Hello, {name}!&quot;)
+<span class="c1"># Derived state (auto-updates when dependencies change)</span>
+<span class="c1">greeting = computed(() =&gt; f&quot;Hello, {name}!&quot;)</span>
 
-# Side effects
-effect(() =&gt; println(f&quot;Name changed to: {name}&quot;))
+<span class="c1"># Side effects</span>
+<span class="c1">effect(() =&gt; println(f&quot;Name changed to: {name}&quot;))</span>
 
-# Update triggers recomputation
-set_name(&quot;Incan&quot;)  # Logs: &quot;Name changed to: Incan&quot;
+<span class="c1"># Update triggers recomputation</span>
+<span class="c1">set_name(&quot;Incan&quot;)  # Logs: &quot;Name changed to: Incan&quot;</span>
 </code></pre></div>
 <h4 id="html-templating">HTML Templating<a class="headerlink" href="#html-templating" title="Permanent link">&para;</a></h4>
 <p>Embedded HTML with Incan expressions:</p>
-<div class="highlight"><pre><span></span><code>return html(&quot;&quot;&quot;
-    &lt;div class={active ? &quot;active&quot; : &quot;&quot;}&gt;
-        &lt;!-- Conditionals --&gt;
-        {
-        if logged_in:
-            &lt;UserProfile user={user} /&gt;
-        else:
-            &lt;LoginForm /&gt;
-        }
+<div class="language-incan highlight"><pre><span></span><code><span class="k">return</span> <span class="n">html</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">    &lt;div class={active ? &quot;</span><span class="n">active</span><span class="s2">&quot; : &quot;&quot;}&gt;</span>
+<span class="s2">        &lt;!-- Conditionals --&gt;</span>
+<span class="s2">        {</span>
+<span class="s2">        if logged_in:</span>
+<span class="s2">            &lt;UserProfile user={user} /&gt;</span>
+<span class="s2">        else:</span>
+<span class="s2">            &lt;LoginForm /&gt;</span>
+<span class="s2">        }</span>
 
-        &lt;!-- Loops --&gt;
-        &lt;ul&gt;
-            {
-            for item in items:
-                &lt;li key={item.id}&gt;{item.name}&lt;/li&gt;
-            }
-        &lt;/ul&gt;
+<span class="s2">        &lt;!-- Loops --&gt;</span>
+<span class="s2">        &lt;ul&gt;</span>
+<span class="s2">            {</span>
+<span class="s2">            for item in items:</span>
+<span class="s2">                &lt;li key={item.id}&gt;{item.name}&lt;/li&gt;</span>
+<span class="s2">            }</span>
+<span class="s2">        &lt;/ul&gt;</span>
 
-        &lt;!-- Event handlers --&gt;
-        &lt;button on:click={handle_click}&gt;Click me&lt;/button&gt;
-        &lt;input on:input={(e) =&gt; set_value(e.target.value)} /&gt;
-    &lt;/div&gt;
-&quot;&quot;&quot;)
+<span class="s2">        &lt;!-- Event handlers --&gt;</span>
+<span class="s2">        &lt;button on:click={handle_click}&gt;Click me&lt;/button&gt;</span>
+<span class="s2">        &lt;input on:input={(e) =&gt; set_value(e.target.value)} /&gt;</span>
+<span class="s2">    &lt;/div&gt;</span>
+<span class="s2">&quot;&quot;&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h4 id="component-props-and-children">Component Props and Children<a class="headerlink" href="#component-props-and-children" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.ui import component, html, Element, Children
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">ui</span> <span class="k">import</span> <span class="n">component</span><span class="p">,</span> <span class="n">html</span><span class="p">,</span> <span class="n">Element</span><span class="p">,</span> <span class="n">Children</span>
 
-@component
-def Card(title: str, children: Children) -&gt; Element:
-    return html(&quot;&quot;&quot;
-        &lt;div class=&quot;card&quot;&gt;
-            &lt;h2&gt;{title}&lt;/h2&gt;
-            &lt;div class=&quot;content&quot;&gt;
-                {children}
-            &lt;/div&gt;
-        &lt;/div&gt;
-    &quot;&quot;&quot;)
+<span class="err">@</span><span class="n">component</span>
+<span class="k">def</span> <span class="n">Card</span><span class="p">(</span><span class="n">title</span><span class="p">:</span> <span class="n">str</span><span class="p">,</span> <span class="n">children</span><span class="p">:</span> <span class="n">Children</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Element</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">html</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        &lt;div class=&quot;</span><span class="n">card</span><span class="s2">&quot;&gt;</span>
+<span class="s2">            &lt;h2&gt;{title}&lt;/h2&gt;</span>
+<span class="s2">            &lt;div class=&quot;</span><span class="n">content</span><span class="s2">&quot;&gt;</span>
+<span class="s2">                {children}</span>
+<span class="s2">            &lt;/div&gt;</span>
+<span class="s2">        &lt;/div&gt;</span>
+<span class="s2">    &quot;&quot;&quot;</span><span class="p">)</span>
 
-# Usage
-html(&quot;&quot;&quot;
-    &lt;Card title=&quot;My Card&quot;&gt;
-        &lt;p&gt;This is the card content.&lt;/p&gt;
-    &lt;/Card&gt;
-&quot;&quot;&quot;)
+<span class="c1"># Usage</span>
+<span class="c1">html(&quot;&quot;&quot;</span>
+<span class="c1">    &lt;Card title=&quot;My Card&quot;&gt;</span>
+<span class="c1">        &lt;p&gt;This is the card content.&lt;/p&gt;</span>
+<span class="c1">    &lt;/Card&gt;</span>
+<span class="c1">&quot;&quot;&quot;)</span>
 </code></pre></div>
 <h4 id="lifecycle-and-effects">Lifecycle and Effects<a class="headerlink" href="#lifecycle-and-effects" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.ui import component, signal, effect, html, Element
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">ui</span> <span class="k">import</span> <span class="n">component</span><span class="p">,</span> <span class="n">signal</span><span class="p">,</span> <span class="n">effect</span><span class="p">,</span> <span class="n">html</span><span class="p">,</span> <span class="n">Element</span>
 
-@component
-def dataFetcher(url: str) -&gt; Element:
-    data, set_data = signal(None)
-    loading, set_loading = signal(True)
+<span class="err">@</span><span class="n">component</span>
+<span class="k">def</span> <span class="n">dataFetcher</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Element</span><span class="p">:</span>
+    <span class="n">data</span><span class="p">,</span> <span class="n">set_data</span> <span class="o">=</span> <span class="n">signal</span><span class="p">(</span><span class="k">None</span><span class="p">)</span>
+    <span class="n">loading</span><span class="p">,</span> <span class="n">set_loading</span> <span class="o">=</span> <span class="n">signal</span><span class="p">(</span><span class="n">True</span><span class="p">)</span>
 
-    # Runs on mount and when url changes
-    effect(async () =&gt; (
-        set_loading(True)
-        result = await fetch(url)
-        set_data(result)
-        set_loading(False)
-    ), deps=[url])
+    <span class="c1"># Runs on mount and when url changes</span>
+<span class="c1">    effect(async () =&gt; (</span>
+<span class="c1">        set_loading(True)</span>
+<span class="c1">        result = await fetch(url)</span>
+<span class="c1">        set_data(result)</span>
+<span class="c1">        set_loading(False)</span>
+<span class="c1">    ), deps=[url])</span>
 
-    return html(&quot;&quot;&quot;
-        {
-        if loading:
-            &lt;Spinner /&gt;
-        else:
-            &lt;DataView data={data} /&gt;
-        }
-    &quot;&quot;&quot;)
+<span class="c1">    return html(&quot;&quot;&quot;</span>
+<span class="c1">        {</span>
+<span class="c1">        if loading:</span>
+<span class="c1">            &lt;Spinner /&gt;</span>
+<span class="c1">        else:</span>
+<span class="c1">            &lt;DataView data={data} /&gt;</span>
+<span class="c1">        }</span>
+<span class="c1">    &quot;&quot;&quot;)</span>
 </code></pre></div>
 <h4 id="routing">Routing<a class="headerlink" href="#routing" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.ui import component, Router, Route, Link, Element
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">ui</span> <span class="k">import</span> <span class="n">component</span><span class="p">,</span> <span class="n">Router</span><span class="p">,</span> <span class="n">Route</span><span class="p">,</span> <span class="n">Link</span><span class="p">,</span> <span class="n">Element</span>
 
-@component
-def app() -&gt; Element:
-    return html(&quot;&quot;&quot;
-        &lt;Router&gt;
-            &lt;nav&gt;
-                &lt;Link to=&quot;/&quot;&gt;Home&lt;/Link&gt;
-                &lt;Link to=&quot;/about&quot;&gt;About&lt;/Link&gt;
-                &lt;Link to=&quot;/users/{id}&quot;&gt;User&lt;/Link&gt;
-            &lt;/nav&gt;
+<span class="err">@</span><span class="n">component</span>
+<span class="k">def</span> <span class="n">app</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Element</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">html</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        &lt;Router&gt;</span>
+<span class="s2">            &lt;nav&gt;</span>
+<span class="s2">                &lt;Link to=&quot;</span><span class="o">/</span><span class="s2">&quot;&gt;Home&lt;/Link&gt;</span>
+<span class="s2">                &lt;Link to=&quot;</span><span class="o">/</span><span class="n">about</span><span class="s2">&quot;&gt;About&lt;/Link&gt;</span>
+<span class="s2">                &lt;Link to=&quot;</span><span class="o">/</span><span class="n">users</span><span class="o">/</span><span class="p">{</span><span class="n">id</span><span class="p">}</span><span class="s2">&quot;&gt;User&lt;/Link&gt;</span>
+<span class="s2">            &lt;/nav&gt;</span>
 
-            &lt;Route path=&quot;/&quot; component={Home} /&gt;
-            &lt;Route path=&quot;/about&quot; component={About} /&gt;
-            &lt;Route path=&quot;/users/{id}&quot; component={UserProfile} /&gt;
-        &lt;/Router&gt;
-    &quot;&quot;&quot;)
+<span class="s2">            &lt;Route path=&quot;</span><span class="o">/</span><span class="s2">&quot; component={Home} /&gt;</span>
+<span class="s2">            &lt;Route path=&quot;</span><span class="o">/</span><span class="n">about</span><span class="s2">&quot; component={About} /&gt;</span>
+<span class="s2">            &lt;Route path=&quot;</span><span class="o">/</span><span class="n">users</span><span class="o">/</span><span class="p">{</span><span class="n">id</span><span class="p">}</span><span class="s2">&quot; component={UserProfile} /&gt;</span>
+<span class="s2">        &lt;/Router&gt;</span>
+<span class="s2">    &quot;&quot;&quot;</span><span class="p">)</span>
 </code></pre></div>
 <hr />
 <h3 id="part-2b-jsx-template-syntax-alternative">Part 2b: JSX Template Syntax (Alternative)<a class="headerlink" href="#part-2b-jsx-template-syntax-alternative" title="Permanent link">&para;</a></h3>
@@ -4400,13 +4400,13 @@ def app() -&gt; Element:
 This provides a more familiar experience for developers coming from React/TypeScript, with full IDE support.</p>
 <h4 id="why-a-jsx-wrapper">Why a <code>jsx()</code> Wrapper?<a class="headerlink" href="#why-a-jsx-wrapper" title="Permanent link">&para;</a></h4>
 <p>Raw JSX in Incan would create parser ambiguity:</p>
-<div class="highlight"><pre><span></span><code>result = &lt;div&gt;content&lt;/div&gt;    # JSX? Or...
-result = x &lt; y                  # Less-than comparison?
+<div class="language-incan highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">div</span><span class="o">&gt;</span><span class="n">content</span><span class="o">&lt;/</span><span class="n">div</span><span class="o">&gt;</span>    <span class="c1"># JSX? Or...</span>
+<span class="c1">result = x &lt; y                  # Less-than comparison?</span>
 </code></pre></div>
 <p>The <code>jsx()</code> wrapper solves this by explicitly marking JSX regions:</p>
-<div class="highlight"><pre><span></span><code>return jsx(
-    &lt;div&gt;content&lt;/div&gt;
-)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">return</span> <span class="n">jsx</span><span class="p">(</span>
+    <span class="o">&lt;</span><span class="n">div</span><span class="o">&gt;</span><span class="n">content</span><span class="o">&lt;/</span><span class="n">div</span><span class="o">&gt;</span>
+<span class="p">)</span>
 </code></pre></div>
 <p>This approach:</p>
 <ul>
@@ -4442,147 +4442,147 @@ result = x &lt; y                  # Less-than comparison?
 </table>
 <p>Both compile to the same output — choose based on preference.</p>
 <h4 id="jsx-syntax-in-incan">JSX Syntax in Incan<a class="headerlink" href="#jsx-syntax-in-incan" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.ui import component, signal, jsx, Element
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">ui</span> <span class="k">import</span> <span class="n">component</span><span class="p">,</span> <span class="n">signal</span><span class="p">,</span> <span class="n">jsx</span><span class="p">,</span> <span class="n">Element</span>
 
-@component
-def counter(initial: int = 0) -&gt; Element:
-    count, set_count = signal(initial)
+<span class="err">@</span><span class="n">component</span>
+<span class="k">def</span> <span class="n">counter</span><span class="p">(</span><span class="n">initial</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Element</span><span class="p">:</span>
+    <span class="n">count</span><span class="p">,</span> <span class="n">set_count</span> <span class="o">=</span> <span class="n">signal</span><span class="p">(</span><span class="n">initial</span><span class="p">)</span>
 
-    def increment() -&gt; None:
-        set_count(count + 1)
+    <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+        <span class="n">set_count</span><span class="p">(</span><span class="n">count</span> <span class="o">+</span> <span class="m">1</span><span class="p">)</span>
 
-    def decrement() -&gt; None:
-        set_count(count - 1)
+    <span class="k">def</span> <span class="n">decrement</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+        <span class="n">set_count</span><span class="p">(</span><span class="n">count</span> <span class="o">-</span> <span class="m">1</span><span class="p">)</span>
 
-    return jsx(
-        &lt;div class=&quot;counter&quot;&gt;
-            &lt;span&gt;Count: {count}&lt;/span&gt;
-            &lt;button onClick={increment}&gt;+&lt;/button&gt;
-            &lt;button onClick={decrement}&gt;-&lt;/button&gt;
-        &lt;/div&gt;
-    )
+    <span class="k">return</span> <span class="n">jsx</span><span class="p">(</span>
+        <span class="o">&lt;</span><span class="n">div</span> <span class="k">class</span><span class="o">=</span><span class="s2">&quot;counter&quot;</span><span class="o">&gt;</span>
+            <span class="o">&lt;</span><span class="n">span</span><span class="o">&gt;</span><span class="n">Count</span><span class="p">:</span> <span class="p">{</span><span class="n">count</span><span class="p">}</span><span class="o">&lt;/</span><span class="n">span</span><span class="o">&gt;</span>
+            <span class="o">&lt;</span><span class="n">button</span> <span class="n">onClick</span><span class="o">=</span><span class="p">{</span><span class="n">increment</span><span class="p">}</span><span class="o">&gt;+&lt;/</span><span class="n">button</span><span class="o">&gt;</span>
+            <span class="o">&lt;</span><span class="n">button</span> <span class="n">onClick</span><span class="o">=</span><span class="p">{</span><span class="n">decrement</span><span class="p">}</span><span class="o">&gt;-&lt;/</span><span class="n">button</span><span class="o">&gt;</span>
+        <span class="o">&lt;/</span><span class="n">div</span><span class="o">&gt;</span>
+    <span class="p">)</span>
 </code></pre></div>
 <h4 id="expressions-in-jsx">Expressions in JSX<a class="headerlink" href="#expressions-in-jsx" title="Permanent link">&para;</a></h4>
 <blockquote>
 <p><strong>Note</strong>: The following examples show content <em>inside</em> a <code>jsx()</code> wrapper for brevity.</p>
 </blockquote>
-<div class="highlight"><pre><span></span><code># Variables
-&lt;span&gt;{user.name}&lt;/span&gt;
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Variables</span>
+<span class="c1">&lt;span&gt;{user.name}&lt;/span&gt;</span>
 
-# Expressions
-&lt;div class={is_active ? &quot;active&quot; : &quot;inactive&quot;}&gt;
-    {items.len()} items
-&lt;/div&gt;
+<span class="c1"># Expressions</span>
+<span class="c1">&lt;div class={is_active ? &quot;active&quot; : &quot;inactive&quot;}&gt;</span>
+<span class="c1">    {items.len()} items</span>
+<span class="c1">&lt;/div&gt;</span>
 
-# Function calls
-&lt;span&gt;{format_date(created_at)}&lt;/span&gt;
+<span class="c1"># Function calls</span>
+<span class="c1">&lt;span&gt;{format_date(created_at)}&lt;/span&gt;</span>
 </code></pre></div>
 <h4 id="conditionals">Conditionals<a class="headerlink" href="#conditionals" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code># If expression
-&lt;div&gt;
-    {
-    if logged_in:
-        &lt;UserProfile user={user} /&gt;
-    else:
-        &lt;LoginForm /&gt;
-    }
-&lt;/div&gt;
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># If expression</span>
+<span class="c1">&lt;div&gt;</span>
+<span class="c1">    {</span>
+<span class="c1">    if logged_in:</span>
+<span class="c1">        &lt;UserProfile user={user} /&gt;</span>
+<span class="c1">    else:</span>
+<span class="c1">        &lt;LoginForm /&gt;</span>
+<span class="c1">    }</span>
+<span class="c1">&lt;/div&gt;</span>
 
-# Match expression
-&lt;div&gt;
-    {
-    match status:
-        case Status.Loading: &lt;Spinner /&gt;
-        case Status.Error(msg): &lt;ErrorMessage message={msg} /&gt;
-        case Status.Success(data): &lt;DataView data={data} /&gt;
-    }
-&lt;/div&gt;
+<span class="c1"># Match expression</span>
+<span class="c1">&lt;div&gt;</span>
+<span class="c1">    {</span>
+<span class="c1">    match status:</span>
+<span class="c1">        case Status.Loading: &lt;Spinner /&gt;</span>
+<span class="c1">        case Status.Error(msg): &lt;ErrorMessage message={msg} /&gt;</span>
+<span class="c1">        case Status.Success(data): &lt;DataView data={data} /&gt;</span>
+<span class="c1">    }</span>
+<span class="c1">&lt;/div&gt;</span>
 </code></pre></div>
 <h4 id="loops">Loops<a class="headerlink" href="#loops" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>&lt;ul&gt;
-    {
-    for item in items:
-        &lt;li key={item.id}&gt;
-            {item.name} - ${item.price}
-        &lt;/li&gt;
-    }
-&lt;/ul&gt;
+<div class="language-incan highlight"><pre><span></span><code><span class="o">&lt;</span><span class="n">ul</span><span class="o">&gt;</span>
+    <span class="p">{</span>
+    <span class="k">for</span> <span class="n">item</span> <span class="k">in</span> <span class="n">items</span><span class="p">:</span>
+        <span class="o">&lt;</span><span class="n">li</span> <span class="n">key</span><span class="o">=</span><span class="p">{</span><span class="n">item</span><span class="p">.</span><span class="n">id</span><span class="p">}</span><span class="o">&gt;</span>
+            <span class="p">{</span><span class="n">item</span><span class="p">.</span><span class="n">name</span><span class="p">}</span> <span class="o">-</span> <span class="err">$</span><span class="p">{</span><span class="n">item</span><span class="p">.</span><span class="n">price</span><span class="p">}</span>
+        <span class="o">&lt;/</span><span class="n">li</span><span class="o">&gt;</span>
+    <span class="p">}</span>
+<span class="o">&lt;/</span><span class="n">ul</span><span class="o">&gt;</span>
 
-# With index
-&lt;ol&gt;
-    {
-    for i, item in enumerate(items):
-        &lt;li&gt;{i + 1}. {item.name}&lt;/li&gt;
-    }
-&lt;/ol&gt;
+<span class="c1"># With index</span>
+<span class="c1">&lt;ol&gt;</span>
+<span class="c1">    {</span>
+<span class="c1">    for i, item in enumerate(items):</span>
+<span class="c1">        &lt;li&gt;{i + 1}. {item.name}&lt;/li&gt;</span>
+<span class="c1">    }</span>
+<span class="c1">&lt;/ol&gt;</span>
 </code></pre></div>
 <h4 id="event-handlers">Event Handlers<a class="headerlink" href="#event-handlers" title="Permanent link">&para;</a></h4>
 <p><strong>Preferred</strong>: Named handler functions</p>
-<div class="highlight"><pre><span></span><code>def handle_click() -&gt; None:
-    println(&quot;Button clicked!&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">handle_click</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Button clicked!&quot;</span><span class="p">)</span>
 
-def handle_input(e: Event) -&gt; None:
-    set_text(e.target.value)
+<span class="k">def</span> <span class="n">handle_input</span><span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Event</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">set_text</span><span class="p">(</span><span class="n">e</span><span class="p">.</span><span class="n">target</span><span class="p">.</span><span class="n">value</span><span class="p">)</span>
 
-def handle_key(e: KeyboardEvent) -&gt; None:
-    if e.key == &quot;Enter&quot;:
-        submit()
+<span class="k">def</span> <span class="n">handle_key</span><span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">KeyboardEvent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">e</span><span class="p">.</span><span class="n">key</span> <span class="o">==</span> <span class="s2">&quot;Enter&quot;</span><span class="p">:</span>
+        <span class="n">submit</span><span class="p">()</span>
 
-# Reference handlers by name
-&lt;button onClick={handle_click}&gt;Click me&lt;/button&gt;
-&lt;input value={text} onInput={handle_input} onKeyDown={handle_key} /&gt;
-&lt;form onSubmit={handle_submit}&gt;...&lt;/form&gt;
+<span class="c1"># Reference handlers by name</span>
+<span class="c1">&lt;button onClick={handle_click}&gt;Click me&lt;/button&gt;</span>
+<span class="c1">&lt;input value={text} onInput={handle_input} onKeyDown={handle_key} /&gt;</span>
+<span class="c1">&lt;form onSubmit={handle_submit}&gt;...&lt;/form&gt;</span>
 </code></pre></div>
 <p><strong>Alternative</strong>: Arrow syntax for simple inline cases</p>
-<div class="highlight"><pre><span></span><code>&lt;button onClick={() =&gt; set_count(count + 1)}&gt;+&lt;/button&gt;
-&lt;input onInput={(e) =&gt; set_text(e.target.value)} /&gt;
+<div class="language-incan highlight"><pre><span></span><code><span class="o">&lt;</span><span class="n">button</span> <span class="n">onClick</span><span class="o">=</span><span class="p">{()</span> <span class="o">=&gt;</span> <span class="n">set_count</span><span class="p">(</span><span class="n">count</span> <span class="o">+</span> <span class="m">1</span><span class="p">)}</span><span class="o">&gt;+&lt;/</span><span class="n">button</span><span class="o">&gt;</span>
+<span class="o">&lt;</span><span class="n">input</span> <span class="n">onInput</span><span class="o">=</span><span class="p">{(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">set_text</span><span class="p">(</span><span class="n">e</span><span class="p">.</span><span class="n">target</span><span class="p">.</span><span class="n">value</span><span class="p">)}</span> <span class="o">/&gt;</span>
 </code></pre></div>
 <h4 id="components-in-jsx">Components in JSX<a class="headerlink" href="#components-in-jsx" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code># Using components
-&lt;Card title=&quot;Welcome&quot;&gt;
-    &lt;p&gt;Hello, {user.name}!&lt;/p&gt;
-&lt;/Card&gt;
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Using components</span>
+<span class="c1">&lt;Card title=&quot;Welcome&quot;&gt;</span>
+<span class="c1">    &lt;p&gt;Hello, {user.name}!&lt;/p&gt;</span>
+<span class="c1">&lt;/Card&gt;</span>
 
-# With spread props
-&lt;Button {...button_props} /&gt;
+<span class="c1"># With spread props</span>
+<span class="c1">&lt;Button {...button_props} /&gt;</span>
 
-# Conditional rendering
-&lt;div&gt;
-    &lt;Header /&gt;
-    {if show_sidebar: &lt;Sidebar /&gt;}
-    &lt;Main /&gt;
-    &lt;Footer /&gt;
-&lt;/div&gt;
+<span class="c1"># Conditional rendering</span>
+<span class="c1">&lt;div&gt;</span>
+<span class="c1">    &lt;Header /&gt;</span>
+<span class="c1">    {if show_sidebar: &lt;Sidebar /&gt;}</span>
+<span class="c1">    &lt;Main /&gt;</span>
+<span class="c1">    &lt;Footer /&gt;</span>
+<span class="c1">&lt;/div&gt;</span>
 </code></pre></div>
 <h4 id="fragments">Fragments<a class="headerlink" href="#fragments" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.ui import component, jsx, Element
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">ui</span> <span class="k">import</span> <span class="n">component</span><span class="p">,</span> <span class="n">jsx</span><span class="p">,</span> <span class="n">Element</span>
 
-# Return multiple elements without wrapper
-@component
-def list_items() -&gt; Element:
-    return jsx(
-        &lt;&gt;
-            &lt;li&gt;Item 1&lt;/li&gt;
-            &lt;li&gt;Item 2&lt;/li&gt;
-            &lt;li&gt;Item 3&lt;/li&gt;
-        &lt;/&gt;
-    )
+<span class="c1"># Return multiple elements without wrapper</span>
+<span class="c1">@component</span>
+<span class="c1">def list_items() -&gt; Element:</span>
+<span class="c1">    return jsx(</span>
+<span class="c1">        &lt;&gt;</span>
+<span class="c1">            &lt;li&gt;Item 1&lt;/li&gt;</span>
+<span class="c1">            &lt;li&gt;Item 2&lt;/li&gt;</span>
+<span class="c1">            &lt;li&gt;Item 3&lt;/li&gt;</span>
+<span class="c1">        &lt;/&gt;</span>
+<span class="c1">    )</span>
 </code></pre></div>
 <h4 id="style-handling">Style Handling<a class="headerlink" href="#style-handling" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code># Inline styles (dict)
-&lt;div style={{&quot;color&quot;: &quot;red&quot;, &quot;fontSize&quot;: &quot;16px&quot;}}&gt;
-    Styled text
-&lt;/div&gt;
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Inline styles (dict)</span>
+<span class="c1">&lt;div style={{&quot;color&quot;: &quot;red&quot;, &quot;fontSize&quot;: &quot;16px&quot;}}&gt;</span>
+<span class="c1">    Styled text</span>
+<span class="c1">&lt;/div&gt;</span>
 
-# Dynamic classes
-&lt;div class={[&quot;base&quot;, active ? &quot;active&quot; : &quot;&quot;, error ? &quot;error&quot; : &quot;&quot;]}&gt;
-    Content
-&lt;/div&gt;
+<span class="c1"># Dynamic classes</span>
+<span class="c1">&lt;div class={[&quot;base&quot;, active ? &quot;active&quot; : &quot;&quot;, error ? &quot;error&quot; : &quot;&quot;]}&gt;</span>
+<span class="c1">    Content</span>
+<span class="c1">&lt;/div&gt;</span>
 
-# CSS modules (future)
-&lt;div class={styles.container}&gt;
-    ...
-&lt;/div&gt;
+<span class="c1"># CSS modules (future)</span>
+<span class="c1">&lt;div class={styles.container}&gt;</span>
+<span class="c1">    ...</span>
+<span class="c1">&lt;/div&gt;</span>
 </code></pre></div>
 <h4 id="parser-implementation-notes">Parser Implementation Notes<a class="headerlink" href="#parser-implementation-notes" title="Permanent link">&para;</a></h4>
 <p>Incan supports two wrapper modes: <code>html()</code> and <code>jsx()</code>.
@@ -4591,16 +4591,16 @@ Both compile to the same output (Leptos view nodes), but they parse differently:
 <ul>
 <li>
 <p><code>html()</code> takes a string:</p>
-<div class="highlight"><pre><span></span><code>return html(&quot;&quot;&quot;&lt;div&gt;{message}&lt;/div&gt;&quot;&quot;&quot;)
-#            ↑ This is a string literal
+<div class="language-incan highlight"><pre><span></span><code><span class="k">return</span> <span class="n">html</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;&lt;div&gt;{message}&lt;/div&gt;&quot;&quot;&quot;</span><span class="p">)</span>
+<span class="c1">#            ↑ This is a string literal</span>
 </code></pre></div>
 <p>The content inside <code>html()</code> is a <strong>string</strong> that gets parsed at compile time.
 Your IDE sees a string, not markup.</p>
 </li>
 <li>
 <p><code>jsx()</code> enables native syntax (inspired by React's JSX syntax):</p>
-<div class="highlight"><pre><span></span><code>return jsx(&lt;div&gt;{message}&lt;/div&gt;)
-#          ↑ This is NOT a string — it&#39;s native Incan syntax
+<div class="language-incan highlight"><pre><span></span><code><span class="k">return</span> <span class="n">jsx</span><span class="p">(</span><span class="o">&lt;</span><span class="n">div</span><span class="o">&gt;</span><span class="p">{</span><span class="n">message</span><span class="p">}</span><span class="o">&lt;/</span><span class="n">div</span><span class="o">&gt;</span><span class="p">)</span>
+<span class="c1">#          ↑ This is NOT a string — it&#39;s native Incan syntax</span>
 </code></pre></div>
 <p>The content inside <code>jsx()</code> is <strong>parsed directly by Incan</strong> as first-class syntax.
 Your IDE sees markup, not a string.</p>
@@ -4655,169 +4655,169 @@ Your IDE sees markup, not a string.</p>
 <h3 id="part-3-3d-graphics-threejs-alternative">Part 3: 3D Graphics (Three.js Alternative)<a class="headerlink" href="#part-3-3d-graphics-threejs-alternative" title="Permanent link">&para;</a></h3>
 <p>A scene-graph API for 3D graphics, built on WebGPU via wgpu.</p>
 <h4 id="basic-scene">Basic Scene<a class="headerlink" href="#basic-scene" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.graphics import Scene, Camera, Renderer
-from incan.graphics import Mesh, BoxGeometry, StandardMaterial
-from incan.graphics import AmbientLight, DirectionalLight
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">graphics</span> <span class="k">import</span> <span class="n">Scene</span><span class="p">,</span> <span class="n">Camera</span><span class="p">,</span> <span class="n">Renderer</span>
+<span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">graphics</span> <span class="k">import</span> <span class="n">Mesh</span><span class="p">,</span> <span class="n">BoxGeometry</span><span class="p">,</span> <span class="n">StandardMaterial</span>
+<span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">graphics</span> <span class="k">import</span> <span class="n">AmbientLight</span><span class="p">,</span> <span class="n">DirectionalLight</span>
 
-# Create scene
-scene = Scene()
+<span class="c1"># Create scene</span>
+<span class="c1">scene = Scene()</span>
 
-# Add camera
-camera = Camera.perspective(
-    fov=75,
-    aspect=16/9,
-    near=0.1,
-    far=1000
-)
-camera.position = Vec3(0, 5, 10)
-camera.look_at(Vec3.zero())
+<span class="c1"># Add camera</span>
+<span class="c1">camera = Camera.perspective(</span>
+<span class="c1">    fov=75,</span>
+<span class="c1">    aspect=16/9,</span>
+<span class="c1">    near=0.1,</span>
+<span class="c1">    far=1000</span>
+<span class="c1">)</span>
+<span class="c1">camera.position = Vec3(0, 5, 10)</span>
+<span class="c1">camera.look_at(Vec3.zero())</span>
 
-# Add lighting
-scene.add(AmbientLight(color=0x404040))
-scene.add(DirectionalLight(
-    color=0xffffff,
-    intensity=1.0,
-    position=Vec3(10, 10, 10)
-))
+<span class="c1"># Add lighting</span>
+<span class="c1">scene.add(AmbientLight(color=0x404040))</span>
+<span class="c1">scene.add(DirectionalLight(</span>
+<span class="c1">    color=0xffffff,</span>
+<span class="c1">    intensity=1.0,</span>
+<span class="c1">    position=Vec3(10, 10, 10)</span>
+<span class="c1">))</span>
 
-# Add a cube
-cube = Mesh(
-    geometry=BoxGeometry(2, 2, 2),
-    material=StandardMaterial(
-        color=0x00ff00,
-        metalness=0.5,
-        roughness=0.5
-    )
-)
-scene.add(cube)
+<span class="c1"># Add a cube</span>
+<span class="c1">cube = Mesh(</span>
+<span class="c1">    geometry=BoxGeometry(2, 2, 2),</span>
+<span class="c1">    material=StandardMaterial(</span>
+<span class="c1">        color=0x00ff00,</span>
+<span class="c1">        metalness=0.5,</span>
+<span class="c1">        roughness=0.5</span>
+<span class="c1">    )</span>
+<span class="c1">)</span>
+<span class="c1">scene.add(cube)</span>
 
-# Create renderer
-renderer = Renderer(canvas=&quot;#canvas&quot;)
+<span class="c1"># Create renderer</span>
+<span class="c1">renderer = Renderer(canvas=&quot;#canvas&quot;)</span>
 
-# Animation loop
-def animate(delta: float) -&gt; None:
-    cube.rotation.x += delta
-    cube.rotation.y += delta * 0.5
-    renderer.render(scene, camera)
+<span class="c1"># Animation loop</span>
+<span class="c1">def animate(delta: float) -&gt; None:</span>
+<span class="c1">    cube.rotation.x += delta</span>
+<span class="c1">    cube.rotation.y += delta * 0.5</span>
+<span class="c1">    renderer.render(scene, camera)</span>
 
-renderer.start(animate)
+<span class="c1">renderer.start(animate)</span>
 </code></pre></div>
 <h4 id="geometries">Geometries<a class="headerlink" href="#geometries" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.graphics.geometry import (
-    BoxGeometry,
-    SphereGeometry,
-    PlaneGeometry,
-    CylinderGeometry,
-    TorusGeometry,
-    BufferGeometry,  # Custom geometry
-)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">graphics</span><span class="p">.</span><span class="n">geometry</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">BoxGeometry</span><span class="p">,</span>
+    <span class="n">SphereGeometry</span><span class="p">,</span>
+    <span class="n">PlaneGeometry</span><span class="p">,</span>
+    <span class="n">CylinderGeometry</span><span class="p">,</span>
+    <span class="n">TorusGeometry</span><span class="p">,</span>
+    <span class="n">BufferGeometry</span><span class="p">,</span>  <span class="c1"># Custom geometry</span>
+<span class="c1">)</span>
 
-# Parametric geometries
-sphere = SphereGeometry(radius=1, segments=32)
-plane = PlaneGeometry(width=10, height=10)
-torus = TorusGeometry(radius=1, tube=0.4, segments=16)
+<span class="c1"># Parametric geometries</span>
+<span class="c1">sphere = SphereGeometry(radius=1, segments=32)</span>
+<span class="c1">plane = PlaneGeometry(width=10, height=10)</span>
+<span class="c1">torus = TorusGeometry(radius=1, tube=0.4, segments=16)</span>
 
-# Custom geometry from vertices
-custom = BufferGeometry()
-custom.set_attribute(&quot;position&quot;, positions)
-custom.set_attribute(&quot;normal&quot;, normals)
-custom.set_attribute(&quot;uv&quot;, uvs)
-custom.set_index(indices)
+<span class="c1"># Custom geometry from vertices</span>
+<span class="c1">custom = BufferGeometry()</span>
+<span class="c1">custom.set_attribute(&quot;position&quot;, positions)</span>
+<span class="c1">custom.set_attribute(&quot;normal&quot;, normals)</span>
+<span class="c1">custom.set_attribute(&quot;uv&quot;, uvs)</span>
+<span class="c1">custom.set_index(indices)</span>
 </code></pre></div>
 <h4 id="materials">Materials<a class="headerlink" href="#materials" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.graphics.material import (
-    StandardMaterial,   # PBR material
-    BasicMaterial,      # Unlit
-    PhongMaterial,      # Classic lighting
-    ShaderMaterial,     # Custom shaders
-)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">graphics</span><span class="p">.</span><span class="n">material</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">StandardMaterial</span><span class="p">,</span>   <span class="c1"># PBR material</span>
+<span class="c1">    BasicMaterial,      # Unlit</span>
+<span class="c1">    PhongMaterial,      # Classic lighting</span>
+<span class="c1">    ShaderMaterial,     # Custom shaders</span>
+<span class="c1">)</span>
 
-# PBR material
-pbr = StandardMaterial(
-    color=0xff0000,
-    metalness=0.8,
-    roughness=0.2,
-    normal_map=load_texture(&quot;normal.png&quot;),
-    ao_map=load_texture(&quot;ao.png&quot;),
-)
+<span class="c1"># PBR material</span>
+<span class="c1">pbr = StandardMaterial(</span>
+<span class="c1">    color=0xff0000,</span>
+<span class="c1">    metalness=0.8,</span>
+<span class="c1">    roughness=0.2,</span>
+<span class="c1">    normal_map=load_texture(&quot;normal.png&quot;),</span>
+<span class="c1">    ao_map=load_texture(&quot;ao.png&quot;),</span>
+<span class="c1">)</span>
 
-# Custom shader
-custom = ShaderMaterial(
-    vertex_shader=&quot;&quot;&quot;
-        @vertex
-        fn main(@location(0) position: vec3&lt;f32&gt;) -&gt; @builtin(position) vec4&lt;f32&gt; {
-            return uniforms.mvp * vec4(position, 1.0);
-        }
-    &quot;&quot;&quot;,
-    fragment_shader=&quot;&quot;&quot;
-        @fragment
-        fn main() -&gt; @location(0) vec4&lt;f32&gt; {
-            return vec4(1.0, 0.0, 0.0, 1.0);
-        }
-    &quot;&quot;&quot;,
-    uniforms={&quot;time&quot;: 0.0}
-)
+<span class="c1"># Custom shader</span>
+<span class="c1">custom = ShaderMaterial(</span>
+<span class="c1">    vertex_shader=&quot;&quot;&quot;</span>
+<span class="c1">        @vertex</span>
+<span class="c1">        fn main(@location(0) position: vec3&lt;f32&gt;) -&gt; @builtin(position) vec4&lt;f32&gt; {</span>
+<span class="c1">            return uniforms.mvp * vec4(position, 1.0);</span>
+<span class="c1">        }</span>
+<span class="c1">    &quot;&quot;&quot;,</span>
+<span class="c1">    fragment_shader=&quot;&quot;&quot;</span>
+<span class="c1">        @fragment</span>
+<span class="c1">        fn main() -&gt; @location(0) vec4&lt;f32&gt; {</span>
+<span class="c1">            return vec4(1.0, 0.0, 0.0, 1.0);</span>
+<span class="c1">        }</span>
+<span class="c1">    &quot;&quot;&quot;,</span>
+<span class="c1">    uniforms={&quot;time&quot;: 0.0}</span>
+<span class="c1">)</span>
 </code></pre></div>
 <h4 id="asset-loading">Asset Loading<a class="headerlink" href="#asset-loading" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.graphics import load_gltf, load_texture, load_cubemap
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">graphics</span> <span class="k">import</span> <span class="n">load_gltf</span><span class="p">,</span> <span class="n">load_texture</span><span class="p">,</span> <span class="n">load_cubemap</span>
 
-# Load 3D model
-model = await load_gltf(&quot;model.glb&quot;)
-scene.add(model)
+<span class="c1"># Load 3D model</span>
+<span class="c1">model = await load_gltf(&quot;model.glb&quot;)</span>
+<span class="c1">scene.add(model)</span>
 
-# Load texture
-texture = await load_texture(&quot;diffuse.png&quot;)
+<span class="c1"># Load texture</span>
+<span class="c1">texture = await load_texture(&quot;diffuse.png&quot;)</span>
 
-# Load environment map
-skybox = await load_cubemap([
-    &quot;px.jpg&quot;, &quot;nx.jpg&quot;,
-    &quot;py.jpg&quot;, &quot;ny.jpg&quot;, 
-    &quot;pz.jpg&quot;, &quot;nz.jpg&quot;
-])
-scene.environment = skybox
+<span class="c1"># Load environment map</span>
+<span class="c1">skybox = await load_cubemap([</span>
+<span class="c1">    &quot;px.jpg&quot;, &quot;nx.jpg&quot;,</span>
+<span class="c1">    &quot;py.jpg&quot;, &quot;ny.jpg&quot;, </span>
+<span class="c1">    &quot;pz.jpg&quot;, &quot;nz.jpg&quot;</span>
+<span class="c1">])</span>
+<span class="c1">scene.environment = skybox</span>
 </code></pre></div>
 <h4 id="animation">Animation<a class="headerlink" href="#animation" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.graphics import AnimationMixer, AnimationClip
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">graphics</span> <span class="k">import</span> <span class="n">AnimationMixer</span><span class="p">,</span> <span class="n">AnimationClip</span>
 
-# Load animated model
-model = await load_gltf(&quot;character.glb&quot;)
-mixer = AnimationMixer(model)
+<span class="c1"># Load animated model</span>
+<span class="c1">model = await load_gltf(&quot;character.glb&quot;)</span>
+<span class="c1">mixer = AnimationMixer(model)</span>
 
-# Play animation
-walk = model.animations[&quot;walk&quot;]
-action = mixer.clip_action(walk)
-action.play()
+<span class="c1"># Play animation</span>
+<span class="c1">walk = model.animations[&quot;walk&quot;]</span>
+<span class="c1">action = mixer.clip_action(walk)</span>
+<span class="c1">action.play()</span>
 
-# In render loop
-def animate(delta: float) -&gt; None:
-    mixer.update(delta)
-    renderer.render(scene, camera)
+<span class="c1"># In render loop</span>
+<span class="c1">def animate(delta: float) -&gt; None:</span>
+<span class="c1">    mixer.update(delta)</span>
+<span class="c1">    renderer.render(scene, camera)</span>
 </code></pre></div>
 <h4 id="physics-integration-optional">Physics Integration (Optional)<a class="headerlink" href="#physics-integration-optional" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>from incan.physics import World, RigidBody, Collider
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">incan</span><span class="p">.</span><span class="n">physics</span> <span class="k">import</span> <span class="n">World</span><span class="p">,</span> <span class="n">RigidBody</span><span class="p">,</span> <span class="n">Collider</span>
 
-# Create physics world
-world = World(gravity=Vec3(0, -9.81, 0))
+<span class="c1"># Create physics world</span>
+<span class="c1">world = World(gravity=Vec3(0, -9.81, 0))</span>
 
-# Add physics to mesh
-body = RigidBody(
-    position=cube.position,
-    collider=Collider.box(2, 2, 2),
-    mass=1.0
-)
-world.add(body)
+<span class="c1"># Add physics to mesh</span>
+<span class="c1">body = RigidBody(</span>
+<span class="c1">    position=cube.position,</span>
+<span class="c1">    collider=Collider.box(2, 2, 2),</span>
+<span class="c1">    mass=1.0</span>
+<span class="c1">)</span>
+<span class="c1">world.add(body)</span>
 
-# Sync physics → graphics
-def animate(delta: float) -&gt; None:
-    world.step(delta)
-    cube.position = body.position
-    cube.rotation = body.rotation
-    renderer.render(scene, camera)
+<span class="c1"># Sync physics → graphics</span>
+<span class="c1">def animate(delta: float) -&gt; None:</span>
+<span class="c1">    world.step(delta)</span>
+<span class="c1">    cube.position = body.position</span>
+<span class="c1">    cube.rotation = body.rotation</span>
+<span class="c1">    renderer.render(scene, camera)</span>
 </code></pre></div>
 <hr />
 <h3 id="part-4-build-tooling">Part 4: Build Tooling<a class="headerlink" href="#part-4-build-tooling" title="Permanent link">&para;</a></h3>
 <h4 id="development-server">Development Server<a class="headerlink" href="#development-server" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>dev<span class="w"> </span>--target<span class="w"> </span>wasm
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>dev<span class="w"> </span>--target<span class="w"> </span>wasm
 </code></pre></div>
 <p>Features:</p>
 <ul>
@@ -4827,7 +4827,7 @@ def animate(delta: float) -&gt; None:
 <li>Error overlay</li>
 </ul>
 <h4 id="production-build">Production Build<a class="headerlink" href="#production-build" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>wasm<span class="w"> </span>--release
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>--target<span class="w"> </span>wasm<span class="w"> </span>--release
 </code></pre></div>
 <p>Outputs:</p>
 <ul>
@@ -4837,7 +4837,7 @@ def animate(delta: float) -&gt; None:
 <li>Asset hashing for caching</li>
 </ul>
 <h4 id="project-structure">Project Structure<a class="headerlink" href="#project-structure" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code>my_app/
+<div class="language-bash highlight"><pre><span></span><code>my_app/
 ├──<span class="w"> </span>src/
 │<span class="w">   </span>├──<span class="w"> </span>main.incn<span class="w">          </span><span class="c1"># Entry point</span>
 │<span class="w">   </span>├──<span class="w"> </span>components/
@@ -4858,7 +4858,7 @@ def animate(delta: float) -&gt; None:
 This follows Rust ecosystem conventions (used by wasm-pack, cargo-deb, etc.).
 Rust dependencies are auto-injected by the Incan toolchain based on what your
 Incan code imports and the build target.</p>
-<div class="highlight"><pre><span></span><code><span class="k">[package]</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[package]</span>
 <span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;my_app&quot;</span>
 <span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.1.0&quot;</span>
 <span class="n">edition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2021&quot;</span>

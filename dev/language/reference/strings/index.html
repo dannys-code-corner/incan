@@ -4024,100 +4024,100 @@ code.</p>
 </ul>
 </li>
 </ul>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    s = &quot;héllo&quot;
-    print(s[1])     # &quot;é&quot;
-    print(s[-1])    # &quot;o&quot;
-    print(s[1:4])   # &quot;éll&quot;
-    print(s[::2])   # &quot;hlo&quot;
-    print(s[::-1])  # &quot;olléh&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">s</span> <span class="o">=</span> <span class="s2">&quot;héllo&quot;</span>
+    <span class="n">print</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="m">1</span><span class="p">])</span>     <span class="c1"># &quot;é&quot;</span>
+<span class="c1">    print(s[-1])    # &quot;o&quot;</span>
+<span class="c1">    print(s[1:4])   # &quot;éll&quot;</span>
+<span class="c1">    print(s[::2])   # &quot;hlo&quot;</span>
+<span class="c1">    print(s[::-1])  # &quot;olléh&quot;</span>
 </code></pre></div>
 <p>The same slicing rules apply to <code>list[T]</code>:</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    xs: list[int] = [1, 2, 3]
-    for x in xs[::-1]:
-        print(x)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">xs</span><span class="p">:</span> <span class="n">list</span><span class="p">[</span><span class="n">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">x</span> <span class="k">in</span> <span class="n">xs</span><span class="p">[::</span><span class="o">-</span><span class="m">1</span><span class="p">]:</span>
+        <span class="n">print</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="common-string-methods">Common string methods<a class="headerlink" href="#common-string-methods" title="Permanent link">&para;</a></h2>
 <h3 id="case-conversion">Case conversion<a class="headerlink" href="#case-conversion" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>text = &quot;Hello World&quot;
-println(text.upper())  # HELLO WORLD
-println(text.lower())  # hello world
+<div class="language-incan highlight"><pre><span></span><code><span class="n">text</span> <span class="o">=</span> <span class="s2">&quot;Hello World&quot;</span>
+<span class="n">println</span><span class="p">(</span><span class="n">text</span><span class="p">.</span><span class="n">upper</span><span class="p">())</span>  <span class="c1"># HELLO WORLD</span>
+<span class="c1">println(text.lower())  # hello world</span>
 </code></pre></div>
 <h3 id="whitespace-trimming">Whitespace trimming<a class="headerlink" href="#whitespace-trimming" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>padded = &quot;  hello  &quot;
-println(padded.strip())  # &quot;hello&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="n">padded</span> <span class="o">=</span> <span class="s2">&quot;  hello  &quot;</span>
+<span class="n">println</span><span class="p">(</span><span class="n">padded</span><span class="p">.</span><span class="n">strip</span><span class="p">())</span>  <span class="c1"># &quot;hello&quot;</span>
 </code></pre></div>
 <blockquote>
 <p>Note: Incan currently only has <code>strip()</code> (both sides). Python’s <code>lstrip()</code> / <code>rstrip()</code> are not yet implemented.</p>
 </blockquote>
 <h3 id="splitting-strings">Splitting strings<a class="headerlink" href="#splitting-strings" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>csv = &quot;alice,bob,carol&quot;
-names = csv.split(&quot;,&quot;)  # [&quot;alice&quot;, &quot;bob&quot;, &quot;carol&quot;]
+<div class="language-incan highlight"><pre><span></span><code><span class="n">csv</span> <span class="o">=</span> <span class="s2">&quot;alice,bob,carol&quot;</span>
+<span class="n">names</span> <span class="o">=</span> <span class="n">csv</span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>  <span class="c1"># [&quot;alice&quot;, &quot;bob&quot;, &quot;carol&quot;]</span>
 
-first = names[0]  # &quot;alice&quot;
+<span class="c1">first = names[0]  # &quot;alice&quot;</span>
 </code></pre></div>
 <h3 id="joining-strings">Joining strings<a class="headerlink" href="#joining-strings" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>names = [&quot;alice&quot;, &quot;bob&quot;, &quot;carol&quot;]
-result = &quot;, &quot;.join(names)  # &quot;alice, bob, carol&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="n">names</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;alice&quot;</span><span class="p">,</span> <span class="s2">&quot;bob&quot;</span><span class="p">,</span> <span class="s2">&quot;carol&quot;</span><span class="p">]</span>
+<span class="n">result</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">names</span><span class="p">)</span>  <span class="c1"># &quot;alice, bob, carol&quot;</span>
 </code></pre></div>
 <blockquote>
 <p>Note: The separator is the receiver and the list is the argument: <code>", ".join(names)</code>.</p>
 </blockquote>
 <h3 id="substring-check">Substring check<a class="headerlink" href="#substring-check" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>sentence = &quot;the quick brown fox&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="n">sentence</span> <span class="o">=</span> <span class="s2">&quot;the quick brown fox&quot;</span>
 
-if sentence.contains(&quot;quick&quot;):
-    println(&quot;Found it!&quot;)
+<span class="k">if</span> <span class="n">sentence</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="s2">&quot;quick&quot;</span><span class="p">):</span>
+    <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Found it!&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="string-replacement">String replacement<a class="headerlink" href="#string-replacement" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>text = &quot;hello world&quot;
-result = text.replace(&quot;world&quot;, &quot;incan&quot;)  # &quot;hello incan&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="n">text</span> <span class="o">=</span> <span class="s2">&quot;hello world&quot;</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">text</span><span class="p">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;world&quot;</span><span class="p">,</span> <span class="s2">&quot;incan&quot;</span><span class="p">)</span>  <span class="c1"># &quot;hello incan&quot;</span>
 </code></pre></div>
 <h2 id="f-strings-formatted-strings">F-strings (formatted strings)<a class="headerlink" href="#f-strings-formatted-strings" title="Permanent link">&para;</a></h2>
 <p>Incan supports Python-style f-strings:</p>
-<div class="highlight"><pre><span></span><code>name = &quot;Alice&quot;
-age = 30
-println(f&quot;Name: {name}, Age: {age}&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;Alice&quot;</span>
+<span class="n">age</span> <span class="o">=</span> <span class="m">30</span>
+<span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Name: {name}, Age: {age}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="debug-formatting">Debug formatting<a class="headerlink" href="#debug-formatting" title="Permanent link">&para;</a></h3>
 <p>Use <code>:?</code> for debug output (shows type structure):</p>
-<div class="highlight"><pre><span></span><code>model Point:
-    x: int
-    y: int
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Point</span><span class="p">:</span>
+    <span class="n">x</span><span class="p">:</span> <span class="n">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="n">int</span>
 
-p = Point(x=10, y=20)
-println(f&quot;Debug: {p:?}&quot;)  # Point { x: 10, y: 20 }
+<span class="n">p</span> <span class="o">=</span> <span class="n">Point</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="m">10</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="m">20</span><span class="p">)</span>
+<span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Debug: {p:?}&quot;</span><span class="p">)</span>  <span class="c1"># Point { x: 10, y: 20 }</span>
 </code></pre></div>
 <p>See <a href="../derives/string_representation/">String Representation</a> for details on Debug vs Display formatting.</p>
 <h2 id="string-literals">String literals<a class="headerlink" href="#string-literals" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code># Single or double quotes
-s1 = &quot;hello&quot;
-s2 = &#39;hello&#39;
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Single or double quotes</span>
+<span class="c1">s1 = &quot;hello&quot;</span>
+<span class="c1">s2 = &#39;hello&#39;</span>
 
-# Multiline strings (triple quotes)
-multi = &quot;&quot;&quot;
-This is a
-multiline string
-&quot;&quot;&quot;
+<span class="c1"># Multiline strings (triple quotes)</span>
+<span class="c1">multi = &quot;&quot;&quot;</span>
+<span class="c1">This is a</span>
+<span class="c1">multiline string</span>
+<span class="c1">&quot;&quot;&quot;</span>
 
-# F-strings
-formatted = f&quot;Value: {x}&quot;
+<span class="c1"># F-strings</span>
+<span class="c1">formatted = f&quot;Value: {x}&quot;</span>
 </code></pre></div>
 <h2 id="bytes-binary-data">Bytes (binary data)<a class="headerlink" href="#bytes-binary-data" title="Permanent link">&para;</a></h2>
 <p>The <code>bytes</code> type represents binary data as a sequence of bytes (current backend: Rust <code>Vec&lt;u8&gt;</code>).</p>
 <h3 id="byte-string-literals">Byte string literals<a class="headerlink" href="#byte-string-literals" title="Permanent link">&para;</a></h3>
 <p>Use the <code>b"..."</code> prefix for byte strings:</p>
-<div class="highlight"><pre><span></span><code># ASCII byte string
-data = b&quot;Hello&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># ASCII byte string</span>
+<span class="c1">data = b&quot;Hello&quot;</span>
 
-# Hex escapes for arbitrary bytes
-binary = b&quot;\x00\x01\x02\xff&quot;
+<span class="c1"># Hex escapes for arbitrary bytes</span>
+<span class="c1">binary = b&quot;\x00\x01\x02\xff&quot;</span>
 
-# Common escapes
-newline = b&quot;\n&quot;
-tab = b&quot;\t&quot;
-null = b&quot;\0&quot;
+<span class="c1"># Common escapes</span>
+<span class="c1">newline = b&quot;\n&quot;</span>
+<span class="c1">tab = b&quot;\t&quot;</span>
+<span class="c1">null = b&quot;\0&quot;</span>
 </code></pre></div>
 <p>Supported escape sequences:</p>
 <table>
@@ -4158,8 +4158,8 @@ null = b&quot;\0&quot;
 <p>Note: Byte strings only accept ASCII characters. Non-ASCII characters produce an error.</p>
 </blockquote>
 <h3 id="type-annotation">Type annotation<a class="headerlink" href="#type-annotation" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>def process_binary(data: bytes) -&gt; bytes:
-    return data
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">process_binary</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">bytes</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bytes</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">data</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Coming from Python?</p>

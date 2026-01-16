@@ -3769,59 +3769,59 @@ and “what to do when…”.</p>
 <h2 id="pattern-handle-vs-propagate">Pattern: Handle vs propagate<a class="headerlink" href="#pattern-handle-vs-propagate" title="Permanent link">&para;</a></h2>
 <p>Use <code>?</code> when you want to propagate failures to the caller.</p>
 <p>Use <code>match</code> when you want to <strong>recover</strong>, <strong>retry</strong>, <strong>branch</strong>, or <strong>attach context</strong>.</p>
-<div class="highlight"><pre><span></span><code>def load_user(id: int) -&gt; Result[User, AppError]:
-    # Propagate: caller decides what to do.
-    user = fetch_user(id).map_err(AppError.Network)?
-    return Ok(user)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">load_user</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">AppError</span><span class="p">]:</span>
+    <span class="c1"># Propagate: caller decides what to do.</span>
+<span class="c1">    user = fetch_user(id).map_err(AppError.Network)?</span>
+<span class="c1">    return Ok(user)</span>
 
-def load_user_or_guest(id: int) -&gt; User:
-    # Recover: we decide locally.
-    match load_user(id):
-        Ok(user) =&gt; return user
-        Err(_) =&gt; return User.guest()
+<span class="c1">def load_user_or_guest(id: int) -&gt; User:</span>
+<span class="c1">    # Recover: we decide locally.</span>
+<span class="c1">    match load_user(id):</span>
+<span class="c1">        Ok(user) =&gt; return user</span>
+<span class="c1">        Err(_) =&gt; return User.guest()</span>
 </code></pre></div>
 <h2 id="pattern-convert-errors-at-module-boundaries-map_err">Pattern: Convert errors at module boundaries (<code>map_err</code>)<a class="headerlink" href="#pattern-convert-errors-at-module-boundaries-map_err" title="Permanent link">&para;</a></h2>
 <p>Convert low-level errors into a stable, module-level error type.</p>
-<div class="highlight"><pre><span></span><code>enum ConfigError:
-    Io(IoError)
-    Parse(str)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">ConfigError</span><span class="p">:</span>
+    <span class="n">Io</span><span class="p">(</span><span class="n">IoError</span><span class="p">)</span>
+    <span class="n">Parse</span><span class="p">(</span><span class="n">str</span><span class="p">)</span>
 
-def load_config(path: Path) -&gt; Result[Config, ConfigError]:
-    content = path.read_text().map_err(ConfigError.Io)?
-    cfg = parse_toml[Config](content).map_err(|e| ConfigError.Parse(e))?
-    return Ok(cfg)
+<span class="k">def</span> <span class="n">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">,</span> <span class="n">ConfigError</span><span class="p">]:</span>
+    <span class="n">content</span> <span class="o">=</span> <span class="n">path</span><span class="p">.</span><span class="n">read_text</span><span class="p">().</span><span class="n">map_err</span><span class="p">(</span><span class="n">ConfigError</span><span class="p">.</span><span class="n">Io</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">cfg</span> <span class="o">=</span> <span class="n">parse_toml</span><span class="p">[</span><span class="n">Config</span><span class="p">](</span><span class="n">content</span><span class="p">).</span><span class="n">map_err</span><span class="p">(</span><span class="err">|</span><span class="n">e</span><span class="err">|</span> <span class="n">ConfigError</span><span class="p">.</span><span class="n">Parse</span><span class="p">(</span><span class="n">e</span><span class="p">))</span><span class="err">?</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span>
 </code></pre></div>
 <p>Tip: do this once at the boundary, not at every call site.</p>
 <h2 id="pattern-turn-optiont-into-resultt-e-ok_or">Pattern: Turn <code>Option[T]</code> into <code>Result[T, E]</code> (<code>ok_or</code>)<a class="headerlink" href="#pattern-turn-optiont-into-resultt-e-ok_or" title="Permanent link">&para;</a></h2>
 <p>Use this when “missing” should become a recoverable error.</p>
-<div class="highlight"><pre><span></span><code>def require_user(id: int) -&gt; Result[User, AppError]:
-    return users.get(id).ok_or(AppError.NotFound(f&quot;user {id}&quot;))
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">require_user</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">AppError</span><span class="p">]:</span>
+    <span class="k">return</span> <span class="n">users</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">id</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="n">AppError</span><span class="p">.</span><span class="n">NotFound</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;user {id}&quot;</span><span class="p">))</span>
 </code></pre></div>
 <h2 id="pattern-defaults-unwrap_or-unwrap_or_else">Pattern: Defaults (<code>unwrap_or</code> / <code>unwrap_or_else</code>)<a class="headerlink" href="#pattern-defaults-unwrap_or-unwrap_or_else" title="Permanent link">&para;</a></h2>
 <p>Use defaults only when there is a genuinely safe fallback.</p>
-<div class="highlight"><pre><span></span><code>timeout = settings.get(&quot;timeout_secs&quot;).unwrap_or(&quot;2.0&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="n">timeout</span> <span class="o">=</span> <span class="n">settings</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;timeout_secs&quot;</span><span class="p">).</span><span class="n">unwrap_or</span><span class="p">(</span><span class="s2">&quot;2.0&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>If computing the default is expensive, prefer <code>unwrap_or_else(...)</code> when available.</p>
 <h2 id="pattern-retry-a-fallible-operation">Pattern: Retry a fallible operation<a class="headerlink" href="#pattern-retry-a-fallible-operation" title="Permanent link">&para;</a></h2>
 <p>Keep retries local and explicit.</p>
-<div class="highlight"><pre><span></span><code>def fetch_with_retry(url: str, attempts: int) -&gt; Result[str, NetworkError]:
-    mut last_err: Option[NetworkError] = None
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">fetch_with_retry</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">str</span><span class="p">,</span> <span class="n">attempts</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">NetworkError</span><span class="p">]:</span>
+    <span class="k">mut</span> <span class="n">last_err</span><span class="p">:</span> <span class="n">Option</span><span class="p">[</span><span class="n">NetworkError</span><span class="p">]</span> <span class="o">=</span> <span class="k">None</span>
 
-    for _ in range(attempts):
-        match fetch(url):
-            Ok(body) =&gt; return Ok(body)
-            Err(e) =&gt;
-                last_err = Some(e)
-                continue
+    <span class="k">for</span> <span class="n">_</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="n">attempts</span><span class="p">):</span>
+        <span class="k">match</span> <span class="n">fetch</span><span class="p">(</span><span class="n">url</span><span class="p">):</span>
+            <span class="n">Ok</span><span class="p">(</span><span class="n">body</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+            <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span>
+                <span class="n">last_err</span> <span class="o">=</span> <span class="n">Some</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+                <span class="k">continue</span>
 
-    return Err(last_err.unwrap_or(NetworkError(&quot;unreachable&quot;)))
+    <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="n">last_err</span><span class="p">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="n">NetworkError</span><span class="p">(</span><span class="s2">&quot;unreachable&quot;</span><span class="p">)))</span>
 </code></pre></div>
 <h2 id="pattern-errors-with-recoverable-payloads">Pattern: Errors with recoverable payloads<a class="headerlink" href="#pattern-errors-with-recoverable-payloads" title="Permanent link">&para;</a></h2>
 <p>Sometimes the error should carry a value that would otherwise be lost (e.g. sending on a closed channel).</p>
-<div class="highlight"><pre><span></span><code>match await tx.send(msg):
-    Ok(_) =&gt; println(&quot;Sent!&quot;)
-    Err(e) =&gt;
-        save_for_retry(e.value)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">match</span> <span class="k">await</span> <span class="n">tx</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">msg</span><span class="p">):</span>
+    <span class="n">Ok</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Sent!&quot;</span><span class="p">)</span>
+    <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span>
+        <span class="n">save_for_retry</span><span class="p">(</span><span class="n">e</span><span class="p">.</span><span class="n">value</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="dont-do-this-unwrap-on-user-input">“Don’t do this”: <code>unwrap()</code> on user input<a class="headerlink" href="#dont-do-this-unwrap-on-user-input" title="Permanent link">&para;</a></h2>
 <p><code>unwrap()</code> and <code>panic()</code> are for “should never happen” paths (tests, invariants, internal compiler bugs), not expected

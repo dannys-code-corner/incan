@@ -3714,19 +3714,19 @@
 <p>Follow: <a href="../../how-to/install_and_run/">Install, build, and run</a>.</p>
 <h2 id="your-first-program">Your First Program<a class="headerlink" href="#your-first-program" title="Permanent link">&para;</a></h2>
 <p>Create a file <code>hello.incn</code>:</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    println(&quot;Hello, Incan!&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Hello, Incan!&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Run it:</p>
 <p>If you used <code>make install</code>:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>hello.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>hello.incn
 </code></pre></div>
 <p>If you used the no-install fallback:</p>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>run<span class="w"> </span>hello.incn
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>run<span class="w"> </span>hello.incn
 </code></pre></div>
 <h2 id="project-structure">Project Structure<a class="headerlink" href="#project-structure" title="Permanent link">&para;</a></h2>
 <p>A typical Incan project is just a folder of <code>.incn</code> files (and optionally <code>tests/</code>):</p>
-<div class="highlight"><pre><span></span><code>my_project/
+<div class="language-text highlight"><pre><span></span><code>my_project/
 ├── src/
 │   ├── main.incn      # Entry point
 │   └── utils.incn     # Additional modules

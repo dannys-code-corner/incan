@@ -3764,85 +3764,85 @@ This works well for known, fixed schemas but falls short for:</p>
 <li><strong>Mixed schemas</strong> — JSON where some parts are typed and others are dynamic</li>
 </ol>
 <h3 id="current-approach-works">Current Approach (Works)<a class="headerlink" href="#current-approach-works" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>@derive(Serialize, Deserialize)
-model User:
-    name: str
-    age: int
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">,</span> <span class="n">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
 
-user = User.from_json(json_str)?
-println(user.name)
+<span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">.</span><span class="n">from_json</span><span class="p">(</span><span class="n">json_str</span><span class="p">)</span><span class="err">?</span>
+<span class="n">println</span><span class="p">(</span><span class="n">user</span><span class="p">.</span><span class="n">name</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="proposed-addition">Proposed Addition<a class="headerlink" href="#proposed-addition" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># Parse unknown JSON
-data = JsonValue.parse(json_str)?
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Parse unknown JSON</span>
+<span class="c1">data = JsonValue.parse(json_str)?</span>
 
-# Access dynamically
-name = data[&quot;user&quot;][&quot;name&quot;].as_str()
-count = data[&quot;count&quot;].as_int()
-items = data[&quot;items&quot;].as_list()
+<span class="c1"># Access dynamically</span>
+<span class="c1">name = data[&quot;user&quot;][&quot;name&quot;].as_str()</span>
+<span class="c1">count = data[&quot;count&quot;].as_int()</span>
+<span class="c1">items = data[&quot;items&quot;].as_list()</span>
 
-# Check types at runtime
-if data[&quot;field&quot;].is_string():
-    println(data[&quot;field&quot;].as_str())
+<span class="c1"># Check types at runtime</span>
+<span class="c1">if data[&quot;field&quot;].is_string():</span>
+<span class="c1">    println(data[&quot;field&quot;].as_str())</span>
 </code></pre></div>
 <h2 id="detailed-design">Detailed Design<a class="headerlink" href="#detailed-design" title="Permanent link">&para;</a></h2>
 <h3 id="jsonvalue-type">JsonValue Type<a class="headerlink" href="#jsonvalue-type" title="Permanent link">&para;</a></h3>
 <p><code>JsonValue</code> is an enum representing any JSON value:</p>
-<div class="highlight"><pre><span></span><code>enum JsonValue:
-    Null
-    Bool(bool)
-    Int(int)
-    Float(float)
-    String(str)
-    Array(List[JsonValue])
-    Object(Dict[str, JsonValue])
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">JsonValue</span><span class="p">:</span>
+    <span class="n">Null</span>
+    <span class="n">Bool</span><span class="p">(</span><span class="n">bool</span><span class="p">)</span>
+    <span class="n">Int</span><span class="p">(</span><span class="n">int</span><span class="p">)</span>
+    <span class="n">Float</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>
+    <span class="n">String</span><span class="p">(</span><span class="n">str</span><span class="p">)</span>
+    <span class="n">Array</span><span class="p">(</span><span class="n">List</span><span class="p">[</span><span class="n">JsonValue</span><span class="p">])</span>
+    <span class="n">Object</span><span class="p">(</span><span class="n">Dict</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">JsonValue</span><span class="p">])</span>
 </code></pre></div>
 <h3 id="constructors">Constructors<a class="headerlink" href="#constructors" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># Parse from string
-value = JsonValue.parse(json_str) -&gt; Result[JsonValue, str]
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Parse from string</span>
+<span class="c1">value = JsonValue.parse(json_str) -&gt; Result[JsonValue, str]</span>
 
-# Create values directly
-null_val = JsonValue.null()
-bool_val = JsonValue.bool(true)
-int_val = JsonValue.int(42)
-str_val = JsonValue.string(&quot;hello&quot;)
-arr_val = JsonValue.array([val1, val2])
-obj_val = JsonValue.object({&quot;key&quot;: value})
+<span class="c1"># Create values directly</span>
+<span class="c1">null_val = JsonValue.null()</span>
+<span class="c1">bool_val = JsonValue.bool(true)</span>
+<span class="c1">int_val = JsonValue.int(42)</span>
+<span class="c1">str_val = JsonValue.string(&quot;hello&quot;)</span>
+<span class="c1">arr_val = JsonValue.array([val1, val2])</span>
+<span class="c1">obj_val = JsonValue.object({&quot;key&quot;: value})</span>
 </code></pre></div>
 <h3 id="access-methods">Access Methods<a class="headerlink" href="#access-methods" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># Type checking
-value.is_null() -&gt; bool
-value.is_bool() -&gt; bool
-value.is_int() -&gt; bool
-value.is_float() -&gt; bool
-value.is_string() -&gt; bool
-value.is_array() -&gt; bool
-value.is_object() -&gt; bool
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Type checking</span>
+<span class="c1">value.is_null() -&gt; bool</span>
+<span class="c1">value.is_bool() -&gt; bool</span>
+<span class="c1">value.is_int() -&gt; bool</span>
+<span class="c1">value.is_float() -&gt; bool</span>
+<span class="c1">value.is_string() -&gt; bool</span>
+<span class="c1">value.is_array() -&gt; bool</span>
+<span class="c1">value.is_object() -&gt; bool</span>
 
-# Value extraction (returns Option)
-value.as_bool() -&gt; Option[bool]
-value.as_int() -&gt; Option[int]
-value.as_float() -&gt; Option[float]
-value.as_str() -&gt; Option[str]
-value.as_array() -&gt; Option[List[JsonValue]]
-value.as_object() -&gt; Option[Dict[str, JsonValue]]
+<span class="c1"># Value extraction (returns Option)</span>
+<span class="c1">value.as_bool() -&gt; Option[bool]</span>
+<span class="c1">value.as_int() -&gt; Option[int]</span>
+<span class="c1">value.as_float() -&gt; Option[float]</span>
+<span class="c1">value.as_str() -&gt; Option[str]</span>
+<span class="c1">value.as_array() -&gt; Option[List[JsonValue]]</span>
+<span class="c1">value.as_object() -&gt; Option[Dict[str, JsonValue]]</span>
 </code></pre></div>
 <h3 id="indexing">Indexing<a class="headerlink" href="#indexing" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code># Object field access
-value[&quot;key&quot;] -&gt; JsonValue  # Returns JsonValue.Null if missing
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Object field access</span>
+<span class="c1">value[&quot;key&quot;] -&gt; JsonValue  # Returns JsonValue.Null if missing</span>
 
-# Array index access
-value[0] -&gt; JsonValue  # Returns JsonValue.Null if out of bounds
+<span class="c1"># Array index access</span>
+<span class="c1">value[0] -&gt; JsonValue  # Returns JsonValue.Null if out of bounds</span>
 
-# Chained access
-value[&quot;user&quot;][&quot;address&quot;][&quot;city&quot;].as_str()
+<span class="c1"># Chained access</span>
+<span class="c1">value[&quot;user&quot;][&quot;address&quot;][&quot;city&quot;].as_str()</span>
 </code></pre></div>
 <h3 id="serialization">Serialization<a class="headerlink" href="#serialization" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>value.to_json() -&gt; str  # Serialize back to JSON string
+<div class="language-incan highlight"><pre><span></span><code><span class="n">value</span><span class="p">.</span><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span>  <span class="c1"># Serialize back to JSON string</span>
 </code></pre></div>
 <h2 id="rust-implementation">Rust Implementation<a class="headerlink" href="#rust-implementation" title="Permanent link">&para;</a></h2>
 <p>Maps to <code>serde_json::Value</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="nc">JsonValue</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">Value</span><span class="p">;</span>
+<div class="language-rust highlight"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="nc">JsonValue</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serde_json</span><span class="p">::</span><span class="n">Value</span><span class="p">;</span>
 
 <span class="k">impl</span><span class="w"> </span><span class="n">JsonValue</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">parse</span><span class="p">(</span><span class="n">s</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="bp">Self</span><span class="p">,</span><span class="w"> </span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
@@ -3856,11 +3856,11 @@ value[&quot;user&quot;][&quot;address&quot;][&quot;city&quot;].as_str()
 </code></pre></div>
 <h2 id="hybrid-models">Hybrid Models<a class="headerlink" href="#hybrid-models" title="Permanent link">&para;</a></h2>
 <p>Mix typed and dynamic:</p>
-<div class="highlight"><pre><span></span><code>@derive(Serialize, Deserialize)
-model ApiResponse:
-    status: int
-    message: str
-    data: JsonValue  # Dynamic payload
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">,</span> <span class="n">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">ApiResponse</span><span class="p">:</span>
+    <span class="n">status</span><span class="p">:</span> <span class="n">int</span>
+    <span class="n">message</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">data</span><span class="p">:</span> <span class="n">JsonValue</span>  <span class="c1"># Dynamic payload</span>
 </code></pre></div>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-dictstr-any">1. Dict[str, Any]<a class="headerlink" href="#1-dictstr-any" title="Permanent link">&para;</a></h3>

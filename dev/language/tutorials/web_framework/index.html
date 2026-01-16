@@ -3991,157 +3991,157 @@ giving you Flask/FastAPI-like syntax with native Rust performance.</p>
 <ul>
 <li>from the repository root:</li>
 </ul>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
 </code></pre></div>
 <ul>
 <li>or via an absolute path (from anywhere):</li>
 </ul>
-<div class="highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 </div>
-<div class="highlight"><pre><span></span><code>from web import App, route, Response, Json
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">web</span> <span class="k">import</span> <span class="n">App</span><span class="p">,</span> <span class="n">route</span><span class="p">,</span> <span class="n">Response</span><span class="p">,</span> <span class="n">Json</span>
 
-@derive(Serialize)
-model Greeting:
-    message: str
+<span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">Greeting</span><span class="p">:</span>
+    <span class="n">message</span><span class="p">:</span> <span class="n">str</span>
 
-@route(&quot;/&quot;)
-async def index() -&gt; Response:
-    return Response.html(&quot;&lt;h1&gt;Hello from Incan!&lt;/h1&gt;&quot;)
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">index</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Response</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">Response</span><span class="p">.</span><span class="n">html</span><span class="p">(</span><span class="s2">&quot;&lt;h1&gt;Hello from Incan!&lt;/h1&gt;&quot;</span><span class="p">)</span>
 
-@route(&quot;/api/greet/{name}&quot;)
-async def greet(name: str) -&gt; Json[Greeting]:
-    return Json(Greeting(message=f&quot;Hello, {name}!&quot;))
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/api/greet/{name}&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">greet</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Json</span><span class="p">[</span><span class="n">Greeting</span><span class="p">]:</span>
+    <span class="k">return</span> <span class="n">Json</span><span class="p">(</span><span class="n">Greeting</span><span class="p">(</span><span class="n">message</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Hello, {name}!&quot;</span><span class="p">))</span>
 
-def main() -&gt; None:
-    app = App()
-    app.run(port=8080)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">app</span> <span class="o">=</span> <span class="n">App</span><span class="p">()</span>
+    <span class="n">app</span><span class="p">.</span><span class="n">run</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="m">8080</span><span class="p">)</span>
 </code></pre></div>
 <p>Build and run:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>examples/web/hello_web.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>examples/web/hello_web.incn
 ./target/incan/hello_web/target/release/hello_web
 </code></pre></div>
 <p>Note: the first build may download Rust crates via Cargo (can take minutes) and requires internet access.</p>
 <h2 id="routes">Routes<a class="headerlink" href="#routes" title="Permanent link">&para;</a></h2>
 <p>Define routes using the <code>@route</code> decorator:</p>
-<div class="highlight"><pre><span></span><code>@route(&quot;/path&quot;)
-async def handler() -&gt; Response:
-    ...
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/path&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">handler</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Response</span><span class="p">:</span>
+    <span class="p">...</span>
 
-@route(&quot;/api/resource&quot;, methods=[GET, POST])
-async def resource_handler() -&gt; Response:
-    ...
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/api/resource&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="n">GET</span><span class="p">,</span> <span class="n">POST</span><span class="p">])</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">resource_handler</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Response</span><span class="p">:</span>
+    <span class="p">...</span>
 </code></pre></div>
 <h3 id="path-parameters">Path Parameters<a class="headerlink" href="#path-parameters" title="Permanent link">&para;</a></h3>
 <p>Use <code>{name}</code> syntax for path parameters:</p>
-<div class="highlight"><pre><span></span><code>@route(&quot;/users/{id}&quot;)
-async def get_user(id: int) -&gt; Json[User]:
-    user = find_user(id)?
-    return Json(user)
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/users/{id}&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">get_user</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Json</span><span class="p">[</span><span class="n">User</span><span class="p">]:</span>
+    <span class="n">user</span> <span class="o">=</span> <span class="n">find_user</span><span class="p">(</span><span class="n">id</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">return</span> <span class="n">Json</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
 
-@route(&quot;/posts/{year}/{month}&quot;)
-async def get_posts(year: int, month: int) -&gt; Json[list[Post]]:
-    return Json(fetch_posts(year, month))
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/posts/{year}/{month}&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">get_posts</span><span class="p">(</span><span class="n">year</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">month</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Json</span><span class="p">[</span><span class="n">list</span><span class="p">[</span><span class="n">Post</span><span class="p">]]:</span>
+    <span class="k">return</span> <span class="n">Json</span><span class="p">(</span><span class="n">fetch_posts</span><span class="p">(</span><span class="n">year</span><span class="p">,</span> <span class="n">month</span><span class="p">))</span>
 </code></pre></div>
 <h3 id="http-methods">HTTP Methods<a class="headerlink" href="#http-methods" title="Permanent link">&para;</a></h3>
 <p>Specify allowed methods with the <code>methods</code> parameter:</p>
-<div class="highlight"><pre><span></span><code>from web import GET, POST, PUT, DELETE
+<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">web</span> <span class="k">import</span> <span class="n">GET</span><span class="p">,</span> <span class="n">POST</span><span class="p">,</span> <span class="n">PUT</span><span class="p">,</span> <span class="n">DELETE</span>
 
-@route(&quot;/items&quot;, methods=[GET])
-async def list_items() -&gt; Json[list[Item]]:
-    ...
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/items&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="n">GET</span><span class="p">])</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">list_items</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Json</span><span class="p">[</span><span class="n">list</span><span class="p">[</span><span class="n">Item</span><span class="p">]]:</span>
+    <span class="p">...</span>
 
-@route(&quot;/items&quot;, methods=[POST])
-async def create_item(body: Json[CreateItem]) -&gt; Json[Item]:
-    ...
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/items&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="n">POST</span><span class="p">])</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">create_item</span><span class="p">(</span><span class="n">body</span><span class="p">:</span> <span class="n">Json</span><span class="p">[</span><span class="n">CreateItem</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Json</span><span class="p">[</span><span class="n">Item</span><span class="p">]:</span>
+    <span class="p">...</span>
 
-@route(&quot;/items/{id}&quot;, methods=[PUT, DELETE])
-async def modify_item(id: int) -&gt; Response:
-    ...
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/items/{id}&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="n">PUT</span><span class="p">,</span> <span class="n">DELETE</span><span class="p">])</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">modify_item</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Response</span><span class="p">:</span>
+    <span class="p">...</span>
 </code></pre></div>
 <h2 id="responses">Responses<a class="headerlink" href="#responses" title="Permanent link">&para;</a></h2>
 <h3 id="json-responses">JSON Responses<a class="headerlink" href="#json-responses" title="Permanent link">&para;</a></h3>
 <p>Use <code>Json[T]</code> for JSON responses. The inner type must have <code>@derive(Serialize)</code>:</p>
-<div class="highlight"><pre><span></span><code>@derive(Serialize)
-model User:
-    id: int
-    name: str
-    email: str
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">email</span><span class="p">:</span> <span class="n">str</span>
 
-@route(&quot;/api/user/{id}&quot;)
-async def get_user(id: int) -&gt; Json[User]:
-    user = User(id=id, name=&quot;Alice&quot;, email=&quot;alice@example.com&quot;)
-    return Json(user)
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/api/user/{id}&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">get_user</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Json</span><span class="p">[</span><span class="n">User</span><span class="p">]:</span>
+    <span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">id</span><span class="o">=</span><span class="n">id</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Json</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="html-responses">HTML Responses<a class="headerlink" href="#html-responses" title="Permanent link">&para;</a></h3>
 <p>Return HTML with <code>Response.html()</code>:</p>
-<div class="highlight"><pre><span></span><code>@route(&quot;/&quot;)
-async def index() -&gt; Response:
-    return Response.html(&quot;&lt;h1&gt;Welcome!&lt;/h1&gt;&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">index</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Response</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">Response</span><span class="p">.</span><span class="n">html</span><span class="p">(</span><span class="s2">&quot;&lt;h1&gt;Welcome!&lt;/h1&gt;&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="status-codes">Status Codes<a class="headerlink" href="#status-codes" title="Permanent link">&para;</a></h3>
 <p>Use <code>Response</code> methods for different status codes:</p>
-<div class="highlight"><pre><span></span><code>@route(&quot;/health&quot;)
-async def health() -&gt; Response:
-    return Response.ok()  # 200
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/health&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">health</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Response</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">Response</span><span class="p">.</span><span class="n">ok</span><span class="p">()</span>  <span class="c1"># 200</span>
 
-@route(&quot;/created&quot;)
-async def created() -&gt; Response:
-    return Response.created()  # 201
+<span class="c1">@route(&quot;/created&quot;)</span>
+<span class="c1">async def created() -&gt; Response:</span>
+<span class="c1">    return Response.created()  # 201</span>
 
-@route(&quot;/empty&quot;)
-async def empty() -&gt; Response:
-    return Response.no_content()  # 204
+<span class="c1">@route(&quot;/empty&quot;)</span>
+<span class="c1">async def empty() -&gt; Response:</span>
+<span class="c1">    return Response.no_content()  # 204</span>
 
-@route(&quot;/error&quot;)
-async def error() -&gt; Response:
-    return Response.bad_request(&quot;Invalid input&quot;)  # 400
+<span class="c1">@route(&quot;/error&quot;)</span>
+<span class="c1">async def error() -&gt; Response:</span>
+<span class="c1">    return Response.bad_request(&quot;Invalid input&quot;)  # 400</span>
 
-@route(&quot;/missing&quot;)
-async def missing() -&gt; Response:
-    return Response.not_found(&quot;Resource not found&quot;)  # 404
+<span class="c1">@route(&quot;/missing&quot;)</span>
+<span class="c1">async def missing() -&gt; Response:</span>
+<span class="c1">    return Response.not_found(&quot;Resource not found&quot;)  # 404</span>
 
-@route(&quot;/server-error&quot;)
-async def server_error() -&gt; Response:
-    return Response.internal_error(&quot;Something went wrong&quot;)  # 500
+<span class="c1">@route(&quot;/server-error&quot;)</span>
+<span class="c1">async def server_error() -&gt; Response:</span>
+<span class="c1">    return Response.internal_error(&quot;Something went wrong&quot;)  # 500</span>
 </code></pre></div>
 <h2 id="request-data">Request Data<a class="headerlink" href="#request-data" title="Permanent link">&para;</a></h2>
 <h3 id="extracting-path-parameters">Extracting Path Parameters<a class="headerlink" href="#extracting-path-parameters" title="Permanent link">&para;</a></h3>
 <p>Path parameters are automatically extracted into function arguments:</p>
-<div class="highlight"><pre><span></span><code>@route(&quot;/users/{user_id}/posts/{post_id}&quot;)
-async def get_post(user_id: int, post_id: int) -&gt; Json[Post]:
-    ...
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/users/{user_id}/posts/{post_id}&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">get_post</span><span class="p">(</span><span class="n">user_id</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">post_id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Json</span><span class="p">[</span><span class="n">Post</span><span class="p">]:</span>
+    <span class="p">...</span>
 </code></pre></div>
 <h3 id="query-parameters">Query Parameters<a class="headerlink" href="#query-parameters" title="Permanent link">&para;</a></h3>
 <p>Use <code>Query[T]</code> for query string parameters:</p>
-<div class="highlight"><pre><span></span><code>@derive(Deserialize)
-model SearchParams:
-    q: str
-    limit: int = 10
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">SearchParams</span><span class="p">:</span>
+    <span class="n">q</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">limit</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">10</span>
 
-@route(&quot;/search&quot;)
-async def search(params: Query[SearchParams]) -&gt; Json[list[Result]]:
-    results = do_search(params.q, params.limit)
-    return Json(results)
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/search&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">search</span><span class="p">(</span><span class="n">params</span><span class="p">:</span> <span class="n">Query</span><span class="p">[</span><span class="n">SearchParams</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Json</span><span class="p">[</span><span class="n">list</span><span class="p">[</span><span class="n">Result</span><span class="p">]]:</span>
+    <span class="n">results</span> <span class="o">=</span> <span class="n">do_search</span><span class="p">(</span><span class="n">params</span><span class="p">.</span><span class="n">q</span><span class="p">,</span> <span class="n">params</span><span class="p">.</span><span class="n">limit</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Json</span><span class="p">(</span><span class="n">results</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="json-body">JSON Body<a class="headerlink" href="#json-body" title="Permanent link">&para;</a></h3>
 <p>Use <code>Json[T]</code> as a parameter for JSON request bodies:</p>
-<div class="highlight"><pre><span></span><code>@derive(Deserialize)
-model CreateUser:
-    name: str
-    email: str
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">CreateUser</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">email</span><span class="p">:</span> <span class="n">str</span>
 
-@route(&quot;/users&quot;, methods=[POST])
-async def create_user(body: Json[CreateUser]) -&gt; Json[User]:
-    user = User(id=1, name=body.name, email=body.email)
-    return Json(user)
+<span class="err">@</span><span class="n">route</span><span class="p">(</span><span class="s2">&quot;/users&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="n">POST</span><span class="p">])</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">create_user</span><span class="p">(</span><span class="n">body</span><span class="p">:</span> <span class="n">Json</span><span class="p">[</span><span class="n">CreateUser</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Json</span><span class="p">[</span><span class="n">User</span><span class="p">]:</span>
+    <span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">id</span><span class="o">=</span><span class="m">1</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="n">body</span><span class="p">.</span><span class="n">name</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="n">body</span><span class="p">.</span><span class="n">email</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Json</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="application">Application<a class="headerlink" href="#application" title="Permanent link">&para;</a></h2>
 <h3 id="starting-the-server">Starting the Server<a class="headerlink" href="#starting-the-server" title="Permanent link">&para;</a></h3>
 <p>Create an <code>App</code> and call <code>run()</code>:</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    app = App()
-    app.run(host=&quot;0.0.0.0&quot;, port=3000)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">app</span> <span class="o">=</span> <span class="n">App</span><span class="p">()</span>
+    <span class="n">app</span><span class="p">.</span><span class="n">run</span><span class="p">(</span><span class="n">host</span><span class="o">=</span><span class="s2">&quot;0.0.0.0&quot;</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="m">3000</span><span class="p">)</span>
 </code></pre></div>
 <p>Parameters:</p>
 <ul>
@@ -4165,60 +4165,60 @@ async def create_user(body: Json[CreateUser]) -&gt; Json[User]:
 <li><code>tokio</code> for async runtime</li>
 </ul>
 <h2 id="complete-example">Complete Example<a class="headerlink" href="#complete-example" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>&quot;&quot;&quot;
-A simple REST API for managing items.
-&quot;&quot;&quot;
+<div class="language-incan highlight"><pre><span></span><code><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">A simple REST API for managing items.</span>
+<span class="s2">&quot;&quot;&quot;</span>
 
-from web import App, route, Response, Json, GET, POST, DELETE
-
-
-@derive(Serialize, Deserialize)
-model Item:
-    id: int
-    name: str
-    price: float
+<span class="k">from</span> <span class="n">web</span> <span class="k">import</span> <span class="n">App</span><span class="p">,</span> <span class="n">route</span><span class="p">,</span> <span class="n">Response</span><span class="p">,</span> <span class="n">Json</span><span class="p">,</span> <span class="n">GET</span><span class="p">,</span> <span class="n">POST</span><span class="p">,</span> <span class="n">DELETE</span>
 
 
-# In-memory storage (in a real app, use a database)
-items: list[Item] = []
+<span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">,</span> <span class="n">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">Item</span><span class="p">:</span>
+    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">price</span><span class="p">:</span> <span class="n">float</span>
 
 
-@route(&quot;/api/items&quot;, methods=[GET])
-async def list_items() -&gt; Json[list[Item]]:
-    &quot;&quot;&quot;List all items.&quot;&quot;&quot;
-    return Json(items)
+<span class="c1"># In-memory storage (in a real app, use a database)</span>
+<span class="c1">items: list[Item] = []</span>
 
 
-@route(&quot;/api/items&quot;, methods=[POST])
-async def create_item(body: Json[Item]) -&gt; Json[Item]:
-    &quot;&quot;&quot;Create a new item.&quot;&quot;&quot;
-    items.append(body.value)
-    return Json(body.value)
+<span class="c1">@route(&quot;/api/items&quot;, methods=[GET])</span>
+<span class="c1">async def list_items() -&gt; Json[list[Item]]:</span>
+<span class="c1">    &quot;&quot;&quot;List all items.&quot;&quot;&quot;</span>
+<span class="c1">    return Json(items)</span>
 
 
-@route(&quot;/api/items/{id}&quot;, methods=[GET])
-async def get_item(id: int) -&gt; Response:
-    &quot;&quot;&quot;Get an item by ID.&quot;&quot;&quot;
-    for item in items:
-        if item.id == id:
-            return Json(item)
-    return Response.not_found(&quot;Item not found&quot;)
+<span class="c1">@route(&quot;/api/items&quot;, methods=[POST])</span>
+<span class="c1">async def create_item(body: Json[Item]) -&gt; Json[Item]:</span>
+<span class="c1">    &quot;&quot;&quot;Create a new item.&quot;&quot;&quot;</span>
+<span class="c1">    items.append(body.value)</span>
+<span class="c1">    return Json(body.value)</span>
 
 
-@route(&quot;/api/items/{id}&quot;, methods=[DELETE])
-async def delete_item(id: int) -&gt; Response:
-    &quot;&quot;&quot;Delete an item by ID.&quot;&quot;&quot;
-    for i, item in enumerate(items):
-        if item.id == id:
-            items.pop(i)
-            return Response.no_content()
-    return Response.not_found(&quot;Item not found&quot;)
+<span class="c1">@route(&quot;/api/items/{id}&quot;, methods=[GET])</span>
+<span class="c1">async def get_item(id: int) -&gt; Response:</span>
+<span class="c1">    &quot;&quot;&quot;Get an item by ID.&quot;&quot;&quot;</span>
+<span class="c1">    for item in items:</span>
+<span class="c1">        if item.id == id:</span>
+<span class="c1">            return Json(item)</span>
+<span class="c1">    return Response.not_found(&quot;Item not found&quot;)</span>
 
 
-def main() -&gt; None:
-    println(&quot;Starting API server at http://localhost:8080&quot;)
-    app = App()
-    app.run(port=8080)
+<span class="c1">@route(&quot;/api/items/{id}&quot;, methods=[DELETE])</span>
+<span class="c1">async def delete_item(id: int) -&gt; Response:</span>
+<span class="c1">    &quot;&quot;&quot;Delete an item by ID.&quot;&quot;&quot;</span>
+<span class="c1">    for i, item in enumerate(items):</span>
+<span class="c1">        if item.id == id:</span>
+<span class="c1">            items.pop(i)</span>
+<span class="c1">            return Response.no_content()</span>
+<span class="c1">    return Response.not_found(&quot;Item not found&quot;)</span>
+
+
+<span class="c1">def main() -&gt; None:</span>
+<span class="c1">    println(&quot;Starting API server at http://localhost:8080&quot;)</span>
+<span class="c1">    app = App()</span>
+<span class="c1">    app.run(port=8080)</span>
 </code></pre></div>
 <h2 id="performance">Performance<a class="headerlink" href="#performance" title="Permanent link">&para;</a></h2>
 <p>Since Incan compiles to Rust/Axum, your web application runs with:</p>

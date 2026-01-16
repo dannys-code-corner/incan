@@ -3687,8 +3687,8 @@
 <p>Prerequisite: follow <a href="../../../../tooling/how-to/install_and_run/">Install, build, and run</a>.</p>
 <h2 id="create-a-file">Create a file<a class="headerlink" href="#create-a-file" title="Permanent link">&para;</a></h2>
 <p>Create <code>hello.incn</code>:</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    println(&quot;Hello, Incan!&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Hello, Incan!&quot;</span><span class="p">)</span>
 </code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">Coming from Python?</p>
@@ -3702,10 +3702,10 @@
 formatting (see: <a href="../../../../tooling/how-to/formatting/">Code formatting</a>).</p>
 <h2 id="run-it">Run it<a class="headerlink" href="#run-it" title="Permanent link">&para;</a></h2>
 <p>If you installed to PATH:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>hello.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>hello.incn
 </code></pre></div>
 <p>If you used the no-install fallback:</p>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>run<span class="w"> </span>hello.incn
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>run<span class="w"> </span>hello.incn
 </code></pre></div>
 <h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
 <ol>
@@ -3715,10 +3715,10 @@ formatting (see: <a href="../../../../tooling/how-to/formatting/">Code formattin
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    print(&quot;Hello&quot;)
-    println(&quot;, Incan!&quot;)
-    println(&quot;Second line&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">print</span><span class="p">(</span><span class="s2">&quot;Hello&quot;</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="s2">&quot;, Incan!&quot;</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Second line&quot;</span><span class="p">)</span>
 </code></pre></div>
 </details>
 <h2 id="next">Next<a class="headerlink" href="#next" title="Permanent link">&para;</a></h2>

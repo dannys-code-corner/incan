@@ -3678,14 +3678,14 @@
 <li><strong>Derive</strong>: <code>@derive(Serialize)</code></li>
 <li><strong>API</strong>: <code>json_stringify(value) -&gt; str</code></li>
 </ul>
-<div class="highlight"><pre><span></span><code>@derive(Serialize)
-model User:
-    name: str
-    age: int
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
 
-def main() -&gt; None:
-    u = User(name=&quot;Alice&quot;, age=30)
-    println(json_stringify(u))
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">age</span><span class="o">=</span><span class="m">30</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="n">json_stringify</span><span class="p">(</span><span class="n">u</span><span class="p">))</span>
 </code></pre></div>
 <hr />
 <h2 id="deserialize">Deserialize<a class="headerlink" href="#deserialize" title="Permanent link">&para;</a></h2>
@@ -3693,13 +3693,13 @@ def main() -&gt; None:
 <li><strong>Derive</strong>: <code>@derive(Deserialize)</code></li>
 <li><strong>API</strong>: <code>T.from_json(input: str) -&gt; Result[T, str]</code></li>
 </ul>
-<div class="highlight"><pre><span></span><code>@derive(Deserialize)
-model User:
-    name: str
-    age: int
+<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
 
-def main() -&gt; None:
-    result: Result[User, str] = User.from_json(&quot;{\&quot;name\&quot;:\&quot;Alice\&quot;,\&quot;age\&quot;:30}&quot;)
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">result</span><span class="p">:</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">User</span><span class="p">.</span><span class="n">from_json</span><span class="p">(</span><span class="err">&quot;</span><span class="p">{</span><span class="err">\&quot;</span><span class="n">name</span><span class="err">\&quot;</span><span class="p">:</span><span class="err">\&quot;</span><span class="n">Alice</span><span class="err">\&quot;</span><span class="p">,</span><span class="err">\&quot;</span><span class="n">age</span><span class="err">\</span><span class="s2">&quot;:30}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <hr />
 <h2 id="type-mappings-incan-json">Type mappings (Incan → JSON)<a class="headerlink" href="#type-mappings-incan-json" title="Permanent link">&para;</a></h2>

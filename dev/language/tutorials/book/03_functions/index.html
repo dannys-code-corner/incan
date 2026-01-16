@@ -3771,8 +3771,8 @@
 <p>Functions are named, reusable blocks of code.</p>
 <h2 id="defining-a-function">Defining a function<a class="headerlink" href="#defining-a-function" title="Permanent link">&para;</a></h2>
 <p>Function parameters and return types are explicit:</p>
-<div class="highlight"><pre><span></span><code>def add(a: int, b: int) -&gt; int:
-    return a + b
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 </code></pre></div>
 <ul>
 <li>Parameters use <code>name: Type</code>.</li>
@@ -3787,14 +3787,14 @@
 <li><code>-&gt; None</code> means it doesn’t return a value.</li>
 </ul>
 <p>In order to run an incan file, you must define a <code>main</code> function:</p>
-<div class="highlight"><pre><span></span><code>def main() -&gt; None:
-    total = add(2, 3)
-    println(f&quot;total={total}&quot;)
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">total</span> <span class="o">=</span> <span class="n">add</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;total={total}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">Coming from Python?</p>
 <p>In Python, a common pattern is:</p>
-<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+<div class="language-python highlight"><pre><span></span><code><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
     <span class="n">main</span><span class="p">()</span>
 </code></pre></div>
 <p>In Incan, <code>main</code> is the program entry point when you run a file (e.g. <code>incan run ...</code>), so you don’t need an
@@ -3803,18 +3803,18 @@ and keep other files as imported helper modules.</p>
 </div>
 <h2 id="docstrings">Docstrings<a class="headerlink" href="#docstrings" title="Permanent link">&para;</a></h2>
 <p>Use docstrings to describe intent (especially for public helpers):</p>
-<div class="highlight"><pre><span></span><code>def normalize_name(name: str) -&gt; str:
-    &quot;&quot;&quot;
-    Normalize a user name for consistent comparisons.
-    &quot;&quot;&quot;
-    return name.strip().lower()
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">normalize_name</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">    Normalize a user name for consistent comparisons.</span>
+<span class="s2">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">lower</span><span class="p">()</span>
 </code></pre></div>
 <h2 id="multiple-returns-with-result">Multiple returns (with <code>Result</code>)<a class="headerlink" href="#multiple-returns-with-result" title="Permanent link">&para;</a></h2>
 <p>Many “can fail” functions return <code>Result[T, E]</code> instead of throwing exceptions:</p>
-<div class="highlight"><pre><span></span><code>def parse_port(s: str) -&gt; Result[int, str]:
-    if len(s.strip()) == 0:
-        return Err(&quot;port must not be empty&quot;)
-    return Ok(int(s))
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">parse_port</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">int</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">s</span><span class="p">.</span><span class="n">strip</span><span class="p">())</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;port must not be empty&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">int</span><span class="p">(</span><span class="n">s</span><span class="p">))</span>
 </code></pre></div>
 <p>You’ll learn the <code>Result</code> pattern in Chapter 6.</p>
 <h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
@@ -3825,22 +3825,22 @@ and keep other files as imported helper modules.</p>
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="highlight"><pre><span></span><code>def is_even(n: int) -&gt; bool:
-    return n % 2 == 0
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">is_even</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">n</span> <span class="o">%</span> <span class="m">2</span> <span class="o">==</span> <span class="m">0</span>
 
-def greet(name: str) -&gt; str:
-    cleaned = name.strip()
-    return f&quot;Hello, {cleaned}!&quot;
+<span class="k">def</span> <span class="n">greet</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="n">cleaned</span> <span class="o">=</span> <span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">()</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Hello, {cleaned}!&quot;</span>
 
-def safe_div(a: float, b: float) -&gt; Result[float, str]:
-    if b == 0.0:
-        return Err(&quot;division by zero&quot;)
-    return Ok(a / b)
+<span class="k">def</span> <span class="n">safe_div</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">float</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">float</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">b</span> <span class="o">==</span> <span class="m">0.0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;division by zero&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">a</span> <span class="o">/</span> <span class="n">b</span><span class="p">)</span>
 
-def main() -&gt; None:
-    println(f&quot;is_even(2)={is_even(2)}&quot;)
-    println(f&quot;is_even(3)={is_even(3)}&quot;)
-    println(greet(&quot;  Alice  &quot;))
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;is_even(2)={is_even(2)}&quot;</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;is_even(3)={is_even(3)}&quot;</span><span class="p">)</span>
+    <span class="n">println</span><span class="p">(</span><span class="n">greet</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">))</span>
 </code></pre></div>
 </details>
 <h2 id="what-to-learn-next">What to learn next<a class="headerlink" href="#what-to-learn-next" title="Permanent link">&para;</a></h2>

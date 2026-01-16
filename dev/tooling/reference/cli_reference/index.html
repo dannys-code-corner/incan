@@ -3827,17 +3827,17 @@
 <ul>
 <li>from the repository root:</li>
 </ul>
-<div class="highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
+<div class="language-bash highlight"><pre><span></span><code>./target/release/incan<span class="w"> </span>...
 </code></pre></div>
 <ul>
 <li>or via an absolute path (from anywhere):</li>
 </ul>
-<div class="highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>/absolute/path/to/incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 </div>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
 <p>Top-level usage:</p>
-<div class="highlight"><pre><span></span><code>incan [OPTIONS] [FILE] [COMMAND]
+<div class="language-text highlight"><pre><span></span><code>incan [OPTIONS] [FILE] [COMMAND]
 </code></pre></div>
 <ul>
 <li>If you pass a <code>FILE</code> without a subcommand, <code>incan</code> type-checks it (default action).</li>
@@ -3851,18 +3851,18 @@
 </ul>
 <h2 id="global-options-debug">Global options (debug)<a class="headerlink" href="#global-options-debug" title="Permanent link">&para;</a></h2>
 <p>These flags take a file and run a debug pipeline stage:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>--lex<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>--lex<span class="w"> </span>path/to/file.incn
 incan<span class="w"> </span>--parse<span class="w"> </span>path/to/file.incn
 incan<span class="w"> </span>--check<span class="w"> </span>path/to/file.incn
 incan<span class="w"> </span>--emit-rust<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 <p>Strict mode:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>--strict<span class="w"> </span>--emit-rust<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>--strict<span class="w"> </span>--emit-rust<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 <h2 id="commands">Commands<a class="headerlink" href="#commands" title="Permanent link">&para;</a></h2>
 <h3 id="incan-build"><code>incan build</code><a class="headerlink" href="#incan-build" title="Permanent link">&para;</a></h3>
 <p>Usage:</p>
-<div class="highlight"><pre><span></span><code>incan build &lt;FILE&gt; [OUTPUT_DIR]
+<div class="language-text highlight"><pre><span></span><code>incan build &lt;FILE&gt; [OUTPUT_DIR]
 </code></pre></div>
 <p>Behavior:</p>
 <ul>
@@ -3871,24 +3871,24 @@ incan<span class="w"> </span>--emit-rust<span class="w"> </span>path/to/file.inc
   <code>target/incan/&lt;name&gt;/target/release/&lt;name&gt;</code></li>
 </ul>
 <p>Example:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>examples/simple/hello.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>examples/simple/hello.incn
 </code></pre></div>
 <h3 id="incan-run"><code>incan run</code><a class="headerlink" href="#incan-run" title="Permanent link">&para;</a></h3>
 <p>Usage:</p>
-<div class="highlight"><pre><span></span><code>incan run [OPTIONS] [FILE]
+<div class="language-text highlight"><pre><span></span><code>incan run [OPTIONS] [FILE]
 </code></pre></div>
 <p>Run a file:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>path/to/file.incn
 </code></pre></div>
 <p>Run inline code:</p>
-<div class="highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import this&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import this&quot;</span>
 </code></pre></div>
 <h3 id="incan-fmt"><code>incan fmt</code><a class="headerlink" href="#incan-fmt" title="Permanent link">&para;</a></h3>
 <p>Usage:</p>
-<div class="highlight"><pre><span></span><code>incan fmt [OPTIONS] [PATH]
+<div class="language-text highlight"><pre><span></span><code>incan fmt [OPTIONS] [PATH]
 </code></pre></div>
 <p>Examples:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Format files in place</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Format files in place</span>
 incan<span class="w"> </span>fmt<span class="w"> </span>.
 
 <span class="c1"># Check formatting without modifying (CI mode)</span>
@@ -3899,10 +3899,10 @@ incan<span class="w"> </span>fmt<span class="w"> </span>--diff<span class="w"> <
 </code></pre></div>
 <h3 id="incan-test"><code>incan test</code><a class="headerlink" href="#incan-test" title="Permanent link">&para;</a></h3>
 <p>Usage:</p>
-<div class="highlight"><pre><span></span><code>incan test [OPTIONS] [PATH]
+<div class="language-text highlight"><pre><span></span><code>incan test [OPTIONS] [PATH]
 </code></pre></div>
 <p>Examples:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Run all tests in a directory</span>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Run all tests in a directory</span>
 incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>tests/
 
 <span class="c1"># Run all tests under a path (default: .)</span>
@@ -3927,7 +3927,7 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 <li><strong>Built binary</strong>: <code>target/incan/&lt;name&gt;/target/release/&lt;name&gt;</code></li>
 </ul>
 <p>Cleaning:</p>
-<div class="highlight"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>target/incan/
+<div class="language-bash highlight"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>target/incan/
 </code></pre></div>
 <h2 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h2>
 <ul>
