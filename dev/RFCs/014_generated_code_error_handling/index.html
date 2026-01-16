@@ -3807,10 +3807,10 @@ handling in generated code.</p>
 <h3 id="phase-3-optional-error-recovery">Phase 3: Optional Error Recovery<a class="headerlink" href="#phase-3-optional-error-recovery" title="Permanent link">&para;</a></h3>
 <p>For operations where returning <code>None</code>/default makes sense:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Dict.get() returns Option</span>
-<span class="c1">value = my_dict.get(&quot;key&quot;)  # Returns Option[T]</span>
+<span class="n">value</span> <span class="o">=</span> <span class="n">my_dict</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">)</span>  <span class="c1"># Returns Option[T]</span>
 
 <span class="c1"># With default</span>
-<span class="c1">value = my_dict.get(&quot;key&quot;, default=&quot;fallback&quot;)</span>
+<span class="n">value</span> <span class="o">=</span> <span class="n">my_dict</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;fallback&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Generated as:</p>
 <div class="language-rust highlight"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">my_dict</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">&quot;key&quot;</span><span class="p">).</span><span class="n">cloned</span><span class="p">();</span><span class="w">  </span><span class="c1">// Option&lt;T&gt;</span>
@@ -3824,9 +3824,9 @@ handling in generated code.</p>
 </ul>
 <p>Example (handle a parse failure by falling back to a default):</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Incan uses a match expression to handle errors, instead of a try-except block (like Python)</span>
-<span class="c1">match int(user_input):</span>
-<span class="c1">    Ok(v) =&gt; value = v</span>
-<span class="c1">    Err(_) =&gt; value = 0</span>
+<span class="k">match</span> <span class="nb">int</span><span class="p">(</span><span class="n">user_input</span><span class="p">):</span>
+    <span class="nb">Ok</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">value</span> <span class="o">=</span> <span class="n">v</span>
+    <span class="nb">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">value</span> <span class="o">=</span> <span class="mi">0</span>
 </code></pre></div>
 <p>Generated as:</p>
 <div class="language-rust highlight"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">match</span><span class="w"> </span><span class="n">user_input</span><span class="p">.</span><span class="n">parse</span><span class="p">::</span><span class="o">&lt;</span><span class="kt">i64</span><span class="o">&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>

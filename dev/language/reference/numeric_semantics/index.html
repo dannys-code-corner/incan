@@ -4228,10 +4228,10 @@ for negative numbers.</p>
 <li><code>float</code></li>
 </ul>
 <h4 id="examples">Examples (<code>/</code>)<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="m">1</span> <span class="o">/</span> <span class="m">2</span>      <span class="c1"># 0.5</span>
-<span class="c1">4 / 2      # 2.0</span>
-<span class="c1">7.0 / 2    # 3.5</span>
-<span class="c1">7 / 2.0    # 3.5</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="mi">1</span> <span class="o">/</span> <span class="mi">2</span>      <span class="c1"># 0.5</span>
+<span class="mi">4</span> <span class="o">/</span> <span class="mi">2</span>      <span class="c1"># 2.0</span>
+<span class="mf">7.0</span> <span class="o">/</span> <span class="mi">2</span>    <span class="c1"># 3.5</span>
+<span class="mi">7</span> <span class="o">/</span> <span class="mf">2.0</span>    <span class="c1"># 3.5</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Python comparison</p>
@@ -4246,14 +4246,14 @@ for negative numbers.</p>
 <li>otherwise <code>float</code></li>
 </ul>
 <h4 id="examples_1">Examples (<code>//</code>)<a class="headerlink" href="#examples_1" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="m">7</span> <span class="c1">// 3        # 2</span>
-<span class="c1">-7 // 3       # -3</span>
-<span class="c1">7 // -3       # -3</span>
-<span class="c1">-7 // -3      # 2</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="mi">7</span> <span class="o">//</span> <span class="mi">3</span>        <span class="c1"># 2</span>
+<span class="o">-</span><span class="mi">7</span> <span class="o">//</span> <span class="mi">3</span>       <span class="c1"># -3</span>
+<span class="mi">7</span> <span class="o">//</span> <span class="o">-</span><span class="mi">3</span>       <span class="c1"># -3</span>
+<span class="o">-</span><span class="mi">7</span> <span class="o">//</span> <span class="o">-</span><span class="mi">3</span>      <span class="c1"># 2</span>
 
-<span class="c1">7.0 // 3      # 2.0</span>
-<span class="c1">-7.0 // 3     # -3.0</span>
-<span class="c1">7 // 3.0      # 2.0</span>
+<span class="mf">7.0</span> <span class="o">//</span> <span class="mi">3</span>      <span class="c1"># 2.0</span>
+<span class="o">-</span><span class="mf">7.0</span> <span class="o">//</span> <span class="mi">3</span>     <span class="c1"># -3.0</span>
+<span class="mi">7</span> <span class="o">//</span> <span class="mf">3.0</span>      <span class="c1"># 2.0</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Rust comparison</p>
@@ -4278,14 +4278,14 @@ a = \left\lfloor \frac{a}{b} \right\rfloor b + (a \bmod b)
 <li>otherwise <code>float</code></li>
 </ul>
 <h4 id="examples_2">Examples (<code>%</code>)<a class="headerlink" href="#examples_2" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="m">7</span> <span class="o">%</span> <span class="m">3</span>         <span class="c1"># 1</span>
-<span class="c1">-7 % 3        # 2      (Rust would give -1)</span>
-<span class="c1">7 % -3        # -2     (Rust would give 1)</span>
-<span class="c1">-7 % -3       # -1</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="mi">7</span> <span class="o">%</span> <span class="mi">3</span>         <span class="c1"># 1</span>
+<span class="o">-</span><span class="mi">7</span> <span class="o">%</span> <span class="mi">3</span>        <span class="c1"># 2      (Rust would give -1)</span>
+<span class="mi">7</span> <span class="o">%</span> <span class="o">-</span><span class="mi">3</span>        <span class="c1"># -2     (Rust would give 1)</span>
+<span class="o">-</span><span class="mi">7</span> <span class="o">%</span> <span class="o">-</span><span class="mi">3</span>       <span class="c1"># -1</span>
 
-<span class="c1">7.0 % 3.0     # 1.0</span>
-<span class="c1">-7.0 % 3.0    # 2.0</span>
-<span class="c1">7.0 % -3.0    # -2.0</span>
+<span class="mf">7.0</span> <span class="o">%</span> <span class="mf">3.0</span>     <span class="c1"># 1.0</span>
+<span class="o">-</span><span class="mf">7.0</span> <span class="o">%</span> <span class="mf">3.0</span>    <span class="c1"># 2.0</span>
+<span class="mf">7.0</span> <span class="o">%</span> <span class="o">-</span><span class="mf">3.0</span>    <span class="c1"># -2.0</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Rust comparison</p>
@@ -4308,15 +4308,15 @@ a = \left\lfloor \frac{a}{b} \right\rfloor b + (a \bmod b)
 <li>otherwise <code>float</code></li>
 </ul>
 <h4 id="examples_3">Examples (<code>**</code>)<a class="headerlink" href="#examples_3" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="m">2</span> <span class="o">**</span> <span class="m">3</span>        <span class="c1"># 8        (int)</span>
-<span class="c1">2 ** 0        # 1        (int)</span>
-<span class="c1">2 ** -1       # 0.5      (float)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="mi">2</span> <span class="o">**</span> <span class="mi">3</span>        <span class="c1"># 8        (int)</span>
+<span class="mi">2</span> <span class="o">**</span> <span class="mi">0</span>        <span class="c1"># 1        (int)</span>
+<span class="mi">2</span> <span class="o">**</span> <span class="o">-</span><span class="mi">1</span>       <span class="c1"># 0.5      (float)</span>
 
-<span class="c1">exp = 3</span>
-<span class="c1">2 ** exp      # float (even if exp is int at runtime)</span>
+<span class="nb">exp</span> <span class="o">=</span> <span class="mi">3</span>
+<span class="mi">2</span> <span class="o">**</span> <span class="nb">exp</span>      <span class="c1"># float (even if exp is int at runtime)</span>
 
-<span class="c1">2.0 ** 3      # float</span>
-<span class="c1">2 ** 3.0      # float</span>
+<span class="mf">2.0</span> <span class="o">**</span> <span class="mi">3</span>      <span class="c1"># float</span>
+<span class="mi">2</span> <span class="o">**</span> <span class="mf">3.0</span>      <span class="c1"># float</span>
 </code></pre></div>
 <h4 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h4>
 <ul>
@@ -4331,9 +4331,9 @@ a = \left\lfloor \frac{a}{b} \right\rfloor b + (a \bmod b)
 <li>The result type is <code>bool</code>.</li>
 </ul>
 <h4 id="examples-comparisons">Examples (comparisons)<a class="headerlink" href="#examples-comparisons" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="m">1</span> <span class="o">==</span> <span class="m">1.0</span>      <span class="c1"># true</span>
-<span class="c1">1 &lt; 1.5       # true</span>
-<span class="c1">2 &gt;= 2.0      # true</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="mi">1</span> <span class="o">==</span> <span class="mf">1.0</span>      <span class="c1"># true</span>
+<span class="mi">1</span> <span class="o">&lt;</span> <span class="mf">1.5</span>       <span class="c1"># true</span>
+<span class="mi">2</span> <span class="o">&gt;=</span> <span class="mf">2.0</span>      <span class="c1"># true</span>
 </code></pre></div>
 <h2 id="compound-assignments">Compound assignments<a class="headerlink" href="#compound-assignments" title="Permanent link">&para;</a></h2>
 <p>This section covers: <code>+=</code>, <code>-=</code>, <code>*=</code>, <code>/=</code>, <code>//=</code>, <code>%=</code></p>
@@ -4343,14 +4343,14 @@ a = \left\lfloor \frac{a}{b} \right\rfloor b + (a \bmod b)
 <p>Because variables are statically typed, the <strong>result type</strong> of <code>(x &lt;op&gt; y)</code> must be
 assignable back to <code>x</code>.</p>
 <h3 id="examples-compound-assignments">Examples (compound assignments)<a class="headerlink" href="#examples-compound-assignments" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">mut</span> <span class="n">x</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">10</span>
-<span class="n">x</span> <span class="o">+=</span> <span class="m">2</span>        <span class="c1"># ok (int)</span>
-<span class="c1">x *= 3        # ok (int)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">mut</span> <span class="n">x</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">x</span> <span class="o">+=</span> <span class="mi">2</span>        <span class="c1"># ok (int)</span>
+<span class="n">x</span> <span class="o">*=</span> <span class="mi">3</span>        <span class="c1"># ok (int)</span>
 <span class="c1"># x /= 2      # error: (int / int) is float, cannot assign to int</span>
 
-<span class="c1">mut y: float = 10.0</span>
-<span class="c1">y /= 2        # ok (float)</span>
-<span class="c1">y %= 7        # ok (float)</span>
+<span class="k">mut</span> <span class="n">y</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">10.0</span>
+<span class="n">y</span> <span class="o">/=</span> <span class="mi">2</span>        <span class="c1"># ok (float)</span>
+<span class="n">y</span> <span class="o">%=</span> <span class="mi">7</span>        <span class="c1"># ok (float)</span>
 </code></pre></div>
 <h2 id="nan-infinity">NaN / Infinity<a class="headerlink" href="#nan-infinity" title="Permanent link">&para;</a></h2>
 <p>This section documents how <code>float</code> behaves today.</p>
@@ -4364,7 +4364,7 @@ assignable back to <code>x</code>.</p>
 <span class="c1"># inf = 1.0 / 0.0</span>
 <span class="c1">#</span>
 <span class="c1"># NaN/Inf can still appear via Rust interop or other IEEE-producing operations.</span>
-<span class="c1">pass</span>
+<span class="k">pass</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Python comparison</p>

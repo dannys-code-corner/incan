@@ -4426,76 +4426,76 @@ work the same way.</p>
 with Rust-level async performance.</p>
 </div>
 <h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">fetch_data</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">1.0</span><span class="p">)</span>  <span class="c1"># Wait 1 second</span>
-<span class="c1">    return &quot;data&quot;</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetch_data</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">await</span> <span class="nb">sleep</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># Wait 1 second</span>
+    <span class="k">return</span> <span class="s2">&quot;data&quot;</span>
 
-<span class="c1">def main() -&gt; None:</span>
-<span class="c1">    # When async is used, main automatically gets #[tokio::main]</span>
-<span class="c1">    println(&quot;Starting...&quot;)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="c1"># When async is used, main automatically gets #[tokio::main]</span>
+    <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Starting...&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="core-concepts">Core Concepts<a class="headerlink" href="#core-concepts" title="Permanent link">&para;</a></h2>
 <h3 id="async-functions">Async Functions<a class="headerlink" href="#async-functions" title="Permanent link">&para;</a></h3>
 <p>Declare async functions with <code>async def</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">do_work</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
-    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">0.5</span><span class="p">)</span>
-    <span class="k">return</span> <span class="m">42</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">do_work</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">await</span> <span class="nb">sleep</span><span class="p">(</span><span class="mf">0.5</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">42</span>
 </code></pre></div>
 <h3 id="await">Await<a class="headerlink" href="#await" title="Permanent link">&para;</a></h3>
 <p>Use <code>await</code> to wait for an async operation:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">process</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">process</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
     <span class="n">data</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetch_data</span><span class="p">()</span>
-    <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">transform</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">result</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">transform</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+    <span class="k">return</span> <span class="kt">result</span>
 </code></pre></div>
 <h2 id="time-primitives">Time Primitives<a class="headerlink" href="#time-primitives" title="Permanent link">&para;</a></h2>
 <h3 id="sleep">sleep<a class="headerlink" href="#sleep" title="Permanent link">&para;</a></h3>
 <p>Pause execution for a duration:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">1.5</span><span class="p">)</span>      <span class="c1"># Sleep 1.5 seconds</span>
-<span class="c1">await sleep_ms(500)   # Sleep 500 milliseconds</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">await</span> <span class="nb">sleep</span><span class="p">(</span><span class="mf">1.5</span><span class="p">)</span>      <span class="c1"># Sleep 1.5 seconds</span>
+<span class="k">await</span> <span class="n">sleep_ms</span><span class="p">(</span><span class="mi">500</span><span class="p">)</span>   <span class="c1"># Sleep 500 milliseconds</span>
 </code></pre></div>
 <h3 id="timeout">timeout<a class="headerlink" href="#timeout" title="Permanent link">&para;</a></h3>
 <p>Run an operation with a time limit:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">timeout</span><span class="p">(</span><span class="m">5.0</span><span class="p">,</span> <span class="n">slow_operation</span><span class="p">)</span>
-<span class="k">match</span> <span class="n">result</span><span class="p">:</span>
-    <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Success: {value}&quot;</span><span class="p">)</span>
-    <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Operation timed out&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kt">result</span> <span class="o">=</span> <span class="k">await</span> <span class="nb">timeout</span><span class="p">(</span><span class="mf">5.0</span><span class="p">,</span> <span class="n">slow_operation</span><span class="p">)</span>
+<span class="k">match</span> <span class="kt">result</span><span class="p">:</span>
+    <span class="k">case</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Success: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Operation timed out&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="task-spawning">Task Spawning<a class="headerlink" href="#task-spawning" title="Permanent link">&para;</a></h2>
 <h3 id="spawn">spawn<a class="headerlink" href="#spawn" title="Permanent link">&para;</a></h3>
 <p>Run a task concurrently:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">background_work</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
-    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">2.0</span><span class="p">)</span>
-    <span class="k">return</span> <span class="m">42</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">background_work</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">await</span> <span class="nb">sleep</span><span class="p">(</span><span class="mf">2.0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">42</span>
 
 <span class="c1"># Spawn returns immediately</span>
-<span class="c1">handle = spawn(background_work)</span>
+<span class="n">handle</span> <span class="o">=</span> <span class="nb">spawn</span><span class="p">(</span><span class="n">background_work</span><span class="p">)</span>
 
 <span class="c1"># Do other work...</span>
-<span class="c1">println(&quot;Working on other things...&quot;)</span>
+<span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Working on other things...&quot;</span><span class="p">)</span>
 
 <span class="c1"># Wait for the spawned task</span>
-<span class="c1">result = await handle</span>
-<span class="c1">println(f&quot;Background task returned: {result}&quot;)</span>
+<span class="kt">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">handle</span>
+<span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Background task returned: </span><span class="si">{</span><span class="kt">result</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="spawn_blocking">spawn_blocking<a class="headerlink" href="#spawn_blocking" title="Permanent link">&para;</a></h3>
 <p>Run CPU-intensive or blocking code on a dedicated thread:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">heavy_computation</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
-    <span class="n">result</span> <span class="o">=</span> <span class="m">0</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="m">1_000_000</span><span class="p">):</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="n">result</span> <span class="o">+</span> <span class="n">i</span>
-    <span class="k">return</span> <span class="n">result</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">heavy_computation</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1_000_000</span><span class="p">):</span>
+        <span class="kt">result</span> <span class="o">=</span> <span class="kt">result</span> <span class="o">+</span> <span class="n">i</span>
+    <span class="k">return</span> <span class="kt">result</span>
 
 <span class="c1"># Won&#39;t block the async runtime</span>
-<span class="c1">result = await spawn_blocking(heavy_computation)</span>
+<span class="kt">result</span> <span class="o">=</span> <span class="k">await</span> <span class="nb">spawn_blocking</span><span class="p">(</span><span class="n">heavy_computation</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="yield_now">yield_now<a class="headerlink" href="#yield_now" title="Permanent link">&para;</a></h3>
 <p>Cooperatively yield to let other tasks run:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">cooperative_loop</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="m">10000</span><span class="p">):</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">cooperative_loop</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10000</span><span class="p">):</span>
         <span class="c1"># Do some work...</span>
-<span class="c1">        if i % 100 == 0:</span>
-<span class="c1">            await yield_now()  # Let other tasks run</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">100</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">await</span> <span class="nb">yield_now</span><span class="p">()</span>  <span class="c1"># Let other tasks run</span>
 </code></pre></div>
 <h2 id="channels">Channels<a class="headerlink" href="#channels" title="Permanent link">&para;</a></h2>
 <p>Channels enable safe message passing between concurrent tasks.
@@ -4536,43 +4536,43 @@ They're the primary way to communicate between async tasks without shared mutabl
 </table>
 <p><strong>Bounded channel</strong> (recommended):</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Create channel with buffer size 32</span>
-<span class="c1">tx, rx = channel[str](32)</span>
+<span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="nb">channel</span><span class="p">[</span><span class="nb">str</span><span class="p">](</span><span class="mi">32</span><span class="p">)</span>
 
 <span class="c1"># Sender - blocks if buffer is full (backpressure)</span>
-<span class="c1">async def producer() -&gt; None:</span>
-<span class="c1">    await tx.send(&quot;hello&quot;)  # Waits if buffer full</span>
-<span class="c1">    await tx.send(&quot;world&quot;)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">producer</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">tx</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="s2">&quot;hello&quot;</span><span class="p">)</span>  <span class="c1"># Waits if buffer full</span>
+    <span class="k">await</span> <span class="n">tx</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="s2">&quot;world&quot;</span><span class="p">)</span>
 
 <span class="c1"># Receiver - blocks until message available</span>
-<span class="c1">async def consumer() -&gt; None:</span>
-<span class="c1">    while True:</span>
-<span class="c1">        match await rx.recv():</span>
-<span class="c1">            case Some(msg): println(f&quot;Got: {msg}&quot;)</span>
-<span class="c1">            case None: break  # All senders dropped, channel closed</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">consumer</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="k">match</span> <span class="k">await</span> <span class="n">rx</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
+            <span class="k">case</span> <span class="nb">Some</span><span class="p">(</span><span class="n">msg</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Got: </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">case</span> <span class="kc">None</span><span class="p">:</span> <span class="k">break</span>  <span class="c1"># All senders dropped, channel closed</span>
 </code></pre></div>
 <p><strong>Multiple producers</strong> (clone the sender):</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="n">channel</span><span class="p">[</span><span class="n">int</span><span class="p">](</span><span class="m">100</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="nb">channel</span><span class="p">[</span><span class="nb">int</span><span class="p">](</span><span class="mi">100</span><span class="p">)</span>
 
 <span class="c1"># Clone sender for each producer</span>
-<span class="c1">tx1 = tx.clone()</span>
-<span class="c1">tx2 = tx.clone()</span>
+<span class="n">tx1</span> <span class="o">=</span> <span class="n">tx</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
+<span class="n">tx2</span> <span class="o">=</span> <span class="n">tx</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
 
-<span class="c1">spawn(async () -&gt; None:</span>
-<span class="c1">    await tx1.send(1)</span>
-<span class="c1">    await tx1.send(2)</span>
-<span class="c1">)</span>
+<span class="nb">spawn</span><span class="p">(</span><span class="k">async</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">tx1</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">await</span> <span class="n">tx1</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+<span class="p">)</span>
 
-<span class="c1">spawn(async () -&gt; None:</span>
-<span class="c1">    await tx2.send(100)</span>
-<span class="c1">    await tx2.send(200)</span>
-<span class="c1">)</span>
+<span class="nb">spawn</span><span class="p">(</span><span class="k">async</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">tx2</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+    <span class="k">await</span> <span class="n">tx2</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="mi">200</span><span class="p">)</span>
+<span class="p">)</span>
 
 <span class="c1"># Single consumer receives from all producers</span>
-<span class="c1">async def consume() -&gt; None:</span>
-<span class="c1">    while True:</span>
-<span class="c1">        match await rx.recv():</span>
-<span class="c1">            case Some(n): println(f&quot;Received: {n}&quot;)</span>
-<span class="c1">            case None: break</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">consume</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="k">match</span> <span class="k">await</span> <span class="n">rx</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
+            <span class="k">case</span> <span class="nb">Some</span><span class="p">(</span><span class="n">n</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Received: </span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">case</span> <span class="kc">None</span><span class="p">:</span> <span class="k">break</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Coming from Python?</p>
@@ -4613,17 +4613,17 @@ when producers finish.</p>
 <h3 id="unbounded-channel">Unbounded Channel<a class="headerlink" href="#unbounded-channel" title="Permanent link">&para;</a></h3>
 <p><code>send</code> never blocks, but use with caution — if producers outpace consumers, memory grows without limit:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># No capacity limit - send always succeeds immediately</span>
-<span class="c1">tx, rx = unbounded_channel[int]()</span>
+<span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="nb">unbounded_channel</span><span class="p">[</span><span class="nb">int</span><span class="p">]()</span>
 
 <span class="c1"># These never block</span>
-<span class="c1">tx.send(1)</span>
-<span class="c1">tx.send(2)</span>
-<span class="c1">tx.send(3)</span>
+<span class="n">tx</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">tx</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+<span class="n">tx</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
 
 <span class="c1"># Consumer still blocks waiting for messages</span>
-<span class="c1">match await rx.recv():</span>
-<span class="c1">    case Some(n): println(f&quot;Got: {n}&quot;)</span>
-<span class="c1">    case None: println(&quot;Channel closed&quot;)</span>
+<span class="k">match</span> <span class="k">await</span> <span class="n">rx</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
+    <span class="k">case</span> <span class="nb">Some</span><span class="p">(</span><span class="n">n</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Got: </span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="kc">None</span><span class="p">:</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Channel closed&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>When unbounded is OK:</strong></p>
 <ul>
@@ -4663,36 +4663,36 @@ This is perfect for "request-response" patterns where you spawn a task and wait 
 </tbody>
 </table>
 <p><strong>Basic usage:</strong></p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="n">oneshot</span><span class="p">[</span><span class="n">int</span><span class="p">]()</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="nb">oneshot</span><span class="p">[</span><span class="nb">int</span><span class="p">]()</span>
 
-<span class="n">spawn</span><span class="p">(</span><span class="k">async</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">result</span> <span class="o">=</span> <span class="n">expensive_computation</span><span class="p">()</span>
-    <span class="n">tx</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>  <span class="c1"># Consumes sender - can only send once</span>
-<span class="c1">)</span>
+<span class="nb">spawn</span><span class="p">(</span><span class="k">async</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="n">expensive_computation</span><span class="p">()</span>
+    <span class="n">tx</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="kt">result</span><span class="p">)</span>  <span class="c1"># Consumes sender - can only send once</span>
+<span class="p">)</span>
 
 <span class="c1"># Wait for the result</span>
-<span class="c1">match await rx.recv():</span>
-<span class="c1">    case Ok(value): println(f&quot;Got result: {value}&quot;)</span>
-<span class="c1">    case Err(e): println(&quot;Sender dropped without sending&quot;)</span>
+<span class="k">match</span> <span class="k">await</span> <span class="n">rx</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
+    <span class="k">case</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Got result: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Sender dropped without sending&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Common pattern - returning results from spawned tasks:</strong></p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">compute_in_background</span><span class="p">(</span><span class="n">input</span><span class="p">:</span> <span class="n">Data</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Output</span><span class="p">,</span> <span class="n">ComputeError</span><span class="p">]:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">compute_in_background</span><span class="p">(</span><span class="nb">input</span><span class="p">:</span> <span class="nc">Data</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Output</span><span class="p">,</span> <span class="nc">ComputeError</span><span class="p">]:</span>
     <span class="c1"># Create oneshot for the result</span>
-<span class="c1">    tx, rx = oneshot[Result[Output, ComputeError]]()</span>
+    <span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="nb">oneshot</span><span class="p">[</span><span class="kt">Result</span><span class="p">[</span><span class="nc">Output</span><span class="p">,</span> <span class="nc">ComputeError</span><span class="p">]]()</span>
 
-<span class="c1">    # Spawn the computation</span>
-<span class="c1">    spawn(async () -&gt; None:</span>
-<span class="c1">        result = heavy_computation(input)</span>
-<span class="c1">        tx.send(result)</span>
-<span class="c1">    )</span>
+    <span class="c1"># Spawn the computation</span>
+    <span class="nb">spawn</span><span class="p">(</span><span class="k">async</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="kt">result</span> <span class="o">=</span> <span class="n">heavy_computation</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+        <span class="n">tx</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="kt">result</span><span class="p">)</span>
+    <span class="p">)</span>
 
-<span class="c1">    # Do other work while computation runs...</span>
-<span class="c1">    do_other_stuff()</span>
+    <span class="c1"># Do other work while computation runs...</span>
+    <span class="n">do_other_stuff</span><span class="p">()</span>
 
-<span class="c1">    # Wait for result</span>
-<span class="c1">    match await rx.recv():</span>
-<span class="c1">        case Ok(result): return result</span>
-<span class="c1">        case Err(_): return Err(ComputeError.TaskFailed)</span>
+    <span class="c1"># Wait for result</span>
+    <span class="k">match</span> <span class="k">await</span> <span class="n">rx</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
+        <span class="k">case</span> <span class="nb">Ok</span><span class="p">(</span><span class="kt">result</span><span class="p">):</span> <span class="k">return</span> <span class="kt">result</span>
+        <span class="k">case</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="k">_</span><span class="p">):</span> <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">ComputeError</span><span class="o">.</span><span class="nc">TaskFailed</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Key differences from regular channels:</strong></p>
 <ul>
@@ -4752,13 +4752,13 @@ while Python's Lock is just a lock you use alongside your data.</p>
 <li><code>guard.set(new_value)</code> — Write a new value</li>
 <li>Guard auto-releases when it goes out of scope</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">shared_counter</span> <span class="o">=</span> <span class="n">Mutex</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">shared_counter</span> <span class="o">=</span> <span class="kt">Mutex</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
-<span class="k">async</span> <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">guard</span> <span class="o">=</span> <span class="k">await</span> <span class="n">shared_counter</span><span class="p">.</span><span class="n">lock</span><span class="p">()</span>  <span class="c1"># Blocks until lock acquired</span>
-<span class="c1">    current = guard.get()</span>
-<span class="c1">    guard.set(current + 1)</span>
-<span class="c1">    # Lock released when guard goes out of scope</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">guard</span> <span class="o">=</span> <span class="k">await</span> <span class="n">shared_counter</span><span class="o">.</span><span class="n">lock</span><span class="p">()</span>  <span class="c1"># Blocks until lock acquired</span>
+    <span class="n">current</span> <span class="o">=</span> <span class="n">guard</span><span class="o">.</span><span class="nb">get</span><span class="p">()</span>
+    <span class="n">guard</span><span class="o">.</span><span class="kt">set</span><span class="p">(</span><span class="n">current</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># Lock released when guard goes out of scope</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Python comparison</p>
@@ -4773,11 +4773,11 @@ while Python's Lock is just a lock you use alongside your data.</p>
         <span class="n">counter</span> <span class="o">+=</span> <span class="mi">1</span>
 </code></pre></div>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Incan - lock wraps the data</span>
-<span class="c1">counter = Mutex(0)</span>
+<span class="n">counter</span> <span class="o">=</span> <span class="kt">Mutex</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
-<span class="c1">async def increment() -&gt; None:</span>
-<span class="c1">    guard = await counter.lock()</span>
-<span class="c1">    guard.set(guard.get() + 1)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">guard</span> <span class="o">=</span> <span class="k">await</span> <span class="n">counter</span><span class="o">.</span><span class="n">lock</span><span class="p">()</span>
+    <span class="n">guard</span><span class="o">.</span><span class="kt">set</span><span class="p">(</span><span class="n">guard</span><span class="o">.</span><span class="nb">get</span><span class="p">()</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="rwlock">RwLock<a class="headerlink" href="#rwlock" title="Permanent link">&para;</a></h3>
 <p>Reader-writer lock — allows <strong>multiple readers</strong> OR a <strong>single writer</strong>, but not both simultaneously.
@@ -4791,15 +4791,15 @@ More efficient than Mutex when reads are frequent.</p>
 <li><code>guard.get()</code> — Read the value</li>
 <li><code>guard.set(new_value)</code> — Write (only on write guard)</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">config</span> <span class="o">=</span> <span class="n">RwLock</span><span class="p">(</span><span class="n">Config</span><span class="p">(</span><span class="n">debug</span><span class="o">=</span><span class="n">False</span><span class="p">))</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">config</span> <span class="o">=</span> <span class="kt">RwLock</span><span class="p">(</span><span class="nc">Config</span><span class="p">(</span><span class="n">debug</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
 
-<span class="k">async</span> <span class="k">def</span> <span class="n">read_config</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-    <span class="n">guard</span> <span class="o">=</span> <span class="k">await</span> <span class="n">config</span><span class="p">.</span><span class="n">read</span><span class="p">()</span>  <span class="c1"># Multiple readers allowed simultaneously</span>
-<span class="c1">    return guard.get().debug</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">read_config</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="n">guard</span> <span class="o">=</span> <span class="k">await</span> <span class="n">config</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>  <span class="c1"># Multiple readers allowed simultaneously</span>
+    <span class="k">return</span> <span class="n">guard</span><span class="o">.</span><span class="nb">get</span><span class="p">()</span><span class="o">.</span><span class="n">debug</span>
 
-<span class="c1">async def update_config(debug: bool) -&gt; None:</span>
-<span class="c1">    guard = await config.write()  # Waits for all readers, then exclusive</span>
-<span class="c1">    guard.set(Config(debug=debug))</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">update_config</span><span class="p">(</span><span class="n">debug</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">guard</span> <span class="o">=</span> <span class="k">await</span> <span class="n">config</span><span class="o">.</span><span class="n">write</span><span class="p">()</span>  <span class="c1"># Waits for all readers, then exclusive</span>
+    <span class="n">guard</span><span class="o">.</span><span class="kt">set</span><span class="p">(</span><span class="nc">Config</span><span class="p">(</span><span class="n">debug</span><span class="o">=</span><span class="n">debug</span><span class="p">))</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Coming from Python?</p>
@@ -4816,13 +4816,13 @@ More efficient than Mutex when reads are frequent.</p>
 <li>Permit auto-releases when it goes out of scope</li>
 </ul>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Allow max 3 concurrent connections</span>
-<span class="c1">connection_limit = Semaphore(3)</span>
+<span class="n">connection_limit</span> <span class="o">=</span> <span class="kt">Semaphore</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
 
-<span class="c1">async def make_request() -&gt; Response:</span>
-<span class="c1">    permit = await connection_limit.acquire()  # Blocks if no permits</span>
-<span class="c1">    response = await http_get(url)</span>
-<span class="c1">    # Permit released automatically when permit goes out of scope</span>
-<span class="c1">    return response</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">make_request</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Response</span><span class="p">:</span>
+    <span class="n">permit</span> <span class="o">=</span> <span class="k">await</span> <span class="n">connection_limit</span><span class="o">.</span><span class="n">acquire</span><span class="p">()</span>  <span class="c1"># Blocks if no permits</span>
+    <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">http_get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
+    <span class="c1"># Permit released automatically when permit goes out of scope</span>
+    <span class="k">return</span> <span class="n">response</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Python equivalent</p>
@@ -4836,15 +4836,15 @@ More efficient than Mutex when reads are frequent.</p>
 <li><code>Barrier(n)</code> — Create barrier for n tasks</li>
 <li><code>await barrier.wait()</code> — Wait until all n tasks reach this point</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">barrier</span> <span class="o">=</span> <span class="n">Barrier</span><span class="p">(</span><span class="m">3</span><span class="p">)</span>  <span class="c1"># Wait for 3 tasks</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">barrier</span> <span class="o">=</span> <span class="kt">Barrier</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>  <span class="c1"># Wait for 3 tasks</span>
 
-<span class="c1">async def worker(id: int) -&gt; None:</span>
-<span class="c1">    println(f&quot;Worker {id} starting phase 1&quot;)</span>
-<span class="c1">    # ... do phase 1 work ...</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">worker</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Worker </span><span class="si">{</span><span class="nb">id</span><span class="si">}</span><span class="s2"> starting phase 1&quot;</span><span class="p">)</span>
+    <span class="c1"># ... do phase 1 work ...</span>
 
-<span class="c1">    await barrier.wait()  # All 3 must reach here before anyone continues</span>
+    <span class="k">await</span> <span class="n">barrier</span><span class="o">.</span><span class="n">wait</span><span class="p">()</span>  <span class="c1"># All 3 must reach here before anyone continues</span>
 
-<span class="c1">    println(f&quot;Worker {id} starting phase 2&quot;)  # All start phase 2 together</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Worker </span><span class="si">{</span><span class="nb">id</span><span class="si">}</span><span class="s2"> starting phase 2&quot;</span><span class="p">)</span>  <span class="c1"># All start phase 2 together</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Python equivalent</p>
@@ -4856,41 +4856,41 @@ for a runnable demo of all four primitives.</p>
 <h2 id="select-racing-futures">Select (Racing Futures)<a class="headerlink" href="#select-racing-futures" title="Permanent link">&para;</a></h2>
 <h3 id="select2">select2<a class="headerlink" href="#select2" title="Permanent link">&para;</a></h3>
 <p>Race two futures, get whichever completes first:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">fast</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">0.1</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fast</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">await</span> <span class="nb">sleep</span><span class="p">(</span><span class="mf">0.1</span><span class="p">)</span>
     <span class="k">return</span> <span class="s2">&quot;fast&quot;</span>
 
-<span class="k">async</span> <span class="k">def</span> <span class="n">slow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">1.0</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">slow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">await</span> <span class="nb">sleep</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)</span>
     <span class="k">return</span> <span class="s2">&quot;slow&quot;</span>
 
 <span class="k">match</span> <span class="k">await</span> <span class="n">select2</span><span class="p">(</span><span class="n">fast</span><span class="p">,</span> <span class="n">slow</span><span class="p">):</span>
-    <span class="k">case</span> <span class="n">Either</span><span class="p">.</span><span class="n">Left</span><span class="p">(</span><span class="n">result</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Fast won: {result}&quot;</span><span class="p">)</span>
-    <span class="k">case</span> <span class="n">Either</span><span class="p">.</span><span class="n">Right</span><span class="p">(</span><span class="n">result</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Slow won: {result}&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="nc">Either</span><span class="o">.</span><span class="nc">Left</span><span class="p">(</span><span class="kt">result</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Fast won: </span><span class="si">{</span><span class="kt">result</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="nc">Either</span><span class="o">.</span><span class="nc">Right</span><span class="p">(</span><span class="kt">result</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Slow won: </span><span class="si">{</span><span class="kt">result</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="select3">select3<a class="headerlink" href="#select3" title="Permanent link">&para;</a></h3>
 <p>Race three futures:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">select3</span><span class="p">(</span><span class="n">op1</span><span class="p">,</span> <span class="n">op2</span><span class="p">,</span> <span class="n">op3</span><span class="p">)</span>
-<span class="k">match</span> <span class="n">result</span><span class="p">:</span>
-    <span class="k">case</span> <span class="n">Either3</span><span class="p">.</span><span class="n">First</span><span class="p">(</span><span class="n">v</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;op1 won&quot;</span><span class="p">)</span>
-    <span class="k">case</span> <span class="n">Either3</span><span class="p">.</span><span class="n">Second</span><span class="p">(</span><span class="n">v</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;op2 won&quot;</span><span class="p">)</span>  
-    <span class="k">case</span> <span class="n">Either3</span><span class="p">.</span><span class="n">Third</span><span class="p">(</span><span class="n">v</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;op3 won&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kt">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">select3</span><span class="p">(</span><span class="n">op1</span><span class="p">,</span> <span class="n">op2</span><span class="p">,</span> <span class="n">op3</span><span class="p">)</span>
+<span class="k">match</span> <span class="kt">result</span><span class="p">:</span>
+    <span class="k">case</span> <span class="nc">Either3</span><span class="o">.</span><span class="nc">First</span><span class="p">(</span><span class="n">v</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;op1 won&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="nc">Either3</span><span class="o">.</span><span class="nc">Second</span><span class="p">(</span><span class="n">v</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;op2 won&quot;</span><span class="p">)</span>  
+    <span class="k">case</span> <span class="nc">Either3</span><span class="o">.</span><span class="nc">Third</span><span class="p">(</span><span class="n">v</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;op3 won&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="select_timeout">select_timeout<a class="headerlink" href="#select_timeout" title="Permanent link">&para;</a></h3>
 <p>Simplified timeout returning Option:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">match</span> <span class="k">await</span> <span class="n">select_timeout</span><span class="p">(</span><span class="m">2.0</span><span class="p">,</span> <span class="n">slow_operation</span><span class="p">):</span>
-    <span class="k">case</span> <span class="n">Some</span><span class="p">(</span><span class="n">result</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Got: {result}&quot;</span><span class="p">)</span>
-    <span class="k">case</span> <span class="kc">None</span><span class="p">:</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Timed out, using default&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">match</span> <span class="k">await</span> <span class="nb">select_timeout</span><span class="p">(</span><span class="mf">2.0</span><span class="p">,</span> <span class="n">slow_operation</span><span class="p">):</span>
+    <span class="k">case</span> <span class="nb">Some</span><span class="p">(</span><span class="kt">result</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Got: </span><span class="si">{</span><span class="kt">result</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="kc">None</span><span class="p">:</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Timed out, using default&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="runtime-integration">Runtime Integration<a class="headerlink" href="#runtime-integration" title="Permanent link">&para;</a></h2>
 <h3 id="automatic-tokio-main">Automatic Tokio Main<a class="headerlink" href="#automatic-tokio-main" title="Permanent link">&para;</a></h3>
 <p>When your program uses async features, the <code>main()</code> function is automatically wrapped with <code>#[tokio::main]</code>:</p>
 <p>Tokio is Rust's async runtime: see the <a href="https://tokio.rs/">Tokio project</a> for a high-level overview.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="c1"># This becomes async main() under the hood</span>
-<span class="c1">    # when async primitives are used</span>
-<span class="c1">    result = await fetch_data()</span>
-<span class="c1">    println(f&quot;Result: {result}&quot;)</span>
+    <span class="c1"># when async primitives are used</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetch_data</span><span class="p">()</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Result: </span><span class="si">{</span><span class="kt">result</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="generated-dependencies">Generated Dependencies<a class="headerlink" href="#generated-dependencies" title="Permanent link">&para;</a></h3>
 <p>The compiler automatically adds tokio to your Cargo.toml:</p>
@@ -4901,60 +4901,60 @@ for a runnable demo of all four primitives.</p>
 <h3 id="1-dont-block-the-runtime">1. Don't Block the Runtime<a class="headerlink" href="#1-dont-block-the-runtime" title="Permanent link">&para;</a></h3>
 <p>Avoid blocking operations in async code:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># BAD: Blocks the async runtime</span>
-<span class="c1">async def bad() -&gt; None:</span>
-<span class="c1">    std_thread_sleep(1.0)  # Don&#39;t do this!</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">bad</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">std_thread_sleep</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># Don&#39;t do this!</span>
 
 <span class="c1"># GOOD: Use async sleep</span>
-<span class="c1">async def good() -&gt; None:</span>
-<span class="c1">    await sleep(1.0)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">good</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">await</span> <span class="nb">sleep</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="2-use-spawn_blocking-for-cpu-work">2. Use spawn_blocking for CPU Work<a class="headerlink" href="#2-use-spawn_blocking-for-cpu-work" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># BAD: CPU work on async runtime</span>
-<span class="c1">async def bad() -&gt; int:</span>
-<span class="c1">    return heavy_computation()</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">bad</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">heavy_computation</span><span class="p">()</span>
 
 <span class="c1"># GOOD: Offload to blocking pool</span>
-<span class="c1">async def good() -&gt; int:</span>
-<span class="c1">    return await spawn_blocking(heavy_computation)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">good</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="k">await</span> <span class="nb">spawn_blocking</span><span class="p">(</span><span class="n">heavy_computation</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="3-use-bounded-channels">3. Use Bounded Channels<a class="headerlink" href="#3-use-bounded-channels" title="Permanent link">&para;</a></h3>
 <p>Prefer bounded channels to prevent memory issues:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Prefer this:</span>
-<span class="c1">tx, rx = channel[Data](100)</span>
+<span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="nb">channel</span><span class="p">[</span><span class="nc">Data</span><span class="p">](</span><span class="mi">100</span><span class="p">)</span>
 
 <span class="c1"># Over this (unbounded can grow forever):</span>
-<span class="c1">tx, rx = unbounded_channel[Data]()</span>
+<span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="nb">unbounded_channel</span><span class="p">[</span><span class="nc">Data</span><span class="p">]()</span>
 </code></pre></div>
 <h3 id="4-handle-cancellation">4. Handle Cancellation<a class="headerlink" href="#4-handle-cancellation" title="Permanent link">&para;</a></h3>
 <p>Tasks can be cancelled when their handles are dropped:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">cancellable_work</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">await</span> <span class="n">sleep</span><span class="p">(</span><span class="m">10.0</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">cancellable_work</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">await</span> <span class="nb">sleep</span><span class="p">(</span><span class="mf">10.0</span><span class="p">)</span>
     <span class="k">return</span> <span class="s2">&quot;done&quot;</span>
 
-<span class="n">handle</span> <span class="o">=</span> <span class="n">spawn</span><span class="p">(</span><span class="n">cancellable_work</span><span class="p">)</span>
+<span class="n">handle</span> <span class="o">=</span> <span class="nb">spawn</span><span class="p">(</span><span class="n">cancellable_work</span><span class="p">)</span>
 <span class="c1"># If we don&#39;t await handle, the task is cancelled!</span>
 <span class="c1"># Always await or explicitly ignore:</span>
-<span class="c1">_ = handle  # Explicit ignore (task continues)</span>
+<span class="n">_</span> <span class="o">=</span> <span class="n">handle</span>  <span class="c1"># Explicit ignore (task continues)</span>
 </code></pre></div>
 <h2 id="error-handling">Error Handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
 <h3 id="timeout-errors">Timeout Errors<a class="headerlink" href="#timeout-errors" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">timeout</span><span class="p">(</span><span class="m">1.0</span><span class="p">,</span> <span class="n">slow_task</span><span class="p">)</span>
-<span class="k">match</span> <span class="n">result</span><span class="p">:</span>
-    <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">process</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
-    <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Timed out: {e}&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kt">result</span> <span class="o">=</span> <span class="k">await</span> <span class="nb">timeout</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">slow_task</span><span class="p">)</span>
+<span class="k">match</span> <span class="kt">result</span><span class="p">:</span>
+    <span class="k">case</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">process</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+    <span class="k">case</span> <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Timed out: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="channel-closed">Channel Closed<a class="headerlink" href="#channel-closed" title="Permanent link">&para;</a></h3>
 <p>When sending fails because the receiver was dropped, <code>SendError[T]</code> contains the value that couldn't be sent in its
 <code>.value</code> field:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">sender</span><span class="p">(</span><span class="n">tx</span><span class="p">:</span> <span class="n">Sender</span><span class="p">[</span><span class="n">Message</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">msg</span> <span class="o">=</span> <span class="n">Message</span><span class="p">(</span><span class="n">id</span><span class="o">=</span><span class="m">1</span><span class="p">,</span> <span class="n">content</span><span class="o">=</span><span class="s2">&quot;important data&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">sender</span><span class="p">(</span><span class="n">tx</span><span class="p">:</span> <span class="kt">Sender</span><span class="p">[</span><span class="nc">Message</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">msg</span> <span class="o">=</span> <span class="nc">Message</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">content</span><span class="o">=</span><span class="s2">&quot;important data&quot;</span><span class="p">)</span>
 
-    <span class="k">match</span> <span class="k">await</span> <span class="n">tx</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">msg</span><span class="p">):</span>
-        <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">_</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Sent successfully&quot;</span><span class="p">)</span>
-        <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span>
+    <span class="k">match</span> <span class="k">await</span> <span class="n">tx</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">msg</span><span class="p">):</span>
+        <span class="k">case</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="k">_</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Sent successfully&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span>
             <span class="c1"># Recover the unsent value - it&#39;s not lost!</span>
-<span class="c1">            println(f&quot;Channel closed, saving for retry: {e.value:?}&quot;)</span>
-<span class="c1">            save_for_later(e.value)</span>
+            <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Channel closed, saving for retry: </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">value</span><span class="si">:</span><span class="s2">?</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="n">save_for_later</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
 </code></pre></div>
 <p>This pattern is important for reliability.
 If a channel closes unexpectedly, you can recover and handle the data that failed to send.</p>

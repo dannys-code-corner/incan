@@ -3773,7 +3773,7 @@
 <p>Functions are named, reusable blocks of code.</p>
 <h2 id="defining-a-function">Defining a function<a class="headerlink" href="#defining-a-function" title="Permanent link">&para;</a></h2>
 <p>Function parameters and return types are explicit:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 </code></pre></div>
 <ul>
@@ -3789,9 +3789,9 @@
 <li><code>-&gt; None</code> means it doesn’t return a value.</li>
 </ul>
 <p>In order to run an incan file, you must define a <code>main</code> function:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">total</span> <span class="o">=</span> <span class="n">add</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;total={total}&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">total</span> <span class="o">=</span> <span class="n">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;total=</span><span class="si">{</span><span class="n">total</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">Coming from Python?</p>
@@ -3805,18 +3805,18 @@ and keep other files as imported helper modules.</p>
 </div>
 <h2 id="docstrings">Docstrings<a class="headerlink" href="#docstrings" title="Permanent link">&para;</a></h2>
 <p>Use docstrings to describe intent (especially for public helpers):</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">normalize_name</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    Normalize a user name for consistent comparisons.</span>
-<span class="s2">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">lower</span><span class="p">()</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">normalize_name</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Normalize a user name for consistent comparisons.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">name</span><span class="o">.</span><span class="nb">strip</span><span class="p">()</span><span class="o">.</span><span class="nb">lower</span><span class="p">()</span>
 </code></pre></div>
 <h2 id="multiple-returns-with-result">Multiple returns (with <code>Result</code>)<a class="headerlink" href="#multiple-returns-with-result" title="Permanent link">&para;</a></h2>
 <p>Many “can fail” functions return <code>Result[T, E]</code> instead of throwing exceptions:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">parse_port</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">int</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">s</span><span class="p">.</span><span class="n">strip</span><span class="p">())</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;port must not be empty&quot;</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">int</span><span class="p">(</span><span class="n">s</span><span class="p">))</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">parse_port</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="nb">strip</span><span class="p">())</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="s2">&quot;port must not be empty&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">s</span><span class="p">))</span>
 </code></pre></div>
 <p>You’ll learn the <code>Result</code> pattern in Chapter 6.</p>
 <h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
@@ -3827,22 +3827,22 @@ and keep other files as imported helper modules.</p>
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">is_even</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">n</span> <span class="o">%</span> <span class="m">2</span> <span class="o">==</span> <span class="m">0</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">is_even</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">n</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span>
 
-<span class="k">def</span> <span class="n">greet</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="n">cleaned</span> <span class="o">=</span> <span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">()</span>
-    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Hello, {cleaned}!&quot;</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="n">cleaned</span> <span class="o">=</span> <span class="n">name</span><span class="o">.</span><span class="nb">strip</span><span class="p">()</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="n">cleaned</span><span class="si">}</span><span class="s2">!&quot;</span>
 
-<span class="k">def</span> <span class="n">safe_div</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">float</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">float</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="n">b</span> <span class="o">==</span> <span class="m">0.0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;division by zero&quot;</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">a</span> <span class="o">/</span> <span class="n">b</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">safe_div</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">b</span> <span class="o">==</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="s2">&quot;division by zero&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">a</span> <span class="o">/</span> <span class="n">b</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;is_even(2)={is_even(2)}&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;is_even(3)={is_even(3)}&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="n">greet</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">))</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;is_even(2)=</span><span class="si">{</span><span class="n">is_even</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;is_even(3)=</span><span class="si">{</span><span class="n">is_even</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">greet</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">))</span>
 </code></pre></div>
 </details>
 <h2 id="what-to-learn-next">What to learn next<a class="headerlink" href="#what-to-learn-next" title="Permanent link">&para;</a></h2>

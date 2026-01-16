@@ -3742,14 +3742,14 @@ value.</p>
 <p class="admonition-title">Coming from Python?</p>
 <p><strong>Derives</strong> are like getting common “dunder methods” (<code>__repr__</code>, <code>__eq__</code>, etc.) without writing them by hand.</p>
 </div>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Debug</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">Point</span><span class="p">:</span>
-    <span class="n">x</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">y</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Debug</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">Point</span><span class="p">:</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">p</span> <span class="o">=</span> <span class="n">Point</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="m">1</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="m">2</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{p:?}&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="nc">Point</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">p</span><span class="si">:</span><span class="s2">?</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="debug-formatting">Debug formatting (<code>:?</code>)<a class="headerlink" href="#debug-formatting" title="Permanent link">&para;</a></h3>
 <p>The <code>:?</code> inside an f-string means “debug formatting”.</p>
@@ -3769,23 +3769,23 @@ value.</p>
 these methods can be treated as this capability”.</p>
 </div>
 <p>Example:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="n">Greetable</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="nc">Greetable</span><span class="p">:</span>
     <span class="c1"># Required method: implementers must provide this</span>
-<span class="c1">    def name(self) -&gt; str: ...</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span> <span class="o">...</span>
 
-<span class="c1">    # Default method: implementers can provide this</span>
-<span class="c1">    def greet(self) -&gt; str:</span>
-<span class="c1">        return f&quot;Hello, {self.name()}!&quot;</span>
+    <span class="c1"># Default method: implementers can provide this</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">()</span><span class="si">}</span><span class="s2">!&quot;</span>
 
-<span class="c1">model User with Greetable:</span>
-<span class="c1">    username: str</span>
+<span class="k">model</span> <span class="nc">User</span> <span class="k">with</span> <span class="nc">Greetable</span><span class="p">:</span>
+    <span class="n">username</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="c1">    def name(self) -&gt; str:</span>
-<span class="c1">        return self.username</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">username</span>
 
-<span class="c1">def main() -&gt; None:</span>
-<span class="c1">    u = User(username=&quot;alice&quot;)</span>
-<span class="c1">    println(u.greet())  # outputs: Hello, alice!</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">u</span> <span class="o">=</span> <span class="nc">User</span><span class="p">(</span><span class="n">username</span><span class="o">=</span><span class="s2">&quot;alice&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">u</span><span class="o">.</span><span class="n">greet</span><span class="p">())</span>  <span class="c1"># outputs: Hello, alice!</span>
 </code></pre></div>
 <h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
 <ol>
@@ -3795,23 +3795,23 @@ these methods can be treated as this capability”.</p>
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Debug</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">Point</span><span class="p">:</span>
-    <span class="n">x</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">y</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Debug</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">Point</span><span class="p">:</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="k">trait</span> <span class="n">Describable</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span> <span class="p">...</span>
+<span class="k">trait</span> <span class="nc">Describable</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">describe</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span> <span class="o">...</span>
 
-<span class="k">model</span> <span class="n">User</span> <span class="k">with</span> <span class="n">Describable</span><span class="p">:</span>
-    <span class="n">username</span><span class="p">:</span> <span class="n">str</span>
+<span class="k">model</span> <span class="nc">User</span> <span class="k">with</span> <span class="nc">Describable</span><span class="p">:</span>
+    <span class="n">username</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;user={self.username}&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">describe</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;user=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">username</span><span class="si">}</span><span class="s2">&quot;</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{Point(x=1, y=2):?}&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="n">User</span><span class="p">(</span><span class="n">username</span><span class="o">=</span><span class="s2">&quot;alice&quot;</span><span class="p">).</span><span class="n">describe</span><span class="p">())</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nc">Point</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span><span class="si">:</span><span class="s2">?</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="nc">User</span><span class="p">(</span><span class="n">username</span><span class="o">=</span><span class="s2">&quot;alice&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">describe</span><span class="p">())</span>
 </code></pre></div>
 </details>
 <h2 id="where-to-learn-more">Where to learn more<a class="headerlink" href="#where-to-learn-more" title="Permanent link">&para;</a></h2>

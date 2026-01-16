@@ -3739,26 +3739,26 @@ def handle(e: Event) -&gt; str:
 </details>
 <h2 id="pattern-1-state-machines">Pattern 1: State machines<a class="headerlink" href="#pattern-1-state-machines" title="Permanent link">&para;</a></h2>
 <p>Use this when a value progresses through a <strong>closed</strong> set of states and you want transitions to be explicit and checked.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">ConnectionState</span><span class="p">:</span>
-    <span class="n">Disconnected</span>
-    <span class="n">Connecting</span><span class="p">(</span><span class="n">str</span><span class="p">)</span>          <span class="c1"># URL being connected to</span>
-<span class="c1">    Connected(Connection)</span>
-<span class="c1">    Error(str)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">ConnectionState</span><span class="p">:</span>
+    <span class="nc">Disconnected</span>
+    <span class="nc">Connecting</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>          <span class="c1"># URL being connected to</span>
+    <span class="nc">Connected</span><span class="p">(</span><span class="nc">Connection</span><span class="p">)</span>
+    <span class="nc">Error</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 
-<span class="c1">def handle_state(state: ConnectionState) -&gt; ConnectionState:</span>
-<span class="c1">    match state:</span>
-<span class="c1">        Disconnected =&gt;</span>
-<span class="c1">            return ConnectionState.Connecting(&quot;https://api.example.com&quot;)</span>
-<span class="c1">        Connecting(url) =&gt;</span>
-<span class="c1">            match try_connect(url):</span>
-<span class="c1">                Ok(conn) =&gt; return ConnectionState.Connected(conn)</span>
-<span class="c1">                Err(e) =&gt; return ConnectionState.Error(e)</span>
-<span class="c1">        Connected(_) =&gt;</span>
-<span class="c1">            # Stay connected</span>
-<span class="c1">            return state</span>
-<span class="c1">        Error(msg) =&gt;</span>
-<span class="c1">            println(f&quot;Error: {msg}&quot;)</span>
-<span class="c1">            return ConnectionState.Disconnected</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_state</span><span class="p">(</span><span class="n">state</span><span class="p">:</span> <span class="nc">ConnectionState</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">ConnectionState</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">state</span><span class="p">:</span>
+        <span class="nc">Disconnected</span> <span class="o">=&gt;</span>
+            <span class="k">return</span> <span class="nc">ConnectionState</span><span class="o">.</span><span class="nc">Connecting</span><span class="p">(</span><span class="s2">&quot;https://api.example.com&quot;</span><span class="p">)</span>
+        <span class="nc">Connecting</span><span class="p">(</span><span class="n">url</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="k">match</span> <span class="n">try_connect</span><span class="p">(</span><span class="n">url</span><span class="p">):</span>
+                <span class="nb">Ok</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="nc">ConnectionState</span><span class="o">.</span><span class="nc">Connected</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
+                <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="nc">ConnectionState</span><span class="o">.</span><span class="nc">Error</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+        <span class="nc">Connected</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="c1"># Stay connected</span>
+            <span class="k">return</span> <span class="n">state</span>
+        <span class="nc">Error</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error: </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="nc">ConnectionState</span><span class="o">.</span><span class="nc">Disconnected</span>
 </code></pre></div>
 <p>Tips:</p>
 <ul>
@@ -3767,22 +3767,22 @@ def handle(e: Event) -&gt; str:
 </ul>
 <h2 id="pattern-2-commands-actions">Pattern 2: Commands / actions<a class="headerlink" href="#pattern-2-commands-actions" title="Permanent link">&para;</a></h2>
 <p>Use this when your program receives a <strong>finite set</strong> of commands and each command has its own payload.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Command</span><span class="p">:</span>
-    <span class="n">Create</span><span class="p">(</span><span class="n">str</span><span class="p">,</span> <span class="n">str</span><span class="p">)</span>         <span class="c1"># (name, content)</span>
-<span class="c1">    Update(int, str)         # (id, new_content)</span>
-<span class="c1">    Delete(int)              # id</span>
-<span class="c1">    List</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Command</span><span class="p">:</span>
+    <span class="nc">Create</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>         <span class="c1"># (name, content)</span>
+    <span class="nc">Update</span><span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>         <span class="c1"># (id, new_content)</span>
+    <span class="nc">Delete</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>              <span class="c1"># id</span>
+    <span class="kt">List</span>
 
-<span class="c1">def execute(cmd: Command) -&gt; Result[str, str]:</span>
-<span class="c1">    match cmd:</span>
-<span class="c1">        Create(name, content) =&gt;</span>
-<span class="c1">            return create_item(name, content)</span>
-<span class="c1">        Update(id, content) =&gt;</span>
-<span class="c1">            return update_item(id, content)</span>
-<span class="c1">        Delete(id) =&gt;</span>
-<span class="c1">            return delete_item(id)</span>
-<span class="c1">        List =&gt;</span>
-<span class="c1">            return Ok(list_items())</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">execute</span><span class="p">(</span><span class="n">cmd</span><span class="p">:</span> <span class="nc">Command</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">match</span> <span class="n">cmd</span><span class="p">:</span>
+        <span class="nc">Create</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">content</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="k">return</span> <span class="n">create_item</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">content</span><span class="p">)</span>
+        <span class="nc">Update</span><span class="p">(</span><span class="nb">id</span><span class="p">,</span> <span class="n">content</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="k">return</span> <span class="n">update_item</span><span class="p">(</span><span class="nb">id</span><span class="p">,</span> <span class="n">content</span><span class="p">)</span>
+        <span class="nc">Delete</span><span class="p">(</span><span class="nb">id</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="k">return</span> <span class="n">delete_item</span><span class="p">(</span><span class="nb">id</span><span class="p">)</span>
+        <span class="kt">List</span> <span class="o">=&gt;</span>
+            <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">list_items</span><span class="p">())</span>
 </code></pre></div>
 <p>Tips:</p>
 <ul>
@@ -3792,27 +3792,27 @@ def handle(e: Event) -&gt; str:
 </ul>
 <h2 id="pattern-3-error-hierarchies">Pattern 3: Error hierarchies<a class="headerlink" href="#pattern-3-error-hierarchies" title="Permanent link">&para;</a></h2>
 <p>Use this when you want rich, typed errors but still keep exhaustiveness and structure.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">DatabaseError</span><span class="p">:</span>
-    <span class="n">ConnectionFailed</span><span class="p">(</span><span class="n">str</span><span class="p">)</span>
-    <span class="n">QueryFailed</span><span class="p">(</span><span class="n">str</span><span class="p">,</span> <span class="n">int</span><span class="p">)</span>    <span class="c1"># (query, error_code)</span>
-<span class="c1">    NotFound(str)            # table/record name</span>
-<span class="c1">    PermissionDenied</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">DatabaseError</span><span class="p">:</span>
+    <span class="nc">ConnectionFailed</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+    <span class="nc">QueryFailed</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>    <span class="c1"># (query, error_code)</span>
+    <span class="nc">NotFound</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>            <span class="c1"># table/record name</span>
+    <span class="nc">PermissionDenied</span>
 
-<span class="c1">enum AppError:</span>
-<span class="c1">    Database(DatabaseError)  # Nested enum</span>
-<span class="c1">    Validation(str)</span>
-<span class="c1">    NotAuthenticated</span>
+<span class="k">enum</span> <span class="nc">AppError</span><span class="p">:</span>
+    <span class="nc">Database</span><span class="p">(</span><span class="nc">DatabaseError</span><span class="p">)</span>  <span class="c1"># Nested enum</span>
+    <span class="nc">Validation</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+    <span class="nc">NotAuthenticated</span>
 
-<span class="c1">def handle_error(err: AppError) -&gt; str:</span>
-<span class="c1">    match err:</span>
-<span class="c1">        Database(db_err) =&gt;</span>
-<span class="c1">            match db_err:</span>
-<span class="c1">                ConnectionFailed(host) =&gt; return f&quot;Can&#39;t reach {host}&quot;</span>
-<span class="c1">                QueryFailed(q, code) =&gt; return f&quot;Query error {code}: {q}&quot;</span>
-<span class="c1">                NotFound(name) =&gt; return f&quot;Not found: {name}&quot;</span>
-<span class="c1">                PermissionDenied =&gt; return &quot;Access denied&quot;</span>
-<span class="c1">        Validation(msg) =&gt; return f&quot;Invalid: {msg}&quot;</span>
-<span class="c1">        NotAuthenticated =&gt; return &quot;Please log in&quot;</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_error</span><span class="p">(</span><span class="n">err</span><span class="p">:</span> <span class="nc">AppError</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">err</span><span class="p">:</span>
+        <span class="nc">Database</span><span class="p">(</span><span class="n">db_err</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="k">match</span> <span class="n">db_err</span><span class="p">:</span>
+                <span class="nc">ConnectionFailed</span><span class="p">(</span><span class="n">host</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Can&#39;t reach </span><span class="si">{</span><span class="n">host</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="nc">QueryFailed</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="n">code</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Query error </span><span class="si">{</span><span class="n">code</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">q</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="nc">NotFound</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Not found: </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="nc">PermissionDenied</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Access denied&quot;</span>
+        <span class="nc">Validation</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Invalid: </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="nc">NotAuthenticated</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Please log in&quot;</span>
 </code></pre></div>
 <p>Tips:</p>
 <ul>
@@ -3821,25 +3821,25 @@ def handle(e: Event) -&gt; str:
 </ul>
 <h2 id="pattern-4-expression-trees-asts">Pattern 4: Expression trees (ASTs)<a class="headerlink" href="#pattern-4-expression-trees-asts" title="Permanent link">&para;</a></h2>
 <p>Use this when you want to represent recursive structure (expressions, queries, filters) and interpret/transform it.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Expr</span><span class="p">:</span>
-    <span class="n">Number</span><span class="p">(</span><span class="n">int</span><span class="p">)</span>
-    <span class="n">Add</span><span class="p">(</span><span class="n">Expr</span><span class="p">,</span> <span class="n">Expr</span><span class="p">)</span>
-    <span class="n">Mul</span><span class="p">(</span><span class="n">Expr</span><span class="p">,</span> <span class="n">Expr</span><span class="p">)</span>
-    <span class="n">Neg</span><span class="p">(</span><span class="n">Expr</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Expr</span><span class="p">:</span>
+    <span class="nc">Number</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+    <span class="nc">Add</span><span class="p">(</span><span class="nc">Expr</span><span class="p">,</span> <span class="nc">Expr</span><span class="p">)</span>
+    <span class="nc">Mul</span><span class="p">(</span><span class="nc">Expr</span><span class="p">,</span> <span class="nc">Expr</span><span class="p">)</span>
+    <span class="nc">Neg</span><span class="p">(</span><span class="nc">Expr</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">eval</span><span class="p">(</span><span class="n">expr</span><span class="p">:</span> <span class="n">Expr</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">eval</span><span class="p">(</span><span class="n">expr</span><span class="p">:</span> <span class="nc">Expr</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">expr</span><span class="p">:</span>
-        <span class="n">Number</span><span class="p">(</span><span class="n">n</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">n</span>
-        <span class="n">Add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">eval</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">+</span> <span class="n">eval</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
-        <span class="n">Mul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">eval</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">*</span> <span class="n">eval</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
-        <span class="n">Neg</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="o">-</span><span class="n">eval</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+        <span class="nc">Number</span><span class="p">(</span><span class="n">n</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">n</span>
+        <span class="nc">Add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="nb">eval</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">+</span> <span class="nb">eval</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+        <span class="nc">Mul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="nb">eval</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">*</span> <span class="nb">eval</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+        <span class="nc">Neg</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="o">-</span><span class="nb">eval</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
 
 <span class="c1"># (3 + 4) * -2 = -14</span>
-<span class="c1">expr = Expr.Mul(</span>
-<span class="c1">    Expr.Add(Expr.Number(3), Expr.Number(4)),</span>
-<span class="c1">    Expr.Neg(Expr.Number(2)),</span>
-<span class="c1">)</span>
-<span class="c1">result = eval(expr)  # -14</span>
+<span class="n">expr</span> <span class="o">=</span> <span class="nc">Expr</span><span class="o">.</span><span class="nc">Mul</span><span class="p">(</span>
+    <span class="nc">Expr</span><span class="o">.</span><span class="nc">Add</span><span class="p">(</span><span class="nc">Expr</span><span class="o">.</span><span class="nc">Number</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span> <span class="nc">Expr</span><span class="o">.</span><span class="nc">Number</span><span class="p">(</span><span class="mi">4</span><span class="p">)),</span>
+    <span class="nc">Expr</span><span class="o">.</span><span class="nc">Neg</span><span class="p">(</span><span class="nc">Expr</span><span class="o">.</span><span class="nc">Number</span><span class="p">(</span><span class="mi">2</span><span class="p">)),</span>
+<span class="p">)</span>
+<span class="kt">result</span> <span class="o">=</span> <span class="nb">eval</span><span class="p">(</span><span class="n">expr</span><span class="p">)</span>  <span class="c1"># -14</span>
 </code></pre></div>
 <p>Tips:</p>
 <ul>

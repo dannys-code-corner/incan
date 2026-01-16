@@ -4021,21 +4021,21 @@ The current implementation has limitations:</p>
 <h2 id="1-inline-version-annotations">1. Inline Version Annotations<a class="headerlink" href="#1-inline-version-annotations" title="Permanent link">&para;</a></h2>
 <h3 id="11-basic-version">1.1 Basic Version<a class="headerlink" href="#11-basic-version" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Pin a specific version</span>
-<span class="c1">import rust::my_crate @ &quot;1.0&quot;</span>
-<span class="c1">from rust::obscure_lib @ &quot;0.5&quot; import Widget</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">my_crate</span> <span class="o">@</span> <span class="s2">&quot;1.0&quot;</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">obscure_lib</span> <span class="o">@</span> <span class="s2">&quot;0.5&quot;</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Widget</span>
 
 <span class="c1"># Semver operators (like Cargo)</span>
-<span class="c1">import rust::some_crate @ &quot;^1.2&quot;   # &gt;=1.2.0, &lt;2.0.0</span>
-<span class="c1">import rust::other_crate @ &quot;~1.2&quot;  # &gt;=1.2.0, &lt;1.3.0</span>
-<span class="c1">import rust::exact_crate @ &quot;=1.2.3&quot; # exactly 1.2.3</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">some_crate</span> <span class="o">@</span> <span class="s2">&quot;^1.2&quot;</span>   <span class="c1"># &gt;=1.2.0, &lt;2.0.0</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">other_crate</span> <span class="o">@</span> <span class="s2">&quot;~1.2&quot;</span>  <span class="c1"># &gt;=1.2.0, &lt;1.3.0</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">exact_crate</span> <span class="o">@</span> <span class="s2">&quot;=1.2.3&quot;</span> <span class="c1"># exactly 1.2.3</span>
 </code></pre></div>
 <h3 id="12-version-with-features">1.2 Version with Features<a class="headerlink" href="#12-version-with-features" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Enable features</span>
-<span class="c1">import rust::tokio @ &quot;1.0&quot; with [&quot;full&quot;]</span>
-<span class="c1">import rust::serde @ &quot;1.0&quot; with [&quot;derive&quot;, &quot;rc&quot;]</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">tokio</span> <span class="o">@</span> <span class="s2">&quot;1.0&quot;</span> <span class="k">with</span> <span class="p">[</span><span class="s2">&quot;full&quot;</span><span class="p">]</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde</span> <span class="o">@</span> <span class="s2">&quot;1.0&quot;</span> <span class="k">with</span> <span class="p">[</span><span class="s2">&quot;derive&quot;</span><span class="p">,</span> <span class="s2">&quot;rc&quot;</span><span class="p">]</span>
 
 <span class="c1"># Import from crate with features</span>
-<span class="c1">from rust::sqlx @ &quot;0.7&quot; with [&quot;runtime-tokio&quot;, &quot;postgres&quot;] import Pool</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">sqlx</span> <span class="o">@</span> <span class="s2">&quot;0.7&quot;</span> <span class="k">with</span> <span class="p">[</span><span class="s2">&quot;runtime-tokio&quot;</span><span class="p">,</span> <span class="s2">&quot;postgres&quot;</span><span class="p">]</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Pool</span>
 </code></pre></div>
 <h3 id="13-grammar-extension">1.3 Grammar Extension<a class="headerlink" href="#13-grammar-extension" title="Permanent link">&para;</a></h3>
 <div class="language-ebnf highlight"><pre><span></span><code><span class="cm">(* Extended import syntax for rust:: crates *)</span>
@@ -4251,7 +4251,7 @@ These serve as <strong>convenient defaults</strong>, not restrictions:</p>
 <p>Users can <strong>override</strong> these defaults via <code>incan.toml</code> or inline annotations.</p>
 <h3 id="42-conflict-resolution">4.2 Conflict Resolution<a class="headerlink" href="#42-conflict-resolution" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># This is an error - conflicting versions</span>
-<span class="c1">import rust::tokio @ &quot;1.0&quot;   # Inline says 1.0</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">tokio</span> <span class="o">@</span> <span class="s2">&quot;1.0&quot;</span>   <span class="c1"># Inline says 1.0</span>
 <span class="c1"># incan.toml says tokio = &quot;2.0&quot;</span>
 </code></pre></div>
 <p>Error message:</p>
@@ -4336,16 +4336,16 @@ Tip:<span class="w"> </span>Check<span class="w"> </span>https://crates.io/crate
 <h2 id="7-examples">7. Examples<a class="headerlink" href="#7-examples" title="Permanent link">&para;</a></h2>
 <h3 id="71-simple-usage-phase-1">7.1 Simple Usage (Phase 1+)<a class="headerlink" href="#71-simple-usage-phase-1" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Known-good crate - just works</span>
-<span class="c1">import rust::serde</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde</span>
 
 <span class="c1"># Unknown crate - must specify version</span>
-<span class="c1">import rust::obscure_parser @ &quot;2.1&quot;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">obscure_parser</span> <span class="o">@</span> <span class="s2">&quot;2.1&quot;</span>
 
 <span class="c1"># Known-good with different version</span>
-<span class="c1">import rust::tokio @ &quot;1.35&quot;  # Override default</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">tokio</span> <span class="o">@</span> <span class="s2">&quot;1.35&quot;</span>  <span class="c1"># Override default</span>
 
-<span class="c1">def main() -&gt; None:</span>
-<span class="c1">    print(&quot;Hello, Rust ecosystem!&quot;)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Hello, Rust ecosystem!&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="72-full-project-phase-3">7.2 Full Project (Phase 3+)<a class="headerlink" href="#72-full-project-phase-3" title="Permanent link">&para;</a></h3>
 <p><strong>incan.toml:</strong></p>
@@ -4361,14 +4361,14 @@ Tip:<span class="w"> </span>Check<span class="w"> </span>https://crates.io/crate
 </code></pre></div>
 <p><strong>src/main.incn:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># No version needed - defined in incan.toml</span>
-<span class="c1">from rust::axum import Router, Json</span>
-<span class="c1">from rust::sqlx import PgPool</span>
-<span class="c1">import rust::tracing</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">axum</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Router</span><span class="o">,</span><span class="w"> </span><span class="nn">Json</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">sqlx</span> <span class="kn">import</span><span class="w"> </span><span class="nn">PgPool</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">tracing</span>
 
-<span class="c1">async def main() -&gt; None:</span>
-<span class="c1">    tracing::info(&quot;Starting server...&quot;)</span>
-<span class="c1">    app = Router::new()</span>
-<span class="c1">    # ...</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">tracing</span><span class="p">::</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting server...&quot;</span><span class="p">)</span>
+    <span class="n">app</span> <span class="o">=</span> <span class="nc">Router</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+    <span class="c1"># ...</span>
 </code></pre></div>
 <h3 id="73-mixed-inline-and-config">7.3 Mixed Inline and Config<a class="headerlink" href="#73-mixed-inline-and-config" title="Permanent link">&para;</a></h3>
 <p><strong>incan.toml:</strong></p>
@@ -4381,13 +4381,13 @@ Tip:<span class="w"> </span>Check<span class="w"> </span>https://crates.io/crate
 </code></pre></div>
 <p><strong>src/main.incn:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># From incan.toml</span>
-<span class="c1">import rust::serde</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde</span>
 
 <span class="c1"># Inline - not in incan.toml</span>
-<span class="c1">import rust::uuid @ &quot;1.0&quot; with [&quot;v4&quot;]</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">uuid</span> <span class="o">@</span> <span class="s2">&quot;1.0&quot;</span> <span class="k">with</span> <span class="p">[</span><span class="s2">&quot;v4&quot;</span><span class="p">]</span>
 
 <span class="c1"># Override known-good default for one-off use</span>
-<span class="c1">from rust::chrono @ &quot;0.4&quot; with [&quot;serde&quot;, &quot;clock&quot;] import DateTime, Utc</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">chrono</span> <span class="o">@</span> <span class="s2">&quot;0.4&quot;</span> <span class="k">with</span> <span class="p">[</span><span class="s2">&quot;serde&quot;</span><span class="p">,</span> <span class="s2">&quot;clock&quot;</span><span class="p">]</span> <span class="kn">import</span><span class="w"> </span><span class="nn">DateTime</span><span class="o">,</span><span class="w"> </span><span class="nn">Utc</span>
 </code></pre></div>
 <hr />
 <h2 id="8-comparison-with-pyprojecttoml">8. Comparison with pyproject.toml<a class="headerlink" href="#8-comparison-with-pyprojecttoml" title="Permanent link">&para;</a></h2>

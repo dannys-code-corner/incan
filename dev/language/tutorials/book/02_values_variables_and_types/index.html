@@ -3720,18 +3720,18 @@
 <p class="admonition-title">Coming from Python?</p>
 <p>Incan supports Python-style f-strings for string interpolation:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;Incan&quot;</span>
-<span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hello, {name}&quot;</span><span class="p">)</span>
+<span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>For more examples and formatting details, see: <a href="../../../reference/strings/">Strings</a>.</p>
 </div>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;Incan&quot;</span>
-    <span class="n">answer</span> <span class="o">=</span> <span class="m">42</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{name}: {answer}&quot;</span><span class="p">)</span>
+    <span class="n">answer</span> <span class="o">=</span> <span class="mi">42</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">answer</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="function-arguments-and-return-types">Function arguments and return types<a class="headerlink" href="#function-arguments-and-return-types" title="Permanent link">&para;</a></h2>
 <p>Incan uses type annotations on function arguments and return types:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 </code></pre></div>
 <h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
@@ -3742,17 +3742,17 @@
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;Incan&quot;</span>
-    <span class="n">count</span> <span class="o">=</span> <span class="m">3</span>
-    <span class="n">ratio</span> <span class="o">=</span> <span class="m">0.5</span>
+    <span class="nb">count</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">ratio</span> <span class="o">=</span> <span class="mf">0.5</span>
     <span class="n">enabled</span> <span class="o">=</span> <span class="k">true</span>
 
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;name={name} count={count} ratio={ratio} enabled={enabled}&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;add={add(10, 32)}&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;name=</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> count=</span><span class="si">{</span><span class="nb">count</span><span class="si">}</span><span class="s2"> ratio=</span><span class="si">{</span><span class="n">ratio</span><span class="si">}</span><span class="s2"> enabled=</span><span class="si">{</span><span class="n">enabled</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;add=</span><span class="si">{</span><span class="n">add</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 </details>
 <h2 id="next">Next<a class="headerlink" href="#next" title="Permanent link">&para;</a></h2>

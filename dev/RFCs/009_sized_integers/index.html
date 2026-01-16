@@ -4021,7 +4021,7 @@ the compiler.</p>
 </ol>
 <h3 id="example-problem">Example Problem<a class="headerlink" href="#example-problem" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Current: Can&#39;t express this cleanly</span>
-<span class="c1">from rust::std::net import TcpStream</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">std</span><span class="p">::</span><span class="n">net</span> <span class="kn">import</span><span class="w"> </span><span class="nn">TcpStream</span>
 
 <span class="c1"># TcpStream::connect expects &amp;str, but port is u16 internally</span>
 <span class="c1"># How do we work with u16 port numbers?</span>
@@ -4112,54 +4112,54 @@ the compiler.</p>
 <h3 id="type-aliases-preserved">Type Aliases (Preserved)<a class="headerlink" href="#type-aliases-preserved" title="Permanent link">&para;</a></h3>
 <p>The existing <code>int</code> and <code>float</code> remain as aliases:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># These are equivalent</span>
-<span class="c1">x: int    # Preferred for general code</span>
-<span class="c1">x: i64    # Explicit when size matters</span>
+<span class="n">x</span><span class="p">:</span> <span class="nb">int</span>    <span class="c1"># Preferred for general code</span>
+<span class="n">x</span><span class="p">:</span> <span class="kt">i64</span>    <span class="c1"># Explicit when size matters</span>
 
-<span class="c1">y: float  # Preferred for general code  </span>
-<span class="c1">y: f64    # Explicit when size matters</span>
+<span class="n">y</span><span class="p">:</span> <span class="nb">float</span>  <span class="c1"># Preferred for general code  </span>
+<span class="n">y</span><span class="p">:</span> <span class="kt">f64</span>    <span class="c1"># Explicit when size matters</span>
 </code></pre></div>
 <h3 id="literals">Literals<a class="headerlink" href="#literals" title="Permanent link">&para;</a></h3>
 <h4 id="without-suffix-default">Without Suffix (Default)<a class="headerlink" href="#without-suffix-default" title="Permanent link">&para;</a></h4>
 <p>Unsuffixed literals infer type from context, defaulting to <code>int</code>/<code>float</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">x</span> <span class="o">=</span> <span class="m">42</span>        <span class="c1"># int (i64)</span>
-<span class="c1">let y = 3.14      # float (f64)</span>
-<span class="c1">let z: i32 = 42   # i32 (from annotation)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">x</span> <span class="o">=</span> <span class="mi">42</span>        <span class="c1"># int (i64)</span>
+<span class="k">let</span> <span class="n">y</span> <span class="o">=</span> <span class="mf">3.14</span>      <span class="c1"># float (f64)</span>
+<span class="k">let</span> <span class="n">z</span><span class="p">:</span> <span class="kt">i32</span> <span class="o">=</span> <span class="mi">42</span>   <span class="c1"># i32 (from annotation)</span>
 </code></pre></div>
 <h4 id="with-suffix-explicit">With Suffix (Explicit)<a class="headerlink" href="#with-suffix-explicit" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">a</span> <span class="o">=</span> <span class="err">42</span><span class="n">i8</span>      <span class="c1"># i8</span>
-<span class="c1">let b = 42u16     # u16</span>
-<span class="c1">let c = 42i32     # i32</span>
-<span class="c1">let d = 42u64     # u64</span>
-<span class="c1">let e = 3.14f32   # f32</span>
-<span class="c1">let f = 255u8     # u8</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">a</span> <span class="o">=</span> <span class="mi">42</span><span class="n">i8</span>      <span class="c1"># i8</span>
+<span class="k">let</span> <span class="n">b</span> <span class="o">=</span> <span class="mi">42</span><span class="n">u16</span>     <span class="c1"># u16</span>
+<span class="k">let</span> <span class="n">c</span> <span class="o">=</span> <span class="mi">42</span><span class="kt">i32</span>     <span class="c1"># i32</span>
+<span class="k">let</span> <span class="n">d</span> <span class="o">=</span> <span class="mi">42</span><span class="n">u64</span>     <span class="c1"># u64</span>
+<span class="k">let</span> <span class="n">e</span> <span class="o">=</span> <span class="mf">3.14</span><span class="kt">f32</span>   <span class="c1"># f32</span>
+<span class="k">let</span> <span class="n">f</span> <span class="o">=</span> <span class="mi">255</span><span class="n">u8</span>     <span class="c1"># u8</span>
 </code></pre></div>
 <h3 id="conversions">Conversions<a class="headerlink" href="#conversions" title="Permanent link">&para;</a></h3>
 <h4 id="explicit-casting-required">Explicit Casting Required<a class="headerlink" href="#explicit-casting-required" title="Permanent link">&para;</a></h4>
 <p>No implicit narrowing — all conversions are explicit:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">big</span><span class="p">:</span> <span class="n">i64</span> <span class="o">=</span> <span class="m">1000</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">big</span><span class="p">:</span> <span class="kt">i64</span> <span class="o">=</span> <span class="mi">1000</span>
 <span class="k">let</span> <span class="n">small</span><span class="p">:</span> <span class="n">i16</span> <span class="o">=</span> <span class="n">big</span> <span class="k">as</span> <span class="n">i16</span>        <span class="c1"># Explicit cast (may truncate)</span>
-<span class="c1">let safe: i16 = i16.try_from(big)? # Safe conversion (returns Result)</span>
+<span class="k">let</span> <span class="n">safe</span><span class="p">:</span> <span class="n">i16</span> <span class="o">=</span> <span class="n">i16</span><span class="o">.</span><span class="n">try_from</span><span class="p">(</span><span class="n">big</span><span class="p">)</span><span class="err">?</span> <span class="c1"># Safe conversion (returns Result)</span>
 </code></pre></div>
 <h4 id="conversion-functions">Conversion Functions<a class="headerlink" href="#conversion-functions" title="Permanent link">&para;</a></h4>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Fallible conversions (return Result)</span>
-<span class="c1">let x: Result[i16, ConversionError] = i16.try_from(big_value)</span>
+<span class="k">let</span> <span class="n">x</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="n">i16</span><span class="p">,</span> <span class="nc">ConversionError</span><span class="p">]</span> <span class="o">=</span> <span class="n">i16</span><span class="o">.</span><span class="n">try_from</span><span class="p">(</span><span class="n">big_value</span><span class="p">)</span>
 
 <span class="c1"># Infallible widening (always safe)</span>
-<span class="c1">let wide: i64 = i64.from(small_value)  # i16 -&gt; i64 always works</span>
+<span class="k">let</span> <span class="n">wide</span><span class="p">:</span> <span class="kt">i64</span> <span class="o">=</span> <span class="kt">i64</span><span class="o">.</span><span class="k">from</span><span class="p">(</span><span class="n">small_value</span><span class="p">)</span>  <span class="c1"># i16 -&gt; i64 always works</span>
 
 <span class="c1"># Truncating cast (use with caution)</span>
-<span class="c1">let truncated: i8 = big_value as i8    # May lose data</span>
+<span class="k">let</span> <span class="n">truncated</span><span class="p">:</span> <span class="n">i8</span> <span class="o">=</span> <span class="n">big_value</span> <span class="k">as</span> <span class="n">i8</span>    <span class="c1"># May lose data</span>
 </code></pre></div>
 <h3 id="arithmetic">Arithmetic<a class="headerlink" href="#arithmetic" title="Permanent link">&para;</a></h3>
 <p>Same-type operations return the same type:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">a</span><span class="p">:</span> <span class="n">i32</span> <span class="o">=</span> <span class="m">10</span>
-<span class="k">let</span> <span class="n">b</span><span class="p">:</span> <span class="n">i32</span> <span class="o">=</span> <span class="m">20</span>
-<span class="k">let</span> <span class="n">c</span><span class="p">:</span> <span class="n">i32</span> <span class="o">=</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>  <span class="c1"># i32</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">a</span><span class="p">:</span> <span class="kt">i32</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="k">let</span> <span class="n">b</span><span class="p">:</span> <span class="kt">i32</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="k">let</span> <span class="n">c</span><span class="p">:</span> <span class="kt">i32</span> <span class="o">=</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>  <span class="c1"># i32</span>
 
 <span class="c1"># Mixed types require explicit conversion</span>
-<span class="c1">let x: i32 = 10</span>
-<span class="c1">let y: i64 = 20</span>
-<span class="c1">let z = x as i64 + y  # Must convert first</span>
+<span class="k">let</span> <span class="n">x</span><span class="p">:</span> <span class="kt">i32</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="k">let</span> <span class="n">y</span><span class="p">:</span> <span class="kt">i64</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="k">let</span> <span class="n">z</span> <span class="o">=</span> <span class="n">x</span> <span class="k">as</span> <span class="kt">i64</span> <span class="o">+</span> <span class="n">y</span>  <span class="c1"># Must convert first</span>
 </code></pre></div>
 <h3 id="overflow-behavior">Overflow Behavior<a class="headerlink" href="#overflow-behavior" title="Permanent link">&para;</a></h3>
 <p>Follow Rust's behavior:</p>
@@ -4168,50 +4168,50 @@ the compiler.</p>
 <li><strong>Release builds</strong>: Wrap (two's complement)</li>
 </ul>
 <p>Explicit wrapping/saturating operations available:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">x</span><span class="p">:</span> <span class="n">u8</span> <span class="o">=</span> <span class="m">255</span>
-<span class="k">let</span> <span class="n">y</span> <span class="o">=</span> <span class="n">x</span><span class="p">.</span><span class="n">wrapping_add</span><span class="p">(</span><span class="m">1</span><span class="p">)</span>    <span class="c1"># 0 (wrapped)</span>
-<span class="c1">let z = x.saturating_add(1)  # 255 (saturated)</span>
-<span class="c1">let w = x.checked_add(1)     # None (overflow detected)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">x</span><span class="p">:</span> <span class="n">u8</span> <span class="o">=</span> <span class="mi">255</span>
+<span class="k">let</span> <span class="n">y</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">wrapping_add</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>    <span class="c1"># 0 (wrapped)</span>
+<span class="k">let</span> <span class="n">z</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">saturating_add</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># 255 (saturated)</span>
+<span class="k">let</span> <span class="n">w</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">checked_add</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>     <span class="c1"># None (overflow detected)</span>
 </code></pre></div>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
 <h3 id="binary-protocol-parsing">Binary Protocol Parsing<a class="headerlink" href="#binary-protocol-parsing" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">parse_header</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">bytes</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Header</span><span class="p">,</span> <span class="n">ParseError</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">data</span><span class="p">)</span> <span class="o">&lt;</span> <span class="m">8</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="n">ParseError</span><span class="p">.</span><span class="n">TooShort</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">parse_header</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="nb">bytes</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Header</span><span class="p">,</span> <span class="nc">ParseError</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">8</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">ParseError</span><span class="o">.</span><span class="nc">TooShort</span><span class="p">)</span>
 
-    <span class="k">let</span> <span class="n">magic</span><span class="p">:</span> <span class="n">u32</span> <span class="o">=</span> <span class="n">u32</span><span class="p">.</span><span class="n">from_le_bytes</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="m">0</span><span class="p">..</span><span class="m">4</span><span class="p">])</span>
-    <span class="k">let</span> <span class="n">version</span><span class="p">:</span> <span class="n">u16</span> <span class="o">=</span> <span class="n">u16</span><span class="p">.</span><span class="n">from_le_bytes</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="m">4</span><span class="p">..</span><span class="m">6</span><span class="p">])</span>
-    <span class="k">let</span> <span class="n">flags</span><span class="p">:</span> <span class="n">u8</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="m">6</span><span class="p">]</span>
-    <span class="k">let</span> <span class="n">reserved</span><span class="p">:</span> <span class="n">u8</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="m">7</span><span class="p">]</span>
+    <span class="k">let</span> <span class="n">magic</span><span class="p">:</span> <span class="n">u32</span> <span class="o">=</span> <span class="n">u32</span><span class="o">.</span><span class="n">from_le_bytes</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="mf">0..4</span><span class="p">])</span>
+    <span class="k">let</span> <span class="n">version</span><span class="p">:</span> <span class="n">u16</span> <span class="o">=</span> <span class="n">u16</span><span class="o">.</span><span class="n">from_le_bytes</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="mf">4..6</span><span class="p">])</span>
+    <span class="k">let</span> <span class="n">flags</span><span class="p">:</span> <span class="n">u8</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="mi">6</span><span class="p">]</span>
+    <span class="k">let</span> <span class="n">reserved</span><span class="p">:</span> <span class="n">u8</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="mi">7</span><span class="p">]</span>
 
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">Header</span><span class="p">(</span><span class="n">magic</span><span class="p">,</span> <span class="n">version</span><span class="p">,</span> <span class="n">flags</span><span class="p">))</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nc">Header</span><span class="p">(</span><span class="n">magic</span><span class="p">,</span> <span class="n">version</span><span class="p">,</span> <span class="n">flags</span><span class="p">))</span>
 </code></pre></div>
 <h3 id="network-port-handling">Network Port Handling<a class="headerlink" href="#network-port-handling" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">connect</span><span class="p">(</span><span class="n">host</span><span class="p">:</span> <span class="n">str</span><span class="p">,</span> <span class="n">port</span><span class="p">:</span> <span class="n">u16</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Connection</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
-    <span class="k">let</span> <span class="n">addr</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;{host}:{port}&quot;</span>
-    <span class="k">return</span> <span class="n">Connection</span><span class="p">.</span><span class="n">open</span><span class="p">(</span><span class="n">addr</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">connect</span><span class="p">(</span><span class="n">host</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">port</span><span class="p">:</span> <span class="n">u16</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Connection</span><span class="p">,</span> <span class="nc">IoError</span><span class="p">]:</span>
+    <span class="k">let</span> <span class="n">addr</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">host</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">port</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">return</span> <span class="nc">Connection</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">addr</span><span class="p">)</span>
 
 <span class="c1"># Usage</span>
-<span class="c1">let conn = connect(&quot;localhost&quot;, 8080u16)?</span>
+<span class="k">let</span> <span class="n">conn</span> <span class="o">=</span> <span class="n">connect</span><span class="p">(</span><span class="s2">&quot;localhost&quot;</span><span class="p">,</span> <span class="mi">8080</span><span class="n">u16</span><span class="p">)</span><span class="err">?</span>
 </code></pre></div>
 <h3 id="memory-efficient-arrays">Memory-Efficient Arrays<a class="headerlink" href="#memory-efficient-arrays" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Image pixel data - 3 bytes per pixel instead of 24</span>
-<span class="c1">model Pixel:</span>
-<span class="c1">    r: u8</span>
-<span class="c1">    g: u8</span>
-<span class="c1">    b: u8</span>
+<span class="k">model</span> <span class="nc">Pixel</span><span class="p">:</span>
+    <span class="n">r</span><span class="p">:</span> <span class="n">u8</span>
+    <span class="n">g</span><span class="p">:</span> <span class="n">u8</span>
+    <span class="n">b</span><span class="p">:</span> <span class="n">u8</span>
 
-<span class="c1">let image: List[Pixel] = load_image(&quot;photo.png&quot;)</span>
+<span class="k">let</span> <span class="n">image</span><span class="p">:</span> <span class="kt">List</span><span class="p">[</span><span class="nc">Pixel</span><span class="p">]</span> <span class="o">=</span> <span class="n">load_image</span><span class="p">(</span><span class="s2">&quot;photo.png&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="bit-manipulation">Bit Manipulation<a class="headerlink" href="#bit-manipulation" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">set_bit</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">u32</span><span class="p">,</span> <span class="n">bit</span><span class="p">:</span> <span class="n">u8</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">u32</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">value</span> <span class="err">|</span> <span class="p">(</span><span class="err">1</span><span class="n">u32</span> <span class="o">&lt;&lt;</span> <span class="n">bit</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">set_bit</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">u32</span><span class="p">,</span> <span class="n">bit</span><span class="p">:</span> <span class="n">u8</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">u32</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">value</span> <span class="o">|</span> <span class="p">(</span><span class="mi">1</span><span class="n">u32</span> <span class="o">&lt;&lt;</span> <span class="n">bit</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">clear_bit</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">u32</span><span class="p">,</span> <span class="n">bit</span><span class="p">:</span> <span class="n">u8</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">u32</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">value</span> <span class="err">&amp;</span> <span class="err">~</span><span class="p">(</span><span class="err">1</span><span class="n">u32</span> <span class="o">&lt;&lt;</span> <span class="n">bit</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">clear_bit</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">u32</span><span class="p">,</span> <span class="n">bit</span><span class="p">:</span> <span class="n">u8</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">u32</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">value</span> <span class="o">&amp;</span> <span class="o">~</span><span class="p">(</span><span class="mi">1</span><span class="n">u32</span> <span class="o">&lt;&lt;</span> <span class="n">bit</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">test_bit</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">u32</span><span class="p">,</span> <span class="n">bit</span><span class="p">:</span> <span class="n">u8</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-    <span class="k">return</span> <span class="p">(</span><span class="n">value</span> <span class="err">&amp;</span> <span class="p">(</span><span class="err">1</span><span class="n">u32</span> <span class="o">&lt;&lt;</span> <span class="n">bit</span><span class="p">))</span> <span class="o">!=</span> <span class="m">0</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_bit</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">u32</span><span class="p">,</span> <span class="n">bit</span><span class="p">:</span> <span class="n">u8</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">value</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mi">1</span><span class="n">u32</span> <span class="o">&lt;&lt;</span> <span class="n">bit</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">0</span>
 </code></pre></div>
 <h2 id="implementation-plan">Implementation Plan<a class="headerlink" href="#implementation-plan" title="Permanent link">&para;</a></h2>
 <h3 id="phase-0-builtin-type-registry">Phase 0: Builtin Type Registry<a class="headerlink" href="#phase-0-builtin-type-registry" title="Permanent link">&para;</a></h3>
@@ -4316,19 +4316,19 @@ rather than parsing <code>incan_stdlib</code> source code.</p>
 </ul>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-only-add-when-needed-via-rust-interop">1. Only Add When Needed via Rust Interop<a class="headerlink" href="#1-only-add-when-needed-via-rust-interop" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">std</span><span class="p">::</span><span class="n">primitive</span> <span class="k">import</span> <span class="n">i16</span><span class="p">,</span> <span class="n">u8</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">std</span><span class="p">::</span><span class="n">primitive</span> <span class="kn">import</span><span class="w"> </span><span class="nn">i16</span><span class="o">,</span><span class="w"> </span><span class="nn">u8</span>
 </code></pre></div>
 <p><strong>Rejected</strong>: Awkward syntax, doesn't integrate well with literals.</p>
 <h3 id="2-python-style-arbitrary-precision">2. Python-Style Arbitrary Precision<a class="headerlink" href="#2-python-style-arbitrary-precision" title="Permanent link">&para;</a></h3>
 <p>Python's <code>int</code> is arbitrary precision. We could do the same.</p>
 <p><strong>Rejected</strong>: Doesn't help with FFI, binary protocols, or memory efficiency. Also has performance overhead.</p>
 <h3 id="3-wrapper-types-only">3. Wrapper Types Only<a class="headerlink" href="#3-wrapper-types-only" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">newtype</span> <span class="n">Port</span> <span class="o">=</span> <span class="n">u16</span>  <span class="c1"># Define in stdlib</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">newtype</span> <span class="nc">Port</span> <span class="o">=</span> <span class="n">u16</span>  <span class="c1"># Define in stdlib</span>
 </code></pre></div>
 <p><strong>Rejected</strong>: Still need the underlying sized types.</p>
 <h3 id="4-c-style-type-names">4. C-Style Type Names<a class="headerlink" href="#4-c-style-type-names" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">x</span><span class="p">:</span> <span class="n">short</span> <span class="o">=</span> <span class="m">10</span>      <span class="c1"># i16</span>
-<span class="c1">let y: unsigned int = 20  # u32</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">x</span><span class="p">:</span> <span class="n">short</span> <span class="o">=</span> <span class="mi">10</span>      <span class="c1"># i16</span>
+<span class="k">let</span> <span class="n">y</span><span class="p">:</span> <span class="n">unsigned</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span>  <span class="c1"># u32</span>
 </code></pre></div>
 <p><strong>Rejected</strong>: Verbose, platform-dependent sizes in C, Rust-style is clearer.</p>
 <h2 id="open-questions">Open Questions<a class="headerlink" href="#open-questions" title="Permanent link">&para;</a></h2>

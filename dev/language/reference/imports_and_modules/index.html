@@ -3990,36 +3990,36 @@
 <p>Incan supports two styles that can be mixed freely.</p>
 <h3 id="python-style-from-module-import">Python-style: <code>from module import ...</code><a class="headerlink" href="#python-style-from-module-import" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Import multiple items at once</span>
-<span class="c1">from models import User, Product, Order</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">models</span><span class="w"> </span><span class="kn">import</span> <span class="nc">User</span><span class="p">,</span> <span class="nc">Product</span><span class="p">,</span> <span class="nc">Order</span>
 
 <span class="c1"># Import with aliases</span>
-<span class="c1">from utils import format_currency as fmt, validate_email as check_email</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">format_currency</span> <span class="k">as</span> <span class="n">fmt</span><span class="p">,</span> <span class="n">validate_email</span> <span class="k">as</span> <span class="n">check_email</span>
 </code></pre></div>
 <h3 id="rust-style-import-moduleitem">Rust-style: <code>import module::item</code><a class="headerlink" href="#rust-style-import-moduleitem" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Import a specific item</span>
-<span class="c1">import models::User</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">models</span><span class="p">::</span><span class="nc">User</span>
 
 <span class="c1"># Import with an alias</span>
-<span class="c1">import utils::format_currency as fmt</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">utils</span><span class="p">::</span><span class="n">format_currency</span> <span class="k">as</span> <span class="n">fmt</span>
 </code></pre></div>
 <h2 id="import-path-rules">Import path rules<a class="headerlink" href="#import-path-rules" title="Permanent link">&para;</a></h2>
 <h3 id="child-directory-imports">Child directory imports<a class="headerlink" href="#child-directory-imports" title="Permanent link">&para;</a></h3>
 <p>You can use dots (Python-style) or <code>::</code> (Rust-style):</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Python-style: dots for nested paths</span>
-<span class="c1">from db.models import User, Product</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">db.models</span><span class="w"> </span><span class="kn">import</span> <span class="nc">User</span><span class="p">,</span> <span class="nc">Product</span>
 
 <span class="c1"># Rust-style: :: for nested paths</span>
-<span class="c1">import db::models::User</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">db</span><span class="p">::</span><span class="n">models</span><span class="p">::</span><span class="nc">User</span>
 </code></pre></div>
 <h3 id="parent-directory-imports">Parent directory imports<a class="headerlink" href="#parent-directory-imports" title="Permanent link">&para;</a></h3>
 <p>Navigate to parent directories using <code>..</code> (Python-style) or <code>super</code> (Rust-style):</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Python-style: .. for parent</span>
-<span class="c1">from ..common import Logger</span>
-<span class="c1">from ...shared.utils import format_date</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">..common</span><span class="w"> </span><span class="kn">import</span> <span class="nc">Logger</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">...shared.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">format_date</span>
 
 <span class="c1"># Rust-style: super keyword</span>
-<span class="c1">import super::common::Logger</span>
-<span class="c1">import super::super::shared::utils::format_date</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">super</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="nc">Logger</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">super</span><span class="p">::</span><span class="nb">super</span><span class="p">::</span><span class="n">shared</span><span class="p">::</span><span class="n">utils</span><span class="p">::</span><span class="n">format_date</span>
 </code></pre></div>
 <table>
 <thead>
@@ -4041,8 +4041,8 @@
 </table>
 <h3 id="absolute-imports-project-root">Absolute imports (project root)<a class="headerlink" href="#absolute-imports-project-root" title="Permanent link">&para;</a></h3>
 <p>Import from the project root using <code>crate</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">crate</span><span class="p">.</span><span class="n">config</span> <span class="k">import</span> <span class="n">Settings</span>
-<span class="k">import</span> <span class="k">crate</span><span class="p">::</span><span class="n">lib</span><span class="p">::</span><span class="n">database</span><span class="p">::</span><span class="n">Connection</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">crate.config</span><span class="w"> </span><span class="kn">import</span> <span class="nc">Settings</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">crate</span><span class="p">::</span><span class="n">lib</span><span class="p">::</span><span class="n">database</span><span class="p">::</span><span class="nc">Connection</span>
 </code></pre></div>
 <p>The compiler finds the project root by looking for <code>Cargo.toml</code> or a <code>src/</code> directory.</p>
 <h3 id="path-summary">Path summary<a class="headerlink" href="#path-summary" title="Permanent link">&para;</a></h3>
@@ -4156,28 +4156,28 @@
 <a href="../language/">Language reference (generated)</a>.</p>
 <h3 id="built-in-functions-always-available">Built-in functions (always available)<a class="headerlink" href="#built-in-functions-always-available" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Output</span>
-<span class="c1">println(value)      # Print with newline</span>
-<span class="c1">print(value)        # Print without newline</span>
+<span class="nb">println</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>      <span class="c1"># Print with newline</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>        <span class="c1"># Print without newline</span>
 
 <span class="c1"># Collections</span>
-<span class="c1">len(collection)     # Get length</span>
+<span class="nb">len</span><span class="p">(</span><span class="n">collection</span><span class="p">)</span>     <span class="c1"># Get length</span>
 
 <span class="c1"># Iteration</span>
-<span class="c1">range(n)            # Iterator 0..n</span>
-<span class="c1">range(start, end)   # Iterator start..end</span>
-<span class="c1">range(start, end, step)  # Iterator start..end with a custom step (Python-like)</span>
-<span class="c1">range(start..end)   # Iterator start..end (Rust-style range literal)</span>
-<span class="c1">range(start..=end)  # Iterator start..=end (inclusive end)</span>
-<span class="c1">enumerate(iter)     # Iterator with indices</span>
-<span class="c1">zip(iter1, iter2)   # Pair up two iterators</span>
+<span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>            <span class="c1"># Iterator 0..n</span>
+<span class="nb">range</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">)</span>   <span class="c1"># Iterator start..end</span>
+<span class="nb">range</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">,</span> <span class="n">step</span><span class="p">)</span>  <span class="c1"># Iterator start..end with a custom step (Python-like)</span>
+<span class="nb">range</span><span class="p">(</span><span class="n">start</span><span class="o">..</span><span class="n">end</span><span class="p">)</span>   <span class="c1"># Iterator start..end (Rust-style range literal)</span>
+<span class="nb">range</span><span class="p">(</span><span class="n">start</span><span class="o">..=</span><span class="n">end</span><span class="p">)</span>  <span class="c1"># Iterator start..=end (inclusive end)</span>
+<span class="nb">enumerate</span><span class="p">(</span><span class="nb">iter</span><span class="p">)</span>     <span class="c1"># Iterator with indices</span>
+<span class="nb">zip</span><span class="p">(</span><span class="n">iter1</span><span class="p">,</span> <span class="n">iter2</span><span class="p">)</span>   <span class="c1"># Pair up two iterators</span>
 
 <span class="c1"># Type conversion (Python-like)</span>
-<span class="c1">dict()              # Empty Dict</span>
-<span class="c1">dict(mapping)       # Convert to Dict</span>
-<span class="c1">list()              # Empty List</span>
-<span class="c1">list(iterable)      # Convert to List</span>
-<span class="c1">set()               # Empty Set</span>
-<span class="c1">set(iterable)       # Convert to Set</span>
+<span class="nb">dict</span><span class="p">()</span>              <span class="c1"># Empty Dict</span>
+<span class="nb">dict</span><span class="p">(</span><span class="n">mapping</span><span class="p">)</span>       <span class="c1"># Convert to Dict</span>
+<span class="nb">list</span><span class="p">()</span>              <span class="c1"># Empty List</span>
+<span class="nb">list</span><span class="p">(</span><span class="n">iterable</span><span class="p">)</span>      <span class="c1"># Convert to List</span>
+<span class="nb">set</span><span class="p">()</span>               <span class="c1"># Empty Set</span>
+<span class="nb">set</span><span class="p">(</span><span class="n">iterable</span><span class="p">)</span>       <span class="c1"># Convert to Set</span>
 </code></pre></div>
 <h2 id="special-import-import-this">Special import: <code>import this</code><a class="headerlink" href="#special-import-import-this" title="Permanent link">&para;</a></h2>
 <p><code>import this</code> is always available and prints the Incan “Zen” design principles when imported:</p>
@@ -4185,10 +4185,10 @@
 </code></pre></div>
 <h2 id="standard-library-math">Standard library: <code>math</code><a class="headerlink" href="#standard-library-math" title="Permanent link">&para;</a></h2>
 <p>You must import <code>math</code> before use:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">import</span> <span class="n">math</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;pi={math.pi}&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;pi=</span><span class="si">{</span><span class="n">math</span><span class="o">.</span><span class="n">pi</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="available-constants">Available constants<a class="headerlink" href="#available-constants" title="Permanent link">&para;</a></h3>
 <table>
@@ -4294,10 +4294,10 @@
 </table>
 <h2 id="rust-standard-library-access">Rust standard library access<a class="headerlink" href="#rust-standard-library-access" title="Permanent link">&para;</a></h2>
 <p>Incan can import from Rust’s standard library:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">import</span> <span class="n">std</span><span class="p">::</span><span class="n">fs</span>
-<span class="k">import</span> <span class="n">std</span><span class="p">::</span><span class="n">env</span>
-<span class="k">import</span> <span class="n">std</span><span class="p">::</span><span class="n">path</span><span class="p">::</span><span class="n">Path</span>
-<span class="k">import</span> <span class="n">std</span><span class="p">::</span><span class="n">time</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">std</span><span class="p">::</span><span class="n">fs</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">std</span><span class="p">::</span><span class="n">env</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">std</span><span class="p">::</span><span class="n">path</span><span class="p">::</span><span class="nc">Path</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">std</span><span class="p">::</span><span class="n">time</span>
 </code></pre></div>
 <p>Note: using these requires understanding the underlying Rust types. Prefer Incan built-ins (<code>read_file</code>, <code>write_file</code>,
 etc.) where available.</p>

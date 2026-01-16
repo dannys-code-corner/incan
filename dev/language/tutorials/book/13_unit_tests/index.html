@@ -3643,22 +3643,22 @@
 </div>
 <h2 id="the-testing-module">The testing module<a class="headerlink" href="#the-testing-module" title="Permanent link">&para;</a></h2>
 <p>Test assertions and helpers are imported from the <code>testing</code> module:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert</span><span class="p">,</span> <span class="n">assert_eq</span><span class="p">,</span> <span class="n">assert_ne</span><span class="p">,</span> <span class="n">assert_true</span><span class="p">,</span> <span class="n">assert_false</span><span class="p">,</span> <span class="n">fail</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="k">assert</span><span class="p">,</span> <span class="nf">assert_eq</span><span class="p">,</span> <span class="nf">assert_ne</span><span class="p">,</span> <span class="nf">assert_true</span><span class="p">,</span> <span class="nf">assert_false</span><span class="p">,</span> <span class="n">fail</span>
 </code></pre></div>
 <p>These are normal functions (not language keywords), which makes them easy for tooling to understand.</p>
 <p>For the full API reference, see:
 <a href="../../../reference/testing/">Testing (reference)</a>.</p>
 <h2 id="your-first-unit-test">Your first unit test<a class="headerlink" href="#your-first-unit-test" title="Permanent link">&para;</a></h2>
 <p>Create a test file, for example <code>tests/test_math.incn</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="s2">&quot;&quot;&quot;Unit tests for math utilities.&quot;&quot;&quot;</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="sd">&quot;&quot;&quot;Unit tests for math utilities.&quot;&quot;&quot;</span>
 
-<span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="nf">assert_eq</span>
 
-<span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-<span class="k">def</span> <span class="n">test_addition</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">),</span> <span class="m">5</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_addition</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="mi">5</span><span class="p">)</span>
 </code></pre></div>
 <p>Run it:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>tests/
@@ -3675,17 +3675,17 @@
 <a href="../../../../tooling/how-to/testing/">Tooling → Testing</a>.</p>
 <h2 id="common-patterns">Common patterns<a class="headerlink" href="#common-patterns" title="Permanent link">&para;</a></h2>
 <h3 id="boolean-assertions">Boolean assertions<a class="headerlink" href="#boolean-assertions" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert</span><span class="p">,</span> <span class="n">assert_true</span><span class="p">,</span> <span class="n">assert_false</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="k">assert</span><span class="p">,</span> <span class="nf">assert_true</span><span class="p">,</span> <span class="nf">assert_false</span>
 
-<span class="k">def</span> <span class="n">test_flags</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert</span><span class="p">(</span><span class="n">True</span><span class="p">)</span>
-    <span class="n">assert_true</span><span class="p">(</span><span class="m">1</span> <span class="o">&lt;</span> <span class="m">2</span><span class="p">)</span>
-    <span class="n">assert_false</span><span class="p">(</span><span class="m">2</span> <span class="o">&lt;</span> <span class="m">1</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_flags</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">assert</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+    <span class="nf">assert_true</span><span class="p">(</span><span class="mi">1</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="nf">assert_false</span><span class="p">(</span><span class="mi">2</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="explicit-failure">Explicit failure<a class="headerlink" href="#explicit-failure" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fail</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">fail</span>
 
-<span class="k">def</span> <span class="n">test_not_reached</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_not_reached</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">fail</span><span class="p">(</span><span class="s2">&quot;this should not happen&quot;</span><span class="p">)</span>
 </code></pre></div>
 

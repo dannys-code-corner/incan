@@ -3760,14 +3760,14 @@
 └── strings.incn
 </code></pre></div>
 <p><code>strings.incn</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="k">def</span> <span class="n">shout</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">s</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">upper</span><span class="p">()</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">shout</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="nb">strip</span><span class="p">()</span><span class="o">.</span><span class="nb">upper</span><span class="p">()</span>
 </code></pre></div>
 <p><code>main.incn</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">strings</span> <span class="k">import</span> <span class="n">shout</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">strings</span><span class="w"> </span><span class="kn">import</span> <span class="n">shout</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">println</span><span class="p">(</span><span class="n">shout</span><span class="p">(</span><span class="s2">&quot;  hello  &quot;</span><span class="p">))</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">shout</span><span class="p">(</span><span class="s2">&quot;  hello  &quot;</span><span class="p">))</span>
 </code></pre></div>
 <p>Run from <code>my_project/</code>:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>main.incn
@@ -3784,10 +3784,10 @@ In Incan, you typically make the intended “public API” of a module explicit 
 <h2 id="import-styles">Import styles<a class="headerlink" href="#import-styles" title="Permanent link">&para;</a></h2>
 <p>Incan supports two styles you can mix:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Python-style</span>
-<span class="c1">from strings import shout</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">strings</span><span class="w"> </span><span class="kn">import</span> <span class="n">shout</span>
 
 <span class="c1"># Rust-style</span>
-<span class="c1">import strings::shout</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">strings</span><span class="p">::</span><span class="n">shout</span>
 </code></pre></div>
 <h2 id="navigating-folders-super-crate">Navigating folders (<code>..</code>, <code>super</code>, <code>crate</code>)<a class="headerlink" href="#navigating-folders-super-crate" title="Permanent link">&para;</a></h2>
 <p>The reference documents how parent/root paths work:</p>
@@ -3805,18 +3805,18 @@ In Incan, you typically make the intended “public API” of a module explicit 
 <details class="example">
 <summary>One possible solution</summary>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># strings.incn</span>
-<span class="c1">pub def shout(s: str) -&gt; str:</span>
-<span class="c1">    return s.strip().upper()</span>
+<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">shout</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="nb">strip</span><span class="p">()</span><span class="o">.</span><span class="nb">upper</span><span class="p">()</span>
 
-<span class="c1">pub def whisper(s: str) -&gt; str:</span>
-<span class="c1">    return s.strip().lower()</span>
+<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">whisper</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="nb">strip</span><span class="p">()</span><span class="o">.</span><span class="nb">lower</span><span class="p">()</span>
 
 <span class="c1"># main.incn</span>
-<span class="c1">from strings import shout, whisper</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">strings</span><span class="w"> </span><span class="kn">import</span> <span class="n">shout</span><span class="p">,</span> <span class="n">whisper</span>
 
-<span class="c1">def main() -&gt; None:</span>
-<span class="c1">    println(shout(&quot;  hello  &quot;))    # outputs: HELLO</span>
-<span class="c1">    println(whisper(&quot;  HELLO  &quot;))  # outputs: hello</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">shout</span><span class="p">(</span><span class="s2">&quot;  hello  &quot;</span><span class="p">))</span>    <span class="c1"># outputs: HELLO</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">whisper</span><span class="p">(</span><span class="s2">&quot;  HELLO  &quot;</span><span class="p">))</span>  <span class="c1"># outputs: hello</span>
 </code></pre></div>
 </details>
 <h2 id="what-to-learn-next">What to learn next<a class="headerlink" href="#what-to-learn-next" title="Permanent link">&para;</a></h2>

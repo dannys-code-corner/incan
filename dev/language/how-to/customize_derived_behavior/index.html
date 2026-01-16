@@ -3956,12 +3956,12 @@
 <li>Define <code>__str__(self) -&gt; str</code> on your <code>model</code>/<code>class</code>.</li>
 <li>Do not also <code>@derive(Display)</code> (that’s a conflict).</li>
 </ol>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">email</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">email</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">__str__</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;{self.name} &lt;{self.email}&gt;&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> &lt;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">email</span><span class="si">}</span><span class="s2">&gt;&quot;</span>
 </code></pre></div>
 <hr />
 <h2 id="custom-equality">Custom equality (<code>==</code>)<a class="headerlink" href="#custom-equality" title="Permanent link">&para;</a></h2>
@@ -3972,12 +3972,12 @@
 <li>Define <code>__eq__(self, other: Self) -&gt; bool</code>.</li>
 <li>Do not also <code>@derive(Eq)</code>.</li>
 </ol>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="nb">id</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">__eq__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">id</span> <span class="o">==</span> <span class="n">other</span><span class="p">.</span><span class="n">id</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="nc">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">id</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">id</span>
 </code></pre></div>
 <hr />
 <h2 id="custom-ordering-sorted">Custom ordering (<code>sorted(...)</code>)<a class="headerlink" href="#custom-ordering-sorted" title="Permanent link">&para;</a></h2>
@@ -3988,12 +3988,12 @@
 <li>Define <code>__lt__(self, other: Self) -&gt; bool</code>.</li>
 <li>Do not also <code>@derive(Ord)</code>.</li>
 </ol>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Task</span><span class="p">:</span>
-    <span class="n">priority</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">title</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">Task</span><span class="p">:</span>
+    <span class="n">priority</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">title</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">__lt__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">Task</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">priority</span> <span class="o">&lt;</span> <span class="n">other</span><span class="p">.</span><span class="n">priority</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__lt__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="nc">Task</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">priority</span> <span class="o">&lt;</span> <span class="n">other</span><span class="o">.</span><span class="n">priority</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Why <code>__lt__</code>?</p>
@@ -4011,15 +4011,15 @@
 <li>Ensure it matches equality: if <code>a == b</code>, their hashes must match.</li>
 <li>Do not also <code>@derive(Hash)</code>.</li>
 </ol>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="nb">id</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">__eq__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">id</span> <span class="o">==</span> <span class="n">other</span><span class="p">.</span><span class="n">id</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="nc">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">id</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">id</span>
 
-    <span class="k">def</span> <span class="n">__hash__</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">__hash__</span><span class="p">()</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__hash__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="fm">__hash__</span><span class="p">()</span>
 </code></pre></div>
 <hr />
 <h2 id="field-defaults-make-construction-ergonomic">Field defaults: make construction ergonomic<a class="headerlink" href="#field-defaults-make-construction-ergonomic" title="Permanent link">&para;</a></h2>
@@ -4030,9 +4030,9 @@
 <li>Put defaults on the fields (<code>field: T = expr</code>).</li>
 <li>Any field with no default must still be provided.</li>
 </ol>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Settings</span><span class="p">:</span>
-    <span class="n">theme</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;dark&quot;</span>
-    <span class="n">font_size</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">14</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">Settings</span><span class="p">:</span>
+    <span class="n">theme</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;dark&quot;</span>
+    <span class="n">font_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">14</span>
 </code></pre></div>
 
 

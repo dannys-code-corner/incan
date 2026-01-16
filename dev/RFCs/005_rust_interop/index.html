@@ -3728,23 +3728,23 @@ clear type mapping, codegen, and build integration.</p>
 <ul>
 <li>Whole-crate import:</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">import</span> <span class="k">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">as</span> <span class="n">json</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">as</span> <span class="n">json</span>
 </code></pre></div>
 <ul>
 <li>Selective import:</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">time</span> <span class="k">import</span> <span class="n">Instant</span><span class="p">,</span> <span class="n">Duration</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">time</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Instant</span><span class="o">,</span><span class="w"> </span><span class="nn">Duration</span>
 </code></pre></div>
 <ul>
 <li>Nested paths:</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">chrono</span><span class="p">::</span><span class="n">naive</span><span class="p">::</span><span class="n">date</span> <span class="k">import</span> <span class="n">NaiveDate</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">chrono</span><span class="p">::</span><span class="n">naive</span><span class="p">::</span><span class="n">date</span> <span class="kn">import</span><span class="w"> </span><span class="nn">NaiveDate</span>
 </code></pre></div>
 <h3 id="related-crate-absolute-module-paths">Related: <code>crate::...</code> absolute module paths<a class="headerlink" href="#related-crate-absolute-module-paths" title="Permanent link">&para;</a></h3>
 <p>This RFC also introduces the <strong>Rust-style</strong> <code>crate</code> import prefix for <strong>Incan module paths</strong>:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Import from the project root (absolute module path)</span>
-<span class="c1">import crate::config as cfg</span>
-<span class="c1">from crate::utils import format_date</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">crate</span><span class="p">::</span><span class="n">config</span> <span class="k">as</span> <span class="n">cfg</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">crate</span><span class="p">::</span><span class="n">utils</span> <span class="kn">import</span><span class="w"> </span><span class="nn">format_date</span>
 </code></pre></div>
 <p>Notes:</p>
 <ul>
@@ -3792,22 +3792,22 @@ clear type mapping, codegen, and build integration.</p>
 <li>User-managed Cargo (future): allow opting out and integrating into existing workspaces.</li>
 </ul>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">import</span> <span class="k">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">as</span> <span class="n">json</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">as</span> <span class="n">json</span>
 
-<span class="k">def</span> <span class="n">encode_user</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">json</span><span class="p">::</span><span class="n">to_string</span><span class="p">(</span><span class="err">&amp;</span><span class="n">user</span><span class="p">)</span><span class="err">?</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">encode_user</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="nc">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">json</span><span class="p">::</span><span class="nb">to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">user</span><span class="p">)</span><span class="err">?</span>
 </code></pre></div>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">time</span> <span class="k">import</span> <span class="n">Instant</span><span class="p">,</span> <span class="n">Duration</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">time</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Instant</span><span class="o">,</span><span class="w"> </span><span class="nn">Duration</span>
 
-<span class="k">def</span> <span class="n">elapsed_ms</span><span class="p">(</span><span class="n">start</span><span class="p">:</span> <span class="n">Instant</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">Duration</span><span class="p">::</span><span class="n">from_secs_f64</span><span class="p">(</span><span class="n">start</span><span class="p">.</span><span class="n">elapsed</span><span class="p">().</span><span class="n">as_secs_f64</span><span class="p">()).</span><span class="n">as_millis</span><span class="p">()</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">elapsed_ms</span><span class="p">(</span><span class="n">start</span><span class="p">:</span> <span class="nc">Instant</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="nc">Duration</span><span class="p">::</span><span class="n">from_secs_f64</span><span class="p">(</span><span class="n">start</span><span class="o">.</span><span class="n">elapsed</span><span class="p">()</span><span class="o">.</span><span class="n">as_secs_f64</span><span class="p">())</span><span class="o">.</span><span class="n">as_millis</span><span class="p">()</span>
 </code></pre></div>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">reqwest</span> <span class="k">import</span> <span class="n">Client</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">reqwest</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Client</span>
 
-<span class="k">async</span> <span class="k">def</span> <span class="n">fetch_text</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">HttpError</span><span class="p">]:</span>
-    <span class="n">client</span> <span class="o">=</span> <span class="n">Client</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
-    <span class="n">resp</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">url</span><span class="p">).</span><span class="n">send</span><span class="p">()</span><span class="err">?</span>
-    <span class="k">return</span> <span class="k">await</span> <span class="n">resp</span><span class="p">.</span><span class="n">text</span><span class="p">()</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetch_text</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nc">HttpError</span><span class="p">]:</span>
+    <span class="n">client</span> <span class="o">=</span> <span class="nc">Client</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+    <span class="n">resp</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span><span class="o">.</span><span class="n">send</span><span class="p">()</span><span class="err">?</span>
+    <span class="k">return</span> <span class="k">await</span> <span class="n">resp</span><span class="o">.</span><span class="n">text</span><span class="p">()</span>
 </code></pre></div>
 <h2 id="limitations-initial">Limitations (initial)<a class="headerlink" href="#limitations-initial" title="Permanent link">&para;</a></h2>
 <ul>

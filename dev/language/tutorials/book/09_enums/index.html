@@ -3724,10 +3724,10 @@
 <h1 id="9-enums-and-better-match">9. Enums and better <code>match</code><a class="headerlink" href="#9-enums-and-better-match" title="Permanent link">&para;</a></h1>
 <p>Enums let you represent “one of several shapes” as a real type, and <code>match</code> lets you handle it exhaustively.</p>
 <h2 id="a-small-command-enum">A small command enum<a class="headerlink" href="#a-small-command-enum" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Command</span><span class="p">:</span>
-    <span class="n">Add</span><span class="p">(</span><span class="n">int</span><span class="p">)</span>
-    <span class="n">Remove</span><span class="p">(</span><span class="n">int</span><span class="p">)</span>
-    <span class="n">List</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Command</span><span class="p">:</span>
+    <span class="nc">Add</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+    <span class="nc">Remove</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+    <span class="kt">List</span>
 </code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">Coming from Python?</p>
@@ -3737,16 +3737,16 @@ strings, <code>dataclass</code> hierarchies, or <code>Union</code> types.</p>
 to handle every case.</p>
 </div>
 <h2 id="matching-on-enums">Matching on enums<a class="headerlink" href="#matching-on-enums" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">run</span><span class="p">(</span><span class="n">cmd</span><span class="p">:</span> <span class="n">Command</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">cmd</span><span class="p">:</span> <span class="nc">Command</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">cmd</span><span class="p">:</span>
-        <span class="n">Add</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;add {x}&quot;</span><span class="p">)</span>
-        <span class="n">Remove</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;remove {x}&quot;</span><span class="p">)</span>
-        <span class="n">List</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;list&quot;</span><span class="p">)</span>
+        <span class="nc">Add</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;add </span><span class="si">{</span><span class="n">x</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nc">Remove</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;remove </span><span class="si">{</span><span class="n">x</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="kt">List</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;list&quot;</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">run</span><span class="p">(</span><span class="n">Command</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="m">1</span><span class="p">))</span>     <span class="c1"># outputs: add 1</span>
-<span class="c1">    run(Command.Remove(1))  # outputs: remove 1</span>
-<span class="c1">    run(Command.List)       # outputs: list</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">run</span><span class="p">(</span><span class="nc">Command</span><span class="o">.</span><span class="nc">Add</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>     <span class="c1"># outputs: add 1</span>
+    <span class="n">run</span><span class="p">(</span><span class="nc">Command</span><span class="o">.</span><span class="nc">Remove</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>  <span class="c1"># outputs: remove 1</span>
+    <span class="n">run</span><span class="p">(</span><span class="nc">Command</span><span class="o">.</span><span class="kt">List</span><span class="p">)</span>       <span class="c1"># outputs: list</span>
 </code></pre></div>
 <h2 id="why-this-matters">Why this matters<a class="headerlink" href="#why-this-matters" title="Permanent link">&para;</a></h2>
 <p>Unlike a stringly-typed “command name”, enums:</p>
@@ -3762,20 +3762,20 @@ to handle every case.</p>
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Command</span><span class="p">:</span>
-    <span class="n">Add</span><span class="p">(</span><span class="n">int</span><span class="p">)</span>
-    <span class="n">Remove</span><span class="p">(</span><span class="n">int</span><span class="p">)</span>
-    <span class="n">Rename</span><span class="p">(</span><span class="n">str</span><span class="p">)</span>
-    <span class="n">Clear</span>
-    <span class="n">List</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Command</span><span class="p">:</span>
+    <span class="nc">Add</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+    <span class="nc">Remove</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+    <span class="nc">Rename</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+    <span class="nc">Clear</span>
+    <span class="kt">List</span>
 
-<span class="k">def</span> <span class="n">run</span><span class="p">(</span><span class="n">cmd</span><span class="p">:</span> <span class="n">Command</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">cmd</span><span class="p">:</span> <span class="nc">Command</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">cmd</span><span class="p">:</span>
-        <span class="n">Add</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;add {x}&quot;</span><span class="p">)</span>
-        <span class="n">Remove</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;remove {x}&quot;</span><span class="p">)</span>
-        <span class="n">Rename</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rename {name}&quot;</span><span class="p">)</span>
-        <span class="n">Clear</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;clear&quot;</span><span class="p">)</span>
-        <span class="n">List</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;list&quot;</span><span class="p">)</span>
+        <span class="nc">Add</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;add </span><span class="si">{</span><span class="n">x</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nc">Remove</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;remove </span><span class="si">{</span><span class="n">x</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nc">Rename</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rename </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nc">Clear</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;clear&quot;</span><span class="p">)</span>
+        <span class="kt">List</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;list&quot;</span><span class="p">)</span>
 </code></pre></div>
 </details>
 <h2 id="where-to-learn-more">Where to learn more<a class="headerlink" href="#where-to-learn-more" title="Permanent link">&para;</a></h2>

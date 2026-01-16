@@ -3989,10 +3989,10 @@ obvious change even though <code>incan fmt</code> would update the file.</p>
 <li><strong>4 spaces</strong> per indentation level</li>
 <li>No tabs</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">calculate</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="m">0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">x</span> <span class="o">*</span> <span class="m">2</span>
-    <span class="k">return</span> <span class="m">0</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">calculate</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">x</span> <span class="o">*</span> <span class="mi">2</span>
+    <span class="k">return</span> <span class="mi">0</span>
 </code></pre></div>
 <h3 id="line-length">Line Length<a class="headerlink" href="#line-length" title="Permanent link">&para;</a></h3>
 <ul>
@@ -4005,23 +4005,23 @@ obvious change even though <code>incan fmt</code> would update the file.</p>
 <li><strong>2 blank lines</strong> between top-level declarations (functions, classes, models, traits)</li>
 <li><strong>1 blank line</strong> between methods within a class/model</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">first_function</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">first_function</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">pass</span>
 
 
-<span class="k">def</span> <span class="n">second_function</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">second_function</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">pass</span>
 
 
-<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="nb">int</span>
 
-    <span class="k">def</span> <span class="n">greet</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Hello, {self.name}&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span>
 
-    <span class="k">def</span> <span class="n">is_adult</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">age</span> <span class="o">&gt;=</span> <span class="m">18</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">is_adult</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">age</span> <span class="o">&gt;=</span> <span class="mi">18</span>
 </code></pre></div>
 <h3 id="spacing">Spacing<a class="headerlink" href="#spacing" title="Permanent link">&para;</a></h3>
 <ul>
@@ -4045,11 +4045,11 @@ obvious change even though <code>incan fmt</code> would update the file.</p>
 <li>Single-line docstrings on one line: <code>"""Brief description"""</code></li>
 <li>Multi-line docstrings with content on separate lines:</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">This is a longer docstring.</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This is a longer docstring.</span>
 
-<span class="s2">It can span multiple lines.</span>
-<span class="s2">&quot;&quot;&quot;</span>
+<span class="sd">It can span multiple lines.</span>
+<span class="sd">&quot;&quot;&quot;</span>
 </code></pre></div>
 <h2 id="cli-options">CLI Options<a class="headerlink" href="#cli-options" title="Permanent link">&para;</a></h2>
 <table>

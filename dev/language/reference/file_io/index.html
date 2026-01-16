@@ -3736,27 +3736,27 @@
 <p>For task-oriented examples, see <a href="../../how-to/file_io/">File I/O (how-to)</a>.</p>
 <h2 id="path-methods-and-properties">Path methods and properties<a class="headerlink" href="#path-methods-and-properties" title="Permanent link">&para;</a></h2>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Create from string</span>
-<span class="c1">p = Path(&quot;data/config.toml&quot;)</span>
+<span class="n">p</span> <span class="o">=</span> <span class="nc">Path</span><span class="p">(</span><span class="s2">&quot;data/config.toml&quot;</span><span class="p">)</span>
 
 <span class="c1"># Join paths with /</span>
-<span class="c1">cfg = Path(&quot;config&quot;) / &quot;app.toml&quot;</span>
+<span class="n">cfg</span> <span class="o">=</span> <span class="nc">Path</span><span class="p">(</span><span class="s2">&quot;config&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="s2">&quot;app.toml&quot;</span>
 
 <span class="c1"># Queries</span>
-<span class="c1">p.exists()</span>
-<span class="c1">p.is_file()</span>
-<span class="c1">p.is_dir()</span>
-<span class="c1">p.is_absolute()</span>
+<span class="n">p</span><span class="o">.</span><span class="n">exists</span><span class="p">()</span>
+<span class="n">p</span><span class="o">.</span><span class="n">is_file</span><span class="p">()</span>
+<span class="n">p</span><span class="o">.</span><span class="n">is_dir</span><span class="p">()</span>
+<span class="n">p</span><span class="o">.</span><span class="n">is_absolute</span><span class="p">()</span>
 
 <span class="c1"># Components</span>
-<span class="c1">p.name</span>
-<span class="c1">p.stem</span>
-<span class="c1">p.suffix</span>
-<span class="c1">p.parent</span>
-<span class="c1">p.parts</span>
+<span class="n">p</span><span class="o">.</span><span class="n">name</span>
+<span class="n">p</span><span class="o">.</span><span class="n">stem</span>
+<span class="n">p</span><span class="o">.</span><span class="n">suffix</span>
+<span class="n">p</span><span class="o">.</span><span class="n">parent</span>
+<span class="n">p</span><span class="o">.</span><span class="n">parts</span>
 
 <span class="c1"># Derive new paths</span>
-<span class="c1">p.with_suffix(&quot;.tmp&quot;)</span>
-<span class="c1">p.with_name(&quot;summary.txt&quot;)</span>
+<span class="n">p</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.tmp&quot;</span><span class="p">)</span>
+<span class="n">p</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="s2">&quot;summary.txt&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="path-constructors-joins-queries-and-components">Path constructors, joins, queries, and components<a class="headerlink" href="#path-constructors-joins-queries-and-components" title="Permanent link">&para;</a></h3>
 <table>
@@ -3961,13 +3961,13 @@
 </table>
 <h2 id="ioerror">IoError<a class="headerlink" href="#ioerror" title="Permanent link">&para;</a></h2>
 <p>File operations return <code>Result[T, IoError]</code>. Common error variants:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">IoError</span><span class="p">:</span>
-    <span class="n">NotFound</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
-    <span class="n">PermissionDenied</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
-    <span class="n">AlreadyExists</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
-    <span class="n">IsDirectory</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
-    <span class="n">NotDirectory</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span>
-    <span class="n">Other</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">IoError</span><span class="p">:</span>
+    <span class="nc">NotFound</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span>
+    <span class="nc">PermissionDenied</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span>
+    <span class="nc">AlreadyExists</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span>
+    <span class="nc">IsDirectory</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span>
+    <span class="nc">NotDirectory</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span>
+    <span class="nc">Other</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="raii-automatic-resource-cleanup">RAII: Automatic resource cleanup<a class="headerlink" href="#raii-automatic-resource-cleanup" title="Permanent link">&para;</a></h2>
 <p>Incan uses RAII (Resource Acquisition Is Initialization) for file handles. When a <code>File</code> goes out of scope, it’s

@@ -3657,7 +3657,7 @@
 rather than the entire f-string.</p>
 <h2 id="motivation">Motivation<a class="headerlink" href="#motivation" title="Permanent link">&para;</a></h2>
 <p>Currently, when an error occurs in an f-string expression like:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[Producer {id}] Sending message {i}&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[Producer </span><span class="si">{</span><span class="nb">id</span><span class="si">}</span><span class="s2">] Sending message </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>The error points to the entire f-string:</p>
 <div class="language-bash highlight"><pre><span></span><code><span class="nb">type</span><span class="w"> </span>error:<span class="w"> </span>Unknown<span class="w"> </span>symbol<span class="w"> </span><span class="s1">&#39;i&#39;</span>

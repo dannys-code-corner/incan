@@ -3766,81 +3766,81 @@ This works well for known, fixed schemas but falls short for:</p>
 <li><strong>Mixed schemas</strong> — JSON where some parts are typed and others are dynamic</li>
 </ol>
 <h3 id="current-approach-works">Current Approach (Works)<a class="headerlink" href="#current-approach-works" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">,</span> <span class="n">Deserialize</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Serialize</span><span class="p">,</span> <span class="kt">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">.</span><span class="n">from_json</span><span class="p">(</span><span class="n">json_str</span><span class="p">)</span><span class="err">?</span>
-<span class="n">println</span><span class="p">(</span><span class="n">user</span><span class="p">.</span><span class="n">name</span><span class="p">)</span>
+<span class="n">user</span> <span class="o">=</span> <span class="nc">User</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span><span class="n">json_str</span><span class="p">)</span><span class="err">?</span>
+<span class="nb">println</span><span class="p">(</span><span class="n">user</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="proposed-addition">Proposed Addition<a class="headerlink" href="#proposed-addition" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Parse unknown JSON</span>
-<span class="c1">data = JsonValue.parse(json_str)?</span>
+<span class="n">data</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">json_str</span><span class="p">)</span><span class="err">?</span>
 
 <span class="c1"># Access dynamically</span>
-<span class="c1">name = data[&quot;user&quot;][&quot;name&quot;].as_str()</span>
-<span class="c1">count = data[&quot;count&quot;].as_int()</span>
-<span class="c1">items = data[&quot;items&quot;].as_list()</span>
+<span class="n">name</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;user&quot;</span><span class="p">][</span><span class="s2">&quot;name&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">as_str</span><span class="p">()</span>
+<span class="nb">count</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;count&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">as_int</span><span class="p">()</span>
+<span class="n">items</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;items&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">as_list</span><span class="p">()</span>
 
 <span class="c1"># Check types at runtime</span>
-<span class="c1">if data[&quot;field&quot;].is_string():</span>
-<span class="c1">    println(data[&quot;field&quot;].as_str())</span>
+<span class="k">if</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;field&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">is_string</span><span class="p">():</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;field&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">as_str</span><span class="p">())</span>
 </code></pre></div>
 <h2 id="detailed-design">Detailed Design<a class="headerlink" href="#detailed-design" title="Permanent link">&para;</a></h2>
 <h3 id="jsonvalue-type">JsonValue Type<a class="headerlink" href="#jsonvalue-type" title="Permanent link">&para;</a></h3>
 <p><code>JsonValue</code> is an enum representing any JSON value:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">JsonValue</span><span class="p">:</span>
-    <span class="n">Null</span>
-    <span class="n">Bool</span><span class="p">(</span><span class="n">bool</span><span class="p">)</span>
-    <span class="n">Int</span><span class="p">(</span><span class="n">int</span><span class="p">)</span>
-    <span class="n">Float</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>
-    <span class="n">String</span><span class="p">(</span><span class="n">str</span><span class="p">)</span>
-    <span class="n">Array</span><span class="p">(</span><span class="n">List</span><span class="p">[</span><span class="n">JsonValue</span><span class="p">])</span>
-    <span class="n">Object</span><span class="p">(</span><span class="n">Dict</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">JsonValue</span><span class="p">])</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">JsonValue</span><span class="p">:</span>
+    <span class="nc">Null</span>
+    <span class="nc">Bool</span><span class="p">(</span><span class="nb">bool</span><span class="p">)</span>
+    <span class="nc">Int</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+    <span class="nc">Float</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+    <span class="nc">String</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+    <span class="nc">Array</span><span class="p">(</span><span class="kt">List</span><span class="p">[</span><span class="nc">JsonValue</span><span class="p">])</span>
+    <span class="nc">Object</span><span class="p">(</span><span class="kt">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nc">JsonValue</span><span class="p">])</span>
 </code></pre></div>
 <h3 id="constructors">Constructors<a class="headerlink" href="#constructors" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Parse from string</span>
-<span class="c1">value = JsonValue.parse(json_str) -&gt; Result[JsonValue, str]</span>
+<span class="n">value</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">json_str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">JsonValue</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>
 
 <span class="c1"># Create values directly</span>
-<span class="c1">null_val = JsonValue.null()</span>
-<span class="c1">bool_val = JsonValue.bool(true)</span>
-<span class="c1">int_val = JsonValue.int(42)</span>
-<span class="c1">str_val = JsonValue.string(&quot;hello&quot;)</span>
-<span class="c1">arr_val = JsonValue.array([val1, val2])</span>
-<span class="c1">obj_val = JsonValue.object({&quot;key&quot;: value})</span>
+<span class="n">null_val</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="n">null</span><span class="p">()</span>
+<span class="n">bool_val</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="kt">bool</span><span class="p">(</span><span class="k">true</span><span class="p">)</span>
+<span class="n">int_val</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="kt">int</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span>
+<span class="n">str_val</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="n">string</span><span class="p">(</span><span class="s2">&quot;hello&quot;</span><span class="p">)</span>
+<span class="n">arr_val</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">val1</span><span class="p">,</span> <span class="n">val2</span><span class="p">])</span>
+<span class="n">obj_val</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="n">object</span><span class="p">({</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="n">value</span><span class="p">})</span>
 </code></pre></div>
 <h3 id="access-methods">Access Methods<a class="headerlink" href="#access-methods" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Type checking</span>
-<span class="c1">value.is_null() -&gt; bool</span>
-<span class="c1">value.is_bool() -&gt; bool</span>
-<span class="c1">value.is_int() -&gt; bool</span>
-<span class="c1">value.is_float() -&gt; bool</span>
-<span class="c1">value.is_string() -&gt; bool</span>
-<span class="c1">value.is_array() -&gt; bool</span>
-<span class="c1">value.is_object() -&gt; bool</span>
+<span class="n">value</span><span class="o">.</span><span class="n">is_null</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+<span class="n">value</span><span class="o">.</span><span class="n">is_bool</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+<span class="n">value</span><span class="o">.</span><span class="n">is_int</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+<span class="n">value</span><span class="o">.</span><span class="n">is_float</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+<span class="n">value</span><span class="o">.</span><span class="n">is_string</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+<span class="n">value</span><span class="o">.</span><span class="n">is_array</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+<span class="n">value</span><span class="o">.</span><span class="n">is_object</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
 
 <span class="c1"># Value extraction (returns Option)</span>
-<span class="c1">value.as_bool() -&gt; Option[bool]</span>
-<span class="c1">value.as_int() -&gt; Option[int]</span>
-<span class="c1">value.as_float() -&gt; Option[float]</span>
-<span class="c1">value.as_str() -&gt; Option[str]</span>
-<span class="c1">value.as_array() -&gt; Option[List[JsonValue]]</span>
-<span class="c1">value.as_object() -&gt; Option[Dict[str, JsonValue]]</span>
+<span class="n">value</span><span class="o">.</span><span class="n">as_bool</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span>
+<span class="n">value</span><span class="o">.</span><span class="n">as_int</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
+<span class="n">value</span><span class="o">.</span><span class="n">as_float</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span>
+<span class="n">value</span><span class="o">.</span><span class="n">as_str</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+<span class="n">value</span><span class="o">.</span><span class="n">as_array</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="kt">List</span><span class="p">[</span><span class="nc">JsonValue</span><span class="p">]]</span>
+<span class="n">value</span><span class="o">.</span><span class="n">as_object</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="kt">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nc">JsonValue</span><span class="p">]]</span>
 </code></pre></div>
 <h3 id="indexing">Indexing<a class="headerlink" href="#indexing" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Object field access</span>
-<span class="c1">value[&quot;key&quot;] -&gt; JsonValue  # Returns JsonValue.Null if missing</span>
+<span class="n">value</span><span class="p">[</span><span class="s2">&quot;key&quot;</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="nc">JsonValue</span>  <span class="c1"># Returns JsonValue.Null if missing</span>
 
 <span class="c1"># Array index access</span>
-<span class="c1">value[0] -&gt; JsonValue  # Returns JsonValue.Null if out of bounds</span>
+<span class="n">value</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="nc">JsonValue</span>  <span class="c1"># Returns JsonValue.Null if out of bounds</span>
 
 <span class="c1"># Chained access</span>
-<span class="c1">value[&quot;user&quot;][&quot;address&quot;][&quot;city&quot;].as_str()</span>
+<span class="n">value</span><span class="p">[</span><span class="s2">&quot;user&quot;</span><span class="p">][</span><span class="s2">&quot;address&quot;</span><span class="p">][</span><span class="s2">&quot;city&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">as_str</span><span class="p">()</span>
 </code></pre></div>
 <h3 id="serialization">Serialization<a class="headerlink" href="#serialization" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">value</span><span class="p">.</span><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span>  <span class="c1"># Serialize back to JSON string</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">value</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span>  <span class="c1"># Serialize back to JSON string</span>
 </code></pre></div>
 <h2 id="rust-implementation">Rust Implementation<a class="headerlink" href="#rust-implementation" title="Permanent link">&para;</a></h2>
 <p>Maps to <code>serde_json::Value</code>:</p>
@@ -3858,11 +3858,11 @@ This works well for known, fixed schemas but falls short for:</p>
 </code></pre></div>
 <h2 id="hybrid-models">Hybrid Models<a class="headerlink" href="#hybrid-models" title="Permanent link">&para;</a></h2>
 <p>Mix typed and dynamic:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">,</span> <span class="n">Deserialize</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">ApiResponse</span><span class="p">:</span>
-    <span class="n">status</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">message</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">data</span><span class="p">:</span> <span class="n">JsonValue</span>  <span class="c1"># Dynamic payload</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Serialize</span><span class="p">,</span> <span class="kt">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">ApiResponse</span><span class="p">:</span>
+    <span class="n">status</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">message</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">data</span><span class="p">:</span> <span class="nc">JsonValue</span>  <span class="c1"># Dynamic payload</span>
 </code></pre></div>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-dictstr-any">1. Dict[str, Any]<a class="headerlink" href="#1-dictstr-any" title="Permanent link">&para;</a></h3>

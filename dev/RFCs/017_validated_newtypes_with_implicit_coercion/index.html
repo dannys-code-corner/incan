@@ -3845,11 +3845,11 @@ constructors, or via a future “impure validation” extension.</p>
 <h2 id="proposal-sketch">Proposal sketch<a class="headerlink" href="#proposal-sketch" title="Permanent link">&para;</a></h2>
 <h3 id="newtype-validationconversion-hook-canonical">Newtype validation/conversion hook (canonical)<a class="headerlink" href="#newtype-validationconversion-hook-canonical" title="Permanent link">&para;</a></h3>
 <p>For a newtype:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">type</span> <span class="n">Attempts</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">int</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">from_underlying</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Attempts</span><span class="p">,</span> <span class="n">ValidationError</span><span class="p">]:</span>
-        <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;=</span> <span class="m">0</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="n">ValidationError</span><span class="p">(</span><span class="s2">&quot;attempts must be &gt;= 1&quot;</span><span class="p">))</span>
-        <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">Attempts</span><span class="p">(</span><span class="n">n</span><span class="p">))</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nb">type</span> <span class="nc">Attempts</span> <span class="o">=</span> <span class="k">newtype</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">from_underlying</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Attempts</span><span class="p">,</span> <span class="nc">ValidationError</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">ValidationError</span><span class="p">(</span><span class="s2">&quot;attempts must be &gt;= 1&quot;</span><span class="p">))</span>
+        <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nc">Attempts</span><span class="p">(</span><span class="n">n</span><span class="p">))</span>
 </code></pre></div>
 <p><strong>Notes</strong>:</p>
 <ul>
@@ -3888,8 +3888,8 @@ constructors, or via a future “impure validation” extension.</p>
 as type-level parameters using bracket syntax:</p>
 <p>(Inspiration: this is similar in spirit to Python's <code>typing.Annotated[...]</code> constraints and pydantic's constrained types.
 The goal is “feel”, not copying pydantic syntax.)</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">type</span> <span class="n">NonNegativeInt</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">int</span><span class="p">[</span><span class="n">ge</span><span class="o">=</span><span class="m">0</span><span class="p">]</span>
-<span class="k">type</span> <span class="n">PositiveInt</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">int</span><span class="p">[</span><span class="n">gt</span><span class="o">=</span><span class="m">0</span><span class="p">]</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nb">type</span> <span class="nc">NonNegativeInt</span> <span class="o">=</span> <span class="k">newtype</span> <span class="nb">int</span><span class="p">[</span><span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">]</span>
+<span class="nb">type</span> <span class="nc">PositiveInt</span> <span class="o">=</span> <span class="k">newtype</span> <span class="nb">int</span><span class="p">[</span><span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">]</span>
 </code></pre></div>
 <p><strong>Semantics</strong>:</p>
 <ul>
@@ -3925,8 +3925,8 @@ The goal is “feel”, not copying pydantic syntax.)</p>
 </ul>
 <h3 id="newtype-on-newtype-transitive-coercion">Newtype-on-newtype (transitive coercion)<a class="headerlink" href="#newtype-on-newtype-transitive-coercion" title="Permanent link">&para;</a></h3>
 <p>Newtypes should be able to wrap other newtypes:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">type</span> <span class="n">PositiveInt</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">int</span><span class="p">[</span><span class="n">gt</span><span class="o">=</span><span class="m">0</span><span class="p">]</span>
-<span class="k">type</span> <span class="n">RetryAttempts</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">PositiveInt</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nb">type</span> <span class="nc">PositiveInt</span> <span class="o">=</span> <span class="k">newtype</span> <span class="nb">int</span><span class="p">[</span><span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">]</span>
+<span class="nb">type</span> <span class="nc">RetryAttempts</span> <span class="o">=</span> <span class="k">newtype</span> <span class="nc">PositiveInt</span>
 </code></pre></div>
 <p>In this case, implicit coercion should be transitive:</p>
 <ul>

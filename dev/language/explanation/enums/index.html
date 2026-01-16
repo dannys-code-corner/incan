@@ -4035,14 +4035,14 @@ hierarchies and <code>isinstance(...)</code> checks, which are not exhaustive an
 <p>Note: Python 3.10+ has <code>match</code>/<code>case</code>, but it still won’t enforce exhaustiveness the way Incan does.</p>
 </blockquote>
 <p><strong>Incan (enum + exhaustive <code>match</code>)</strong>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Shape</span><span class="p">:</span>
-    <span class="n">Circle</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>
-    <span class="n">Rectangle</span><span class="p">(</span><span class="n">float</span><span class="p">,</span> <span class="n">float</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Shape</span><span class="p">:</span>
+    <span class="nc">Circle</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+    <span class="nc">Rectangle</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">area</span><span class="p">(</span><span class="n">shape</span><span class="p">:</span> <span class="n">Shape</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">float</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">area</span><span class="p">(</span><span class="n">shape</span><span class="p">:</span> <span class="nc">Shape</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">shape</span><span class="p">:</span>
-        <span class="n">Circle</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="m">3.14159</span> <span class="o">*</span> <span class="n">r</span> <span class="o">*</span> <span class="n">r</span>
-        <span class="n">Rectangle</span><span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="n">h</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">w</span> <span class="o">*</span> <span class="n">h</span>
+        <span class="nc">Circle</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="mf">3.14159</span> <span class="o">*</span> <span class="n">r</span> <span class="o">*</span> <span class="n">r</span>
+        <span class="nc">Rectangle</span><span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="n">h</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">w</span> <span class="o">*</span> <span class="n">h</span>
 </code></pre></div>
 <p>If you add a new variant later, the compiler will point you at the <code>match</code> sites that must be updated.</p>
 </details>
@@ -4054,132 +4054,132 @@ hierarchies and <code>isinstance(...)</code> checks, which are not exhaustive an
 - Construction uses Incan’s syntax (e.g. <code>Status.Active</code> / <code>Message.Move(1, 2)</code>), rather than Rust’s <code>Type::Variant(...)</code>.</p>
 </details>
 <h2 id="a-motivating-example">A motivating example<a class="headerlink" href="#a-motivating-example" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Shape</span><span class="p">:</span>
-    <span class="n">Circle</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>          <span class="c1"># radius</span>
-<span class="c1">    Rectangle(float, float)  # width, height</span>
-<span class="c1">    Triangle(float, float)   # base, height</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Shape</span><span class="p">:</span>
+    <span class="nc">Circle</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>          <span class="c1"># radius</span>
+    <span class="nc">Rectangle</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">)</span>  <span class="c1"># width, height</span>
+    <span class="nc">Triangle</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">)</span>   <span class="c1"># base, height</span>
 
-<span class="c1">def area(shape: Shape) -&gt; float:</span>
-<span class="c1">    match shape:</span>
-<span class="c1">        Circle(r) =&gt; return 3.14159 * r * r</span>
-<span class="c1">        Rectangle(w, h) =&gt; return w * h</span>
-<span class="c1">        Triangle(b, h) =&gt; return 0.5 * b * h</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">area</span><span class="p">(</span><span class="n">shape</span><span class="p">:</span> <span class="nc">Shape</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">shape</span><span class="p">:</span>
+        <span class="nc">Circle</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="mf">3.14159</span> <span class="o">*</span> <span class="n">r</span> <span class="o">*</span> <span class="n">r</span>
+        <span class="nc">Rectangle</span><span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="n">h</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">w</span> <span class="o">*</span> <span class="n">h</span>
+        <span class="nc">Triangle</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">b</span> <span class="o">*</span> <span class="n">h</span>
 </code></pre></div>
 <p>If you add a new variant later, the compiler will point you at the <code>match</code> sites that must be updated.</p>
 <h2 id="basic-syntax">Basic syntax<a class="headerlink" href="#basic-syntax" title="Permanent link">&para;</a></h2>
 <h3 id="simple-enum-no-data">Simple Enum (No Data)<a class="headerlink" href="#simple-enum-no-data" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Status</span><span class="p">:</span>
-    <span class="n">Pending</span>
-    <span class="n">Active</span>
-    <span class="n">Completed</span>
-    <span class="n">Cancelled</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Status</span><span class="p">:</span>
+    <span class="nc">Pending</span>
+    <span class="nc">Active</span>
+    <span class="nc">Completed</span>
+    <span class="nc">Cancelled</span>
 </code></pre></div>
 <p>Usage:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">status</span> <span class="o">=</span> <span class="n">Status</span><span class="p">.</span><span class="n">Active</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">status</span> <span class="o">=</span> <span class="nc">Status</span><span class="o">.</span><span class="nc">Active</span>
 
 <span class="k">match</span> <span class="n">status</span><span class="p">:</span>
-    <span class="n">Pending</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Waiting...&quot;</span><span class="p">)</span>
-    <span class="n">Active</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;In progress&quot;</span><span class="p">)</span>
-    <span class="n">Completed</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Done!&quot;</span><span class="p">)</span>
-    <span class="n">Cancelled</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Aborted&quot;</span><span class="p">)</span>
+    <span class="nc">Pending</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Waiting...&quot;</span><span class="p">)</span>
+    <span class="nc">Active</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;In progress&quot;</span><span class="p">)</span>
+    <span class="nc">Completed</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Done!&quot;</span><span class="p">)</span>
+    <span class="nc">Cancelled</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Aborted&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="enum-with-data-variants">Enum with Data (Variants)<a class="headerlink" href="#enum-with-data-variants" title="Permanent link">&para;</a></h3>
 <p>Each variant can carry different types and amounts of data:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Message</span><span class="p">:</span>
-    <span class="n">Quit</span>                           <span class="c1"># No data</span>
-<span class="c1">    Move(int, int)                 # Two ints (x, y)</span>
-<span class="c1">    Write(str)                     # A string</span>
-<span class="c1">    ChangeColor(int, int, int)     # RGB values</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Message</span><span class="p">:</span>
+    <span class="nc">Quit</span>                           <span class="c1"># No data</span>
+    <span class="nc">Move</span><span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>                 <span class="c1"># Two ints (x, y)</span>
+    <span class="nc">Write</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>                     <span class="c1"># A string</span>
+    <span class="nc">ChangeColor</span><span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>     <span class="c1"># RGB values</span>
 </code></pre></div>
 <p>Usage:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">msg</span> <span class="o">=</span> <span class="n">Message</span><span class="p">.</span><span class="n">Move</span><span class="p">(</span><span class="m">10</span><span class="p">,</span> <span class="m">20</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">msg</span> <span class="o">=</span> <span class="nc">Message</span><span class="o">.</span><span class="nc">Move</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">)</span>
 
 <span class="k">match</span> <span class="n">msg</span><span class="p">:</span>
-    <span class="n">Quit</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Goodbye&quot;</span><span class="p">)</span>
-    <span class="n">Move</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Moving to ({x}, {y})&quot;</span><span class="p">)</span>
-    <span class="n">Write</span><span class="p">(</span><span class="n">text</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Message: {text}&quot;</span><span class="p">)</span>
-    <span class="n">ChangeColor</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">g</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;RGB({r}, {g}, {b})&quot;</span><span class="p">)</span>
+    <span class="nc">Quit</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Goodbye&quot;</span><span class="p">)</span>
+    <span class="nc">Move</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Moving to (</span><span class="si">{</span><span class="n">x</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">y</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+    <span class="nc">Write</span><span class="p">(</span><span class="n">text</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Message: </span><span class="si">{</span><span class="n">text</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nc">ChangeColor</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">g</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;RGB(</span><span class="si">{</span><span class="n">r</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">g</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">b</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
 </code></pre></div>
 <hr />
 <h2 id="generic-enums">Generic enums<a class="headerlink" href="#generic-enums" title="Permanent link">&para;</a></h2>
 <p>Enums can be generic — parameterized over types:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
-    <span class="n">Some</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="kt">Option</span><span class="p">[</span><span class="nc">T</span><span class="p">]:</span>
+    <span class="nb">Some</span><span class="p">(</span><span class="nc">T</span><span class="p">)</span>
     <span class="kc">None</span>
 
-<span class="k">enum</span> <span class="n">Result</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">]:</span>
-    <span class="n">Ok</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
-    <span class="n">Err</span><span class="p">(</span><span class="n">E</span><span class="p">)</span>
+<span class="k">enum</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">T</span><span class="p">,</span> <span class="nc">E</span><span class="p">]:</span>
+    <span class="nb">Ok</span><span class="p">(</span><span class="nc">T</span><span class="p">)</span>
+    <span class="nb">Err</span><span class="p">(</span><span class="nc">E</span><span class="p">)</span>
 </code></pre></div>
 <blockquote>
 <p>Note: These are Incan's built-in types for handling optional values and errors.</p>
 </blockquote>
 <h3 id="custom-generic-enum">Custom Generic Enum<a class="headerlink" href="#custom-generic-enum" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Tree</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
-    <span class="n">Leaf</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
-    <span class="n">Node</span><span class="p">(</span><span class="n">Tree</span><span class="p">[</span><span class="n">T</span><span class="p">],</span> <span class="n">Tree</span><span class="p">[</span><span class="n">T</span><span class="p">])</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Tree</span><span class="p">[</span><span class="nc">T</span><span class="p">]:</span>
+    <span class="nc">Leaf</span><span class="p">(</span><span class="nc">T</span><span class="p">)</span>
+    <span class="nc">Node</span><span class="p">(</span><span class="nc">Tree</span><span class="p">[</span><span class="nc">T</span><span class="p">],</span> <span class="nc">Tree</span><span class="p">[</span><span class="nc">T</span><span class="p">])</span>
 
 <span class="c1"># A binary tree of integers</span>
-<span class="c1">tree = Node(</span>
-<span class="c1">    Leaf(1),</span>
-<span class="c1">    Node(Leaf(2), Leaf(3))</span>
-<span class="c1">)</span>
+<span class="n">tree</span> <span class="o">=</span> <span class="nc">Node</span><span class="p">(</span>
+    <span class="nc">Leaf</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+    <span class="nc">Node</span><span class="p">(</span><span class="nc">Leaf</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="nc">Leaf</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span>
+<span class="p">)</span>
 </code></pre></div>
 <hr />
 <h2 id="pattern-matching">Pattern matching<a class="headerlink" href="#pattern-matching" title="Permanent link">&para;</a></h2>
 <p>The <code>match</code> expression is how you work with enums. It's exhaustive — the compiler ensures you handle all variants.</p>
 <h3 id="basic-match">Basic Match<a class="headerlink" href="#basic-match" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Direction</span><span class="p">:</span>
-    <span class="n">North</span>
-    <span class="n">South</span>
-    <span class="n">East</span>
-    <span class="n">West</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Direction</span><span class="p">:</span>
+    <span class="nc">North</span>
+    <span class="nc">South</span>
+    <span class="nc">East</span>
+    <span class="nc">West</span>
 
-<span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="n">dir</span><span class="p">:</span> <span class="n">Direction</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">match</span> <span class="n">dir</span><span class="p">:</span>
-        <span class="n">North</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going up&quot;</span>
-        <span class="n">South</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going down&quot;</span>
-        <span class="n">East</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going right&quot;</span>
-        <span class="n">West</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going left&quot;</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">describe</span><span class="p">(</span><span class="nb">dir</span><span class="p">:</span> <span class="nc">Direction</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">match</span> <span class="nb">dir</span><span class="p">:</span>
+        <span class="nc">North</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going up&quot;</span>
+        <span class="nc">South</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going down&quot;</span>
+        <span class="nc">East</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going right&quot;</span>
+        <span class="nc">West</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Going left&quot;</span>
 </code></pre></div>
 <h3 id="extracting-data">Extracting Data<a class="headerlink" href="#extracting-data" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">ApiResponse</span><span class="p">:</span>
-    <span class="n">Success</span><span class="p">(</span><span class="n">str</span><span class="p">,</span> <span class="n">int</span><span class="p">)</span>        <span class="c1"># (data, status_code)</span>
-<span class="c1">    Error(str)               # error message</span>
-<span class="c1">    Loading</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">ApiResponse</span><span class="p">:</span>
+    <span class="nc">Success</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>        <span class="c1"># (data, status_code)</span>
+    <span class="nc">Error</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>               <span class="c1"># error message</span>
+    <span class="nc">Loading</span>
 
-<span class="c1">def handle(response: ApiResponse) -&gt; None:</span>
-<span class="c1">    match response:</span>
-<span class="c1">        Success(data, code) =&gt;</span>
-<span class="c1">            println(f&quot;Got {code}: {data}&quot;)</span>
-<span class="c1">        Error(msg) =&gt;</span>
-<span class="c1">            println(f&quot;Failed: {msg}&quot;)</span>
-<span class="c1">        Loading =&gt;</span>
-<span class="c1">            println(&quot;Please wait...&quot;)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle</span><span class="p">(</span><span class="n">response</span><span class="p">:</span> <span class="nc">ApiResponse</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">response</span><span class="p">:</span>
+        <span class="nc">Success</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">code</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Got </span><span class="si">{</span><span class="n">code</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">data</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nc">Error</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Failed: </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nc">Loading</span> <span class="o">=&gt;</span>
+            <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Please wait...&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="wildcard-pattern">Wildcard Pattern<a class="headerlink" href="#wildcard-pattern" title="Permanent link">&para;</a></h3>
 <p>Use <code>_</code> to match any remaining variants:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">match</span> <span class="n">status</span><span class="p">:</span>
-    <span class="n">Active</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Working on it&quot;</span><span class="p">)</span>
-    <span class="n">_</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Not active&quot;</span><span class="p">)</span>  <span class="c1"># Matches Pending, Completed, Cancelled</span>
+    <span class="nc">Active</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Working on it&quot;</span><span class="p">)</span>
+    <span class="n">_</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Not active&quot;</span><span class="p">)</span>  <span class="c1"># Matches Pending, Completed, Cancelled</span>
 </code></pre></div>
 <blockquote>
 <p><strong>Warning</strong>: Wildcards can hide bugs when you add new variants. Prefer explicit matches.</p>
 </blockquote>
 <h3 id="guards">Guards<a class="headerlink" href="#guards" title="Permanent link">&para;</a></h3>
 <p>Add conditions to patterns:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Temperature</span><span class="p">:</span>
-    <span class="n">Celsius</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>
-    <span class="n">Fahrenheit</span><span class="p">(</span><span class="n">float</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Temperature</span><span class="p">:</span>
+    <span class="nc">Celsius</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+    <span class="nc">Fahrenheit</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="n">temp</span><span class="p">:</span> <span class="n">Temperature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">describe</span><span class="p">(</span><span class="n">temp</span><span class="p">:</span> <span class="nc">Temperature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">temp</span><span class="p">:</span>
-        <span class="n">Celsius</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">if</span> <span class="n">c</span> <span class="o">&gt;</span> <span class="m">30</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Hot (Celsius)&quot;</span>
-        <span class="n">Celsius</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">if</span> <span class="n">c</span> <span class="o">&lt;</span> <span class="m">10</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Cold (Celsius)&quot;</span>
-        <span class="n">Celsius</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Moderate (Celsius)&quot;</span>
-        <span class="n">Fahrenheit</span><span class="p">(</span><span class="n">f</span><span class="p">)</span> <span class="k">if</span> <span class="n">f</span> <span class="o">&gt;</span> <span class="m">86</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Hot (Fahrenheit)&quot;</span>
-        <span class="n">Fahrenheit</span><span class="p">(</span><span class="n">f</span><span class="p">)</span> <span class="k">if</span> <span class="n">f</span> <span class="o">&lt;</span> <span class="m">50</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Cold (Fahrenheit)&quot;</span>
-        <span class="n">Fahrenheit</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Moderate (Fahrenheit)&quot;</span>
+        <span class="nc">Celsius</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">if</span> <span class="n">c</span> <span class="o">&gt;</span> <span class="mi">30</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Hot (Celsius)&quot;</span>
+        <span class="nc">Celsius</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">if</span> <span class="n">c</span> <span class="o">&lt;</span> <span class="mi">10</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Cold (Celsius)&quot;</span>
+        <span class="nc">Celsius</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Moderate (Celsius)&quot;</span>
+        <span class="nc">Fahrenheit</span><span class="p">(</span><span class="n">f</span><span class="p">)</span> <span class="k">if</span> <span class="n">f</span> <span class="o">&gt;</span> <span class="mi">86</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Hot (Fahrenheit)&quot;</span>
+        <span class="nc">Fahrenheit</span><span class="p">(</span><span class="n">f</span><span class="p">)</span> <span class="k">if</span> <span class="n">f</span> <span class="o">&lt;</span> <span class="mi">50</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Cold (Fahrenheit)&quot;</span>
+        <span class="nc">Fahrenheit</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Moderate (Fahrenheit)&quot;</span>
 </code></pre></div>
 <hr />
 <h2 id="common-patterns">Common patterns<a class="headerlink" href="#common-patterns" title="Permanent link">&para;</a></h2>
@@ -4256,22 +4256,22 @@ hierarchies and <code>isinstance(...)</code> checks, which are not exhaustive an
 </tbody>
 </table>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Enum: closed set, exhaustive matching</span>
-<span class="c1">enum PaymentMethod:</span>
-<span class="c1">    CreditCard(str, str)     # number, expiry</span>
-<span class="c1">    PayPal(str)              # email</span>
-<span class="c1">    BankTransfer(str, str)   # account, routing</span>
+<span class="k">enum</span> <span class="nc">PaymentMethod</span><span class="p">:</span>
+    <span class="nc">CreditCard</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>     <span class="c1"># number, expiry</span>
+    <span class="nc">PayPal</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>              <span class="c1"># email</span>
+    <span class="nc">BankTransfer</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>   <span class="c1"># account, routing</span>
 
 <span class="c1"># Model: data-first, serialization</span>
-<span class="c1">@derive(Serialize, Deserialize)</span>
-<span class="c1">model PaymentRequest:</span>
-<span class="c1">    method: PaymentMethod</span>
-<span class="c1">    amount: float</span>
-<span class="c1">    currency: str = &quot;USD&quot;</span>
+<span class="nd">@derive</span><span class="p">(</span><span class="kt">Serialize</span><span class="p">,</span> <span class="kt">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">PaymentRequest</span><span class="p">:</span>
+    <span class="n">method</span><span class="p">:</span> <span class="nc">PaymentMethod</span>
+    <span class="n">amount</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">currency</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;USD&quot;</span>
 
 <span class="c1"># Class: behavior-first, inheritance</span>
-<span class="c1">class PaymentProcessor:</span>
-<span class="c1">    def process(self, amount: float) -&gt; Result[Receipt, Error]:</span>
-<span class="c1">        ...</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">PaymentProcessor</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">process</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">amount</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Receipt</span><span class="p">,</span> <span class="nc">Error</span><span class="p">]:</span>
+        <span class="o">...</span>
 </code></pre></div>
 <p>See also: <a href="../models_and_classes/">Models and Classes Guide</a></p>
 <hr />
@@ -4279,24 +4279,24 @@ hierarchies and <code>isinstance(...)</code> checks, which are not exhaustive an
 <p>Incan provides these enums in the standard library:</p>
 <h3 id="optiont">Option[T]<a class="headerlink" href="#optiont" title="Permanent link">&para;</a></h3>
 <p>Represents an optional value:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
-    <span class="n">Some</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="kt">Option</span><span class="p">[</span><span class="nc">T</span><span class="p">]:</span>
+    <span class="nb">Some</span><span class="p">(</span><span class="nc">T</span><span class="p">)</span>
     <span class="kc">None</span>
 </code></pre></div>
 <p>See: <a href="../error_handling/">Error Handling Guide</a></p>
 <h3 id="resultt-e">Result[T, E]<a class="headerlink" href="#resultt-e" title="Permanent link">&para;</a></h3>
 <p>Represents success or failure:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Result</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">]:</span>
-    <span class="n">Ok</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
-    <span class="n">Err</span><span class="p">(</span><span class="n">E</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">T</span><span class="p">,</span> <span class="nc">E</span><span class="p">]:</span>
+    <span class="nb">Ok</span><span class="p">(</span><span class="nc">T</span><span class="p">)</span>
+    <span class="nb">Err</span><span class="p">(</span><span class="nc">E</span><span class="p">)</span>
 </code></pre></div>
 <p>See: <a href="../error_handling/">Error Handling Guide</a></p>
 <h3 id="ordering">Ordering<a class="headerlink" href="#ordering" title="Permanent link">&para;</a></h3>
 <p>Comparison result:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Ordering</span><span class="p">:</span>
-    <span class="n">Less</span>
-    <span class="n">Equal</span>
-    <span class="n">Greater</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">Ordering</span><span class="p">:</span>
+    <span class="nc">Less</span>
+    <span class="nc">Equal</span>
+    <span class="nc">Greater</span>
 </code></pre></div>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
 <table>

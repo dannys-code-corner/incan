@@ -3680,13 +3680,13 @@
 <li><strong>User override</strong>: not supported</li>
 <li><strong>Intended behavior</strong>: structured output (type name + fields)</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Point</span><span class="p">:</span>
-    <span class="n">x</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">y</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">Point</span><span class="p">:</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">p</span> <span class="o">=</span> <span class="n">Point</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="m">10</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="m">20</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{p:?}&quot;</span><span class="p">)</span>  <span class="c1"># Point { x: 10, y: 20 }</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="nc">Point</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">p</span><span class="si">:</span><span class="s2">?</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>  <span class="c1"># Point { x: 10, y: 20 }</span>
 </code></pre></div>
 <hr />
 <h2 id="display-automatic-customizable-with-__str__">Display (Automatic, customizable with <code>__str__</code>)<a class="headerlink" href="#display-automatic-customizable-with-__str__" title="Permanent link">&para;</a></h2>
@@ -3696,17 +3696,17 @@
 <li><strong>Custom behavior</strong>: define <code>__str__(self) -&gt; str</code></li>
 <li><strong>Conflict rule</strong>: if you define <code>__str__</code>, do not also <code>@derive(Display)</code></li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">email</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">email</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">__str__</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;{self.name} &lt;{self.email}&gt;&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> &lt;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">email</span><span class="si">}</span><span class="s2">&gt;&quot;</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{u}&quot;</span><span class="p">)</span>    <span class="c1"># Alice &lt;alice@example.com&gt;</span>
-<span class="c1">    println(f&quot;{u:?}&quot;)  # User { name: &quot;Alice&quot;, email: &quot;alice@example.com&quot; }</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">u</span> <span class="o">=</span> <span class="nc">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">u</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>    <span class="c1"># Alice &lt;alice@example.com&gt;</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">u</span><span class="si">:</span><span class="s2">?</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>  <span class="c1"># User { name: &quot;Alice&quot;, email: &quot;alice@example.com&quot; }</span>
 </code></pre></div>
 <hr />
 <h2 id="debug-vs-display-quick-guide">Debug vs Display (quick guide)<a class="headerlink" href="#debug-vs-display-quick-guide" title="Permanent link">&para;</a></h2>

@@ -3978,16 +3978,16 @@ Incan uses <code>model</code> instead because:</p>
 <li>Prefix a declaration with <code>pub</code> (publicly visible) to make it importable from other modules.</li>
 <li>For <code>model</code> and <code>class</code>, <code>pub</code> also makes fields public by default.</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>           <span class="c1"># private by default</span>
-<span class="c1">    name: str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>           <span class="c1"># private by default</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="c1">pub model PublicUser: # public model, fields are now public by default</span>
-<span class="c1">    name: str</span>
+<span class="k">pub</span> <span class="k">model</span> <span class="nc">PublicUser</span><span class="p">:</span> <span class="c1"># public model, fields are now public by default</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="c1">class Service:        # private by default</span>
-<span class="c1">    repo: Repo</span>
-<span class="c1">    def work(self) -&gt; None:</span>
-<span class="c1">        ...</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Service</span><span class="p">:</span>        <span class="c1"># private by default</span>
+    <span class="n">repo</span><span class="p">:</span> <span class="nc">Repo</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">work</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">Coming from Python?</p>
@@ -3998,22 +3998,22 @@ You have to specifically opt-in to make items public.</p>
 <h2 id="model-data-first">Model: Data-First<a class="headerlink" href="#model-data-first" title="Permanent link">&para;</a></h2>
 <p>Models are for <strong>data containers</strong> — types where the fields are the primary concern.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Simple data model</span>
-<span class="c1">model Point:</span>
-<span class="c1">    x: int</span>
-<span class="c1">    y: int</span>
+<span class="k">model</span> <span class="nc">Point</span><span class="p">:</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">int</span>
 
 <span class="c1"># With derives for common behaviors</span>
-<span class="c1">@derive(Eq, Hash, Serialize)</span>
-<span class="c1">model User:</span>
-<span class="c1">    id: int</span>
-<span class="c1">    name: str</span>
-<span class="c1">    email: str</span>
+<span class="nd">@derive</span><span class="p">(</span><span class="kt">Eq</span><span class="p">,</span> <span class="kt">Hash</span><span class="p">,</span> <span class="kt">Serialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="nb">id</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">email</span><span class="p">:</span> <span class="nb">str</span>
 
 <span class="c1"># With default values</span>
-<span class="c1">model Config:</span>
-<span class="c1">    host: str = &quot;localhost&quot;</span>
-<span class="c1">    port: int = 8080</span>
-<span class="c1">    debug: bool = false</span>
+<span class="k">model</span> <span class="nc">Config</span><span class="p">:</span>
+    <span class="n">host</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;localhost&quot;</span>
+    <span class="n">port</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8080</span>
+    <span class="n">debug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="k">false</span>
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">Coming from Python?</p>
@@ -4022,13 +4022,13 @@ You have to specifically opt-in to make items public.</p>
 <h3 id="what-models-get-automatically">What Models Get Automatically<a class="headerlink" href="#what-models-get-automatically" title="Permanent link">&para;</a></h3>
 <p>By default, models (and classes) get <code>Debug</code> and <code>Clone</code>. Use <code>@derive(...)</code> to add additional behavior.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Debug + Clone are implicit:</span>
-<span class="c1">model User:</span>
-<span class="c1">    name: str</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
 <span class="c1"># You only need @derive(...) when you want extra traits:</span>
-<span class="c1">@derive(Eq, Hash, Serialize)</span>
-<span class="c1">model User:</span>
-<span class="c1">    name: str</span>
+<span class="nd">@derive</span><span class="p">(</span><span class="kt">Eq</span><span class="p">,</span> <span class="kt">Hash</span><span class="p">,</span> <span class="kt">Serialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 </code></pre></div>
 <h3 id="models-cannot-inherit">Models Cannot Inherit<a class="headerlink" href="#models-cannot-inherit" title="Permanent link">&para;</a></h3>
 <p>Models intentionally do not support inheritance. Incan keeps <code>model</code> as a <strong>data-first</strong> construct: </p>
@@ -4038,89 +4038,89 @@ You have to specifically opt-in to make items public.</p>
 <li>introduces override-style complexity that belongs in <code>class</code>.</li>
 </ul>
 <p>Prefer <strong>composition</strong> to keep the structure explicit and tooling predictable.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Base</span><span class="p">:</span>
-    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">Base</span><span class="p">:</span>
+    <span class="nb">id</span><span class="p">:</span> <span class="nb">int</span>
 
 <span class="hll"><span class="c1"># ❌ Inheritance is NOT allowed</span>
-</span><span class="hll"><span class="c1">model Child extends Base:  # Error!</span>
-</span><span class="c1">    name: str</span>
+</span><span class="hll"><span class="k">model</span> <span class="nc">Child</span> <span class="n">extends</span> <span class="nc">Base</span><span class="p">:</span>  <span class="c1"># Error!</span>
+</span>    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="c1">model Child:</span>
-<span class="hll"><span class="c1">    base: Base  # ✅ Use composition instead</span>
-</span><span class="c1">    name: str</span>
+<span class="k">model</span> <span class="nc">Child</span><span class="p">:</span>
+<span class="hll">    <span class="n">base</span><span class="p">:</span> <span class="nc">Base</span>  <span class="c1"># ✅ Use composition instead</span>
+</span>    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 </code></pre></div>
 <h2 id="class-behavior-first">Class: Behavior-First<a class="headerlink" href="#class-behavior-first" title="Permanent link">&para;</a></h2>
 <p>Classes are for <strong>objects with behavior</strong> — types where methods are the primary concern.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="n">Loggable</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">log</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="p">...</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="nc">Loggable</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
 
-<span class="k">class</span> <span class="n">UserService</span> <span class="k">with</span> <span class="n">Loggable</span><span class="p">:</span>
-    <span class="n">repo</span><span class="p">:</span> <span class="n">UserRepository</span>
-    <span class="n">logger_name</span><span class="p">:</span> <span class="n">str</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">UserService</span> <span class="k">with</span> <span class="nc">Loggable</span><span class="p">:</span>
+    <span class="n">repo</span><span class="p">:</span> <span class="nc">UserRepository</span>
+    <span class="n">logger_name</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">log</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[{self.logger_name}] {msg}&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">logger_name</span><span class="si">}</span><span class="s2">] </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="n">create_user</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">,</span> <span class="n">email</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">ServiceError</span><span class="p">]:</span>
-        <span class="k">self</span><span class="p">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Creating user: {name}&quot;</span><span class="p">)</span>
-        <span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">id</span><span class="o">=</span><span class="n">next_id</span><span class="p">(),</span> <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="n">email</span><span class="p">)</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">repo</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">create_user</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">email</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nc">ServiceError</span><span class="p">]:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Creating user: </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">user</span> <span class="o">=</span> <span class="nc">User</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="n">next_id</span><span class="p">(),</span> <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="n">email</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">repo</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="n">find_user</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">User</span><span class="p">]:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">repo</span><span class="p">.</span><span class="n">find_by_id</span><span class="p">(</span><span class="n">id</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">find_user</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="nc">User</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">repo</span><span class="o">.</span><span class="n">find_by_id</span><span class="p">(</span><span class="nb">id</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="classes-support-inheritance">Classes Support Inheritance<a class="headerlink" href="#classes-support-inheritance" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span> <span class="n">Animal</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Animal</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">speak</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">speak</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">return</span> <span class="s2">&quot;...&quot;</span>
 
-<span class="hll"><span class="k">class</span> <span class="n">Dog</span> <span class="n">extends</span> <span class="n">Animal</span><span class="p">:</span>
-</span>    <span class="n">breed</span><span class="p">:</span> <span class="n">str</span>
+<span class="hll"><span class="k">class</span><span class="w"> </span><span class="nc">Dog</span> <span class="n">extends</span> <span class="nc">Animal</span><span class="p">:</span>
+</span>    <span class="n">breed</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">speak</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">speak</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">return</span> <span class="s2">&quot;Woof!&quot;</span>
 
-<span class="hll"><span class="k">class</span> <span class="n">Cat</span> <span class="n">extends</span> <span class="n">Animal</span><span class="p">:</span>
-</span>    <span class="n">indoor</span><span class="p">:</span> <span class="n">bool</span>
+<span class="hll"><span class="k">class</span><span class="w"> </span><span class="nc">Cat</span> <span class="n">extends</span> <span class="nc">Animal</span><span class="p">:</span>
+</span>    <span class="n">indoor</span><span class="p">:</span> <span class="nb">bool</span>
 
-    <span class="k">def</span> <span class="n">speak</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">speak</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">return</span> <span class="s2">&quot;Meow!&quot;</span>
 </code></pre></div>
 <h3 id="mutable-methods">Mutable Methods<a class="headerlink" href="#mutable-methods" title="Permanent link">&para;</a></h3>
 <p>Use <code>mut self</code> when a method modifies the object:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span> <span class="n">Counter</span><span class="p">:</span>
-    <span class="n">value</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Counter</span><span class="p">:</span>
+    <span class="n">value</span><span class="p">:</span> <span class="nb">int</span>
 
-    <span class="k">def</span> <span class="n">get</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">value</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span>
 
-<span class="hll">    <span class="k">def</span> <span class="n">increment</span><span class="p">(</span><span class="k">mut</span> <span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span class="hll">        <span class="k">self</span><span class="p">.</span><span class="n">value</span> <span class="o">=</span> <span class="k">self</span><span class="p">.</span><span class="n">value</span> <span class="o">+</span> <span class="m">1</span>
+<span class="hll">    <span class="k">def</span><span class="w"> </span><span class="nf">increment</span><span class="p">(</span><span class="k">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span class="hll">        <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">+</span> <span class="mi">1</span>
 </span>
-<span class="hll">    <span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="k">mut</span> <span class="k">self</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span class="hll">        <span class="k">self</span><span class="p">.</span><span class="n">value</span> <span class="o">=</span> <span class="k">self</span><span class="p">.</span><span class="n">value</span> <span class="o">+</span> <span class="n">n</span>
+<span class="hll">    <span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span class="hll">        <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">+</span> <span class="n">n</span>
 </span></code></pre></div>
 <h2 id="both-can-implement-traits">Both Can Implement Traits<a class="headerlink" href="#both-can-implement-traits" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="n">Describable</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span> <span class="p">...</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="nc">Describable</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">describe</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span> <span class="o">...</span>
 
 <span class="hll"><span class="c1"># Model implementing a trait</span>
-</span><span class="hll"><span class="c1">model Product with Describable:</span>
-</span><span class="c1">    name: str</span>
-<span class="c1">    price: float</span>
+</span><span class="hll"><span class="k">model</span> <span class="nc">Product</span> <span class="k">with</span> <span class="nc">Describable</span><span class="p">:</span>
+</span>    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">price</span><span class="p">:</span> <span class="nb">float</span>
 
-<span class="c1">    def describe(self) -&gt; str:</span>
-<span class="c1">        return f&quot;{self.name}: ${self.price}&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">describe</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">: $</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">price</span><span class="si">}</span><span class="s2">&quot;</span>
 
 <span class="hll"><span class="c1"># Class implementing a trait</span>
-</span><span class="hll"><span class="c1">class Employee with Describable:</span>
-</span><span class="c1">    name: str</span>
-<span class="c1">    title: str</span>
+</span><span class="hll"><span class="k">class</span><span class="w"> </span><span class="nc">Employee</span> <span class="k">with</span> <span class="nc">Describable</span><span class="p">:</span>
+</span>    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">title</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="c1">    def describe(self) -&gt; str:</span>
-<span class="c1">        return f&quot;{self.name}, {self.title}&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">describe</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">title</span><span class="si">}</span><span class="s2">&quot;</span>
 </code></pre></div>
 <h2 id="design-philosophy">Design Philosophy<a class="headerlink" href="#design-philosophy" title="Permanent link">&para;</a></h2>
 <p>Incan's type system follows the principle: <strong>Python's vocabulary, Rust's guarantees</strong>.</p>

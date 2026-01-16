@@ -3885,10 +3885,10 @@
 <p>Incan treats errors as <strong>values</strong>: functions that can fail return a <code>Result[T, E]</code>, and callers handle success/error
 <strong>explicitly</strong>. This makes failure modes visible in APIs, encourages structured error types, and keeps control flow clear.</p>
 <h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">,</span> <span class="n">AppError</span><span class="p">]:</span>
-    <span class="n">content</span> <span class="o">=</span> <span class="n">path</span><span class="p">.</span><span class="n">read_text</span><span class="p">().</span><span class="n">map_err</span><span class="p">(</span><span class="n">AppError</span><span class="p">.</span><span class="n">Io</span><span class="p">)</span><span class="err">?</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">parse_toml</span><span class="p">[</span><span class="n">Config</span><span class="p">](</span><span class="n">content</span><span class="p">).</span><span class="n">map_err</span><span class="p">(</span><span class="n">AppError</span><span class="p">.</span><span class="n">Parse</span><span class="p">)</span><span class="err">?</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Config</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
+    <span class="n">content</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">read_text</span><span class="p">()</span><span class="o">.</span><span class="n">map_err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">Io</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">parse_toml</span><span class="p">[</span><span class="nc">Config</span><span class="p">](</span><span class="n">content</span><span class="p">)</span><span class="o">.</span><span class="n">map_err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">Parse</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
 </code></pre></div>
 <p>The key ideas:</p>
 <ul>
@@ -3911,10 +3911,10 @@ Python 3.10+ has <code>match</code>/<code>case</code>, but it still won’t enfo
     <span class="k">return</span> <span class="n">parse_config</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>  <span class="c1"># may raise ParseError</span>
 </code></pre></div>
 <p><strong>Incan (explicit propagation)</strong>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">,</span> <span class="n">AppError</span><span class="p">]:</span>
-    <span class="n">content</span> <span class="o">=</span> <span class="n">path</span><span class="p">.</span><span class="n">read_text</span><span class="p">().</span><span class="n">map_err</span><span class="p">(</span><span class="n">AppError</span><span class="p">.</span><span class="n">Io</span><span class="p">)</span><span class="err">?</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">parse_toml</span><span class="p">[</span><span class="n">Config</span><span class="p">](</span><span class="n">content</span><span class="p">).</span><span class="n">map_err</span><span class="p">(</span><span class="n">AppError</span><span class="p">.</span><span class="n">Parse</span><span class="p">)</span><span class="err">?</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Config</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
+    <span class="n">content</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">read_text</span><span class="p">()</span><span class="o">.</span><span class="n">map_err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">Io</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">parse_toml</span><span class="p">[</span><span class="nc">Config</span><span class="p">](</span><span class="n">content</span><span class="p">)</span><span class="o">.</span><span class="n">map_err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">Parse</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
 </code></pre></div>
 <p>Quick mapping:</p>
 <table>
@@ -3950,9 +3950,9 @@ Python 3.10+ has <code>match</code>/<code>case</code>, but it still won’t enfo
     <span class="n">config</span> <span class="o">=</span> <span class="n">default_config</span><span class="p">()</span>
 </code></pre></div>
 <p>vs.</p>
-<div class="language-incan highlight"><span class="filename">Incan `match`</span><pre><span></span><code><span class="k">match</span> <span class="n">load_config</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="s2">&quot;app.toml&quot;</span><span class="p">)):</span>
-    <span class="n">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">config</span>
-    <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span>
+<div class="language-incan highlight"><span class="filename">Incan `match`</span><pre><span></span><code><span class="k">match</span> <span class="n">load_config</span><span class="p">(</span><span class="nc">Path</span><span class="p">(</span><span class="s2">&quot;app.toml&quot;</span><span class="p">)):</span>
+    <span class="nb">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">config</span>
+    <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span>
         <span class="n">log</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
         <span class="n">default_config</span><span class="p">()</span>
 </code></pre></div>
@@ -3973,41 +3973,41 @@ caught values are frequently <code>unknown</code>).</p>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">,</span> <span class="n">AppError</span><span class="p">]:</span>
-    <span class="n">content</span> <span class="o">=</span> <span class="n">path</span><span class="p">.</span><span class="n">read_text</span><span class="p">().</span><span class="n">map_err</span><span class="p">(</span><span class="n">AppError</span><span class="p">.</span><span class="n">Io</span><span class="p">)</span><span class="err">?</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">parse_toml</span><span class="p">[</span><span class="n">Config</span><span class="p">](</span><span class="n">content</span><span class="p">).</span><span class="n">map_err</span><span class="p">(</span><span class="n">AppError</span><span class="p">.</span><span class="n">Parse</span><span class="p">)</span><span class="err">?</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Config</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
+    <span class="n">content</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">read_text</span><span class="p">()</span><span class="o">.</span><span class="n">map_err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">Io</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">parse_toml</span><span class="p">[</span><span class="nc">Config</span><span class="p">](</span><span class="n">content</span><span class="p">)</span><span class="o">.</span><span class="n">map_err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">Parse</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">load_config_or_default</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Config</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_config_or_default</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Config</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
-        <span class="n">Ok</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">cfg</span>
-        <span class="n">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">default_config</span><span class="p">()</span>
+        <span class="nb">Ok</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">cfg</span>
+        <span class="nb">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="n">default_config</span><span class="p">()</span>
 </code></pre></div>
 </details>
 <h2 id="core-types">Core types<a class="headerlink" href="#core-types" title="Permanent link">&para;</a></h2>
 <h3 id="resultt-e"><code>Result[T, E]</code><a class="headerlink" href="#resultt-e" title="Permanent link">&para;</a></h3>
 <p><code>Result</code> represents an operation that can succeed (<code>Ok(T)</code>) or fail (<code>Err(E)</code>).</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">divide</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">int</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="n">b</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;division by zero&quot;</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">a</span> <span class="o">/</span> <span class="n">b</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">divide</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">b</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="s2">&quot;division by zero&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">a</span> <span class="o">/</span> <span class="n">b</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">match</span> <span class="n">divide</span><span class="p">(</span><span class="m">10</span><span class="p">,</span> <span class="m">2</span><span class="p">):</span>
-        <span class="n">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Result: {value}&quot;</span><span class="p">)</span>
-        <span class="n">Err</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error: {msg}&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">divide</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">2</span><span class="p">):</span>
+        <span class="nb">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Result: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">Err</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error: </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="optiont"><code>Option[T]</code><a class="headerlink" href="#optiont" title="Permanent link">&para;</a></h3>
 <p><code>Option</code> (optional) represents a value that may or may not exist.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">find_user</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">User</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="n">id</span> <span class="k">in</span> <span class="n">users</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">Some</span><span class="p">(</span><span class="n">users</span><span class="p">[</span><span class="n">id</span><span class="p">])</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">find_user</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="nc">User</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="nb">id</span> <span class="ow">in</span> <span class="n">users</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">Some</span><span class="p">(</span><span class="n">users</span><span class="p">[</span><span class="nb">id</span><span class="p">])</span>
     <span class="k">return</span> <span class="kc">None</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">match</span> <span class="n">find_user</span><span class="p">(</span><span class="m">42</span><span class="p">):</span>
-        <span class="n">Some</span><span class="p">(</span><span class="n">user</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Found: {user.name}&quot;</span><span class="p">)</span>
-        <span class="kc">None</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;User not found&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">find_user</span><span class="p">(</span><span class="mi">42</span><span class="p">):</span>
+        <span class="nb">Some</span><span class="p">(</span><span class="n">user</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Found: </span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="kc">None</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;User not found&quot;</span><span class="p">)</span>
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">Coming from Python?</p>
@@ -4017,10 +4017,10 @@ In Incan, <code>Option[T]</code> is an explicit enum that the compiler can reaso
 <h2 id="the-operator-propagation">The <code>?</code> operator (propagation)<a class="headerlink" href="#the-operator-propagation" title="Permanent link">&para;</a></h2>
 <p>The <code>?</code> operator provides concise error propagation: if the left-hand side is <code>Err(e)</code>, return early with that error;
 otherwise unwrap the <code>Ok(...)</code> value.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">process</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Data</span><span class="p">,</span> <span class="n">Error</span><span class="p">]:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">process</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Data</span><span class="p">,</span> <span class="nc">Error</span><span class="p">]:</span>
     <span class="n">data</span> <span class="o">=</span> <span class="n">fetch_data</span><span class="p">()</span><span class="err">?</span>
     <span class="n">valid</span> <span class="o">=</span> <span class="n">validate</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="err">?</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">valid</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">valid</span><span class="p">)</span>
 </code></pre></div>
 <p>Rules of thumb:</p>
 <ul>
@@ -4029,36 +4029,36 @@ otherwise unwrap the <code>Ok(...)</code> value.</p>
 </ul>
 <h3 id="a-common-compile-time-error">A common compile-time error<a class="headerlink" href="#a-common-compile-time-error" title="Permanent link">&para;</a></h3>
 <p><code>?</code> is only allowed when the function can return an error.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">data</span> <span class="o">=</span> <span class="n">fetch_data</span><span class="p">()</span><span class="err">?</span>  <span class="c1"># error: can&#39;t use ? in a non-Result function</span>
 </code></pre></div>
 <h2 id="structured-error-types">Structured error types<a class="headerlink" href="#structured-error-types" title="Permanent link">&para;</a></h2>
 <p>Prefer structured errors over strings so callers can pattern match on failure modes and carry context.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">ProcessError</span><span class="p">:</span>
-    <span class="n">NetworkFailure</span><span class="p">(</span><span class="n">str</span><span class="p">,</span> <span class="n">int</span><span class="p">)</span>     <span class="c1"># (url, status)</span>
-<span class="c1">    ValidationFailed(str, str)   # (field, reason)</span>
-<span class="c1">    NotFound(str)                # resource</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">ProcessError</span><span class="p">:</span>
+    <span class="nc">NetworkFailure</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>     <span class="c1"># (url, status)</span>
+    <span class="nc">ValidationFailed</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>   <span class="c1"># (field, reason)</span>
+    <span class="nc">NotFound</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>                <span class="c1"># resource</span>
 
-<span class="c1">def process() -&gt; Result[Data, ProcessError]:</span>
-<span class="c1">    return Err(ProcessError.NotFound(&quot;user&quot;))</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">process</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Data</span><span class="p">,</span> <span class="nc">ProcessError</span><span class="p">]:</span>
+    <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">ProcessError</span><span class="o">.</span><span class="nc">NotFound</span><span class="p">(</span><span class="s2">&quot;user&quot;</span><span class="p">))</span>
 </code></pre></div>
 <h2 id="common-helpers">Common helpers<a class="headerlink" href="#common-helpers" title="Permanent link">&para;</a></h2>
 <h3 id="transform-errors-with-map_err">Transform errors with <code>map_err</code><a class="headerlink" href="#transform-errors-with-map_err" title="Permanent link">&para;</a></h3>
 <p>Use this when you want to convert one error type into another at a boundary.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">,</span> <span class="n">AppError</span><span class="p">]:</span>
-    <span class="n">content</span> <span class="o">=</span> <span class="n">path</span><span class="p">.</span><span class="n">read_text</span><span class="p">().</span><span class="n">map_err</span><span class="p">(</span><span class="n">AppError</span><span class="p">.</span><span class="n">Io</span><span class="p">)</span><span class="err">?</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">parse_toml</span><span class="p">[</span><span class="n">Config</span><span class="p">](</span><span class="n">content</span><span class="p">).</span><span class="n">map_err</span><span class="p">(</span><span class="n">AppError</span><span class="p">.</span><span class="n">Parse</span><span class="p">)</span><span class="err">?</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Config</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
+    <span class="n">content</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">read_text</span><span class="p">()</span><span class="o">.</span><span class="n">map_err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">Io</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">parse_toml</span><span class="p">[</span><span class="nc">Config</span><span class="p">](</span><span class="n">content</span><span class="p">)</span><span class="o">.</span><span class="n">map_err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">Parse</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="provide-defaults-with-unwrap_or">Provide defaults with <code>unwrap_or</code><a class="headerlink" href="#provide-defaults-with-unwrap_or" title="Permanent link">&para;</a></h3>
 <p>Use this for optional values where a default makes sense.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">get_setting</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">settings</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">).</span><span class="n">unwrap_or</span><span class="p">(</span><span class="s2">&quot;default_value&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_setting</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">settings</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">key</span><span class="p">)</span><span class="o">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="s2">&quot;default_value&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="convert-optiont-to-resultt-e-with-ok_or">Convert <code>Option[T]</code> to <code>Result[T, E]</code> with <code>ok_or</code><a class="headerlink" href="#convert-optiont-to-resultt-e-with-ok_or" title="Permanent link">&para;</a></h3>
 <p>Use this when absence should become a recoverable error.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">require_user</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
-    <span class="k">return</span> <span class="n">find_user</span><span class="p">(</span><span class="n">id</span><span class="p">).</span><span class="n">ok_or</span><span class="p">(</span><span class="s2">&quot;user not found&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">require_user</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">return</span> <span class="n">find_user</span><span class="p">(</span><span class="nb">id</span><span class="p">)</span><span class="o">.</span><span class="n">ok_or</span><span class="p">(</span><span class="s2">&quot;user not found&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="unwrap-and-panic"><code>unwrap()</code> and <code>panic()</code><a class="headerlink" href="#unwrap-and-panic" title="Permanent link">&para;</a></h2>
 <p><code>unwrap()</code> extracts a value from <code>Option</code>/<code>Result</code>, and <strong>panics</strong> if it is <code>None</code>/<code>Err(...)</code>.</p>

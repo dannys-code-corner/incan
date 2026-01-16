@@ -3808,16 +3808,16 @@
 </ol>
 <h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
 <h3 id="basic-syntax">Basic Syntax<a class="headerlink" href="#basic-syntax" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">parametrize</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">parametrize</span>
 
-<span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;a, b, expected&quot;</span><span class="p">,</span> <span class="p">[</span>
-    <span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">),</span>
-    <span class="p">(</span><span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">),</span>
-    <span class="p">(</span><span class="o">-</span><span class="m">1</span><span class="p">,</span> <span class="m">1</span><span class="p">,</span> <span class="m">0</span><span class="p">),</span>
-    <span class="p">(</span><span class="m">100</span><span class="p">,</span> <span class="m">200</span><span class="p">,</span> <span class="m">300</span><span class="p">),</span>
+<span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;a, b, expected&quot;</span><span class="p">,</span> <span class="p">[</span>
+    <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+    <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
+    <span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
+    <span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">200</span><span class="p">,</span> <span class="mi">300</span><span class="p">),</span>
 <span class="p">])</span>
-<span class="k">def</span> <span class="n">test_add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">expected</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">expected</span><span class="p">)</span>
 </code></pre></div>
 <p>Output:</p>
 <div class="language-bash highlight"><pre><span></span><code>test_math.incn::test_add<span class="o">[</span><span class="m">1</span>-2-3<span class="o">]</span><span class="w"> </span>PASSED
@@ -3826,13 +3826,13 @@ test_math.incn::test_add<span class="o">[</span>-1-1-0<span class="o">]</span><s
 test_math.incn::test_add<span class="o">[</span><span class="m">100</span>-200-300<span class="o">]</span><span class="w"> </span>PASSED
 </code></pre></div>
 <h3 id="named-parameters">Named Parameters<a class="headerlink" href="#named-parameters" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;input, expected&quot;</span><span class="p">,</span> <span class="p">[</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;input, expected&quot;</span><span class="p">,</span> <span class="p">[</span>
     <span class="p">(</span><span class="s2">&quot;hello&quot;</span><span class="p">,</span> <span class="s2">&quot;HELLO&quot;</span><span class="p">),</span>
     <span class="p">(</span><span class="s2">&quot;World&quot;</span><span class="p">,</span> <span class="s2">&quot;WORLD&quot;</span><span class="p">),</span>
     <span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
 <span class="p">],</span> <span class="n">ids</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;lowercase&quot;</span><span class="p">,</span> <span class="s2">&quot;mixed&quot;</span><span class="p">,</span> <span class="s2">&quot;empty&quot;</span><span class="p">])</span>
-<span class="k">def</span> <span class="n">test_upper</span><span class="p">(</span><span class="n">input</span><span class="p">:</span> <span class="n">str</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">input</span><span class="p">.</span><span class="n">upper</span><span class="p">(),</span> <span class="n">expected</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_upper</span><span class="p">(</span><span class="nb">input</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="nb">upper</span><span class="p">(),</span> <span class="n">expected</span><span class="p">)</span>
 </code></pre></div>
 <p>Output:</p>
 <div class="language-bash highlight"><pre><span></span><code>test_string.incn::test_upper<span class="o">[</span>lowercase<span class="o">]</span><span class="w"> </span>PASSED
@@ -3840,11 +3840,11 @@ test_string.incn::test_upper<span class="o">[</span>mixed<span class="o">]</span
 test_string.incn::test_upper<span class="o">[</span>empty<span class="o">]</span><span class="w"> </span>PASSED
 </code></pre></div>
 <h3 id="multiple-parametrize-decorators">Multiple Parametrize Decorators<a class="headerlink" href="#multiple-parametrize-decorators" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">])</span>
-<span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="p">[</span><span class="m">10</span><span class="p">,</span> <span class="m">20</span><span class="p">])</span>
-<span class="k">def</span> <span class="n">test_multiply</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">result</span> <span class="o">=</span> <span class="n">x</span> <span class="o">*</span> <span class="n">y</span>
-    <span class="n">assert_true</span><span class="p">(</span><span class="n">result</span> <span class="o">&gt;</span> <span class="m">0</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+<span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_multiply</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="n">x</span> <span class="o">*</span> <span class="n">y</span>
+    <span class="nf">assert_true</span><span class="p">(</span><span class="kt">result</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
 </code></pre></div>
 <p>Generates 6 tests (cartesian product):</p>
 <div class="language-bash highlight"><pre><span></span><code>test_multiply<span class="o">[</span><span class="m">1</span>-10<span class="o">]</span>,<span class="w"> </span>test_multiply<span class="o">[</span><span class="m">1</span>-20<span class="o">]</span>,
@@ -3852,33 +3852,33 @@ test_multiply<span class="o">[</span><span class="m">2</span>-10<span class="o">
 test_multiply<span class="o">[</span><span class="m">3</span>-10<span class="o">]</span>,<span class="w"> </span>test_multiply<span class="o">[</span><span class="m">3</span>-20<span class="o">]</span>
 </code></pre></div>
 <h3 id="complex-types">Complex Types<a class="headerlink" href="#complex-types" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">TestCase</span><span class="p">:</span>
-    <span class="n">input</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">expected</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">description</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">TestCase</span><span class="p">:</span>
+    <span class="nb">input</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">expected</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">description</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;case&quot;</span><span class="p">,</span> <span class="p">[</span>
-    <span class="n">TestCase</span><span class="p">(</span><span class="n">input</span><span class="o">=</span><span class="s2">&quot;hello&quot;</span><span class="p">,</span> <span class="n">expected</span><span class="o">=</span><span class="m">5</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;simple word&quot;</span><span class="p">),</span>
-    <span class="n">TestCase</span><span class="p">(</span><span class="n">input</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">expected</span><span class="o">=</span><span class="m">0</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;empty string&quot;</span><span class="p">),</span>
-    <span class="n">TestCase</span><span class="p">(</span><span class="n">input</span><span class="o">=</span><span class="s2">&quot;hello world&quot;</span><span class="p">,</span> <span class="n">expected</span><span class="o">=</span><span class="m">11</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;with space&quot;</span><span class="p">),</span>
+<span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;case&quot;</span><span class="p">,</span> <span class="p">[</span>
+    <span class="nc">TestCase</span><span class="p">(</span><span class="nb">input</span><span class="o">=</span><span class="s2">&quot;hello&quot;</span><span class="p">,</span> <span class="n">expected</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;simple word&quot;</span><span class="p">),</span>
+    <span class="nc">TestCase</span><span class="p">(</span><span class="nb">input</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">expected</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;empty string&quot;</span><span class="p">),</span>
+    <span class="nc">TestCase</span><span class="p">(</span><span class="nb">input</span><span class="o">=</span><span class="s2">&quot;hello world&quot;</span><span class="p">,</span> <span class="n">expected</span><span class="o">=</span><span class="mi">11</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;with space&quot;</span><span class="p">),</span>
 <span class="p">])</span>
-<span class="k">def</span> <span class="n">test_length</span><span class="p">(</span><span class="k">case</span><span class="p">:</span> <span class="n">TestCase</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">len</span><span class="p">(</span><span class="k">case</span><span class="p">.</span><span class="n">input</span><span class="p">),</span> <span class="k">case</span><span class="p">.</span><span class="n">expected</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_length</span><span class="p">(</span><span class="k">case</span><span class="p">:</span> <span class="nc">TestCase</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="k">case</span><span class="o">.</span><span class="n">input</span><span class="p">),</span> <span class="k">case</span><span class="o">.</span><span class="n">expected</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="combining-with-fixtures">Combining with Fixtures<a class="headerlink" href="#combining-with-fixtures" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">fixture</span>
-<span class="k">def</span> <span class="n">database</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Database</span><span class="p">:</span>
-    <span class="n">db</span> <span class="o">=</span> <span class="n">Database</span><span class="p">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@fixture</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">database</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Database</span><span class="p">:</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="nc">Database</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
     <span class="k">yield</span> <span class="n">db</span>
-    <span class="n">db</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 
-<span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;key, value&quot;</span><span class="p">,</span> <span class="p">[</span>
+<span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;key, value&quot;</span><span class="p">,</span> <span class="p">[</span>
     <span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="s2">&quot;Alice&quot;</span><span class="p">),</span>
     <span class="p">(</span><span class="s2">&quot;age&quot;</span><span class="p">,</span> <span class="s2">&quot;30&quot;</span><span class="p">),</span>
 <span class="p">])</span>
-<span class="k">def</span> <span class="n">test_insert</span><span class="p">(</span><span class="n">database</span><span class="p">:</span> <span class="n">Database</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">str</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">database</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">database</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">),</span> <span class="n">value</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_insert</span><span class="p">(</span><span class="n">database</span><span class="p">:</span> <span class="nc">Database</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">database</span><span class="o">.</span><span class="nb">insert</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">database</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">key</span><span class="p">),</span> <span class="n">value</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="implementation">Implementation<a class="headerlink" href="#implementation" title="Permanent link">&para;</a></h2>
 <h3 id="phase-1-parser-changes">Phase 1: Parser Changes<a class="headerlink" href="#phase-1-parser-changes" title="Permanent link">&para;</a></h3>
@@ -3944,32 +3944,32 @@ test_math.incn::test_add<span class="o">[</span><span class="m">0</span>-0-0<spa
 </code></pre></div>
 <h2 id="edge-cases">Edge Cases<a class="headerlink" href="#edge-cases" title="Permanent link">&para;</a></h2>
 <h3 id="empty-parameter-list">Empty Parameter List<a class="headerlink" href="#empty-parameter-list" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[])</span>
-<span class="k">def</span> <span class="n">test_nothing</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_nothing</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">pass</span>
 </code></pre></div>
 <p>Result: No tests generated, warning emitted.</p>
 <h3 id="type-mismatches">Type Mismatches<a class="headerlink" href="#type-mismatches" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[</span><span class="m">1</span><span class="p">,</span> <span class="s2">&quot;two&quot;</span><span class="p">,</span> <span class="m">3.0</span><span class="p">])</span>
-<span class="k">def</span> <span class="n">test_typed</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;two&quot;</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_typed</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">pass</span>
 </code></pre></div>
 <p>Result: Compile error - parameter types must match function signature.</p>
 <h3 id="nested-tuples">Nested Tuples<a class="headerlink" href="#nested-tuples" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;point&quot;</span><span class="p">,</span> <span class="p">[</span>
-    <span class="p">((</span><span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">),</span> <span class="s2">&quot;origin&quot;</span><span class="p">),</span>
-    <span class="p">((</span><span class="m">1</span><span class="p">,</span> <span class="m">1</span><span class="p">),</span> <span class="s2">&quot;diagonal&quot;</span><span class="p">),</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;point&quot;</span><span class="p">,</span> <span class="p">[</span>
+    <span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="s2">&quot;origin&quot;</span><span class="p">),</span>
+    <span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="s2">&quot;diagonal&quot;</span><span class="p">),</span>
 <span class="p">])</span>
-<span class="k">def</span> <span class="n">test_points</span><span class="p">(</span><span class="n">point</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">int</span><span class="p">,</span> <span class="n">int</span><span class="p">],</span> <span class="n">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_points</span><span class="p">(</span><span class="n">point</span><span class="p">:</span> <span class="kt">Tuple</span><span class="p">[</span><span class="kt">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">coords</span><span class="p">,</span> <span class="n">name</span> <span class="o">=</span> <span class="n">point</span>
-    <span class="p">...</span>
+    <span class="o">...</span>
 </code></pre></div>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-loop-in-test">1. Loop in Test<a class="headerlink" href="#1-loop-in-test" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">test_add_all</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">cases</span> <span class="o">=</span> <span class="p">[(</span><span class="m">1</span><span class="p">,</span><span class="m">2</span><span class="p">,</span><span class="m">3</span><span class="p">),</span> <span class="p">(</span><span class="m">0</span><span class="p">,</span><span class="m">0</span><span class="p">,</span><span class="m">0</span><span class="p">)]</span>
-    <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">expected</span> <span class="k">in</span> <span class="n">cases</span><span class="p">:</span>
-        <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">expected</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">test_add_all</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">cases</span> <span class="o">=</span> <span class="p">[(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">)]</span>
+    <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">expected</span> <span class="ow">in</span> <span class="n">cases</span><span class="p">:</span>
+        <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">expected</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Rejected</strong>:</p>
 <ul>
@@ -3978,14 +3978,14 @@ test_math.incn::test_add<span class="o">[</span><span class="m">0</span>-0-0<spa
 <li>Harder to identify which case failed</li>
 </ul>
 <h3 id="2-test-tables-go-style">2. Test Tables (Go-style)<a class="headerlink" href="#2-test-tables-go-style" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">table</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span> <span class="m">1</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">:</span> <span class="m">2</span><span class="p">,</span> <span class="s2">&quot;expected&quot;</span><span class="p">:</span> <span class="m">3</span><span class="p">},</span>
-        <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span> <span class="m">0</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">:</span> <span class="m">0</span><span class="p">,</span> <span class="s2">&quot;expected&quot;</span><span class="p">:</span> <span class="m">0</span><span class="p">},</span>
+        <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;expected&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">},</span>
+        <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;expected&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">},</span>
     <span class="p">]</span>
-    <span class="k">for</span> <span class="k">case</span> <span class="k">in</span> <span class="n">table</span><span class="p">:</span>
+    <span class="k">for</span> <span class="k">case</span> <span class="ow">in</span> <span class="n">table</span><span class="p">:</span>
         <span class="k">with</span> <span class="n">subtest</span><span class="p">(</span><span class="k">case</span><span class="p">):</span>
-            <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="k">case</span><span class="p">[</span><span class="s2">&quot;a&quot;</span><span class="p">],</span> <span class="k">case</span><span class="p">[</span><span class="s2">&quot;b&quot;</span><span class="p">]),</span> <span class="k">case</span><span class="p">[</span><span class="s2">&quot;expected&quot;</span><span class="p">])</span>
+            <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="k">case</span><span class="p">[</span><span class="s2">&quot;a&quot;</span><span class="p">],</span> <span class="k">case</span><span class="p">[</span><span class="s2">&quot;b&quot;</span><span class="p">]),</span> <span class="k">case</span><span class="p">[</span><span class="s2">&quot;expected&quot;</span><span class="p">])</span>
 </code></pre></div>
 <p><strong>Rejected</strong>: More verbose, requires subtest infrastructure.</p>
 <h2 id="open-questions">Open Questions<a class="headerlink" href="#open-questions" title="Permanent link">&para;</a></h2>

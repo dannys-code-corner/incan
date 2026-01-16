@@ -3723,14 +3723,14 @@
 <hr />
 <h2 id="tie-breakers-ordering">Tie-breakers (ordering)<a class="headerlink" href="#tie-breakers-ordering" title="Permanent link">&para;</a></h2>
 <p>If you implement <code>__lt__</code>, avoid “accidental ties” by adding a deterministic tie-breaker:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Task</span><span class="p">:</span>
-    <span class="n">priority</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">Task</span><span class="p">:</span>
+    <span class="n">priority</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">__lt__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">Task</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-        <span class="k">if</span> <span class="k">self</span><span class="p">.</span><span class="n">priority</span> <span class="o">!=</span> <span class="n">other</span><span class="p">.</span><span class="n">priority</span><span class="p">:</span>
-            <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">priority</span> <span class="o">&lt;</span> <span class="n">other</span><span class="p">.</span><span class="n">priority</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">name</span> <span class="o">&lt;</span> <span class="n">other</span><span class="p">.</span><span class="n">name</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__lt__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="nc">Task</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">priority</span> <span class="o">!=</span> <span class="n">other</span><span class="o">.</span><span class="n">priority</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">priority</span> <span class="o">&lt;</span> <span class="n">other</span><span class="o">.</span><span class="n">priority</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">&lt;</span> <span class="n">other</span><span class="o">.</span><span class="n">name</span>
 </code></pre></div>
 
 

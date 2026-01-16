@@ -4350,7 +4350,7 @@ pytest/Rust/Jest muscle memory:</p>
 </table>
 <h3 id="the-testing-module">The <code>testing</code> module<a class="headerlink" href="#the-testing-module" title="Permanent link">&para;</a></h3>
 <p>Testing utilities are normal functions/decorators imported from the <code>testing</code> module:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span><span class="p">,</span> <span class="n">assert_true</span><span class="p">,</span> <span class="n">assert_false</span><span class="p">,</span> <span class="n">fail</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="nf">assert_eq</span><span class="p">,</span> <span class="nf">assert_true</span><span class="p">,</span> <span class="nf">assert_false</span><span class="p">,</span> <span class="n">fail</span>
 </code></pre></div>
 <p>Language-level <code>assert</code> semantics and the <code>testing.assert_*</code> mapping are defined in RFC 018.</p>
 <h3 id="where-tests-can-live-two-test-contexts">Where tests can live (two test contexts)<a class="headerlink" href="#where-tests-can-live-two-test-contexts" title="Permanent link">&para;</a></h3>
@@ -4361,15 +4361,15 @@ pytest/Rust/Jest muscle memory:</p>
 <li><code>*_test.incn</code></li>
 </ul>
 <p>Example:</p>
-<div class="language-incan highlight"><span class="filename">tests/test_math.incn</span><pre><span></span><code><span class="s2">&quot;&quot;&quot;Unit tests for math.&quot;&quot;&quot;</span>
+<div class="language-incan highlight"><span class="filename">tests/test_math.incn</span><pre><span></span><code><span class="sd">&quot;&quot;&quot;Unit tests for math.&quot;&quot;&quot;</span>
 
-<span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="nf">assert_eq</span>
 
-<span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-<span class="k">def</span> <span class="n">test_addition</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">),</span> <span class="m">5</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_addition</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="mi">5</span><span class="p">)</span>
 </code></pre></div>
 <p>Note: In test files, the entire file is already a test context. Do not wrap tests in <code>module tests:</code>; that construct is
 reserved for inline tests in production source files.</p>
@@ -4405,47 +4405,47 @@ RFC 018.</p>
 <li>it is named <code>test_*</code>, or</li>
 <li>it is decorated with <code>@test</code> from the <code>testing</code> module</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-<span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span><span class="p">,</span> <span class="n">test</span>
+<span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="nf">assert_eq</span><span class="p">,</span> <span class="k">test</span>
 
     <span class="c1"># implicitly marked as a test because it is named `test_*`</span>
-<span class="c1">    def test_by_name() -&gt; None:</span>
-<span class="c1">        assert_eq(add(1, 2), 3)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_by_name</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
 
-<span class="c1">    @test  # explicitly marked as a test</span>
-<span class="c1">    def any_name_is_ok() -&gt; None:</span>
-<span class="c1">        assert_eq(add(2, 2), 4)</span>
+    <span class="nd">@test</span>  <span class="c1"># explicitly marked as a test</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">any_name_is_ok</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">4</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="fixtures-pytest-style">Fixtures (pytest-style)<a class="headerlink" href="#fixtures-pytest-style" title="Permanent link">&para;</a></h3>
 <p>Fixtures are functions decorated with <code>@fixture</code> and injected by parameter name:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span><span class="p">,</span> <span class="n">assert_eq</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">fixture</span><span class="p">,</span> <span class="nf">assert_eq</span>
 
-    <span class="err">@</span><span class="n">fixture</span>
-    <span class="k">def</span> <span class="n">base</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
-        <span class="k">return</span> <span class="m">40</span>
+    <span class="nd">@fixture</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">base</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mi">40</span>
 
-    <span class="k">def</span> <span class="n">test_uses_fixture</span><span class="p">(</span><span class="n">base</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">assert_eq</span><span class="p">(</span><span class="n">base</span> <span class="o">+</span> <span class="m">2</span><span class="p">,</span> <span class="m">42</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_uses_fixture</span><span class="p">(</span><span class="n">base</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nf">assert_eq</span><span class="p">(</span><span class="n">base</span> <span class="o">+</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">42</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="parametrize">Parametrize<a class="headerlink" href="#parametrize" title="Permanent link">&para;</a></h3>
 <p>Parametrized tests expand into multiple cases:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-<span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">parametrize</span><span class="p">,</span> <span class="n">assert_eq</span><span class="p">,</span> <span class="n">test</span>
+<span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">parametrize</span><span class="p">,</span> <span class="nf">assert_eq</span><span class="p">,</span> <span class="k">test</span>
 
-    <span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;a, b, expected&quot;</span><span class="p">,</span> <span class="p">[</span>
-        <span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">),</span>
-        <span class="p">(</span><span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">),</span>
-        <span class="p">(</span><span class="o">-</span><span class="m">1</span><span class="p">,</span> <span class="m">1</span><span class="p">,</span> <span class="m">0</span><span class="p">),</span>
+    <span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;a, b, expected&quot;</span><span class="p">,</span> <span class="p">[</span>
+        <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
+        <span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
     <span class="p">])</span>
-    <span class="k">def</span> <span class="n">test_add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">expected</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">expected</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="running-tests">Running tests<a class="headerlink" href="#running-tests" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span class="c1"># Run all tests under tests/</span>
@@ -4506,33 +4506,33 @@ external services, global singletons, etc.). Incan provides two stdlib-gated sch
   <code>--jobs 1</code> if you need a single shared session fixture.</li>
 </ul>
 <p>Example:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">resource</span><span class="p">,</span> <span class="n">serial</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">resource</span><span class="p">,</span> <span class="n">serial</span>
 
-    <span class="err">@</span><span class="n">resource</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_migrate_schema</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="p">...</span>
+    <span class="nd">@resource</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_migrate_schema</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
 
-    <span class="err">@</span><span class="n">resource</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_user_repo_queries</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="p">...</span>
+    <span class="nd">@resource</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_user_repo_queries</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
 
-    <span class="err">@</span><span class="n">serial</span>
-    <span class="k">def</span> <span class="n">test_uses_fixed_port_8080</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="p">...</span>
+    <span class="nd">@serial</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_uses_fixed_port_8080</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
 </code></pre></div>
 <p>Note: <code>@mark("db")</code> is <em>classification</em> for selection/reporting; it does not imply locking. Use <code>@resource("db")</code> when
 you need mutual exclusion.</p>
 <h3 id="markers-pytest-style-and-marker-selection">Markers (pytest-style) and marker selection<a class="headerlink" href="#markers-pytest-style-and-marker-selection" title="Permanent link">&para;</a></h3>
 <p>Beyond the built-in markers (<code>@skip</code>, <code>@xfail</code>, <code>@slow</code>), Incan supports user-defined markers and marker-based
 selection:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">mark</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">mark</span>
 
-    <span class="err">@</span><span class="n">mark</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">)</span>
-    <span class="err">@</span><span class="n">mark</span><span class="p">(</span><span class="s2">&quot;flaky&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_query</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="p">...</span>
+    <span class="nd">@mark</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">)</span>
+    <span class="nd">@mark</span><span class="p">(</span><span class="s2">&quot;flaky&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_query</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
 </code></pre></div>
 <p>Run subsets of tests:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;db and not flaky&quot;</span><span class="w"> </span>tests/
@@ -4560,21 +4560,21 @@ without repeating <code>@mark("integration")</code> on every test. Incan support
 </li>
 </ul>
 <p><code>tests/integrations/conftest.incn</code>:</p>
-<div class="language-incan highlight"><span class="filename">tests/integrations/conftest.incn</span><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span>
+<div class="language-incan highlight"><span class="filename">tests/integrations/conftest.incn</span><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">fixture</span>
 
-<span class="k">const</span> <span class="n">TEST_MARKS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;integration&quot;</span><span class="p">]</span>
+<span class="k">const</span> <span class="nc">TEST_MARKS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;integration&quot;</span><span class="p">]</span>
 
-<span class="err">@</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
-<span class="k">def</span> <span class="n">base_url</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+<span class="nd">@fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">base_url</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
     <span class="k">return</span> <span class="s2">&quot;http://localhost:8080&quot;</span>
 </code></pre></div>
 <p><code>tests/integrations/test_some_things.incn</code>:</p>
-<div class="language-incan highlight"><span class="filename">tests/integrations/test_some_things.incn</span><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span>
+<div class="language-incan highlight"><span class="filename">tests/integrations/test_some_things.incn</span><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="nf">assert_eq</span>
 
-<span class="k">const</span> <span class="n">TEST_MARKS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;smoke&quot;</span><span class="p">]</span>
+<span class="k">const</span> <span class="nc">TEST_MARKS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;smoke&quot;</span><span class="p">]</span>
 
-<span class="k">def</span> <span class="n">test_ping</span><span class="p">(</span><span class="n">base_url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">base_url</span><span class="p">,</span> <span class="s2">&quot;http://localhost:8080&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_ping</span><span class="p">(</span><span class="n">base_url</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">base_url</span><span class="p">,</span> <span class="s2">&quot;http://localhost:8080&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Now:</p>
 <ul>
@@ -4585,44 +4585,44 @@ without repeating <code>@mark("integration")</code> on every test. Incan support
 discouraged: keep inline tests simple and prefer per-test marks (or move richer test organization into <code>tests/</code>).</p>
 <h3 id="conditional-skipxfail">Conditional skip/xfail<a class="headerlink" href="#conditional-skipxfail" title="Permanent link">&para;</a></h3>
 <p>Incan supports conditional skipping/xfail for platform- and feature-gated tests:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">skipif</span><span class="p">,</span> <span class="n">xfailif</span><span class="p">,</span> <span class="n">platform</span><span class="p">,</span> <span class="n">feature</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">skipif</span><span class="p">,</span> <span class="n">xfailif</span><span class="p">,</span> <span class="n">platform</span><span class="p">,</span> <span class="n">feature</span>
 
-    <span class="err">@</span><span class="n">skipif</span><span class="p">(</span><span class="n">platform</span><span class="p">()</span> <span class="o">==</span> <span class="s2">&quot;windows&quot;</span><span class="p">,</span> <span class="s2">&quot;path semantics differ&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_paths</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="p">...</span>
+    <span class="nd">@skipif</span><span class="p">(</span><span class="n">platform</span><span class="p">()</span> <span class="o">==</span> <span class="s2">&quot;windows&quot;</span><span class="p">,</span> <span class="s2">&quot;path semantics differ&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_paths</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
 
-    <span class="err">@</span><span class="n">xfailif</span><span class="p">(</span><span class="n">feature</span><span class="p">(</span><span class="s2">&quot;new_parser&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="k">false</span><span class="p">,</span> <span class="s2">&quot;known bug #123&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_known_bug</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="p">...</span>
+    <span class="nd">@xfailif</span><span class="p">(</span><span class="n">feature</span><span class="p">(</span><span class="s2">&quot;new_parser&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="k">false</span><span class="p">,</span> <span class="s2">&quot;known bug #123&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_known_bug</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="o">...</span>
 </code></pre></div>
 <h3 id="parametrize-with-per-case-marks">Parametrize with per-case marks<a class="headerlink" href="#parametrize-with-per-case-marks" title="Permanent link">&para;</a></h3>
 <p>You can mark individual parameter cases (skip/xfail/etc.) via <code>case(...)</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">parametrize</span><span class="p">,</span> <span class="k">case</span><span class="p">,</span> <span class="n">skip</span><span class="p">,</span> <span class="n">xfail</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">parametrize</span><span class="p">,</span> <span class="k">case</span><span class="p">,</span> <span class="n">skip</span><span class="p">,</span> <span class="n">xfail</span>
 
-    <span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[</span>
-        <span class="k">case</span><span class="p">(</span><span class="m">1</span><span class="p">),</span>
-        <span class="k">case</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">xfail</span><span class="p">(</span><span class="s2">&quot;bug #123&quot;</span><span class="p">)]),</span>
-        <span class="k">case</span><span class="p">(</span><span class="m">3</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;too slow&quot;</span><span class="p">)]),</span>
+    <span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[</span>
+        <span class="k">case</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+        <span class="k">case</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">xfail</span><span class="p">(</span><span class="s2">&quot;bug #123&quot;</span><span class="p">)]),</span>
+        <span class="k">case</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;too slow&quot;</span><span class="p">)]),</span>
     <span class="p">])</span>
-    <span class="k">def</span> <span class="n">test_x</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">assert</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="m">0</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_x</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">0</span>
 </code></pre></div>
 <h3 id="shared-fixtures-via-conftestincn">Shared fixtures via <code>conftest.incn</code><a class="headerlink" href="#shared-fixtures-via-conftestincn" title="Permanent link">&para;</a></h3>
 <p>To avoid repeating fixtures across many test files, any <code>conftest.incn</code> under <code>tests/</code> is automatically loaded by the
 test runner and contributes fixtures to tests in that directory subtree.</p>
 <p>Example:</p>
-<div class="language-incan highlight"><span class="filename">tests/conftest.incn</span><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span>
+<div class="language-incan highlight"><span class="filename">tests/conftest.incn</span><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">fixture</span>
 
-<span class="err">@</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
-<span class="k">def</span> <span class="n">base_url</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+<span class="nd">@fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">base_url</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
     <span class="k">return</span> <span class="s2">&quot;http://localhost:8080&quot;</span>
 </code></pre></div>
-<div class="language-incan highlight"><span class="filename">tests/test_api.incn</span><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span>
+<div class="language-incan highlight"><span class="filename">tests/test_api.incn</span><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="nf">assert_eq</span>
 
-<span class="k">def</span> <span class="n">test_ping</span><span class="p">(</span><span class="n">base_url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">base_url</span><span class="p">,</span> <span class="s2">&quot;http://localhost:8080&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_ping</span><span class="p">(</span><span class="n">base_url</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">base_url</span><span class="p">,</span> <span class="s2">&quot;http://localhost:8080&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p><code>conftest.incn</code> is only auto-discovered under <code>tests/</code> and only applies to tests located in that subtree.
 Inline tests in production source trees (e.g. <code>src/**</code> <code>module tests:</code> blocks) do not automatically receive <code>conftest</code>
@@ -4639,25 +4639,25 @@ fixtures; share fixtures via explicit helper modules instead.</p>
 temp directory and yields its path. Use <code>env</code> to temporarily set/unset environment variables for a test, with automatic
 restoration afterward.</p>
 <p>Example:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span><span class="p">,</span> <span class="n">tmp_workdir</span><span class="p">,</span> <span class="n">tmp_path</span><span class="p">,</span> <span class="n">env</span><span class="p">,</span> <span class="n">TestEnv</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">fixture</span><span class="p">,</span> <span class="n">tmp_workdir</span><span class="p">,</span> <span class="n">tmp_path</span><span class="p">,</span> <span class="n">env</span><span class="p">,</span> <span class="nc">TestEnv</span>
 
-    <span class="k">def</span> <span class="n">test_uses_tmp_path</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_uses_tmp_path</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">let</span> <span class="n">config</span> <span class="o">=</span> <span class="n">tmp_path</span> <span class="o">/</span> <span class="s2">&quot;config.json&quot;</span>
         <span class="c1"># write/read config using an absolute path (error handling omitted in examples)</span>
-<span class="c1">        config.write_text(&quot;{}&quot;)?</span>
-<span class="c1">        assert config.exists()</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="p">)</span><span class="err">?</span>
+        <span class="k">assert</span> <span class="n">config</span><span class="o">.</span><span class="n">exists</span><span class="p">()</span>
 
-<span class="c1">    def test_relative_paths(tmp_workdir: Path) -&gt; None:</span>
-<span class="c1">        # current working directory is a fresh temp dir for this test</span>
-<span class="c1">        Path(&quot;output.txt&quot;).write_text(&quot;ok&quot;)</span>
-<span class="c1">        assert (tmp_workdir / &quot;output.txt&quot;).exists()</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_relative_paths</span><span class="p">(</span><span class="n">tmp_workdir</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># current working directory is a fresh temp dir for this test</span>
+        <span class="nc">Path</span><span class="p">(</span><span class="s2">&quot;output.txt&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;ok&quot;</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="n">tmp_workdir</span> <span class="o">/</span> <span class="s2">&quot;output.txt&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">exists</span><span class="p">()</span>
 
-<span class="c1">    def test_env(env: TestEnv) -&gt; None:</span>
-<span class="c1">        env.set(&quot;MODE&quot;, &quot;test&quot;)</span>
-<span class="c1">        mode = env.get(&quot;MODE&quot;)</span>
-<span class="c1">        assert mode is Some(v)</span>
-<span class="c1">        assert v == &quot;test&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_env</span><span class="p">(</span><span class="n">env</span><span class="p">:</span> <span class="nc">TestEnv</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">env</span><span class="o">.</span><span class="kt">set</span><span class="p">(</span><span class="s2">&quot;MODE&quot;</span><span class="p">,</span> <span class="s2">&quot;test&quot;</span><span class="p">)</span>
+        <span class="n">mode</span> <span class="o">=</span> <span class="n">env</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="s2">&quot;MODE&quot;</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">mode</span> <span class="ow">is</span> <span class="nb">Some</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">v</span> <span class="o">==</span> <span class="s2">&quot;test&quot;</span>
 </code></pre></div>
 <h3 id="timeouts">Timeouts<a class="headerlink" href="#timeouts" title="Permanent link">&para;</a></h3>
 <p>Timeouts may be configured globally via CLI and overridden per test with a decorator (see reference-level rules).</p>
@@ -4695,10 +4695,10 @@ conditions, <code>@parametrize</code> data (and ids), <code>TEST_MARKS</code>, a
   test body when you need <code>Path</code>, UUIDs, or domain objects.</li>
 <li>Example: pass a filename as <code>str</code> and construct a <code>Path</code> inside the test.</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;config.json&quot;</span><span class="p">,</span> <span class="s2">&quot;defaults.json&quot;</span><span class="p">])</span>
-<span class="k">def</span> <span class="n">test_config</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;config.json&quot;</span><span class="p">,</span> <span class="s2">&quot;defaults.json&quot;</span><span class="p">])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_config</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">let</span> <span class="n">path</span> <span class="o">=</span> <span class="n">tmp_path</span> <span class="o">/</span> <span class="n">name</span>
-    <span class="n">assert</span> <span class="n">path</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span> <span class="o">==</span> <span class="n">False</span>
+    <span class="k">assert</span> <span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">()</span> <span class="o">==</span> <span class="kc">False</span>
 </code></pre></div>
 <p>If an expression required to be const-evaluable does not meet this, a <strong>test collection error</strong> (<code>TestCollectionError</code>)
 will be raised.</p>
@@ -5206,10 +5206,10 @@ function into multiple test cases.</p>
 </ul>
 <h3 id="parametrize-per-case-marks">Parametrize per-case marks<a class="headerlink" href="#parametrize-per-case-marks" title="Permanent link">&para;</a></h3>
 <p><code>@parametrize</code> supports per-case marks via a <code>case(...)</code> helper from the <code>testing</code> module:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[</span>
-    <span class="k">case</span><span class="p">(</span><span class="m">1</span><span class="p">),</span>
-    <span class="k">case</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">xfail</span><span class="p">(</span><span class="s2">&quot;bug #123&quot;</span><span class="p">)]),</span>
-    <span class="k">case</span><span class="p">(</span><span class="m">3</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;too slow&quot;</span><span class="p">)]),</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="p">[</span>
+    <span class="k">case</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+    <span class="k">case</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">xfail</span><span class="p">(</span><span class="s2">&quot;bug #123&quot;</span><span class="p">)]),</span>
+    <span class="k">case</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;too slow&quot;</span><span class="p">)]),</span>
 <span class="p">])</span>
 </code></pre></div>
 <p>Allowed per-case marks (in <code>case(..., marks=[...])</code>):</p>

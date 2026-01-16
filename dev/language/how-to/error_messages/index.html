@@ -3851,12 +3851,12 @@ where it happened, and what to do next.</p>
 <p><strong>Problem:</strong> Function returns <code>Result</code> but you're returning a plain value.</p>
 <p><strong>Solution:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
-<span class="c1">def get_user(id: int) -&gt; Result[User, Error]:</span>
-<span class="hll"><span class="c1">    return User(name=&quot;Alice&quot;)  # ❌ Missing Ok()</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_user</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nc">Error</span><span class="p">]:</span>
+<span class="hll">    <span class="k">return</span> <span class="nc">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">)</span>  <span class="c1"># ❌ Missing Ok()</span>
 </span>
 <span class="c1"># Right</span>
-<span class="c1">def get_user(id: int) -&gt; Result[User, Error]:</span>
-<span class="hll"><span class="c1">    return Ok(User(name=&quot;Alice&quot;))  # ✅</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_user</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nc">Error</span><span class="p">]:</span>
+<span class="hll">    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nc">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">))</span>  <span class="c1"># ✅</span>
 </span></code></pre></div>
 <hr />
 <p><strong>Error:</strong></p>
@@ -3865,20 +3865,20 @@ where it happened, and what to do next.</p>
 <p><strong>Problem:</strong> Using a <code>Result</code> where a plain value is expected.</p>
 <p><strong>Solution:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
-<span class="c1">def greet() -&gt; str:</span>
-<span class="c1">    name = get_name()  # Returns Result[str, Error]</span>
-<span class="hll"><span class="c1">    return name  # ❌ name is still Result</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">greet</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">get_name</span><span class="p">()</span>  <span class="c1"># Returns Result[str, Error]</span>
+<span class="hll">    <span class="k">return</span> <span class="n">name</span>  <span class="c1"># ❌ name is still Result</span>
 </span>
 <span class="c1"># Right - use ? to unwrap</span>
-<span class="c1">def greet() -&gt; Result[str, Error]:</span>
-<span class="hll"><span class="c1">    name = get_name()?  # ✅ Unwraps Ok, returns Err early</span>
-</span><span class="c1">    return Ok(f&quot;Hello, {name}&quot;)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">greet</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nc">Error</span><span class="p">]:</span>
+<span class="hll">    <span class="n">name</span> <span class="o">=</span> <span class="n">get_name</span><span class="p">()</span><span class="err">?</span>  <span class="c1"># ✅ Unwraps Ok, returns Err early</span>
+</span>    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Or handle explicitly</span>
-<span class="c1">def greet_safe() -&gt; str:</span>
-<span class="c1">    match get_name():</span>
-<span class="c1">        case Ok(name): return f&quot;Hello, {name}&quot;</span>
-<span class="c1">        case Err(_): return &quot;Hello, stranger&quot;</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">greet_safe</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">get_name</span><span class="p">():</span>
+        <span class="k">case</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">name</span><span class="p">):</span> <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="k">case</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="k">_</span><span class="p">):</span> <span class="k">return</span> <span class="s2">&quot;Hello, stranger&quot;</span>
 </code></pre></div>
 <h3 id="the-operator">The <code>?</code> Operator<a class="headerlink" href="#the-operator" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
@@ -3887,12 +3887,12 @@ where it happened, and what to do next.</p>
 <p><strong>Problem:</strong> The <code>?</code> operator only works on <code>Result</code> types.</p>
 <p><strong>Solution:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
-<span class="c1">def double(x: int) -&gt; int:</span>
-<span class="hll"><span class="c1">    return x?  # ❌ x is not a Result</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">double</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="hll">    <span class="k">return</span> <span class="n">x</span><span class="err">?</span>  <span class="c1"># ❌ x is not a Result</span>
 </span>
 <span class="c1"># Right</span>
-<span class="c1">def double(x: int) -&gt; int:</span>
-<span class="hll"><span class="c1">    return x * 2  # ✅ No ? needed</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">double</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="hll">    <span class="k">return</span> <span class="n">x</span> <span class="o">*</span> <span class="mi">2</span>  <span class="c1"># ✅ No ? needed</span>
 </span></code></pre></div>
 <h3 id="mutability-errors">Mutability Errors<a class="headerlink" href="#mutability-errors" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
@@ -3902,16 +3902,16 @@ where it happened, and what to do next.</p>
 <p><strong>Why:</strong> Incan variables are immutable by default for safety and clarity.</p>
 <p><strong>Solution:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
-<span class="c1">def counter() -&gt; int:</span>
-<span class="c1">    let count = 0</span>
-<span class="hll"><span class="c1">    count = count + 1  # ❌ count is immutable</span>
-</span><span class="c1">    return count</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">counter</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">let</span> <span class="nb">count</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="hll">    <span class="nb">count</span> <span class="o">=</span> <span class="nb">count</span> <span class="o">+</span> <span class="mi">1</span>  <span class="c1"># ❌ count is immutable</span>
+</span>    <span class="k">return</span> <span class="nb">count</span>
 
 <span class="c1"># Right</span>
-<span class="c1">def counter() -&gt; int:</span>
-<span class="hll"><span class="c1">    mut count = 0      # ✅ Declare as mutable</span>
-</span><span class="c1">    count = count + 1</span>
-<span class="c1">    return count</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">counter</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="hll">    <span class="k">mut</span> <span class="nb">count</span> <span class="o">=</span> <span class="mi">0</span>      <span class="c1"># ✅ Declare as mutable</span>
+</span>    <span class="nb">count</span> <span class="o">=</span> <span class="nb">count</span> <span class="o">+</span> <span class="mi">1</span>
+    <span class="k">return</span> <span class="nb">count</span>
 </code></pre></div>
 <h3 id="self-mutation">Self Mutation<a class="headerlink" href="#self-mutation" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
@@ -3919,16 +3919,16 @@ where it happened, and what to do next.</p>
 </code></pre></div>
 <p><strong>Problem:</strong> Method modifies <code>self</code> but doesn't declare <code>mut self</code>.</p>
 <p><strong>Solution:</strong></p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Counter</span><span class="p">:</span>
-    <span class="n">value</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">Counter</span><span class="p">:</span>
+    <span class="n">value</span><span class="p">:</span> <span class="nb">int</span>
 
     <span class="c1"># Wrong</span>
-<span class="hll"><span class="c1">    def increment(self) -&gt; None:</span>
-</span><span class="c1">        self.value += 1  # ❌ self is immutable</span>
+<span class="hll">    <span class="k">def</span><span class="w"> </span><span class="nf">increment</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span>        <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">+=</span> <span class="mi">1</span>  <span class="c1"># ❌ self is immutable</span>
 
-<span class="hll"><span class="c1">    # Right</span>
-</span><span class="c1">    def increment(mut self) -&gt; None:  # ✅ mut self</span>
-<span class="c1">        self.value += 1</span>
+<span class="hll">    <span class="c1"># Right</span>
+</span>    <span class="k">def</span><span class="w"> </span><span class="nf">increment</span><span class="p">(</span><span class="k">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>  <span class="c1"># ✅ mut self</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">+=</span> <span class="mi">1</span>
 </code></pre></div>
 <h3 id="missing-traits">Missing Traits<a class="headerlink" href="#missing-traits" title="Permanent link">&para;</a></h3>
 <p><strong>Error:</strong></p>
@@ -3937,14 +3937,14 @@ where it happened, and what to do next.</p>
 <p><strong>Problem:</strong> Using <code>==</code> on a type without equality support.</p>
 <p><strong>Solution:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Add @derive(Eq) to enable ==</span>
-<span class="c1">@derive(Eq)</span>
-<span class="c1">model Point:</span>
-<span class="c1">    x: int</span>
-<span class="c1">    y: int</span>
+<span class="nd">@derive</span><span class="p">(</span><span class="kt">Eq</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">Point</span><span class="p">:</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">int</span>
 
 <span class="c1"># Now this works</span>
-<span class="c1">if p1 == p2:</span>
-<span class="c1">    println(&quot;Same point!&quot;)</span>
+<span class="k">if</span> <span class="n">p1</span> <span class="o">==</span> <span class="n">p2</span><span class="p">:</span>
+    <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;Same point!&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Common derives:</strong></p>
 <table>
@@ -3987,18 +3987,18 @@ where it happened, and what to do next.</p>
 <p><strong>Problem:</strong> Using <code>Option</code> directly in a condition.</p>
 <p><strong>Solution:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
-<span class="c1">let user = find_user(id)</span>
-<span class="hll"><span class="c1">if user:  # ❌ Can&#39;t use Option as bool</span>
-</span><span class="c1">    ...</span>
+<span class="k">let</span> <span class="n">user</span> <span class="o">=</span> <span class="n">find_user</span><span class="p">(</span><span class="nb">id</span><span class="p">)</span>
+<span class="hll"><span class="k">if</span> <span class="n">user</span><span class="p">:</span>  <span class="c1"># ❌ Can&#39;t use Option as bool</span>
+</span>    <span class="o">...</span>
 
 <span class="c1"># Right - use pattern matching</span>
-<span class="hll"><span class="c1">if user is Some(u):  # ✅</span>
-</span><span class="c1">    println(u.name)</span>
+<span class="hll"><span class="k">if</span> <span class="n">user</span> <span class="ow">is</span> <span class="nb">Some</span><span class="p">(</span><span class="n">u</span><span class="p">):</span>  <span class="c1"># ✅</span>
+</span>    <span class="nb">println</span><span class="p">(</span><span class="n">u</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
 
 <span class="c1"># Or check explicitly</span>
-<span class="c1">if user.is_some():</span>
-<span class="hll"><span class="c1">    let u = user.unwrap()</span>
-</span><span class="c1">    println(u.name)</span>
+<span class="k">if</span> <span class="n">user</span><span class="o">.</span><span class="n">is_some</span><span class="p">():</span>
+<span class="hll">    <span class="k">let</span> <span class="n">u</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">unwrap</span><span class="p">()</span>
+</span>    <span class="nb">println</span><span class="p">(</span><span class="n">u</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="philosophy-explicit-is-better">Philosophy: Explicit is Better<a class="headerlink" href="#philosophy-explicit-is-better" title="Permanent link">&para;</a></h2>
 <p>Incan intentionally requires explicit handling of:</p>

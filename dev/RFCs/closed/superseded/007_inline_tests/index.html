@@ -3919,31 +3919,31 @@ with Rust's proximity benefits. Test functions are automatically stripped from p
 <p>This is stripped from release builds via <code>#[cfg(test)]</code>.</p>
 <h3 id="incans-opportunity">Incan's Opportunity<a class="headerlink" href="#incans-opportunity" title="Permanent link">&para;</a></h3>
 <p>Combine Python's ergonomics with Rust's proximity:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-<span class="err">@</span><span class="n">test</span>
-<span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">),</span> <span class="m">3</span><span class="p">)</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
 <h3 id="basic-syntax">Basic Syntax<a class="headerlink" href="#basic-syntax" title="Permanent link">&para;</a></h3>
 <p>Any function decorated with <code>@test</code> is a test function:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/math.incn</span>
 
-<span class="c1">def factorial(n: int) -&gt; int:</span>
-<span class="c1">    if n &lt;= 1:</span>
-<span class="c1">        return 1</span>
-<span class="c1">    return n * factorial(n - 1)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">factorial</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mi">1</span>
+    <span class="k">return</span> <span class="n">n</span> <span class="o">*</span> <span class="n">factorial</span><span class="p">(</span><span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
 
-<span class="c1">@test</span>
-<span class="c1">def test_factorial_base() -&gt; None:</span>
-<span class="c1">    assert_eq(factorial(0), 1)</span>
-<span class="c1">    assert_eq(factorial(1), 1)</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_factorial_base</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">factorial</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">factorial</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="mi">1</span><span class="p">)</span>
 
-<span class="c1">@test</span>
-<span class="c1">def test_factorial_recursive() -&gt; None:</span>
-<span class="c1">    assert_eq(factorial(5), 120)</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_factorial_recursive</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">factorial</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span> <span class="mi">120</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="running-tests">Running Tests<a class="headerlink" href="#running-tests" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span class="c1"># Run tests in a specific file</span>
@@ -3986,45 +3986,45 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 <p>Fixtures work naturally with inline tests:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/database.incn</span>
 
-<span class="c1">class Database:</span>
-<span class="c1">    def connect(url: str) -&gt; Database:</span>
-<span class="c1">        ...</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Database</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">connect</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Database</span><span class="p">:</span>
+        <span class="o">...</span>
 
-<span class="c1">    def query(self, sql: str) -&gt; List[Row]:</span>
-<span class="c1">        ...</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">query</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sql</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">List</span><span class="p">[</span><span class="nc">Row</span><span class="p">]:</span>
+        <span class="o">...</span>
 
-<span class="c1">@fixture</span>
-<span class="c1">def test_db() -&gt; Database:</span>
-<span class="c1">    db = Database.connect(&quot;sqlite::memory:&quot;)</span>
-<span class="c1">    yield db</span>
-<span class="c1">    db.close()</span>
+<span class="nd">@fixture</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_db</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Database</span><span class="p">:</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="nc">Database</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;sqlite::memory:&quot;</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">db</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 
-<span class="c1">@test</span>
-<span class="c1">def test_query(test_db: Database) -&gt; None:</span>
-<span class="c1">    result = test_db.query(&quot;SELECT 1&quot;)</span>
-<span class="c1">    assert_eq(len(result), 1)</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_query</span><span class="p">(</span><span class="n">test_db</span><span class="p">:</span> <span class="nc">Database</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="n">test_db</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT 1&quot;</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="kt">result</span><span class="p">),</span> <span class="mi">1</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="private-function-testing">Private Function Testing<a class="headerlink" href="#private-function-testing" title="Permanent link">&para;</a></h3>
 <p>Inline tests can access private (non-<code>pub</code>) functions:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/parser.incn</span>
 
-<span class="c1">def parse(source: str) -&gt; AST:</span>
-<span class="c1">    tokens = _tokenize(source)  # private helper</span>
-<span class="c1">    return _build_ast(tokens)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">parse</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">AST</span><span class="p">:</span>
+    <span class="n">tokens</span> <span class="o">=</span> <span class="n">_tokenize</span><span class="p">(</span><span class="n">source</span><span class="p">)</span>  <span class="c1"># private helper</span>
+    <span class="k">return</span> <span class="n">_build_ast</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span>
 
-<span class="c1">def _tokenize(source: str) -&gt; List[Token]:</span>
-<span class="c1">    # Private implementation detail</span>
-<span class="c1">    ...</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_tokenize</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">List</span><span class="p">[</span><span class="nc">Token</span><span class="p">]:</span>
+    <span class="c1"># Private implementation detail</span>
+    <span class="o">...</span>
 
-<span class="c1">def _build_ast(tokens: List[Token]) -&gt; AST:</span>
-<span class="c1">    # Private implementation detail</span>
-<span class="c1">    ...</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_build_ast</span><span class="p">(</span><span class="n">tokens</span><span class="p">:</span> <span class="kt">List</span><span class="p">[</span><span class="nc">Token</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nc">AST</span><span class="p">:</span>
+    <span class="c1"># Private implementation detail</span>
+    <span class="o">...</span>
 
 <span class="c1"># Tests can access private functions!</span>
-<span class="c1">@test</span>
-<span class="c1">def test_tokenize() -&gt; None:</span>
-<span class="c1">    tokens = _tokenize(&quot;1 + 2&quot;)</span>
-<span class="c1">    assert_eq(len(tokens), 3)</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_tokenize</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">tokens</span> <span class="o">=</span> <span class="n">_tokenize</span><span class="p">(</span><span class="s2">&quot;1 + 2&quot;</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">tokens</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
 </code></pre></div>
 <p>This mirrors Rust's <code>use super::*</code> pattern where inline tests access module internals.</p>
 <h3 id="mixing-inline-and-separate-tests">Mixing Inline and Separate Tests<a class="headerlink" href="#mixing-inline-and-separate-tests" title="Permanent link">&para;</a></h3>
@@ -4063,12 +4063,12 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 </code></pre></div>
 <h3 id="generated-rust">Generated Rust<a class="headerlink" href="#generated-rust" title="Permanent link">&para;</a></h3>
 <p><strong>Incan:</strong></p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-<span class="err">@</span><span class="n">test</span>
-<span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">),</span> <span class="m">3</span><span class="p">)</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Production build (<code>incan build</code>):</strong></p>
 <div class="language-rust highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">{</span>
@@ -4090,57 +4090,57 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 <h3 id="simple-unit-tests">Simple Unit Tests<a class="headerlink" href="#simple-unit-tests" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/strings.incn</span>
 
-<span class="c1">def reverse(s: str) -&gt; str:</span>
-<span class="c1">    return s[::-1]</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">reverse</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">s</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
 
-<span class="c1">def is_palindrome(s: str) -&gt; bool:</span>
-<span class="c1">    return s == reverse(s)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">is_palindrome</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">s</span> <span class="o">==</span> <span class="n">reverse</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
 
-<span class="c1">@test</span>
-<span class="c1">def test_reverse() -&gt; None:</span>
-<span class="c1">    assert_eq(reverse(&quot;hello&quot;), &quot;olleh&quot;)</span>
-<span class="c1">    assert_eq(reverse(&quot;&quot;), &quot;&quot;)</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_reverse</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">reverse</span><span class="p">(</span><span class="s2">&quot;hello&quot;</span><span class="p">),</span> <span class="s2">&quot;olleh&quot;</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">reverse</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">),</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
 
-<span class="c1">@test</span>
-<span class="c1">def test_palindrome() -&gt; None:</span>
-<span class="c1">    assert_true(is_palindrome(&quot;radar&quot;))</span>
-<span class="c1">    assert_false(is_palindrome(&quot;hello&quot;))</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_palindrome</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_true</span><span class="p">(</span><span class="n">is_palindrome</span><span class="p">(</span><span class="s2">&quot;radar&quot;</span><span class="p">))</span>
+    <span class="nf">assert_false</span><span class="p">(</span><span class="n">is_palindrome</span><span class="p">(</span><span class="s2">&quot;hello&quot;</span><span class="p">))</span>
 </code></pre></div>
 <h3 id="with-parametrize">With Parametrize<a class="headerlink" href="#with-parametrize" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/validators.incn</span>
 
-<span class="c1">def is_valid_email(email: str) -&gt; bool:</span>
-<span class="c1">    return &quot;@&quot; in email and &quot;.&quot; in email</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">is_valid_email</span><span class="p">(</span><span class="n">email</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="k">return</span> <span class="s2">&quot;@&quot;</span> <span class="ow">in</span> <span class="n">email</span> <span class="ow">and</span> <span class="s2">&quot;.&quot;</span> <span class="ow">in</span> <span class="n">email</span>
 
-<span class="c1">@test</span>
-<span class="c1">@parametrize(&quot;email, expected&quot;, [</span>
-<span class="c1">    (&quot;user@example.com&quot;, true),</span>
-<span class="c1">    (&quot;invalid&quot;, false),</span>
-<span class="c1">    (&quot;no-at.com&quot;, false),</span>
-<span class="c1">    (&quot;user@domain&quot;, false),</span>
-<span class="c1">])</span>
-<span class="c1">def test_email_validation(email: str, expected: bool) -&gt; None:</span>
-<span class="c1">    assert_eq(is_valid_email(email), expected)</span>
+<span class="nd">@test</span>
+<span class="nd">@parametrize</span><span class="p">(</span><span class="s2">&quot;email, expected&quot;</span><span class="p">,</span> <span class="p">[</span>
+    <span class="p">(</span><span class="s2">&quot;user@example.com&quot;</span><span class="p">,</span> <span class="k">true</span><span class="p">),</span>
+    <span class="p">(</span><span class="s2">&quot;invalid&quot;</span><span class="p">,</span> <span class="k">false</span><span class="p">),</span>
+    <span class="p">(</span><span class="s2">&quot;no-at.com&quot;</span><span class="p">,</span> <span class="k">false</span><span class="p">),</span>
+    <span class="p">(</span><span class="s2">&quot;user@domain&quot;</span><span class="p">,</span> <span class="k">false</span><span class="p">),</span>
+<span class="p">])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_email_validation</span><span class="p">(</span><span class="n">email</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">is_valid_email</span><span class="p">(</span><span class="n">email</span><span class="p">),</span> <span class="n">expected</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="error-case-testing">Error Case Testing<a class="headerlink" href="#error-case-testing" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/division.incn</span>
 
-<span class="c1">def safe_divide(a: int, b: int) -&gt; Result[int, str]:</span>
-<span class="c1">    if b == 0:</span>
-<span class="c1">        return Err(&quot;division by zero&quot;)</span>
-<span class="c1">    return Ok(a / b)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">safe_divide</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">b</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="s2">&quot;division by zero&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">a</span> <span class="o">/</span> <span class="n">b</span><span class="p">)</span>
 
-<span class="c1">@test</span>
-<span class="c1">def test_divide_success() -&gt; None:</span>
-<span class="c1">    result = safe_divide(10, 2)</span>
-<span class="c1">    assert_true(result.is_ok())</span>
-<span class="c1">    assert_eq(result.unwrap(), 5)</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_divide_success</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="n">safe_divide</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="nf">assert_true</span><span class="p">(</span><span class="kt">result</span><span class="o">.</span><span class="n">is_ok</span><span class="p">())</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="kt">result</span><span class="o">.</span><span class="n">unwrap</span><span class="p">(),</span> <span class="mi">5</span><span class="p">)</span>
 
-<span class="c1">@test</span>
-<span class="c1">def test_divide_by_zero() -&gt; None:</span>
-<span class="c1">    result = safe_divide(10, 0)</span>
-<span class="c1">    assert_true(result.is_err())</span>
-<span class="c1">    assert_eq(result.unwrap_err(), &quot;division by zero&quot;)</span>
+<span class="nd">@test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_divide_by_zero</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="n">safe_divide</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="nf">assert_true</span><span class="p">(</span><span class="kt">result</span><span class="o">.</span><span class="n">is_err</span><span class="p">())</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="kt">result</span><span class="o">.</span><span class="n">unwrap_err</span><span class="p">(),</span> <span class="s2">&quot;division by zero&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="test-discovery">Test Discovery<a class="headerlink" href="#test-discovery" title="Permanent link">&para;</a></h2>
 <p>The test runner discovers tests by:</p>
@@ -4167,21 +4167,21 @@ Running<span class="w"> </span>tests...
 </code></pre></div>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-rust-style-test-module">1. Rust-style <code>test</code> Module<a class="headerlink" href="#1-rust-style-test-module" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-<span class="err">@</span><span class="n">test_module</span>
-<span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">),</span> <span class="m">3</span><span class="p">)</span>
+<span class="nd">@test_module</span>
+<span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Rejected:</strong> More syntax to learn, less Pythonic. The <code>@test</code> decorator is simpler.</p>
 <h3 id="2-doctest-only">2. Doctest Only<a class="headerlink" href="#2-doctest-only" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
-    <span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    &gt;&gt;&gt; add(1, 2)</span>
-<span class="s2">    3</span>
-<span class="s2">    &quot;&quot;&quot;</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    &gt;&gt;&gt; add(1, 2)</span>
+<span class="sd">    3</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 </code></pre></div>
 <p><strong>Rejected:</strong> Good for simple examples, but insufficient for complex tests with setup/teardown.</p>

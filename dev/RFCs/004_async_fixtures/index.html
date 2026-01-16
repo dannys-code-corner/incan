@@ -3723,13 +3723,13 @@ setup/teardown and participate in fixture dependency injection.</p>
 </ul>
 <h2 id="proposed-design">Proposed Design<a class="headerlink" href="#proposed-design" title="Permanent link">&para;</a></h2>
 <h3 id="syntax">Syntax<a class="headerlink" href="#syntax" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">fixture</span>
 
-<span class="err">@</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
-<span class="k">async</span> <span class="k">def</span> <span class="n">http_server</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ServerHandle</span><span class="p">:</span>
-    <span class="n">server</span> <span class="o">=</span> <span class="k">await</span> <span class="n">start_server</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="m">0</span><span class="p">)</span>
+<span class="nd">@fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">http_server</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">ServerHandle</span><span class="p">:</span>
+    <span class="n">server</span> <span class="o">=</span> <span class="k">await</span> <span class="n">start_server</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="k">yield</span> <span class="n">server</span>
-    <span class="k">await</span> <span class="n">server</span><span class="p">.</span><span class="n">shutdown</span><span class="p">()</span>
+    <span class="k">await</span> <span class="n">server</span><span class="o">.</span><span class="n">shutdown</span><span class="p">()</span>
 </code></pre></div>
 <h4 id="teardown-guarantee">Teardown guarantee<a class="headerlink" href="#teardown-guarantee" title="Permanent link">&para;</a></h4>
 <p>The test runner ensures fixture teardowns run even if the test panics or is cancelled.

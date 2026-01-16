@@ -3708,8 +3708,8 @@
 └── utils.incn
 </code></pre></div>
 <p>Example imports:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">models</span> <span class="k">import</span> <span class="n">User</span>
-<span class="k">import</span> <span class="n">utils</span><span class="p">::</span><span class="n">format_currency</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">models</span><span class="w"> </span><span class="kn">import</span> <span class="nc">User</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">utils</span><span class="p">::</span><span class="n">format_currency</span>
 </code></pre></div>
 <h2 id="nested-projects">Nested projects<a class="headerlink" href="#nested-projects" title="Permanent link">&para;</a></h2>
 <p>Recommended structure:</p>
@@ -3722,8 +3722,8 @@
         └── utils.incn
 </code></pre></div>
 <p>Example imports:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">db</span><span class="p">.</span><span class="n">models</span> <span class="k">import</span> <span class="n">User</span>
-<span class="k">import</span> <span class="n">shared</span><span class="p">::</span><span class="n">utils</span><span class="p">::</span><span class="n">format_date</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">db.models</span><span class="w"> </span><span class="kn">import</span> <span class="nc">User</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">shared</span><span class="p">::</span><span class="n">utils</span><span class="p">::</span><span class="n">format_date</span>
 </code></pre></div>
 <h2 id="how-module-discovery-works-practical-view">How module discovery works (practical view)<a class="headerlink" href="#how-module-discovery-works-practical-view" title="Permanent link">&para;</a></h2>
 <p>When you import a local module, the compiler:</p>

@@ -3550,10 +3550,10 @@
 
   <h1>Match arms rust style</h1>
 
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">parse_port</span><span class="p">(</span><span class="s2">&quot;8080&quot;</span><span class="p">):</span>
-        <span class="n">Ok</span><span class="p">(</span><span class="n">port</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;port={port}&quot;</span><span class="p">)</span>
-        <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: {e}&quot;</span><span class="p">)</span>
+        <span class="nb">Ok</span><span class="p">(</span><span class="n">port</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;port=</span><span class="si">{</span><span class="n">port</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 
 

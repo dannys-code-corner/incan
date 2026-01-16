@@ -3770,38 +3770,38 @@
 <p>(See the prelude type mapping in the <a href="../../../reference/imports_and_modules/">imports/modules reference</a> for details.)</p>
 </div>
 <h2 id="lists">Lists<a class="headerlink" href="#lists" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">xs</span> <span class="o">=</span> <span class="p">[</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">]</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;first={xs[0]}&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">xs</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;first=</span><span class="si">{</span><span class="n">xs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="dicts">Dicts<a class="headerlink" href="#dicts" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">scores</span> <span class="o">=</span> <span class="n">dict</span><span class="p">([(</span><span class="s2">&quot;alice&quot;</span><span class="p">,</span> <span class="m">10</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;bob&quot;</span><span class="p">,</span> <span class="m">7</span><span class="p">)])</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;alice={scores[&#39;alice&#39;]}&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">scores</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">([(</span><span class="s2">&quot;alice&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;bob&quot;</span><span class="p">,</span> <span class="mi">7</span><span class="p">)])</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;alice=</span><span class="si">{</span><span class="n">scores</span><span class="p">[</span><span class="s1">&#39;alice&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="sets">Sets<a class="headerlink" href="#sets" title="Permanent link">&para;</a></h2>
 <p>Use a set to deduplicate values:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">names</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Alice&quot;</span><span class="p">]</span>
-    <span class="n">unique</span> <span class="o">=</span> <span class="n">set</span><span class="p">(</span><span class="n">names</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;unique_count={len(unique)}&quot;</span><span class="p">)</span>
+    <span class="n">unique</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">names</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;unique_count=</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">unique</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="iteration-with-for">Iteration with <code>for</code><a class="headerlink" href="#iteration-with-for" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">names</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Cara&quot;</span><span class="p">]</span>
-    <span class="k">for</span> <span class="n">name</span> <span class="k">in</span> <span class="n">names</span><span class="p">:</span>
-        <span class="n">println</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">names</span><span class="p">:</span>
+        <span class="nb">println</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="comprehensions-quick-transforms">Comprehensions (quick transforms)<a class="headerlink" href="#comprehensions-quick-transforms" title="Permanent link">&para;</a></h2>
 <p>Use comprehensions to build a new list/dict from an existing collection:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">names</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot; Alice &quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot; Cara &quot;</span><span class="p">]</span>
 
-    <span class="n">normalized</span> <span class="o">=</span> <span class="p">[</span><span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">name</span> <span class="k">in</span> <span class="n">names</span><span class="p">]</span>
-    <span class="n">counts</span> <span class="o">=</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="m">1</span> <span class="k">for</span> <span class="n">name</span> <span class="k">in</span> <span class="n">normalized</span><span class="p">}</span>
+    <span class="n">normalized</span> <span class="o">=</span> <span class="p">[</span><span class="n">name</span><span class="o">.</span><span class="nb">strip</span><span class="p">()</span><span class="o">.</span><span class="nb">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">names</span><span class="p">]</span>
+    <span class="n">counts</span> <span class="o">=</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">normalized</span><span class="p">}</span>
 
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;normalized={normalized:?}&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;counts={counts:?}&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;normalized=</span><span class="si">{</span><span class="n">normalized</span><span class="si">:</span><span class="s2">?</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;counts=</span><span class="si">{</span><span class="n">counts</span><span class="si">:</span><span class="s2">?</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="try-it">Try it<a class="headerlink" href="#try-it" title="Permanent link">&para;</a></h2>
 <ol>
@@ -3811,24 +3811,24 @@
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">names</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Cara&quot;</span><span class="p">]</span>
 
     <span class="c1"># 1) Normalize + print</span>
-<span class="c1">    normalized = [name.strip().lower() for name in names]</span>
-<span class="c1">    for name in normalized:</span>
-<span class="c1">        println(name)</span>
+    <span class="n">normalized</span> <span class="o">=</span> <span class="p">[</span><span class="n">name</span><span class="o">.</span><span class="nb">strip</span><span class="p">()</span><span class="o">.</span><span class="nb">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">names</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">normalized</span><span class="p">:</span>
+        <span class="nb">println</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
 
-<span class="c1">    # 2) Count occurrences</span>
-<span class="c1">    name_counts: Dict[str, int] = {}</span>
-<span class="c1">    for name in normalized:</span>
-<span class="c1">        current_count = name_counts.get(name).unwrap_or(0)</span>
-<span class="c1">        name_counts[name] = current_count + 1</span>
+    <span class="c1"># 2) Count occurrences</span>
+    <span class="n">name_counts</span><span class="p">:</span> <span class="kt">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">normalized</span><span class="p">:</span>
+        <span class="n">current_count</span> <span class="o">=</span> <span class="n">name_counts</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">name_counts</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">current_count</span> <span class="o">+</span> <span class="mi">1</span>
 
-<span class="c1">    # 3) Deduplicate + print counts (set iteration order is not guaranteed)</span>
-<span class="c1">    unique = set(normalized)</span>
-<span class="c1">    for name in unique:</span>
-<span class="c1">        println(f&quot;{name}: {name_counts.get(name).unwrap()}&quot;)</span>
+    <span class="c1"># 3) Deduplicate + print counts (set iteration order is not guaranteed)</span>
+    <span class="n">unique</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">normalized</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">unique</span><span class="p">:</span>
+        <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">name_counts</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">unwrap</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 </details>
 <h2 id="where-to-learn-more">Where to learn more<a class="headerlink" href="#where-to-learn-more" title="Permanent link">&para;</a></h2>

@@ -3982,14 +3982,14 @@
 <h2 id="importing-rust-crates">Importing Rust Crates<a class="headerlink" href="#importing-rust-crates" title="Permanent link">&para;</a></h2>
 <p>Use the <code>rust::</code> prefix to import from Rust crates:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Import entire crate</span>
-<span class="c1">import rust::serde_json as json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">as</span> <span class="n">json</span>
 
 <span class="c1"># Import specific items</span>
-<span class="c1">from rust::time import Instant, Duration</span>
-<span class="c1">from rust::std::collections import HashMap, HashSet</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">time</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Instant</span><span class="o">,</span><span class="w"> </span><span class="nn">Duration</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">std</span><span class="p">::</span><span class="n">collections</span> <span class="kn">import</span><span class="w"> </span><span class="nn">HashMap</span><span class="o">,</span><span class="w"> </span><span class="nn">HashSet</span>
 
 <span class="c1"># Import nested items</span>
-<span class="c1">import rust::serde_json::Value</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde_json</span><span class="p">::</span><span class="nc">Value</span>
 </code></pre></div>
 <h2 id="automatic-dependency-management">Automatic Dependency Management<a class="headerlink" href="#automatic-dependency-management" title="Permanent link">&para;</a></h2>
 <p>When you use <code>import rust::crate_name</code>, Incan automatically adds the dependency to your generated <code>Cargo.toml</code>.</p>
@@ -4137,8 +4137,8 @@ project configuration, and lock files for full flexibility.</p>
 <h3 id="coming-soon-version-annotations-and-incantoml">Coming Soon: Version Annotations and <code>incan.toml</code><a class="headerlink" href="#coming-soon-version-annotations-and-incantoml" title="Permanent link">&para;</a></h3>
 <p><a href="../../../RFCs/013_rust_crate_dependencies/">RFC 013</a> defines a comprehensive dependency system that will allow:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Inline version annotations (planned)</span>
-<span class="c1">import rust::my_crate @ &quot;1.0&quot;</span>
-<span class="c1">import rust::tokio @ &quot;1.35&quot; with [&quot;full&quot;]</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">my_crate</span> <span class="o">@</span> <span class="s2">&quot;1.0&quot;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">tokio</span> <span class="o">@</span> <span class="s2">&quot;1.35&quot;</span> <span class="k">with</span> <span class="p">[</span><span class="s2">&quot;full&quot;</span><span class="p">]</span>
 </code></pre></div>
 <div class="language-toml highlight"><pre><span></span><code><span class="c1"># incan.toml project configuration (planned)</span>
 <span class="k">[project]</span>
@@ -4152,71 +4152,71 @@ project configuration, and lock files for full flexibility.</p>
 <p>This will enable any Rust crate while maintaining reproducibility.</p>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
 <h3 id="working-with-json-serde_json">Working with JSON (serde_json)<a class="headerlink" href="#working-with-json-serde_json" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">import</span> <span class="k">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">as</span> <span class="n">json</span>
-<span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">import</span> <span class="n">Value</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">as</span> <span class="n">json</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Value</span>
 
-<span class="k">def</span> <span class="n">parse_json</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Value</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">json</span><span class="p">.</span><span class="n">from_str</span><span class="p">(</span><span class="n">data</span><span class="p">).</span><span class="n">unwrap</span><span class="p">()</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">parse_json</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Value</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">from_str</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">.</span><span class="n">unwrap</span><span class="p">()</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">data</span> <span class="o">=</span> <span class="s1">&#39;{&quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 30}&#39;</span>
     <span class="n">parsed</span> <span class="o">=</span> <span class="n">parse_json</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Name: {parsed[&#39;name&#39;]}&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Name: </span><span class="si">{</span><span class="n">parsed</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="working-with-time">Working with Time<a class="headerlink" href="#working-with-time" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">time</span> <span class="k">import</span> <span class="n">Instant</span><span class="p">,</span> <span class="n">Duration</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">time</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Instant</span><span class="o">,</span><span class="w"> </span><span class="nn">Duration</span>
 
-<span class="k">def</span> <span class="n">measure_operation</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">start</span> <span class="o">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">now</span><span class="p">()</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">measure_operation</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">start</span> <span class="o">=</span> <span class="nc">Instant</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
 
     <span class="c1"># Do some work</span>
-<span class="c1">    for i in range(1000000):</span>
-<span class="c1">        pass</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1000000</span><span class="p">):</span>
+        <span class="k">pass</span>
 
-<span class="c1">    elapsed = start.elapsed()</span>
-<span class="c1">    println(f&quot;Operation took: {elapsed}&quot;)</span>
+    <span class="n">elapsed</span> <span class="o">=</span> <span class="n">start</span><span class="o">.</span><span class="n">elapsed</span><span class="p">()</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Operation took: </span><span class="si">{</span><span class="n">elapsed</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="http-requests-reqwest">HTTP Requests (reqwest)<a class="headerlink" href="#http-requests-reqwest" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">import</span> <span class="k">rust</span><span class="p">::</span><span class="n">reqwest</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">reqwest</span>
 
-<span class="k">async</span> <span class="k">def</span> <span class="n">fetch_data</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">reqwest</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
-    <span class="k">return</span> <span class="k">await</span> <span class="n">response</span><span class="p">.</span><span class="n">text</span><span class="p">()</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetch_data</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">reqwest</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
+    <span class="k">return</span> <span class="k">await</span> <span class="n">response</span><span class="o">.</span><span class="n">text</span><span class="p">()</span>
 
-<span class="k">async</span> <span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">data</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetch_data</span><span class="p">(</span><span class="s2">&quot;https://api.example.com/data&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="using-collections">Using Collections<a class="headerlink" href="#using-collections" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">std</span><span class="p">::</span><span class="n">collections</span> <span class="k">import</span> <span class="n">HashMap</span><span class="p">,</span> <span class="n">HashSet</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">std</span><span class="p">::</span><span class="n">collections</span> <span class="kn">import</span><span class="w"> </span><span class="nn">HashMap</span><span class="o">,</span><span class="w"> </span><span class="nn">HashSet</span>
 
-<span class="k">def</span> <span class="n">count_words</span><span class="p">(</span><span class="n">text</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">HashMap</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">int</span><span class="p">]:</span>
-    <span class="n">counts</span> <span class="o">=</span> <span class="n">HashMap</span><span class="p">.</span><span class="n">new</span><span class="p">()</span>
-    <span class="k">for</span> <span class="n">word</span> <span class="k">in</span> <span class="n">text</span><span class="p">.</span><span class="n">split</span><span class="p">():</span>
-        <span class="n">count</span> <span class="o">=</span> <span class="n">counts</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">word</span><span class="p">).</span><span class="n">unwrap_or</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
-        <span class="n">counts</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">word</span><span class="p">,</span> <span class="n">count</span> <span class="o">+</span> <span class="m">1</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">count_words</span><span class="p">(</span><span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">HashMap</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
+    <span class="n">counts</span> <span class="o">=</span> <span class="kt">HashMap</span><span class="o">.</span><span class="n">new</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">word</span> <span class="ow">in</span> <span class="n">text</span><span class="o">.</span><span class="nb">split</span><span class="p">():</span>
+        <span class="nb">count</span> <span class="o">=</span> <span class="n">counts</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">word</span><span class="p">)</span><span class="o">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">counts</span><span class="o">.</span><span class="nb">insert</span><span class="p">(</span><span class="n">word</span><span class="p">,</span> <span class="nb">count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">counts</span>
 </code></pre></div>
 <h3 id="random-numbers">Random Numbers<a class="headerlink" href="#random-numbers" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">rand</span> <span class="k">import</span> <span class="n">Rng</span><span class="p">,</span> <span class="n">thread_rng</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">rand</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Rng</span><span class="o">,</span><span class="w"> </span><span class="nn">thread_rng</span>
 
-<span class="k">def</span> <span class="n">random_int</span><span class="p">(</span><span class="n">min</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">max</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">random_int</span><span class="p">(</span><span class="nb">min</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="n">rng</span> <span class="o">=</span> <span class="n">thread_rng</span><span class="p">()</span>
-    <span class="k">return</span> <span class="n">rng</span><span class="p">.</span><span class="n">gen_range</span><span class="p">(</span><span class="n">min</span><span class="p">..</span><span class="n">max</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">rng</span><span class="o">.</span><span class="n">gen_range</span><span class="p">(</span><span class="nb">min</span><span class="o">..</span><span class="n">max</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">for</span> <span class="n">_</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="m">5</span><span class="p">):</span>
-        <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Random: {random_int(1, 100)}&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">5</span><span class="p">):</span>
+        <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Random: </span><span class="si">{</span><span class="n">random_int</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="uuids">UUIDs<a class="headerlink" href="#uuids" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">uuid</span> <span class="k">import</span> <span class="n">Uuid</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">uuid</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Uuid</span>
 
-<span class="k">def</span> <span class="n">generate_id</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">Uuid</span><span class="p">.</span><span class="n">new_v4</span><span class="p">().</span><span class="n">to_string</span><span class="p">()</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">generate_id</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="nc">Uuid</span><span class="o">.</span><span class="n">new_v4</span><span class="p">()</span><span class="o">.</span><span class="nb">to_string</span><span class="p">()</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">id</span> <span class="o">=</span> <span class="n">generate_id</span><span class="p">()</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Generated ID: {id}&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">id</span> <span class="o">=</span> <span class="n">generate_id</span><span class="p">()</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Generated ID: </span><span class="si">{</span><span class="nb">id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="type-mapping">Type Mapping<a class="headerlink" href="#type-mapping" title="Permanent link">&para;</a></h2>
 <p>Incan types map to Rust types:</p>
@@ -4301,15 +4301,15 @@ project configuration, and lock files for full flexibility.</p>
 </li>
 <li>
 <p><strong>Handle Results</strong>: Rust crate functions often return <code>Result</code>. Use <code>?</code> or explicit matching:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">safe_parse</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">int</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
-    <span class="k">return</span> <span class="n">s</span><span class="p">.</span><span class="n">parse</span><span class="p">()</span>  <span class="c1"># Returns Result</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">safe_parse</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="n">parse</span><span class="p">()</span>  <span class="c1"># Returns Result</span>
 
-<span class="c1">def main() -&gt; None:</span>
-<span class="c1">    match safe_parse(&quot;42&quot;):</span>
-<span class="c1">        case Ok(n):</span>
-<span class="c1">            println(f&quot;Parsed: {n}&quot;)</span>
-<span class="c1">        case Err(e):</span>
-<span class="c1">            println(f&quot;Error: {e}&quot;)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">match</span> <span class="n">safe_parse</span><span class="p">(</span><span class="s2">&quot;42&quot;</span><span class="p">):</span>
+        <span class="k">case</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+            <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Parsed: </span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span>
+            <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 </li>
 <li>
@@ -4317,10 +4317,10 @@ project configuration, and lock files for full flexibility.</p>
 </li>
 <li>
 <p><strong>Error types</strong>: Rust's error types can be complex. Consider using <code>anyhow</code> for simple error handling:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">anyhow</span> <span class="k">import</span> <span class="n">Result</span><span class="p">,</span> <span class="n">Context</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">anyhow</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Result</span><span class="o">,</span><span class="w"> </span><span class="nn">Context</span>
 
-<span class="k">def</span> <span class="n">read_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">]:</span>
-    <span class="n">content</span> <span class="o">=</span> <span class="n">fs</span><span class="p">.</span><span class="n">read_to_string</span><span class="p">(</span><span class="n">path</span><span class="p">).</span><span class="n">context</span><span class="p">(</span><span class="s2">&quot;Failed to read config&quot;</span><span class="p">)</span><span class="err">?</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">read_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Config</span><span class="p">]:</span>
+    <span class="n">content</span> <span class="o">=</span> <span class="n">fs</span><span class="o">.</span><span class="n">read_to_string</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="o">.</span><span class="n">context</span><span class="p">(</span><span class="s2">&quot;Failed to read config&quot;</span><span class="p">)</span><span class="err">?</span>
     <span class="k">return</span> <span class="n">parse_config</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
 </code></pre></div>
 </li>

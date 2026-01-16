@@ -3680,14 +3680,14 @@
 <li><strong>Derive</strong>: <code>@derive(Serialize)</code></li>
 <li><strong>API</strong>: <code>json_stringify(value) -&gt; str</code></li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Serialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">age</span><span class="o">=</span><span class="m">30</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="n">json_stringify</span><span class="p">(</span><span class="n">u</span><span class="p">))</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">u</span> <span class="o">=</span> <span class="nc">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">age</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="nb">json_stringify</span><span class="p">(</span><span class="n">u</span><span class="p">))</span>
 </code></pre></div>
 <hr />
 <h2 id="deserialize">Deserialize<a class="headerlink" href="#deserialize" title="Permanent link">&para;</a></h2>
@@ -3695,13 +3695,13 @@
 <li><strong>Derive</strong>: <code>@derive(Deserialize)</code></li>
 <li><strong>API</strong>: <code>T.from_json(input: str) -&gt; Result[T, str]</code></li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Deserialize</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">result</span><span class="p">:</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">User</span><span class="p">.</span><span class="n">from_json</span><span class="p">(</span><span class="err">&quot;</span><span class="p">{</span><span class="err">\&quot;</span><span class="n">name</span><span class="err">\&quot;</span><span class="p">:</span><span class="err">\&quot;</span><span class="n">Alice</span><span class="err">\&quot;</span><span class="p">,</span><span class="err">\&quot;</span><span class="n">age</span><span class="err">\</span><span class="s2">&quot;:30}&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="kt">result</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="nc">User</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span><span class="s2">&quot;{</span><span class="se">\&quot;</span><span class="s2">name</span><span class="se">\&quot;</span><span class="s2">:</span><span class="se">\&quot;</span><span class="s2">Alice</span><span class="se">\&quot;</span><span class="s2">,</span><span class="se">\&quot;</span><span class="s2">age</span><span class="se">\&quot;</span><span class="s2">:30}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <hr />
 <h2 id="type-mappings-incan-json">Type mappings (Incan → JSON)<a class="headerlink" href="#type-mappings-incan-json" title="Permanent link">&para;</a></h2>

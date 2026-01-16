@@ -3724,42 +3724,42 @@
 <h1 id="4-control-flow">4. Control flow<a class="headerlink" href="#4-control-flow" title="Permanent link">&para;</a></h1>
 <p>Control flow is how you branch and loop.</p>
 <h2 id="if-elif-else"><code>if</code> / <code>elif</code> / <code>else</code><a class="headerlink" href="#if-elif-else" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;</span> <span class="m">0</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">describe</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
         <span class="k">return</span> <span class="s2">&quot;negative&quot;</span>
-    <span class="k">elif</span> <span class="n">n</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
+    <span class="k">elif</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
         <span class="k">return</span> <span class="s2">&quot;zero&quot;</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">return</span> <span class="s2">&quot;positive&quot;</span>
 </code></pre></div>
 <h2 id="match-pattern-matching"><code>match</code> (pattern matching)<a class="headerlink" href="#match-pattern-matching" title="Permanent link">&para;</a></h2>
 <p><code>match</code> is the main way to branch on enums like <code>Result</code> and <code>Option</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">result</span> <span class="o">=</span> <span class="n">parse_port</span><span class="p">(</span><span class="s2">&quot;8080&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="n">parse_port</span><span class="p">(</span><span class="s2">&quot;8080&quot;</span><span class="p">)</span>
 
-    <span class="k">match</span> <span class="n">result</span><span class="p">:</span>
-        <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">port</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;port={port}&quot;</span><span class="p">)</span>
-        <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: {e}&quot;</span><span class="p">)</span>
+    <span class="k">match</span> <span class="kt">result</span><span class="p">:</span>
+        <span class="k">case</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">port</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;port=</span><span class="si">{</span><span class="n">port</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">Coming from Rust?</p>
 <p>Incan also supports a more Rust-like match-arm style using <code>=&gt;</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">parse_port</span><span class="p">(</span><span class="s2">&quot;8080&quot;</span><span class="p">):</span>
-        <span class="n">Ok</span><span class="p">(</span><span class="n">port</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;port={port}&quot;</span><span class="p">)</span>
-        <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: {e}&quot;</span><span class="p">)</span>
+        <span class="nb">Ok</span><span class="p">(</span><span class="n">port</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;port=</span><span class="si">{</span><span class="n">port</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>This is equivalent to the <code>case ...:</code> form; pick whichever reads best to you.</p>
 </div>
 <h2 id="for-loops"><code>for</code> loops<a class="headerlink" href="#for-loops" title="Permanent link">&para;</a></h2>
 <p>Incan supports Python-like <code>for</code> loops:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">items</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Cara&quot;</span><span class="p">]</span>
-    <span class="k">for</span> <span class="n">name</span> <span class="k">in</span> <span class="n">items</span><span class="p">:</span>
-        <span class="n">println</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">items</span><span class="p">:</span>
+        <span class="nb">println</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
 </code></pre></div>
 <p>You can break early:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">for</span> <span class="n">name</span> <span class="k">in</span> <span class="n">items</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">items</span><span class="p">:</span>
     <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">&quot;Bob&quot;</span><span class="p">:</span>
         <span class="k">break</span>
 </code></pre></div>
@@ -3772,30 +3772,30 @@
 <details class="example">
 <summary>One possible solution</summary>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># 1) classify function</span>
-<span class="c1">def classify(n: int) -&gt; str:</span>
-<span class="c1">    if n &lt; 0:</span>
-<span class="c1">        return &quot;negative&quot;</span>
-<span class="c1">    elif n == 0:</span>
-<span class="c1">        return &quot;zero&quot;</span>
-<span class="c1">    else:</span>
-<span class="c1">        return &quot;positive&quot;</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">classify</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;negative&quot;</span>
+    <span class="k">elif</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;zero&quot;</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;positive&quot;</span>
 
-<span class="c1">def main() -&gt; None:</span>
-<span class="c1">    println(classify(-1))  # negative</span>
-<span class="c1">    println(classify(0))   # zero</span>
-<span class="c1">    println(classify(2))   # positive</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">classify</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>  <span class="c1"># negative</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">classify</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>   <span class="c1"># zero</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">classify</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span>   <span class="c1"># positive</span>
 
-<span class="c1">    # 2) match on Result</span>
-<span class="c1">    match parse_port(&quot;8080&quot;):</span>
-<span class="c1">        Ok(port) =&gt; println(f&quot;port={port}&quot;)</span>
-<span class="c1">        Err(e) =&gt; println(f&quot;error={e}&quot;)</span>
+    <span class="c1"># 2) match on Result</span>
+    <span class="k">match</span> <span class="n">parse_port</span><span class="p">(</span><span class="s2">&quot;8080&quot;</span><span class="p">):</span>
+        <span class="nb">Ok</span><span class="p">(</span><span class="n">port</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;port=</span><span class="si">{</span><span class="n">port</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error=</span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
-<span class="c1">    # 3) loop over a list and stop early with break</span>
-<span class="c1">    items = [&quot;Alice&quot;, &quot;Bob&quot;, &quot;Cara&quot;]</span>
-<span class="c1">    for name in items:</span>
-<span class="c1">        if name == &quot;Bob&quot;:</span>
-<span class="c1">            break</span>
-<span class="c1">        println(name)</span>
+    <span class="c1"># 3) loop over a list and stop early with break</span>
+    <span class="n">items</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Cara&quot;</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">items</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">&quot;Bob&quot;</span><span class="p">:</span>
+            <span class="k">break</span>
+        <span class="nb">println</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
 </code></pre></div>
 </details>
 <h2 id="where-to-learn-more">Where to learn more<a class="headerlink" href="#where-to-learn-more" title="Permanent link">&para;</a></h2>

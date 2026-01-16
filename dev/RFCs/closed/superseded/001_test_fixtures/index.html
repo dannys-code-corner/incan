@@ -3749,55 +3749,55 @@
 </ol>
 <h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
 <h3 id="basic-syntax">Basic Syntax<a class="headerlink" href="#basic-syntax" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">fixture</span>
 
-<span class="err">@</span><span class="n">fixture</span>
-<span class="k">def</span> <span class="n">database</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Database</span><span class="p">:</span>
-    <span class="s2">&quot;&quot;&quot;Fixture that provides a test database.&quot;&quot;&quot;</span>
-    <span class="n">db</span> <span class="o">=</span> <span class="n">Database</span><span class="p">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
+<span class="nd">@fixture</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">database</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Database</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Fixture that provides a test database.&quot;&quot;&quot;</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="nc">Database</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
     <span class="k">yield</span> <span class="n">db</span>          <span class="c1"># Test runs here</span>
-<span class="c1">    db.close()        # Teardown after test</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>        <span class="c1"># Teardown after test</span>
 
-<span class="c1">def test_insert(database: Database) -&gt; None:</span>
-<span class="c1">    database.insert(&quot;key&quot;, &quot;value&quot;)</span>
-<span class="c1">    assert_eq(database.get(&quot;key&quot;), &quot;value&quot;)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_insert</span><span class="p">(</span><span class="n">database</span><span class="p">:</span> <span class="nc">Database</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">database</span><span class="o">.</span><span class="nb">insert</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">,</span> <span class="s2">&quot;value&quot;</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">database</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">),</span> <span class="s2">&quot;value&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="fixture-scopes">Fixture Scopes<a class="headerlink" href="#fixture-scopes" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>  <span class="c1"># Default: new instance per test</span>
-<span class="c1">def temp_file() -&gt; str:</span>
-<span class="c1">    ...</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>  <span class="c1"># Default: new instance per test</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">temp_file</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="o">...</span>
 
-<span class="c1">@fixture(scope=&quot;module&quot;)    # Shared across all tests in file</span>
-<span class="c1">def shared_client() -&gt; Client:</span>
-<span class="c1">    ...</span>
+<span class="nd">@fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>    <span class="c1"># Shared across all tests in file</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">shared_client</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Client</span><span class="p">:</span>
+    <span class="o">...</span>
 
-<span class="c1">@fixture(scope=&quot;session&quot;)   # Shared across entire test run</span>
-<span class="c1">def global_config() -&gt; Config:</span>
-<span class="c1">    ...</span>
+<span class="nd">@fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>   <span class="c1"># Shared across entire test run</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">global_config</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Config</span><span class="p">:</span>
+    <span class="o">...</span>
 </code></pre></div>
 <h3 id="fixture-dependencies">Fixture Dependencies<a class="headerlink" href="#fixture-dependencies" title="Permanent link">&para;</a></h3>
 <p>Fixtures can depend on other fixtures:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">fixture</span>
-<span class="k">def</span> <span class="n">config</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Config</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">Config</span><span class="p">.</span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;test.toml&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@fixture</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">config</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Config</span><span class="p">:</span>
+    <span class="k">return</span> <span class="nc">Config</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;test.toml&quot;</span><span class="p">)</span>
 
-<span class="err">@</span><span class="n">fixture</span>
-<span class="k">def</span> <span class="n">database</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">Config</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Database</span><span class="p">:</span>
+<span class="nd">@fixture</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">database</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="nc">Config</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Database</span><span class="p">:</span>
     <span class="c1"># config fixture is automatically injected</span>
-<span class="c1">    return Database.connect(config.db_url)</span>
+    <span class="k">return</span> <span class="nc">Database</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">db_url</span><span class="p">)</span>
 
-<span class="c1">def test_query(database: Database) -&gt; None:</span>
-<span class="c1">    # database fixture (and its config dependency) injected</span>
-<span class="c1">    result = database.query(&quot;SELECT 1&quot;)</span>
-<span class="c1">    assert_eq(result, 1)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_query</span><span class="p">(</span><span class="n">database</span><span class="p">:</span> <span class="nc">Database</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="c1"># database fixture (and its config dependency) injected</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="n">database</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT 1&quot;</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="kt">result</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="autouse-fixtures">Autouse Fixtures<a class="headerlink" href="#autouse-fixtures" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">fixture</span><span class="p">(</span><span class="n">autouse</span><span class="o">=</span><span class="k">true</span><span class="p">)</span>
-<span class="k">def</span> <span class="n">setup_logging</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="s2">&quot;&quot;&quot;Automatically applied to all tests in this file.&quot;&quot;&quot;</span>
-    <span class="n">logging</span><span class="p">.</span><span class="n">set_level</span><span class="p">(</span><span class="s2">&quot;DEBUG&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@fixture</span><span class="p">(</span><span class="n">autouse</span><span class="o">=</span><span class="k">true</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">setup_logging</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Automatically applied to all tests in this file.&quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">set_level</span><span class="p">(</span><span class="s2">&quot;DEBUG&quot;</span><span class="p">)</span>
     <span class="k">yield</span>
-    <span class="n">logging</span><span class="p">.</span><span class="n">set_level</span><span class="p">(</span><span class="s2">&quot;INFO&quot;</span><span class="p">)</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">set_level</span><span class="p">(</span><span class="s2">&quot;INFO&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="implementation">Implementation<a class="headerlink" href="#implementation" title="Permanent link">&para;</a></h2>
 <h3 id="phase-1-parser-changes">Phase 1: Parser Changes<a class="headerlink" href="#phase-1-parser-changes" title="Permanent link">&para;</a></h3>
@@ -3849,21 +3849,21 @@
 </code></pre></div>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-setupteardown-methods">1. Setup/Teardown Methods<a class="headerlink" href="#1-setupteardown-methods" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span> <span class="n">TestDatabase</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">setup</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">self</span><span class="p">.</span><span class="n">db</span> <span class="o">=</span> <span class="n">Database</span><span class="p">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">TestDatabase</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">db</span> <span class="o">=</span> <span class="nc">Database</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="n">teardown</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">self</span><span class="p">.</span><span class="n">db</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">teardown</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 
-    <span class="k">def</span> <span class="n">test_insert</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">self</span><span class="p">.</span><span class="n">db</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">,</span> <span class="s2">&quot;value&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_insert</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">db</span><span class="o">.</span><span class="nb">insert</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">,</span> <span class="s2">&quot;value&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Rejected</strong>: Less flexible than fixtures, doesn't support dependency injection.</p>
 <h3 id="2-context-managers">2. Context Managers<a class="headerlink" href="#2-context-managers" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">test_insert</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">with</span> <span class="n">Database</span><span class="p">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
-        <span class="n">db</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">,</span> <span class="s2">&quot;value&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">test_insert</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">with</span> <span class="nc">Database</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
+        <span class="n">db</span><span class="o">.</span><span class="nb">insert</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">,</span> <span class="s2">&quot;value&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Rejected</strong>: Requires boilerplate in each test, no reusability.</p>
 <h2 id="open-questions">Open Questions<a class="headerlink" href="#open-questions" title="Permanent link">&para;</a></h2>

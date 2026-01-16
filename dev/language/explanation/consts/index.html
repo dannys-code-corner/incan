@@ -3913,21 +3913,21 @@ a safe API”.</p>
 </div>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
 <h3 id="rust-native-consts">Rust-native consts<a class="headerlink" href="#rust-native-consts" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">MAX_RETRIES</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">5</span>
-<span class="k">const</span> <span class="n">TIMEOUT_SECS</span><span class="p">:</span> <span class="n">float</span> <span class="o">=</span> <span class="m">2.5</span>
-<span class="k">const</span> <span class="n">IS_DEBUG</span><span class="p">:</span> <span class="n">bool</span> <span class="o">=</span> <span class="n">False</span>
-<span class="k">const</span> <span class="n">PORT</span> <span class="o">=</span> <span class="m">8080</span>  <span class="c1"># type may be inferred</span>
-<span class="c1">const GREETING = &quot;hello&quot; + &quot; world&quot;  # string concatenation is allowed</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="nc">MAX_RETRIES</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span>
+<span class="k">const</span> <span class="nc">TIMEOUT_SECS</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.5</span>
+<span class="k">const</span> <span class="nc">IS_DEBUG</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="k">const</span> <span class="nc">PORT</span> <span class="o">=</span> <span class="mi">8080</span>  <span class="c1"># type may be inferred</span>
+<span class="k">const</span> <span class="nc">GREETING</span> <span class="o">=</span> <span class="s2">&quot;hello&quot;</span> <span class="o">+</span> <span class="s2">&quot; world&quot;</span>  <span class="c1"># string concatenation is allowed</span>
 </code></pre></div>
 <h3 id="frozen-consts-deeply-immutable">Frozen consts (deeply immutable)<a class="headerlink" href="#frozen-consts-deeply-immutable" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">GREETING</span><span class="p">:</span> <span class="n">FrozenStr</span> <span class="o">=</span> <span class="s2">&quot;hello&quot;</span>
-<span class="k">const</span> <span class="n">NUMS</span><span class="p">:</span> <span class="n">FrozenList</span><span class="p">[</span><span class="n">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">]</span>
-<span class="k">const</span> <span class="n">HEADERS</span><span class="p">:</span> <span class="n">FrozenDict</span><span class="p">[</span><span class="n">FrozenStr</span><span class="p">,</span> <span class="n">FrozenStr</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;User-Agent&quot;</span><span class="p">:</span> <span class="s2">&quot;incan&quot;</span><span class="p">}</span>
-<span class="k">const</span> <span class="n">DATA</span><span class="p">:</span> <span class="n">FrozenBytes</span> <span class="o">=</span> <span class="n">b</span><span class="err">&quot;\</span><span class="n">x00</span><span class="err">\</span><span class="n">x01</span><span class="err">&quot;</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="nc">GREETING</span><span class="p">:</span> <span class="kt">FrozenStr</span> <span class="o">=</span> <span class="s2">&quot;hello&quot;</span>
+<span class="k">const</span> <span class="nc">NUMS</span><span class="p">:</span> <span class="kt">FrozenList</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="k">const</span> <span class="nc">HEADERS</span><span class="p">:</span> <span class="kt">FrozenDict</span><span class="p">[</span><span class="kt">FrozenStr</span><span class="p">,</span> <span class="kt">FrozenStr</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;User-Agent&quot;</span><span class="p">:</span> <span class="s2">&quot;incan&quot;</span><span class="p">}</span>
+<span class="k">const</span> <span class="nc">DATA</span><span class="p">:</span> <span class="kt">FrozenBytes</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;</span><span class="se">\x00\x01</span><span class="s2">&quot;</span>
 </code></pre></div>
 <h3 id="consts-can-reference-other-consts">Consts can reference other consts<a class="headerlink" href="#consts-can-reference-other-consts" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="n">BASE</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">10</span>
-<span class="k">const</span> <span class="n">LIMIT</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="n">BASE</span> <span class="o">*</span> <span class="m">2</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">const</span> <span class="nc">BASE</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="k">const</span> <span class="nc">LIMIT</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="nc">BASE</span> <span class="o">*</span> <span class="mi">2</span>
 </code></pre></div>
 <h2 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h2>
 <ul>

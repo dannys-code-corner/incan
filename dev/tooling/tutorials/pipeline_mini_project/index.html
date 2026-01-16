@@ -3720,21 +3720,21 @@
 </code></pre></div>
 <p>Run the commands below from <code>my_project/</code> (this matters for module resolution).</p>
 <p>Create <code>pipeline_step.incn</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">A tiny step-style function that validates input and returns a typed error.</span>
-<span class="s2">&quot;&quot;&quot;</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">A tiny step-style function that validates input and returns a typed error.</span>
+<span class="sd">&quot;&quot;&quot;</span>
 
-<span class="k">def</span> <span class="n">normalize_name</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">str</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="n">len</span><span class="p">(</span><span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">())</span> <span class="o">==</span> <span class="m">0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;name must not be empty&quot;</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">lower</span><span class="p">())</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">normalize_name</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">name</span><span class="o">.</span><span class="nb">strip</span><span class="p">())</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="s2">&quot;name must not be empty&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">name</span><span class="o">.</span><span class="nb">strip</span><span class="p">()</span><span class="o">.</span><span class="nb">lower</span><span class="p">())</span>
 
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">result</span> <span class="o">=</span> <span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">)</span>
-    <span class="k">match</span> <span class="n">result</span><span class="p">:</span>
-        <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ok: {value}&quot;</span><span class="p">)</span>
-        <span class="k">case</span> <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;err: {e}&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="kt">result</span> <span class="o">=</span> <span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">)</span>
+    <span class="k">match</span> <span class="kt">result</span><span class="p">:</span>
+        <span class="k">case</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ok: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">case</span> <span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">):</span> <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;err: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="step-2-run-it">Step 2: Run it<a class="headerlink" href="#step-2-run-it" title="Permanent link">&para;</a></h2>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>run<span class="w"> </span>pipeline_step.incn
@@ -3755,14 +3755,14 @@
 </div>
 <h2 id="step-3-test-it">Step 3: Test it<a class="headerlink" href="#step-3-test-it" title="Permanent link">&para;</a></h2>
 <p>Create <code>tests/test_pipeline_step.incn</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="p">..</span><span class="n">pipeline_step</span> <span class="k">import</span> <span class="n">normalize_name</span>
-<span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">..pipeline_step</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalize_name</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">testing</span><span class="w"> </span><span class="kn">import</span> <span class="nf">assert_eq</span>
 
-<span class="k">def</span> <span class="n">test_normalize_name_ok</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">),</span> <span class="n">Ok</span><span class="p">(</span><span class="s2">&quot;alice&quot;</span><span class="p">))</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_normalize_name_ok</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">),</span> <span class="nb">Ok</span><span class="p">(</span><span class="s2">&quot;alice&quot;</span><span class="p">))</span>
 
-<span class="k">def</span> <span class="n">test_normalize_name_err</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">assert_eq</span><span class="p">(</span><span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;   &quot;</span><span class="p">),</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;name must not be empty&quot;</span><span class="p">))</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_normalize_name_err</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;   &quot;</span><span class="p">),</span> <span class="nb">Err</span><span class="p">(</span><span class="s2">&quot;name must not be empty&quot;</span><span class="p">))</span>
 </code></pre></div>
 <p>Run:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>tests/

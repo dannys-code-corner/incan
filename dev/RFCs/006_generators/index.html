@@ -3859,48 +3859,48 @@ enabling lazy iteration with familiar <code>yield</code> syntax.</p>
 <li>Returns <code>Iterator[T]</code></li>
 </ol>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Python-style generator function</span>
-<span class="c1">def count_up(start: int, end: int) -&gt; Iterator[int]:</span>
-<span class="c1">    mut i = start</span>
-<span class="c1">    while i &lt; end:</span>
-<span class="c1">        yield i</span>
-<span class="c1">        i += 1</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">count_up</span><span class="p">(</span><span class="n">start</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">end</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+    <span class="k">mut</span> <span class="n">i</span> <span class="o">=</span> <span class="n">start</span>
+    <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">end</span><span class="p">:</span>
+        <span class="k">yield</span> <span class="n">i</span>
+        <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
 
 <span class="c1"># Usage: lazy iteration</span>
-<span class="c1">for n in count_up(0, 1_000_000):</span>
-<span class="c1">    if n &gt; 100:</span>
-<span class="c1">        break</span>
-<span class="c1">    println(n)</span>
+<span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">count_up</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1_000_000</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">n</span> <span class="o">&gt;</span> <span class="mi">100</span><span class="p">:</span>
+        <span class="k">break</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="infinite-generators">Infinite Generators<a class="headerlink" href="#infinite-generators" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">fibonacci</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">int</span><span class="p">]:</span>
-    <span class="k">mut</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="m">0</span><span class="p">,</span> <span class="m">1</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">fibonacci</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+    <span class="k">mut</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span>
     <span class="k">while</span> <span class="k">true</span><span class="p">:</span>
         <span class="k">yield</span> <span class="n">a</span>
         <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="p">,</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
 <span class="c1"># Take first 10 Fibonacci numbers</span>
-<span class="c1">let fibs = fibonacci().take(10).collect()</span>
+<span class="k">let</span> <span class="n">fibs</span> <span class="o">=</span> <span class="n">fibonacci</span><span class="p">()</span><span class="o">.</span><span class="n">take</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
 </code></pre></div>
 <h3 id="generators-with-filtering">Generators with Filtering<a class="headerlink" href="#generators-with-filtering" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">even_numbers</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">int</span><span class="p">]:</span>
-    <span class="k">mut</span> <span class="n">n</span> <span class="o">=</span> <span class="m">0</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">even_numbers</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+    <span class="k">mut</span> <span class="n">n</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="k">while</span> <span class="k">true</span><span class="p">:</span>
         <span class="k">yield</span> <span class="n">n</span>
-        <span class="n">n</span> <span class="o">+=</span> <span class="m">2</span>
+        <span class="n">n</span> <span class="o">+=</span> <span class="mi">2</span>
 
-<span class="k">def</span> <span class="n">primes</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">int</span><span class="p">]:</span>
-    <span class="k">mut</span> <span class="n">n</span> <span class="o">=</span> <span class="m">2</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">primes</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+    <span class="k">mut</span> <span class="n">n</span> <span class="o">=</span> <span class="mi">2</span>
     <span class="k">while</span> <span class="k">true</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">is_prime</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
             <span class="k">yield</span> <span class="n">n</span>
-        <span class="n">n</span> <span class="o">+=</span> <span class="m">1</span>
+        <span class="n">n</span> <span class="o">+=</span> <span class="mi">1</span>
 </code></pre></div>
 <h3 id="generator-expressions-comprehension-like">Generator Expressions (Comprehension-like)<a class="headerlink" href="#generator-expressions-comprehension-like" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Existing comprehension (eager, collects to List)</span>
-<span class="c1">squares = [x * x for x in range(10)]</span>
+<span class="n">squares</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span> <span class="o">*</span> <span class="n">x</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">)]</span>
 
 <span class="c1"># Generator expression (lazy, returns Iterator)</span>
-<span class="c1">squares_lazy = (x * x for x in range(10))</span>
+<span class="n">squares_lazy</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span> <span class="o">*</span> <span class="n">x</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">))</span>
 </code></pre></div>
 <h2 id="distinction-from-fixtures">Distinction from Fixtures<a class="headerlink" href="#distinction-from-fixtures" title="Permanent link">&para;</a></h2>
 <p>The <code>yield</code> keyword is already used for test fixtures (RFC 001). The distinction:</p>
@@ -3926,17 +3926,17 @@ enabling lazy iteration with familiar <code>yield</code> syntax.</p>
 </tbody>
 </table>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># FIXTURE: yield once for setup/teardown</span>
-<span class="c1">@fixture</span>
-<span class="c1">def database() -&gt; Database:</span>
-<span class="c1">    db = Database.connect(&quot;test.db&quot;)</span>
-<span class="c1">    yield db        # Single yield: test runs here</span>
-<span class="c1">    db.close()      # Teardown</span>
+<span class="nd">@fixture</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">database</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Database</span><span class="p">:</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="nc">Database</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">db</span>        <span class="c1"># Single yield: test runs here</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>      <span class="c1"># Teardown</span>
 
 <span class="c1"># GENERATOR: yield multiple values lazily</span>
-<span class="c1">def read_lines(path: str) -&gt; Iterator[str]:</span>
-<span class="c1">    let file = File.open(path)?</span>
-<span class="c1">    for line in file.lines():</span>
-<span class="c1">        yield line  # Multiple yields: lazy iteration</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">read_lines</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+    <span class="k">let</span> <span class="n">file</span> <span class="o">=</span> <span class="nc">File</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">file</span><span class="o">.</span><span class="n">lines</span><span class="p">():</span>
+        <span class="k">yield</span> <span class="n">line</span>  <span class="c1"># Multiple yields: lazy iteration</span>
 </code></pre></div>
 <p>The compiler distinguishes by:</p>
 <ul>
@@ -3946,11 +3946,11 @@ enabling lazy iteration with familiar <code>yield</code> syntax.</p>
 <h2 id="compilation-strategy">Compilation Strategy<a class="headerlink" href="#compilation-strategy" title="Permanent link">&para;</a></h2>
 <p>Incan generators compile to Rust 2024 <code>gen</code> blocks:</p>
 <p><strong>Incan:</strong></p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">count_up</span><span class="p">(</span><span class="n">start</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">end</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">int</span><span class="p">]:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">count_up</span><span class="p">(</span><span class="n">start</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">end</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
     <span class="k">mut</span> <span class="n">i</span> <span class="o">=</span> <span class="n">start</span>
     <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">end</span><span class="p">:</span>
         <span class="k">yield</span> <span class="n">i</span>
-        <span class="n">i</span> <span class="o">+=</span> <span class="m">1</span>
+        <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
 </code></pre></div>
 <p><strong>Generated Rust:</strong></p>
 <div class="language-rust highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">count_up</span><span class="p">(</span><span class="n">start</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="n">end</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">impl</span><span class="w"> </span><span class="nb">Iterator</span><span class="o">&lt;</span><span class="n">Item</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kt">i64</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
@@ -3972,20 +3972,20 @@ enabling lazy iteration with familiar <code>yield</code> syntax.</p>
 </ol>
 <h2 id="iterator-methods">Iterator Methods<a class="headerlink" href="#iterator-methods" title="Permanent link">&para;</a></h2>
 <p>Generators return standard iterators, so all iterator methods work:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">naturals</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">int</span><span class="p">]:</span>
-    <span class="k">mut</span> <span class="n">n</span> <span class="o">=</span> <span class="m">0</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">naturals</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+    <span class="k">mut</span> <span class="n">n</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="k">while</span> <span class="k">true</span><span class="p">:</span>
         <span class="k">yield</span> <span class="n">n</span>
-        <span class="n">n</span> <span class="o">+=</span> <span class="m">1</span>
+        <span class="n">n</span> <span class="o">+=</span> <span class="mi">1</span>
 
 <span class="c1"># Chaining works naturally</span>
-<span class="c1">result = (</span>
-<span class="c1">    naturals()</span>
-<span class="c1">    .filter((n) =&gt; (n % 2) == 0)  # filter even numbers</span>
-<span class="c1">    .map((n) =&gt; n * n)            # square the numbers</span>
-<span class="c1">    .take(5)</span>
-<span class="c1">    .collect()</span>
-<span class="c1">) # result = [0, 4, 16, 36, 64]</span>
+<span class="kt">result</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">naturals</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">((</span><span class="n">n</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="p">(</span><span class="n">n</span> <span class="o">%</span> <span class="mi">2</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>  <span class="c1"># filter even numbers</span>
+    <span class="o">.</span><span class="n">map</span><span class="p">((</span><span class="n">n</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">n</span> <span class="o">*</span> <span class="n">n</span><span class="p">)</span>            <span class="c1"># square the numbers</span>
+    <span class="o">.</span><span class="n">take</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+<span class="p">)</span> <span class="c1"># result = [0, 4, 16, 36, 64]</span>
 </code></pre></div>
 <h2 id="implementation-plan">Implementation Plan<a class="headerlink" href="#implementation-plan" title="Permanent link">&para;</a></h2>
 <h3 id="phase-1-parser-changes">Phase 1: Parser Changes<a class="headerlink" href="#phase-1-parser-changes" title="Permanent link">&para;</a></h3>
@@ -4014,7 +4014,7 @@ enabling lazy iteration with familiar <code>yield</code> syntax.</p>
 </ol>
 <h3 id="phase-4-generator-expressions">Phase 4: Generator Expressions<a class="headerlink" href="#phase-4-generator-expressions" title="Permanent link">&para;</a></h3>
 <p>Lower <code>(expr for x in iter)</code> to anonymous generator:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">squares</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span> <span class="o">*</span> <span class="n">x</span> <span class="k">for</span> <span class="n">x</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="m">10</span><span class="p">))</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">squares</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span> <span class="o">*</span> <span class="n">x</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">))</span>
 </code></pre></div>
 <p>Becomes:</p>
 <div class="language-rust highlight"><pre><span></span><code><span class="n">squares</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">gen</span><span class="w"> </span><span class="p">{</span>
@@ -4025,52 +4025,52 @@ enabling lazy iteration with familiar <code>yield</code> syntax.</p>
 </code></pre></div>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
 <h3 id="file-processing">File Processing<a class="headerlink" href="#file-processing" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">read_csv_rows</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">str</span><span class="p">]]:</span>
-    <span class="s2">&quot;&quot;&quot;Lazily read CSV rows without loading entire file.&quot;&quot;&quot;</span>
-    <span class="n">file</span> <span class="o">=</span> <span class="n">File</span><span class="p">.</span><span class="n">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>
-    <span class="k">for</span> <span class="n">line</span> <span class="k">in</span> <span class="n">file</span><span class="p">.</span><span class="n">lines</span><span class="p">():</span>
-        <span class="k">yield</span> <span class="n">line</span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">read_csv_rows</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="kt">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Lazily read CSV rows without loading entire file.&quot;&quot;&quot;</span>
+    <span class="n">file</span> <span class="o">=</span> <span class="nc">File</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">file</span><span class="o">.</span><span class="n">lines</span><span class="p">():</span>
+        <span class="k">yield</span> <span class="n">line</span><span class="o">.</span><span class="nb">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
 
 <span class="c1"># Process million-row CSV with constant memory</span>
-<span class="c1">for row in read_csv_rows(&quot;huge.csv&quot;):</span>
-<span class="c1">    process(row)</span>
+<span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">read_csv_rows</span><span class="p">(</span><span class="s2">&quot;huge.csv&quot;</span><span class="p">):</span>
+    <span class="n">process</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="pagination">Pagination<a class="headerlink" href="#pagination" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">paginate</span><span class="p">(</span><span class="n">items</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">T</span><span class="p">],</span> <span class="n">page_size</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">T</span><span class="p">]]:</span>
-    <span class="s2">&quot;&quot;&quot;Yield pages of items.&quot;&quot;&quot;</span>
-    <span class="k">mut</span> <span class="n">start</span> <span class="o">=</span> <span class="m">0</span>
-    <span class="k">while</span> <span class="n">start</span> <span class="o">&lt;</span> <span class="n">len</span><span class="p">(</span><span class="n">items</span><span class="p">):</span>
-        <span class="k">let</span> <span class="n">end</span> <span class="o">=</span> <span class="n">min</span><span class="p">(</span><span class="n">start</span> <span class="o">+</span> <span class="n">page_size</span><span class="p">,</span> <span class="n">len</span><span class="p">(</span><span class="n">items</span><span class="p">))</span>
-        <span class="k">yield</span> <span class="n">items</span><span class="p">[</span><span class="n">start</span><span class="p">..</span><span class="n">end</span><span class="p">]</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">paginate</span><span class="p">(</span><span class="n">items</span><span class="p">:</span> <span class="kt">List</span><span class="p">[</span><span class="nc">T</span><span class="p">],</span> <span class="n">page_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="kt">List</span><span class="p">[</span><span class="nc">T</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Yield pages of items.&quot;&quot;&quot;</span>
+    <span class="k">mut</span> <span class="n">start</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">while</span> <span class="n">start</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">items</span><span class="p">):</span>
+        <span class="k">let</span> <span class="n">end</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">start</span> <span class="o">+</span> <span class="n">page_size</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">items</span><span class="p">))</span>
+        <span class="k">yield</span> <span class="n">items</span><span class="p">[</span><span class="n">start</span><span class="o">..</span><span class="n">end</span><span class="p">]</span>
         <span class="n">start</span> <span class="o">=</span> <span class="n">end</span>
 
-<span class="k">for</span> <span class="n">page</span> <span class="k">in</span> <span class="n">paginate</span><span class="p">(</span><span class="n">users</span><span class="p">,</span> <span class="m">10</span><span class="p">):</span>
+<span class="k">for</span> <span class="n">page</span> <span class="ow">in</span> <span class="n">paginate</span><span class="p">(</span><span class="n">users</span><span class="p">,</span> <span class="mi">10</span><span class="p">):</span>
     <span class="n">display_page</span><span class="p">(</span><span class="n">page</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="tree-traversal">Tree Traversal<a class="headerlink" href="#tree-traversal" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">walk_tree</span><span class="p">(</span><span class="n">node</span><span class="p">:</span> <span class="n">Node</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Node</span><span class="p">]:</span>
-    <span class="s2">&quot;&quot;&quot;Depth-first traversal.&quot;&quot;&quot;</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">walk_tree</span><span class="p">(</span><span class="n">node</span><span class="p">:</span> <span class="nc">Node</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nc">Node</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Depth-first traversal.&quot;&quot;&quot;</span>
     <span class="k">yield</span> <span class="n">node</span>
-    <span class="k">for</span> <span class="n">child</span> <span class="k">in</span> <span class="n">node</span><span class="p">.</span><span class="n">children</span><span class="p">:</span>
-        <span class="k">for</span> <span class="n">descendant</span> <span class="k">in</span> <span class="n">walk_tree</span><span class="p">(</span><span class="n">child</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">node</span><span class="o">.</span><span class="n">children</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">descendant</span> <span class="ow">in</span> <span class="n">walk_tree</span><span class="p">(</span><span class="n">child</span><span class="p">):</span>
             <span class="k">yield</span> <span class="n">descendant</span>
 </code></pre></div>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-explicit-gen-keyword">1. Explicit <code>gen</code> Keyword<a class="headerlink" href="#1-explicit-gen-keyword" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">fibonacci</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">int</span><span class="p">]:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">fibonacci</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
     <span class="k">return</span> <span class="n">gen</span><span class="p">:</span>
-        <span class="k">mut</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="m">0</span><span class="p">,</span> <span class="m">1</span>
+        <span class="k">mut</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span>
         <span class="k">while</span> <span class="k">true</span><span class="p">:</span>
             <span class="k">yield</span> <span class="n">a</span>
             <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="p">,</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 </code></pre></div>
 <p><strong>Rejected</strong>: More verbose, less Pythonic. The <code>Iterator[T]</code> return type already signals generator intent.</p>
 <h3 id="2-separate-generator-keyword">2. Separate <code>generator</code> Keyword<a class="headerlink" href="#2-separate-generator-keyword" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">generator</span> <span class="n">fibonacci</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>  <span class="c1"># Note: no Iterator wrapper</span>
-<span class="c1">    mut a, b = 0, 1</span>
-<span class="c1">    while true:</span>
-<span class="c1">        yield a</span>
-<span class="c1">        a, b = b, a + b</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">generator</span> <span class="n">fibonacci</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>  <span class="c1"># Note: no Iterator wrapper</span>
+    <span class="k">mut</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span>
+    <span class="k">while</span> <span class="k">true</span><span class="p">:</span>
+        <span class="k">yield</span> <span class="n">a</span>
+        <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="p">,</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 </code></pre></div>
 <p><strong>Rejected</strong>: Deviates from Python, which uses regular <code>def</code> for generators.</p>
 <h3 id="3-no-generators-comprehensions-only">3. No Generators (Comprehensions Only)<a class="headerlink" href="#3-no-generators-comprehensions-only" title="Permanent link">&para;</a></h3>

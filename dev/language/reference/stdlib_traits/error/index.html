@@ -3675,38 +3675,38 @@
 <li>optional error chaining (<code>source()</code>)</li>
 </ul>
 <h2 id="definition">Definition<a class="headerlink" href="#definition" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="n">Error</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">message</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-        <span class="s2">&quot;&quot;&quot;Return a human-readable error message&quot;&quot;&quot;</span>
-        <span class="p">...</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="nc">Error</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">message</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a human-readable error message&quot;&quot;&quot;</span>
+        <span class="o">...</span>
 
-    <span class="k">def</span> <span class="n">source</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">str</span><span class="p">]:</span>
-        <span class="s2">&quot;&quot;&quot;Optional: Return the underlying cause of this error&quot;&quot;&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">source</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Optional: Return the underlying cause of this error&quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="kc">None</span>
 </code></pre></div>
 <h2 id="example-simple-structured-error">Example: simple structured error<a class="headerlink" href="#example-simple-structured-error" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">ValidationError</span> <span class="k">with</span> <span class="n">Error</span><span class="p">:</span>
-    <span class="n">field</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">msg</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">ValidationError</span> <span class="k">with</span> <span class="nc">Error</span><span class="p">:</span>
+    <span class="n">field</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">message</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Validation failed for &#39;{self.field}&#39;: {self.msg}&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">message</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Validation failed for &#39;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">field</span><span class="si">}</span><span class="s2">&#39;: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span>
 
-<span class="k">def</span> <span class="n">validate_age</span><span class="p">(</span><span class="n">age</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">int</span><span class="p">,</span> <span class="n">ValidationError</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="n">age</span> <span class="o">&lt;</span> <span class="m">0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="n">ValidationError</span><span class="p">(</span><span class="n">field</span><span class="o">=</span><span class="s2">&quot;age&quot;</span><span class="p">,</span> <span class="n">msg</span><span class="o">=</span><span class="s2">&quot;cannot be negative&quot;</span><span class="p">))</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">age</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">validate_age</span><span class="p">(</span><span class="n">age</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nc">ValidationError</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">age</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">ValidationError</span><span class="p">(</span><span class="n">field</span><span class="o">=</span><span class="s2">&quot;age&quot;</span><span class="p">,</span> <span class="n">msg</span><span class="o">=</span><span class="s2">&quot;cannot be negative&quot;</span><span class="p">))</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">age</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="example-chaining-with-source">Example: chaining with <code>source()</code><a class="headerlink" href="#example-chaining-with-source" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">DatabaseError</span> <span class="k">with</span> <span class="n">Error</span><span class="p">:</span>
-    <span class="n">query</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">cause</span><span class="p">:</span> <span class="n">Option</span><span class="p">[</span><span class="n">str</span><span class="p">]</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">DatabaseError</span> <span class="k">with</span> <span class="nc">Error</span><span class="p">:</span>
+    <span class="n">query</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">cause</span><span class="p">:</span> <span class="kt">Option</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 
-    <span class="k">def</span> <span class="n">message</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Database query failed: {self.query}&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">message</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Database query failed: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">query</span><span class="si">}</span><span class="s2">&quot;</span>
 
-    <span class="k">def</span> <span class="n">source</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">str</span><span class="p">]:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">cause</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">source</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Option</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">cause</span>
 </code></pre></div>
 
 

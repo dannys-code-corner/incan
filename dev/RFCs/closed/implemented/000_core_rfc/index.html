@@ -3935,15 +3935,15 @@
 <li><strong>Conflict resolution</strong>: When multiple traits provide the same method, the adopting class must explicitly resolve (e.g., <code>TraitA.method(self, ...)</code>).</li>
 <li><strong>Optional <code>@requires</code></strong>: Annotation to declare expected fields/methods on adopters.</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="n">Loggable</span><span class="p">:</span>
-  <span class="k">def</span> <span class="n">log</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">str</span><span class="p">):</span>
-    <span class="n">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[{self.name}] {msg}&quot;</span><span class="p">)</span>   <span class="c1"># assumes self.name exists</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="nc">Loggable</span><span class="p">:</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">] </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>   <span class="c1"># assumes self.name exists</span>
 
 <span class="c1"># With explicit requires (optional ergonomic)</span>
-<span class="c1">@requires(name: str)</span>
-<span class="c1">trait Loggable:</span>
-<span class="c1">  def log(self, msg: str):</span>
-<span class="c1">    print(f&quot;[{self.name}] {msg}&quot;)</span>
+<span class="nd">@requires</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span>
+<span class="k">trait</span> <span class="nc">Loggable</span><span class="p">:</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">] </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="16-models">1.6 Models<a class="headerlink" href="#16-models" title="Permanent link">&para;</a></h3>
 <ul>
@@ -3953,16 +3953,16 @@
 <li><strong>Cannot inherit from classes</strong>: Models are not classes; they are data containers.</li>
 <li><strong>Can implement traits</strong>: Models can adopt storage-free traits.</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Validate</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-  <span class="n">id</span><span class="p">:</span> <span class="n">UserId</span>
-  <span class="n">email</span><span class="p">:</span> <span class="n">Email</span>
-  <span class="n">is_active</span><span class="p">:</span> <span class="n">bool</span> <span class="o">=</span> <span class="k">true</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Validate</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+  <span class="nb">id</span><span class="p">:</span> <span class="nc">UserId</span>
+  <span class="n">email</span><span class="p">:</span> <span class="nc">Email</span>
+  <span class="n">is_active</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="k">true</span>
 
-  <span class="k">def</span> <span class="n">validate</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">ValidationError</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="k">not</span> <span class="k">self</span><span class="p">.</span><span class="n">is_active</span> <span class="k">and</span> <span class="k">not</span> <span class="k">self</span><span class="p">.</span><span class="n">email</span><span class="p">.</span><span class="n">as_str</span><span class="p">().</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;@example.com&quot;</span><span class="p">):</span>
-      <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="n">ValidationError</span><span class="p">.</span><span class="n">InactiveExternal</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="k">self</span><span class="p">)</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">validate</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nc">ValidationError</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_active</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">email</span><span class="o">.</span><span class="n">as_str</span><span class="p">()</span><span class="o">.</span><span class="nb">endswith</span><span class="p">(</span><span class="s2">&quot;@example.com&quot;</span><span class="p">):</span>
+      <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">ValidationError</span><span class="o">.</span><span class="nc">InactiveExternal</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="17-classes">1.7 Classes<a class="headerlink" href="#17-classes" title="Permanent link">&para;</a></h3>
 <ul>
@@ -3971,13 +3971,13 @@
 <li><strong>Single inheritance</strong>: <code>class Child extends Parent</code>.</li>
 <li><strong>Trait composition</strong>: <code>class Service with TraitA, TraitB</code>.</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span> <span class="n">Service</span> <span class="k">with</span> <span class="n">Loggable</span><span class="p">:</span>
-  <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-  <span class="n">repo</span><span class="p">:</span> <span class="n">UserRepo</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Service</span> <span class="k">with</span> <span class="nc">Loggable</span><span class="p">:</span>
+  <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+  <span class="n">repo</span><span class="p">:</span> <span class="nc">UserRepo</span>
 
-  <span class="k">def</span> <span class="n">onboard</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">ValidationError</span><span class="p">]:</span>
-    <span class="k">self</span><span class="p">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;creating {user.email.as_str()}&quot;</span><span class="p">)</span>
-    <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">repo</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">onboard</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">user</span><span class="p">:</span> <span class="nc">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nc">ValidationError</span><span class="p">]:</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;creating </span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">email</span><span class="o">.</span><span class="n">as_str</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">repo</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="18-newtypes">1.8 Newtypes<a class="headerlink" href="#18-newtypes" title="Permanent link">&para;</a></h3>
 <ul>
@@ -3985,32 +3985,32 @@
 <li><strong>Constructors return <code>Result</code></strong>: Validation failures are explicit. Newtypes must be constructed via their validated constructors; direct field construction is disallowed. Codegen enforces the constructor path.</li>
 <li><strong>Type-safe</strong>: Newtypes are distinct from their underlying type.</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">type</span> <span class="n">Email</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">str</span><span class="p">:</span>
-  <span class="err">@</span><span class="n">validate</span> <span class="n">new</span>
-  <span class="k">def</span> <span class="n">from_str</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Email</span><span class="p">,</span> <span class="n">ValidationError</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="k">not</span> <span class="k">in</span> <span class="n">v</span><span class="p">:</span>
-      <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="n">ValidationError</span><span class="p">.</span><span class="n">EmailMissingAt</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">Email</span><span class="p">(</span><span class="n">v</span><span class="p">.</span><span class="n">lower</span><span class="p">()))</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nb">type</span> <span class="nc">Email</span> <span class="o">=</span> <span class="k">newtype</span> <span class="nb">str</span><span class="p">:</span>
+  <span class="nd">@validate</span> <span class="n">new</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">from_str</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Email</span><span class="p">,</span> <span class="nc">ValidationError</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">v</span><span class="p">:</span>
+      <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">ValidationError</span><span class="o">.</span><span class="nc">EmailMissingAt</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nc">Email</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="nb">lower</span><span class="p">()))</span>
 
-<span class="k">type</span> <span class="n">UserId</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">uuid</span>
+<span class="nb">type</span> <span class="nc">UserId</span> <span class="o">=</span> <span class="k">newtype</span> <span class="n">uuid</span>
 </code></pre></div>
 <h3 id="19-enums">1.9 Enums<a class="headerlink" href="#19-enums" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Algebraic data types</strong>: Variants can carry data.</li>
 <li><strong>Exhaustive matching</strong>: <code>match</code> must cover all variants.</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">ValidationError</span><span class="p">:</span>
-  <span class="n">EmailMissingAt</span>
-  <span class="n">InactiveExternal</span>
-  <span class="n">RepoError</span><span class="p">(</span><span class="n">str</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="nc">ValidationError</span><span class="p">:</span>
+  <span class="nc">EmailMissingAt</span>
+  <span class="nc">InactiveExternal</span>
+  <span class="nc">RepoError</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 
-<span class="k">enum</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
-  <span class="n">Some</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
+<span class="k">enum</span> <span class="kt">Option</span><span class="p">[</span><span class="nc">T</span><span class="p">]:</span>
+  <span class="nb">Some</span><span class="p">(</span><span class="nc">T</span><span class="p">)</span>
   <span class="kc">None</span>
 
-<span class="k">enum</span> <span class="n">Result</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">]:</span>
-  <span class="n">Ok</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
-  <span class="n">Err</span><span class="p">(</span><span class="n">E</span><span class="p">)</span>
+<span class="k">enum</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">T</span><span class="p">,</span> <span class="nc">E</span><span class="p">]:</span>
+  <span class="nb">Ok</span><span class="p">(</span><span class="nc">T</span><span class="p">)</span>
+  <span class="nb">Err</span><span class="p">(</span><span class="nc">E</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="110-functions">1.10 Functions<a class="headerlink" href="#110-functions" title="Permanent link">&para;</a></h3>
 <ul>
@@ -4019,12 +4019,12 @@
 <li><strong>Explicit return types</strong>: Required for all functions.</li>
 <li><strong>No implicit returns</strong>: Functions must use <code>return</code>. (Future: implicit last-expression returns could be considered, but are not allowed now.)</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
-  <span class="n">raw</span> <span class="o">=</span> <span class="n">read_file</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>
-  <span class="k">return</span> <span class="n">Config</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span><span class="err">?</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_config</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Config</span><span class="p">,</span> <span class="nc">IoError</span><span class="p">]:</span>
+  <span class="n">raw</span> <span class="o">=</span> <span class="nb">read_file</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>
+  <span class="k">return</span> <span class="nc">Config</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span><span class="err">?</span>
 
-<span class="k">async</span> <span class="k">def</span> <span class="n">fetch_all</span><span class="p">(</span><span class="n">urls</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Bytes</span><span class="p">]:</span>
-  <span class="n">tasks</span> <span class="o">=</span> <span class="p">[</span><span class="n">fetch</span><span class="p">(</span><span class="n">u</span><span class="p">)</span> <span class="k">for</span> <span class="n">u</span> <span class="k">in</span> <span class="n">urls</span><span class="p">]</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetch_all</span><span class="p">(</span><span class="n">urls</span><span class="p">:</span> <span class="kt">List</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kt">List</span><span class="p">[</span><span class="nc">Bytes</span><span class="p">]:</span>
+  <span class="n">tasks</span> <span class="o">=</span> <span class="p">[</span><span class="n">fetch</span><span class="p">(</span><span class="n">u</span><span class="p">)</span> <span class="k">for</span> <span class="n">u</span> <span class="ow">in</span> <span class="n">urls</span><span class="p">]</span>
   <span class="k">return</span> <span class="k">await</span> <span class="n">gather</span><span class="p">(</span><span class="n">tasks</span><span class="p">)</span>
 </code></pre></div>
 <hr />
@@ -4410,65 +4410,65 @@
 <hr />
 <h2 id="6-examples">6. Examples<a class="headerlink" href="#6-examples" title="Permanent link">&para;</a></h2>
 <h3 id="complete-example">Complete Example<a class="headerlink" href="#complete-example" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">import</span> <span class="n">polars</span><span class="p">::</span><span class="n">prelude</span> <span class="k">as</span> <span class="n">pl</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="p">::</span><span class="n">prelude</span> <span class="k">as</span> <span class="n">pl</span>
 
 <span class="c1"># Structured error type</span>
-<span class="c1">enum AppError:</span>
-<span class="c1">  ValidationError(str)</span>
-<span class="c1">  IoError(str)</span>
-<span class="c1">  NotFound</span>
+<span class="k">enum</span> <span class="nc">AppError</span><span class="p">:</span>
+  <span class="nc">ValidationError</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+  <span class="nc">IoError</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+  <span class="nc">NotFound</span>
 
 <span class="c1"># Newtype with invariant</span>
-<span class="c1">type Email = newtype str:</span>
-<span class="c1">  @validate new</span>
-<span class="c1">  def from_str(v: str) -&gt; Result[Email, AppError]:</span>
-<span class="c1">    if &quot;@&quot; not in v:</span>
-<span class="c1">      return Err(AppError.ValidationError(&quot;missing @&quot;))</span>
-<span class="c1">    return Ok(Email(v.lower()))</span>
+<span class="nb">type</span> <span class="nc">Email</span> <span class="o">=</span> <span class="k">newtype</span> <span class="nb">str</span><span class="p">:</span>
+  <span class="nd">@validate</span> <span class="n">new</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">from_str</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Email</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">v</span><span class="p">:</span>
+      <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">ValidationError</span><span class="p">(</span><span class="s2">&quot;missing @&quot;</span><span class="p">))</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nc">Email</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="nb">lower</span><span class="p">()))</span>
 
-<span class="c1">  def as_str(self) -&gt; str:</span>
-<span class="c1">    return self.0   # access underlying value</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">as_str</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="mf">.0</span>   <span class="c1"># access underlying value</span>
 
 <span class="c1"># Model with validation</span>
-<span class="c1">@derive(Debug, Eq, Clone)</span>
-<span class="c1">model User:</span>
-<span class="c1">  id: int</span>
-<span class="c1">  email: Email</span>
-<span class="c1">  is_active: bool = true</span>
+<span class="nd">@derive</span><span class="p">(</span><span class="kt">Debug</span><span class="p">,</span> <span class="kt">Eq</span><span class="p">,</span> <span class="kt">Clone</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+  <span class="nb">id</span><span class="p">:</span> <span class="nb">int</span>
+  <span class="n">email</span><span class="p">:</span> <span class="nc">Email</span>
+  <span class="n">is_active</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="k">true</span>
 
-<span class="c1">  def validate(self) -&gt; Result[User, AppError]:</span>
-<span class="c1">    if not self.is_active:</span>
-<span class="c1">      return Err(AppError.ValidationError(&quot;inactive&quot;))</span>
-<span class="c1">    return Ok(self)</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">validate</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_active</span><span class="p">:</span>
+      <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">ValidationError</span><span class="p">(</span><span class="s2">&quot;inactive&quot;</span><span class="p">))</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
 <span class="c1"># Trait</span>
-<span class="c1">trait Loggable:</span>
-<span class="c1">  def log(self, msg: str):</span>
-<span class="c1">    print(f&quot;[{self.name}] {msg}&quot;)</span>
+<span class="k">trait</span> <span class="nc">Loggable</span><span class="p">:</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">] </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Class with trait</span>
-<span class="c1">class UserService with Loggable:</span>
-<span class="c1">  name: str</span>
-<span class="c1">  users: Dict[int, User]</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">UserService</span> <span class="k">with</span> <span class="nc">Loggable</span><span class="p">:</span>
+  <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+  <span class="n">users</span><span class="p">:</span> <span class="kt">Dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nc">User</span><span class="p">]</span>
 
-<span class="c1">  def create(mut self, email_str: str) -&gt; Result[User, AppError]:</span>
-<span class="c1">    email = Email.from_str(email_str)?</span>
-<span class="c1">    user = User(id=len(self.users) + 1, email=email).validate()?</span>
-<span class="c1">    self.users[user.id] = user</span>
-<span class="c1">    self.log(f&quot;created user {user.id}&quot;)</span>
-<span class="c1">    return Ok(user)</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">create</span><span class="p">(</span><span class="k">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">email_str</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
+    <span class="n">email</span> <span class="o">=</span> <span class="nc">Email</span><span class="o">.</span><span class="n">from_str</span><span class="p">(</span><span class="n">email_str</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">user</span> <span class="o">=</span> <span class="nc">User</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">users</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="n">email</span><span class="p">)</span><span class="o">.</span><span class="n">validate</span><span class="p">()</span><span class="err">?</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">users</span><span class="p">[</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">]</span> <span class="o">=</span> <span class="n">user</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;created user </span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
 
-<span class="c1">  def get(self, id: int) -&gt; Result[User, AppError]:</span>
-<span class="c1">    match self.users.get(id):</span>
-<span class="c1">      case Some(user): Ok(user)</span>
-<span class="c1">      case None: Err(AppError.NotFound)</span>
+  <span class="k">def</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
+    <span class="k">match</span> <span class="bp">self</span><span class="o">.</span><span class="n">users</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="nb">id</span><span class="p">):</span>
+      <span class="k">case</span> <span class="nb">Some</span><span class="p">(</span><span class="n">user</span><span class="p">):</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+      <span class="k">case</span> <span class="kc">None</span><span class="p">:</span> <span class="nb">Err</span><span class="p">(</span><span class="nc">AppError</span><span class="o">.</span><span class="nc">NotFound</span><span class="p">)</span>
 
 <span class="c1"># Usage</span>
-<span class="c1">def main() -&gt; Result[Unit, AppError]:</span>
-<span class="c1">  mut svc = UserService(name=&quot;user-svc&quot;, users={})</span>
-<span class="c1">  user = svc.create(&quot;ada@example.com&quot;)?</span>
-<span class="c1">  print(f&quot;Created: {user}&quot;)</span>
-<span class="c1">  return Ok(())</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Unit</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
+  <span class="k">mut</span> <span class="n">svc</span> <span class="o">=</span> <span class="nc">UserService</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;user-svc&quot;</span><span class="p">,</span> <span class="n">users</span><span class="o">=</span><span class="p">{})</span>
+  <span class="n">user</span> <span class="o">=</span> <span class="n">svc</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;ada@example.com&quot;</span><span class="p">)</span><span class="err">?</span>
+  <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Created: </span><span class="si">{</span><span class="n">user</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+  <span class="k">return</span> <span class="nb">Ok</span><span class="p">(())</span>
 </code></pre></div>
 <hr />
 <h2 id="7-checklist">7. Checklist<a class="headerlink" href="#7-checklist" title="Permanent link">&para;</a></h2>

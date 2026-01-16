@@ -4216,46 +4216,46 @@ So we can change the destination in one place if we move/rename sections.
 <hr />
 <h2 id="common-compiler-diagnostics">Common compiler diagnostics<a class="headerlink" href="#common-compiler-diagnostics" title="Permanent link">&para;</a></h2>
 <h3 id="unknown-derive">Unknown derive<a class="headerlink" href="#unknown-derive" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Debg</span><span class="p">)</span>  <span class="c1"># Typo</span>
-<span class="c1">model User:</span>
-<span class="c1">    name: str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="nc">Debg</span><span class="p">)</span>  <span class="c1"># Typo</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 </code></pre></div>
 <p>Expected: “unknown derive” with a list of valid derive names.</p>
 <h3 id="deriving-a-non-trait">Deriving a non-trait<a class="headerlink" href="#deriving-a-non-trait" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">User</span><span class="p">)</span>  <span class="c1"># wrong: User is a model, not a derive/trait</span>
-<span class="c1">model Admin:</span>
-<span class="c1">    level: int</span>
+<span class="nd">@derive</span><span class="p">(</span><span class="nc">User</span><span class="p">)</span>  <span class="c1"># wrong: User is a model, not a derive/trait</span>
+<span class="k">model</span> <span class="nc">Admin</span><span class="p">:</span>
+    <span class="n">level</span><span class="p">:</span> <span class="nb">int</span>
 </code></pre></div>
 <p>Expected: “cannot derive a model/class” with a hint to use <code>with TraitName</code> for trait implementations.</p>
 <hr />
 <h2 id="traits-authoring">Traits (authoring)<a class="headerlink" href="#traits-authoring" title="Permanent link">&para;</a></h2>
 <p>Traits define reusable capabilities. You opt in with <code>with TraitName</code>. Methods can be required (<code>...</code>) or have defaults.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="n">Describable</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">describe</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">trait</span> <span class="nc">Describable</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">describe</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">return</span> <span class="s2">&quot;An object&quot;</span>
 
-<span class="k">class</span> <span class="n">Product</span> <span class="k">with</span> <span class="n">Describable</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Product</span> <span class="k">with</span> <span class="nc">Describable</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">p</span> <span class="o">=</span> <span class="n">Product</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Laptop&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="n">describe</span><span class="p">())</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="nc">Product</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Laptop&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">describe</span><span class="p">())</span>
 </code></pre></div>
 <p>See also: <a href="#traits-authoring">Traits (authoring)</a>.</p>
 <hr />
 <h2 id="debug-automatic">Debug (Automatic)<a class="headerlink" href="#debug-automatic" title="Permanent link">&para;</a></h2>
 <p><strong>Format</strong>: <code>{value:?}</code> (Debug)</p>
 <p><strong>Override</strong>: not supported (Debug is compiler-generated).</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Point</span><span class="p">:</span>
-    <span class="n">x</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">y</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">Point</span><span class="p">:</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">p</span> <span class="o">=</span> <span class="n">Point</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="m">10</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="m">20</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{p:?}&quot;</span><span class="p">)</span>  <span class="c1"># Point { x: 10, y: 20 }</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="nc">Point</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">p</span><span class="si">:</span><span class="s2">?</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>  <span class="c1"># Point { x: 10, y: 20 }</span>
 </code></pre></div>
 <hr />
 <h2 id="display-custom-with-__str__">Display (Custom with <code>__str__</code>)<a class="headerlink" href="#display-custom-with-__str__" title="Permanent link">&para;</a></h2>
@@ -4265,17 +4265,17 @@ So we can change the destination in one place if we move/rename sections.
 <blockquote>
 <p>Conflict rule: if you define <code>__str__</code>, you must not also <code>@derive(Display)</code>.</p>
 </blockquote>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">email</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">email</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">__str__</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;{self.name} &lt;{self.email}&gt;&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> &lt;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">email</span><span class="si">}</span><span class="s2">&gt;&quot;</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{u}&quot;</span><span class="p">)</span>    <span class="c1"># Alice &lt;alice@example.com&gt;</span>
-<span class="c1">    println(f&quot;{u:?}&quot;)  # User { name: &quot;Alice&quot;, email: &quot;alice@example.com&quot; }</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">u</span> <span class="o">=</span> <span class="nc">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">u</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>    <span class="c1"># Alice &lt;alice@example.com&gt;</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">u</span><span class="si">:</span><span class="s2">?</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>  <span class="c1"># User { name: &quot;Alice&quot;, email: &quot;alice@example.com&quot; }</span>
 </code></pre></div>
 <hr />
 <h2 id="eq-equality">Eq (Equality)<a class="headerlink" href="#eq-equality" title="Permanent link">&para;</a></h2>
@@ -4284,12 +4284,12 @@ So we can change the destination in one place if we move/rename sections.
 <blockquote>
 <p>Conflict rule: if you define <code>__eq__</code>, you must not also <code>@derive(Eq)</code>.</p>
 </blockquote>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="nb">id</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">__eq__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">id</span> <span class="o">==</span> <span class="n">other</span><span class="p">.</span><span class="n">id</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="nc">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">id</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">id</span>
 </code></pre></div>
 <hr />
 <h2 id="ord-ordering">Ord (ordering)<a class="headerlink" href="#ord-ordering" title="Permanent link">&para;</a></h2>
@@ -4298,12 +4298,12 @@ So we can change the destination in one place if we move/rename sections.
 <blockquote>
 <p>Conflict rule: if you define <code>__lt__</code>, you must not also <code>@derive(Ord)</code>.</p>
 </blockquote>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">Task</span><span class="p">:</span>
-    <span class="n">priority</span><span class="p">:</span> <span class="n">int</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">Task</span><span class="p">:</span>
+    <span class="n">priority</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-    <span class="k">def</span> <span class="n">__lt__</span><span class="p">(</span><span class="k">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="n">Task</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">bool</span><span class="p">:</span>
-        <span class="k">return</span> <span class="k">self</span><span class="p">.</span><span class="n">priority</span> <span class="o">&lt;</span> <span class="n">other</span><span class="p">.</span><span class="n">priority</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__lt__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="nc">Task</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">priority</span> <span class="o">&lt;</span> <span class="n">other</span><span class="o">.</span><span class="n">priority</span>
 </code></pre></div>
 <hr />
 <h2 id="hash">Hash<a class="headerlink" href="#hash" title="Permanent link">&para;</a></h2>
@@ -4313,9 +4313,9 @@ So we can change the destination in one place if we move/rename sections.
 <p>Conflict rule: if you define <code>__hash__</code>, you must not also <code>@derive(Hash)</code>.</p>
 <p>Consistency rule: if <code>a == b</code>, then <code>a.__hash__() == b.__hash__()</code>.</p>
 </blockquote>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Eq</span><span class="p">,</span> <span class="n">Hash</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">UserId</span><span class="p">:</span>
-    <span class="n">id</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Eq</span><span class="p">,</span> <span class="kt">Hash</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">UserId</span><span class="p">:</span>
+    <span class="nb">id</span><span class="p">:</span> <span class="nb">int</span>
 </code></pre></div>
 <hr />
 <h2 id="clone">Clone<a class="headerlink" href="#clone" title="Permanent link">&para;</a></h2>
@@ -4337,15 +4337,15 @@ So we can change the destination in one place if we move/rename sections.
 <ul>
 <li>If a field has <strong>no default</strong>, it must be provided when constructing the type.</li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Default</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">Settings</span><span class="p">:</span>
-    <span class="n">theme</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;dark&quot;</span>
-    <span class="n">font_size</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">14</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Default</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">Settings</span><span class="p">:</span>
+    <span class="n">theme</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;dark&quot;</span>
+    <span class="n">font_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">14</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">a</span> <span class="o">=</span> <span class="n">Settings</span><span class="p">()</span>               <span class="c1"># OK: all omitted fields have defaults</span>
-<span class="c1">    b = Settings(font_size=16)   # OK</span>
-<span class="c1">    c = Settings.default()       # OK</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="nc">Settings</span><span class="p">()</span>               <span class="c1"># OK: all omitted fields have defaults</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="nc">Settings</span><span class="p">(</span><span class="n">font_size</span><span class="o">=</span><span class="mi">16</span><span class="p">)</span>   <span class="c1"># OK</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="nc">Settings</span><span class="o">.</span><span class="n">default</span><span class="p">()</span>       <span class="c1"># OK</span>
 </code></pre></div>
 <hr />
 <h2 id="serialize">Serialize<a class="headerlink" href="#serialize" title="Permanent link">&para;</a></h2>
@@ -4354,14 +4354,14 @@ So we can change the destination in one place if we move/rename sections.
 <ul>
 <li><code>json_stringify(value)</code> → <code>str</code></li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Serialize</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Serialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">age</span><span class="o">=</span><span class="m">30</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="n">json_stringify</span><span class="p">(</span><span class="n">u</span><span class="p">))</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">u</span> <span class="o">=</span> <span class="nc">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">age</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="nb">json_stringify</span><span class="p">(</span><span class="n">u</span><span class="p">))</span>
 </code></pre></div>
 <hr />
 <h2 id="deserialize">Deserialize<a class="headerlink" href="#deserialize" title="Permanent link">&para;</a></h2>
@@ -4370,30 +4370,30 @@ So we can change the destination in one place if we move/rename sections.
 <ul>
 <li><code>T.from_json(input: str)</code> → <code>Result[T, str]</code></li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Deserialize</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
-    <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="kt">Deserialize</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">age</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">result</span><span class="p">:</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">User</span><span class="p">.</span><span class="n">from_json</span><span class="p">(</span><span class="err">&quot;</span><span class="p">{</span><span class="err">\&quot;</span><span class="n">name</span><span class="err">\&quot;</span><span class="p">:</span><span class="err">\&quot;</span><span class="n">Alice</span><span class="err">\&quot;</span><span class="p">,</span><span class="err">\&quot;</span><span class="n">age</span><span class="err">\</span><span class="s2">&quot;:30}&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="kt">result</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">User</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="nc">User</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span><span class="s2">&quot;{</span><span class="se">\&quot;</span><span class="s2">name</span><span class="se">\&quot;</span><span class="s2">:</span><span class="se">\&quot;</span><span class="s2">Alice</span><span class="se">\&quot;</span><span class="s2">,</span><span class="se">\&quot;</span><span class="s2">age</span><span class="se">\&quot;</span><span class="s2">:30}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <hr />
 <h2 id="compiler-errors-reference">Compiler errors (reference)<a class="headerlink" href="#compiler-errors-reference" title="Permanent link">&para;</a></h2>
 <h3 id="unknown-derive-example">Unknown derive (example)<a class="headerlink" href="#unknown-derive-example" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">Debg</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="nd">@derive</span><span class="p">(</span><span class="nc">Debg</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 </code></pre></div>
 <div class="language-bash highlight"><pre><span></span><code><span class="nb">type</span><span class="w"> </span>error:<span class="w"> </span>Unknown<span class="w"> </span>derive<span class="w"> </span><span class="s1">&#39;Debg&#39;</span>
 </code></pre></div>
 <h3 id="deriving-a-non-trait-example">Deriving a non-trait (example)<a class="headerlink" href="#deriving-a-non-trait-example" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="err">@</span><span class="n">derive</span><span class="p">(</span><span class="n">User</span><span class="p">)</span>
-<span class="k">model</span> <span class="n">Admin</span><span class="p">:</span>
-    <span class="n">email</span><span class="p">:</span> <span class="n">str</span>
+<span class="nd">@derive</span><span class="p">(</span><span class="nc">User</span><span class="p">)</span>
+<span class="k">model</span> <span class="nc">Admin</span><span class="p">:</span>
+    <span class="n">email</span><span class="p">:</span> <span class="nb">str</span>
 </code></pre></div>
 <div class="language-bash highlight"><pre><span></span><code><span class="nb">type</span><span class="w"> </span>error:<span class="w"> </span>Cannot<span class="w"> </span>derive<span class="w"> </span><span class="s1">&#39;User&#39;</span><span class="w"> </span>-<span class="w"> </span>it<span class="w"> </span>is<span class="w"> </span>a<span class="w"> </span>model,<span class="w"> </span>not<span class="w"> </span>a<span class="w"> </span>trait
 </code></pre></div>
@@ -4404,13 +4404,13 @@ So we can change the destination in one place if we move/rename sections.
 <li><code>__fields__() -&gt; List[str]</code></li>
 <li><code>__class_name__() -&gt; str</code></li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="n">User</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">User</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">)</span>
-    <span class="n">println</span><span class="p">(</span><span class="n">u</span><span class="p">.</span><span class="n">__class_name__</span><span class="p">())</span>
-    <span class="n">println</span><span class="p">(</span><span class="n">u</span><span class="p">.</span><span class="n">__fields__</span><span class="p">())</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">u</span> <span class="o">=</span> <span class="nc">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">)</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">u</span><span class="o">.</span><span class="n">__class_name__</span><span class="p">())</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">u</span><span class="o">.</span><span class="n">__fields__</span><span class="p">())</span>
 </code></pre></div>
 
 
