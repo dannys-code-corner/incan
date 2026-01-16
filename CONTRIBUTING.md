@@ -193,37 +193,6 @@ The stdlib prelude (`stdlib/`) contains trait definitions but is not yet integra
 compilation. Derives like `Debug`, `Clone` work through
 codegen heuristics rather than actual trait implementations.
 
-### Fuzzing
-
-We use `cargo-fuzz` to test the parser with randomly generated inputs.
-
-**Setup:**
-
-```bash
-cargo install cargo-fuzz
-```
-
-**Run fuzzing:**
-
-```bash
-# Fuzz the parser
-cargo fuzz run parse
-
-# Run with more workers
-cargo fuzz run parse -- -workers=4
-
-# Run for 60 seconds
-cargo fuzz run parse -- -max_total_time=60
-```
-
-**Reproduce a crash:**
-
-```bash
-cargo fuzz run parse fuzz/artifacts/parse/crash-<hash>
-```
-
-See `fuzz/README.md` for more details.
-
 ### Property-Based Testing
 
 We use `proptest` for property-based testing of complex invariants.
