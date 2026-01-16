@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3847,7 +3849,7 @@ operations—except errors come back as <code>Result</code> instead of throwing 
             <span class="k">return</span> <span class="s2">&quot;&quot;</span>
 </code></pre></div>
 <h2 id="recipe-print-a-file-line-by-line">Recipe: Print a file line-by-line<a class="headerlink" href="#recipe-print-a-file-line-by-line" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">print_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="k">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">print_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
     <span class="c1"># `read_lines()` returns Result[list[str], IoError]</span>
 <span class="c1">    # `?` propagates Err(...) to the caller, otherwise unwraps Ok(lines).</span>
 <span class="c1">    for line in path.read_lines()?:</span>
@@ -3867,28 +3869,28 @@ operations—except errors come back as <code>Result</code> instead of throwing 
     <span class="c1"># file is closed automatically when it goes out of scope (RAII)</span>
 </code></pre></div>
 <h2 id="recipe-write-a-file-text-or-bytes">Recipe: Write a file (text or bytes)<a class="headerlink" href="#recipe-write-a-file-text-or-bytes" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">save_config</span><span class="p">(</span><span class="n">content</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="k">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">save_config</span><span class="p">(</span><span class="n">content</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
     <span class="n">Path</span><span class="p">(</span><span class="s2">&quot;config.toml&quot;</span><span class="p">).</span><span class="n">write_text</span><span class="p">(</span><span class="n">content</span><span class="p">)</span><span class="err">?</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="k">None</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">save_image</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">bytes</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="k">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
+<span class="k">def</span> <span class="n">save_image</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">bytes</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
     <span class="n">Path</span><span class="p">(</span><span class="s2">&quot;output.png&quot;</span><span class="p">).</span><span class="n">write_bytes</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="err">?</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="k">None</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="recipe-append-to-a-file">Recipe: Append to a file<a class="headerlink" href="#recipe-append-to-a-file" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">append_log</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="k">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">append_log</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
     <span class="k">mut</span> <span class="n">file</span> <span class="o">=</span> <span class="n">File</span><span class="p">.</span><span class="n">open_append</span><span class="p">(</span><span class="s2">&quot;app.log&quot;</span><span class="p">)</span><span class="err">?</span>
     <span class="n">file</span><span class="p">.</span><span class="n">write_line</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[{timestamp()}] {message}&quot;</span><span class="p">)</span><span class="err">?</span>
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="k">None</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="recipe-safe-update-write-temp-then-rename">Recipe: Safe update (write temp, then rename)<a class="headerlink" href="#recipe-safe-update-write-temp-then-rename" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">safe_update</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">content</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="k">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">safe_update</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">content</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
     <span class="n">temp_path</span> <span class="o">=</span> <span class="n">path</span><span class="p">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.tmp&quot;</span><span class="p">)</span>
 
     <span class="n">temp_path</span><span class="p">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">content</span><span class="p">)</span><span class="err">?</span>
     <span class="n">temp_path</span><span class="p">.</span><span class="n">rename</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>
 
-    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="k">None</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="recipe-walk-a-directory-and-filter-files">Recipe: Walk a directory and filter files<a class="headerlink" href="#recipe-walk-a-directory-and-filter-files" title="Permanent link">&para;</a></h2>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">list_toml_configs</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">list</span><span class="p">[</span><span class="n">Path</span><span class="p">],</span> <span class="n">IoError</span><span class="p">]:</span>

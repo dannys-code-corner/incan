@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -4886,47 +4888,47 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <h3 id="examples_1">Examples<a class="headerlink" href="#examples_1" title="Permanent link">&para;</a></h3>
 <p>Only exceptions with examples are listed here.</p>
 <h4 id="valueerror"><code>ValueError</code><a class="headerlink" href="#valueerror" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">print</span><span class="p">(</span><span class="s2">&quot;abc&quot;</span><span class="p">[</span><span class="m">0</span><span class="p">:</span><span class="m">3</span><span class="p">:</span><span class="m">0</span><span class="p">])</span>  <span class="c1"># step 0</span>
 </code></pre></div>
 <p>Panics at runtime with <code>ValueError: slice step cannot be zero</code>.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">_</span> <span class="o">=</span> <span class="n">int</span><span class="p">(</span><span class="s2">&quot;abc&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Panics at runtime with <code>ValueError: cannot convert 'abc' to int</code>.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">_</span> <span class="o">=</span> <span class="n">float</span><span class="p">(</span><span class="s2">&quot;abc&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Panics at runtime with <code>ValueError: cannot convert 'abc' to float</code>.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="c1"># range step cannot be zero (Python-like)</span>
 <span class="c1">    for i in range(0, 5, 0):</span>
 <span class="c1">        print(i)</span>
 </code></pre></div>
 <p>Panics at runtime with <code>ValueError: range() arg 3 must not be zero</code>.</p>
 <h4 id="typeerror"><code>TypeError</code><a class="headerlink" href="#typeerror" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="c1"># Example: JSON serialization failures (e.g. NaN/Inf) raise TypeError</span>
 <span class="c1">    _ = json_stringify(nan)</span>
 </code></pre></div>
 <p>Panics at runtime with a <code>TypeError: ... is not JSON serializable</code> message.</p>
 <h4 id="zerodivisionerror"><code>ZeroDivisionError</code><a class="headerlink" href="#zerodivisionerror" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">print</span><span class="p">(</span><span class="m">1</span> <span class="o">/</span> <span class="m">0</span><span class="p">)</span>
 </code></pre></div>
 <p>Panics at runtime with <code>ZeroDivisionError: float division by zero</code>.</p>
 <h4 id="indexerror"><code>IndexError</code><a class="headerlink" href="#indexerror" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">print</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">[</span><span class="m">99</span><span class="p">])</span>
 </code></pre></div>
 <p>Panics at runtime with <code>IndexError: ...</code>.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">xs</span><span class="p">:</span> <span class="n">list</span><span class="p">[</span><span class="n">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">]</span>
     <span class="n">print</span><span class="p">(</span><span class="n">xs</span><span class="p">[</span><span class="m">99</span><span class="p">])</span>
 </code></pre></div>
 <p>Panics at runtime with <code>IndexError: index 99 out of range for list of length 3</code>.</p>
 <h4 id="keyerror"><code>KeyError</code><a class="headerlink" href="#keyerror" title="Permanent link">&para;</a></h4>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">d</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="n">str</span><span class="p">,</span> <span class="n">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span> <span class="m">1</span><span class="p">}</span>
     <span class="n">print</span><span class="p">(</span><span class="n">d</span><span class="p">[</span><span class="s2">&quot;b&quot;</span><span class="p">])</span>
 </code></pre></div>
@@ -4936,7 +4938,7 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <span class="k">model</span> <span class="n">User</span><span class="p">:</span>
     <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">bad</span><span class="p">:</span> <span class="n">str</span> <span class="o">=</span> <span class="s2">&quot;{&quot;</span>
     <span class="k">match</span> <span class="n">User</span><span class="p">.</span><span class="n">from_json</span><span class="p">(</span><span class="n">bad</span><span class="p">):</span>
         <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">u</span><span class="p">):</span> <span class="n">print</span><span class="p">(</span><span class="n">u</span><span class="p">.</span><span class="n">name</span><span class="p">)</span>

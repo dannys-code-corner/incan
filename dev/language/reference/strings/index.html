@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -4024,7 +4026,7 @@ code.</p>
 </ul>
 </li>
 </ul>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">s</span> <span class="o">=</span> <span class="s2">&quot;héllo&quot;</span>
     <span class="n">print</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="m">1</span><span class="p">])</span>     <span class="c1"># &quot;é&quot;</span>
 <span class="c1">    print(s[-1])    # &quot;o&quot;</span>
@@ -4033,7 +4035,7 @@ code.</p>
 <span class="c1">    print(s[::-1])  # &quot;olléh&quot;</span>
 </code></pre></div>
 <p>The same slicing rules apply to <code>list[T]</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">xs</span><span class="p">:</span> <span class="n">list</span><span class="p">[</span><span class="n">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">]</span>
     <span class="k">for</span> <span class="n">x</span> <span class="k">in</span> <span class="n">xs</span><span class="p">[::</span><span class="o">-</span><span class="m">1</span><span class="p">]:</span>
         <span class="n">print</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>

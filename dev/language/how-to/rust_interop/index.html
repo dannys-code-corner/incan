@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -4156,7 +4158,7 @@ project configuration, and lock files for full flexibility.</p>
 <span class="k">def</span> <span class="n">parse_json</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Value</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">json</span><span class="p">.</span><span class="n">from_str</span><span class="p">(</span><span class="n">data</span><span class="p">).</span><span class="n">unwrap</span><span class="p">()</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">data</span> <span class="o">=</span> <span class="s1">&#39;{&quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 30}&#39;</span>
     <span class="n">parsed</span> <span class="o">=</span> <span class="n">parse_json</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
     <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Name: {parsed[&#39;name&#39;]}&quot;</span><span class="p">)</span>
@@ -4164,7 +4166,7 @@ project configuration, and lock files for full flexibility.</p>
 <h3 id="working-with-time">Working with Time<a class="headerlink" href="#working-with-time" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="k">rust</span><span class="p">::</span><span class="n">time</span> <span class="k">import</span> <span class="n">Instant</span><span class="p">,</span> <span class="n">Duration</span>
 
-<span class="k">def</span> <span class="n">measure_operation</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">measure_operation</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">start</span> <span class="o">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">now</span><span class="p">()</span>
 
     <span class="c1"># Do some work</span>
@@ -4181,7 +4183,7 @@ project configuration, and lock files for full flexibility.</p>
     <span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">reqwest</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
     <span class="k">return</span> <span class="k">await</span> <span class="n">response</span><span class="p">.</span><span class="n">text</span><span class="p">()</span>
 
-<span class="k">async</span> <span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">data</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetch_data</span><span class="p">(</span><span class="s2">&quot;https://api.example.com/data&quot;</span><span class="p">)</span>
     <span class="n">println</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
 </code></pre></div>
@@ -4202,7 +4204,7 @@ project configuration, and lock files for full flexibility.</p>
     <span class="n">rng</span> <span class="o">=</span> <span class="n">thread_rng</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">rng</span><span class="p">.</span><span class="n">gen_range</span><span class="p">(</span><span class="n">min</span><span class="p">..</span><span class="n">max</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">for</span> <span class="n">_</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="m">5</span><span class="p">):</span>
         <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Random: {random_int(1, 100)}&quot;</span><span class="p">)</span>
 </code></pre></div>
@@ -4212,7 +4214,7 @@ project configuration, and lock files for full flexibility.</p>
 <span class="k">def</span> <span class="n">generate_id</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">str</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">Uuid</span><span class="p">.</span><span class="n">new_v4</span><span class="p">().</span><span class="n">to_string</span><span class="p">()</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">id</span> <span class="o">=</span> <span class="n">generate_id</span><span class="p">()</span>
     <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Generated ID: {id}&quot;</span><span class="p">)</span>
 </code></pre></div>

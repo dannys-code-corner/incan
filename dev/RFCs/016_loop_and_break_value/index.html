@@ -44,6 +44,8 @@
       
     
     
+      <link rel="stylesheet" href="../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3926,13 +3928,13 @@ source language has no explicit infinite-loop construct and cannot express “br
 <p><code>await</code> is an async suspension point: it pauses an <code>async def</code> until a <code>Future</code> is ready.
 It does not replace loops.</p>
 <p>You typically combine them:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">wait_until_done</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">wait_until_done</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">loop</span><span class="p">:</span>
         <span class="k">if</span> <span class="k">await</span> <span class="n">done</span><span class="p">():</span>
             <span class="k">break</span>
 </code></pre></div>
 <p>If you need polling/backoff, <code>await</code> controls waiting between iterations:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">wait_with_backoff</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">wait_with_backoff</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">loop</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">done</span><span class="p">():</span>
             <span class="k">break</span>
@@ -3961,7 +3963,7 @@ It does not replace loops.</p>
         <span class="k">break</span> <span class="n">item</span>
 </code></pre></div>
 <p>Equivalent with <code>while True:</code> (today):</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">mut</span> <span class="n">found</span> <span class="o">=</span> <span class="k">None</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">mut</span> <span class="n">found</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="k">while</span> <span class="n">True</span><span class="p">:</span>
     <span class="n">item</span> <span class="o">=</span> <span class="n">next_item</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">item</span><span class="p">.</span><span class="n">is_ok</span><span class="p">():</span>

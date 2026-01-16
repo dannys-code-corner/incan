@@ -44,6 +44,8 @@
       
     
     
+      <link rel="stylesheet" href="../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -4366,7 +4368,7 @@ pytest/Rust/Jest muscle memory:</p>
 <span class="k">def</span> <span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
-<span class="k">def</span> <span class="n">test_addition</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">test_addition</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="m">3</span><span class="p">),</span> <span class="m">5</span><span class="p">)</span>
 </code></pre></div>
 <p>Note: In test files, the entire file is already a test context. Do not wrap tests in <code>module tests:</code>; that construct is
@@ -4426,7 +4428,7 @@ RFC 018.</p>
     <span class="k">def</span> <span class="n">base</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">int</span><span class="p">:</span>
         <span class="k">return</span> <span class="m">40</span>
 
-    <span class="k">def</span> <span class="n">test_uses_fixture</span><span class="p">(</span><span class="n">base</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_uses_fixture</span><span class="p">(</span><span class="n">base</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">assert_eq</span><span class="p">(</span><span class="n">base</span> <span class="o">+</span> <span class="m">2</span><span class="p">,</span> <span class="m">42</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="parametrize">Parametrize<a class="headerlink" href="#parametrize" title="Permanent link">&para;</a></h3>
@@ -4442,7 +4444,7 @@ RFC 018.</p>
         <span class="p">(</span><span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">),</span>
         <span class="p">(</span><span class="o">-</span><span class="m">1</span><span class="p">,</span> <span class="m">1</span><span class="p">,</span> <span class="m">0</span><span class="p">),</span>
     <span class="p">])</span>
-    <span class="k">def</span> <span class="n">test_add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">int</span><span class="p">,</span> <span class="n">expected</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">expected</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="running-tests">Running tests<a class="headerlink" href="#running-tests" title="Permanent link">&para;</a></h3>
@@ -4508,15 +4510,15 @@ external services, global singletons, etc.). Incan provides two stdlib-gated sch
     <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">resource</span><span class="p">,</span> <span class="n">serial</span>
 
     <span class="err">@</span><span class="n">resource</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_migrate_schema</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_migrate_schema</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="p">...</span>
 
     <span class="err">@</span><span class="n">resource</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_user_repo_queries</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_user_repo_queries</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="p">...</span>
 
     <span class="err">@</span><span class="n">serial</span>
-    <span class="k">def</span> <span class="n">test_uses_fixed_port_8080</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_uses_fixed_port_8080</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="p">...</span>
 </code></pre></div>
 <p>Note: <code>@mark("db")</code> is <em>classification</em> for selection/reporting; it does not imply locking. Use <code>@resource("db")</code> when
@@ -4529,7 +4531,7 @@ selection:</p>
 
     <span class="err">@</span><span class="n">mark</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">)</span>
     <span class="err">@</span><span class="n">mark</span><span class="p">(</span><span class="s2">&quot;flaky&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_query</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_query</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="p">...</span>
 </code></pre></div>
 <p>Run subsets of tests:</p>
@@ -4571,7 +4573,7 @@ without repeating <code>@mark("integration")</code> on every test. Incan support
 
 <span class="k">const</span> <span class="n">TEST_MARKS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;smoke&quot;</span><span class="p">]</span>
 
-<span class="k">def</span> <span class="n">test_ping</span><span class="p">(</span><span class="n">base_url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">test_ping</span><span class="p">(</span><span class="n">base_url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">assert_eq</span><span class="p">(</span><span class="n">base_url</span><span class="p">,</span> <span class="s2">&quot;http://localhost:8080&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Now:</p>
@@ -4587,11 +4589,11 @@ discouraged: keep inline tests simple and prefer per-test marks (or move richer 
     <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">skipif</span><span class="p">,</span> <span class="n">xfailif</span><span class="p">,</span> <span class="n">platform</span><span class="p">,</span> <span class="n">feature</span>
 
     <span class="err">@</span><span class="n">skipif</span><span class="p">(</span><span class="n">platform</span><span class="p">()</span> <span class="o">==</span> <span class="s2">&quot;windows&quot;</span><span class="p">,</span> <span class="s2">&quot;path semantics differ&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_paths</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_paths</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="p">...</span>
 
     <span class="err">@</span><span class="n">xfailif</span><span class="p">(</span><span class="n">feature</span><span class="p">(</span><span class="s2">&quot;new_parser&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="k">false</span><span class="p">,</span> <span class="s2">&quot;known bug #123&quot;</span><span class="p">)</span>
-    <span class="k">def</span> <span class="n">test_known_bug</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_known_bug</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="p">...</span>
 </code></pre></div>
 <h3 id="parametrize-with-per-case-marks">Parametrize with per-case marks<a class="headerlink" href="#parametrize-with-per-case-marks" title="Permanent link">&para;</a></h3>
@@ -4604,7 +4606,7 @@ discouraged: keep inline tests simple and prefer per-test marks (or move richer 
         <span class="k">case</span><span class="p">(</span><span class="m">2</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">xfail</span><span class="p">(</span><span class="s2">&quot;bug #123&quot;</span><span class="p">)]),</span>
         <span class="k">case</span><span class="p">(</span><span class="m">3</span><span class="p">,</span> <span class="n">marks</span><span class="o">=</span><span class="p">[</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;too slow&quot;</span><span class="p">)]),</span>
     <span class="p">])</span>
-    <span class="k">def</span> <span class="n">test_x</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_x</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">assert</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="m">0</span>
 </code></pre></div>
 <h3 id="shared-fixtures-via-conftestincn">Shared fixtures via <code>conftest.incn</code><a class="headerlink" href="#shared-fixtures-via-conftestincn" title="Permanent link">&para;</a></h3>
@@ -4619,7 +4621,7 @@ test runner and contributes fixtures to tests in that directory subtree.</p>
 </code></pre></div>
 <div class="language-incan highlight"><span class="filename">tests/test_api.incn</span><pre><span></span><code><span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span>
 
-<span class="k">def</span> <span class="n">test_ping</span><span class="p">(</span><span class="n">base_url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">test_ping</span><span class="p">(</span><span class="n">base_url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">assert_eq</span><span class="p">(</span><span class="n">base_url</span><span class="p">,</span> <span class="s2">&quot;http://localhost:8080&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p><code>conftest.incn</code> is only auto-discovered under <code>tests/</code> and only applies to tests located in that subtree.
@@ -4640,7 +4642,7 @@ restoration afterward.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
     <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">fixture</span><span class="p">,</span> <span class="n">tmp_workdir</span><span class="p">,</span> <span class="n">tmp_path</span><span class="p">,</span> <span class="n">env</span><span class="p">,</span> <span class="n">TestEnv</span>
 
-    <span class="k">def</span> <span class="n">test_uses_tmp_path</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_uses_tmp_path</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">let</span> <span class="n">config</span> <span class="o">=</span> <span class="n">tmp_path</span> <span class="o">/</span> <span class="s2">&quot;config.json&quot;</span>
         <span class="c1"># write/read config using an absolute path (error handling omitted in examples)</span>
 <span class="c1">        config.write_text(&quot;{}&quot;)?</span>
@@ -4694,7 +4696,7 @@ conditions, <code>@parametrize</code> data (and ids), <code>TEST_MARKS</code>, a
 <li>Example: pass a filename as <code>str</code> and construct a <code>Path</code> inside the test.</li>
 </ul>
 <div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;config.json&quot;</span><span class="p">,</span> <span class="s2">&quot;defaults.json&quot;</span><span class="p">])</span>
-<span class="k">def</span> <span class="n">test_config</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">test_config</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">let</span> <span class="n">path</span> <span class="o">=</span> <span class="n">tmp_path</span> <span class="o">/</span> <span class="n">name</span>
     <span class="n">assert</span> <span class="n">path</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span> <span class="o">==</span> <span class="n">False</span>
 </code></pre></div>

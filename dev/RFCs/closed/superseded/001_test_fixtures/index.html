@@ -44,6 +44,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3791,7 +3793,7 @@
 </code></pre></div>
 <h3 id="autouse-fixtures">Autouse Fixtures<a class="headerlink" href="#autouse-fixtures" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="err">@</span><span class="n">fixture</span><span class="p">(</span><span class="n">autouse</span><span class="o">=</span><span class="k">true</span><span class="p">)</span>
-<span class="k">def</span> <span class="n">setup_logging</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">setup_logging</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="s2">&quot;&quot;&quot;Automatically applied to all tests in this file.&quot;&quot;&quot;</span>
     <span class="n">logging</span><span class="p">.</span><span class="n">set_level</span><span class="p">(</span><span class="s2">&quot;DEBUG&quot;</span><span class="p">)</span>
     <span class="k">yield</span>
@@ -3848,18 +3850,18 @@
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-setupteardown-methods">1. Setup/Teardown Methods<a class="headerlink" href="#1-setupteardown-methods" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">class</span> <span class="n">TestDatabase</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">setup</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">setup</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">self</span><span class="p">.</span><span class="n">db</span> <span class="o">=</span> <span class="n">Database</span><span class="p">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="n">teardown</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">teardown</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">self</span><span class="p">.</span><span class="n">db</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
 
-    <span class="k">def</span> <span class="n">test_insert</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_insert</span><span class="p">(</span><span class="k">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">self</span><span class="p">.</span><span class="n">db</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">,</span> <span class="s2">&quot;value&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Rejected</strong>: Less flexible than fixtures, doesn't support dependency injection.</p>
 <h3 id="2-context-managers">2. Context Managers<a class="headerlink" href="#2-context-managers" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">test_insert</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">test_insert</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">with</span> <span class="n">Database</span><span class="p">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;test.db&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
         <span class="n">db</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="s2">&quot;key&quot;</span><span class="p">,</span> <span class="s2">&quot;value&quot;</span><span class="p">)</span>
 </code></pre></div>

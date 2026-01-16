@@ -44,6 +44,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3921,7 +3923,7 @@ with Rust's proximity benefits. Test functions are automatically stripped from p
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
 <span class="err">@</span><span class="n">test</span>
-<span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">),</span> <span class="m">3</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
@@ -4065,7 +4067,7 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
     <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
 
 <span class="err">@</span><span class="n">test</span>
-<span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">),</span> <span class="m">3</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Production build (<code>incan build</code>):</strong></p>
@@ -4170,7 +4172,7 @@ Running<span class="w"> </span>tests...
 
 <span class="err">@</span><span class="n">test_module</span>
 <span class="n">module</span> <span class="n">tests</span><span class="p">:</span>
-    <span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="m">2</span><span class="p">),</span> <span class="m">3</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Rejected:</strong> More syntax to learn, less Pythonic. The <code>@test</code> decorator is simpler.</p>

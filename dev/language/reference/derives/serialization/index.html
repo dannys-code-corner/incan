@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3683,7 +3685,7 @@
     <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
     <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="n">age</span><span class="o">=</span><span class="m">30</span><span class="p">)</span>
     <span class="n">println</span><span class="p">(</span><span class="n">json_stringify</span><span class="p">(</span><span class="n">u</span><span class="p">))</span>
 </code></pre></div>
@@ -3698,7 +3700,7 @@
     <span class="n">name</span><span class="p">:</span> <span class="n">str</span>
     <span class="n">age</span><span class="p">:</span> <span class="n">int</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">result</span><span class="p">:</span> <span class="n">Result</span><span class="p">[</span><span class="n">User</span><span class="p">,</span> <span class="n">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">User</span><span class="p">.</span><span class="n">from_json</span><span class="p">(</span><span class="err">&quot;</span><span class="p">{</span><span class="err">\&quot;</span><span class="n">name</span><span class="err">\&quot;</span><span class="p">:</span><span class="err">\&quot;</span><span class="n">Alice</span><span class="err">\&quot;</span><span class="p">,</span><span class="err">\&quot;</span><span class="n">age</span><span class="err">\</span><span class="s2">&quot;:30}&quot;</span><span class="p">)</span>
 </code></pre></div>
 <hr />

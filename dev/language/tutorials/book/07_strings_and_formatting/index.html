@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3704,13 +3706,13 @@
 <h1 id="7-strings-and-formatting">7. Strings and formatting<a class="headerlink" href="#7-strings-and-formatting" title="Permanent link">&para;</a></h1>
 <p>Strings are <code>str</code>, and you’ll often build output using f-strings.</p>
 <h2 id="string-methods">String methods<a class="headerlink" href="#string-methods" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">raw</span> <span class="o">=</span> <span class="s2">&quot;  Alice  &quot;</span>
     <span class="n">cleaned</span> <span class="o">=</span> <span class="n">raw</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">lower</span><span class="p">()</span>
     <span class="n">println</span><span class="p">(</span><span class="n">cleaned</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="f-strings-interpolation">F-strings (interpolation)<a class="headerlink" href="#f-strings-interpolation" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;Alice&quot;</span>
     <span class="n">age</span> <span class="o">=</span> <span class="m">30</span>
     <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;{name} age={age}&quot;</span><span class="p">)</span>
@@ -3723,7 +3725,7 @@
 </ol>
 <details class="example">
 <summary>One possible solution</summary>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">raw</span> <span class="o">=</span> <span class="s2">&quot;  Alice  &quot;</span>
     <span class="n">cleaned</span> <span class="o">=</span> <span class="n">raw</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">lower</span><span class="p">()</span>
     <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cleaned={cleaned}&quot;</span><span class="p">)</span>

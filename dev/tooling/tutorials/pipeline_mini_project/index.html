@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3728,7 +3730,7 @@
     <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">name</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">lower</span><span class="p">())</span>
 
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">result</span> <span class="o">=</span> <span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">)</span>
     <span class="k">match</span> <span class="n">result</span><span class="p">:</span>
         <span class="k">case</span> <span class="n">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ok: {value}&quot;</span><span class="p">)</span>
@@ -3756,10 +3758,10 @@
 <div class="language-incan highlight"><pre><span></span><code><span class="k">from</span> <span class="p">..</span><span class="n">pipeline_step</span> <span class="k">import</span> <span class="n">normalize_name</span>
 <span class="k">from</span> <span class="n">testing</span> <span class="k">import</span> <span class="n">assert_eq</span>
 
-<span class="k">def</span> <span class="n">test_normalize_name_ok</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">test_normalize_name_ok</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">assert_eq</span><span class="p">(</span><span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;  Alice  &quot;</span><span class="p">),</span> <span class="n">Ok</span><span class="p">(</span><span class="s2">&quot;alice&quot;</span><span class="p">))</span>
 
-<span class="k">def</span> <span class="n">test_normalize_name_err</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">test_normalize_name_err</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">assert_eq</span><span class="p">(</span><span class="n">normalize_name</span><span class="p">(</span><span class="s2">&quot;   &quot;</span><span class="p">),</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;name must not be empty&quot;</span><span class="p">))</span>
 </code></pre></div>
 <p>Run:</p>

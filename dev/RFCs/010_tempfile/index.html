@@ -44,6 +44,8 @@
       
     
     
+      <link rel="stylesheet" href="../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -4046,7 +4048,7 @@ This RFC introduces new surface types and methods, so the canonical spellings sh
     <span class="c1"># temp file cleaned up after test</span>
 </code></pre></div>
 <h3 id="safe-file-updates">Safe File Updates<a class="headerlink" href="#safe-file-updates" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">safe_save</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">content</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="k">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">safe_save</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">content</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
     <span class="c1"># Write to temp file first</span>
 <span class="c1">    temp = TempFile.in_dir(path.parent())?</span>
 <span class="c1">    temp.write_text(content)?</span>

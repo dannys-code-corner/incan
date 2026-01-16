@@ -44,6 +44,8 @@
       
     
     
+      <link rel="stylesheet" href="../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -4269,10 +4271,10 @@ Native<span class="w"> </span>binary<span class="w"> </span><span class="o">(</s
     <span class="s2">&quot;&quot;&quot;A simple counter component.&quot;&quot;&quot;</span>
     <span class="n">count</span><span class="p">,</span> <span class="n">set_count</span> <span class="o">=</span> <span class="n">signal</span><span class="p">(</span><span class="n">initial</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">set_count</span><span class="p">(</span><span class="n">count</span> <span class="o">+</span> <span class="m">1</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="n">decrement</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">decrement</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">set_count</span><span class="p">(</span><span class="n">count</span> <span class="o">-</span> <span class="m">1</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">html</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
@@ -4355,7 +4357,7 @@ Native<span class="w"> </span>binary<span class="w"> </span><span class="o">(</s
 
 <span class="err">@</span><span class="n">component</span>
 <span class="k">def</span> <span class="n">dataFetcher</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Element</span><span class="p">:</span>
-    <span class="n">data</span><span class="p">,</span> <span class="n">set_data</span> <span class="o">=</span> <span class="n">signal</span><span class="p">(</span><span class="k">None</span><span class="p">)</span>
+    <span class="n">data</span><span class="p">,</span> <span class="n">set_data</span> <span class="o">=</span> <span class="n">signal</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
     <span class="n">loading</span><span class="p">,</span> <span class="n">set_loading</span> <span class="o">=</span> <span class="n">signal</span><span class="p">(</span><span class="n">True</span><span class="p">)</span>
 
     <span class="c1"># Runs on mount and when url changes</span>
@@ -4448,10 +4450,10 @@ This provides a more familiar experience for developers coming from React/TypeSc
 <span class="k">def</span> <span class="n">counter</span><span class="p">(</span><span class="n">initial</span><span class="p">:</span> <span class="n">int</span> <span class="o">=</span> <span class="m">0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Element</span><span class="p">:</span>
     <span class="n">count</span><span class="p">,</span> <span class="n">set_count</span> <span class="o">=</span> <span class="n">signal</span><span class="p">(</span><span class="n">initial</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">set_count</span><span class="p">(</span><span class="n">count</span> <span class="o">+</span> <span class="m">1</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="n">decrement</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+    <span class="k">def</span> <span class="n">decrement</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">set_count</span><span class="p">(</span><span class="n">count</span> <span class="o">-</span> <span class="m">1</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">jsx</span><span class="p">(</span>
@@ -4518,13 +4520,13 @@ This provides a more familiar experience for developers coming from React/TypeSc
 </code></pre></div>
 <h4 id="event-handlers">Event Handlers<a class="headerlink" href="#event-handlers" title="Permanent link">&para;</a></h4>
 <p><strong>Preferred</strong>: Named handler functions</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">handle_click</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">handle_click</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Button clicked!&quot;</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">handle_input</span><span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Event</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">handle_input</span><span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Event</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">set_text</span><span class="p">(</span><span class="n">e</span><span class="p">.</span><span class="n">target</span><span class="p">.</span><span class="n">value</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">handle_key</span><span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">KeyboardEvent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">handle_key</span><span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">KeyboardEvent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">if</span> <span class="n">e</span><span class="p">.</span><span class="n">key</span> <span class="o">==</span> <span class="s2">&quot;Enter&quot;</span><span class="p">:</span>
         <span class="n">submit</span><span class="p">()</span>
 

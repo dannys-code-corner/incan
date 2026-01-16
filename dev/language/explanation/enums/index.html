@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -4103,7 +4105,7 @@ hierarchies and <code>isinstance(...)</code> checks, which are not exhaustive an
 <p>Enums can be generic — parameterized over types:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
     <span class="n">Some</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
-    <span class="k">None</span>
+    <span class="kc">None</span>
 
 <span class="k">enum</span> <span class="n">Result</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">]:</span>
     <span class="n">Ok</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
@@ -4279,7 +4281,7 @@ hierarchies and <code>isinstance(...)</code> checks, which are not exhaustive an
 <p>Represents an optional value:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">enum</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
     <span class="n">Some</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
-    <span class="k">None</span>
+    <span class="kc">None</span>
 </code></pre></div>
 <p>See: <a href="../error_handling/">Error Handling Guide</a></p>
 <h3 id="resultt-e">Result[T, E]<a class="headerlink" href="#resultt-e" title="Permanent link">&para;</a></h3>

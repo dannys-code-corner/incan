@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -4489,7 +4491,7 @@ with Rust-level async performance.</p>
 </code></pre></div>
 <h3 id="yield_now">yield_now<a class="headerlink" href="#yield_now" title="Permanent link">&para;</a></h3>
 <p>Cooperatively yield to let other tasks run:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">cooperative_loop</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">cooperative_loop</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">for</span> <span class="n">i</span> <span class="k">in</span> <span class="n">range</span><span class="p">(</span><span class="m">10000</span><span class="p">):</span>
         <span class="c1"># Do some work...</span>
 <span class="c1">        if i % 100 == 0:</span>
@@ -4663,7 +4665,7 @@ This is perfect for "request-response" patterns where you spawn a task and wait 
 <p><strong>Basic usage:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="n">tx</span><span class="p">,</span> <span class="n">rx</span> <span class="o">=</span> <span class="n">oneshot</span><span class="p">[</span><span class="n">int</span><span class="p">]()</span>
 
-<span class="n">spawn</span><span class="p">(</span><span class="k">async</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="n">spawn</span><span class="p">(</span><span class="k">async</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">result</span> <span class="o">=</span> <span class="n">expensive_computation</span><span class="p">()</span>
     <span class="n">tx</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>  <span class="c1"># Consumes sender - can only send once</span>
 <span class="c1">)</span>
@@ -4752,7 +4754,7 @@ while Python's Lock is just a lock you use alongside your data.</p>
 </ul>
 <div class="language-incan highlight"><pre><span></span><code><span class="n">shared_counter</span> <span class="o">=</span> <span class="n">Mutex</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
 
-<span class="k">async</span> <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">async</span> <span class="k">def</span> <span class="n">increment</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">guard</span> <span class="o">=</span> <span class="k">await</span> <span class="n">shared_counter</span><span class="p">.</span><span class="n">lock</span><span class="p">()</span>  <span class="c1"># Blocks until lock acquired</span>
 <span class="c1">    current = guard.get()</span>
 <span class="c1">    guard.set(current + 1)</span>
@@ -4878,13 +4880,13 @@ for a runnable demo of all four primitives.</p>
 <p>Simplified timeout returning Option:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">match</span> <span class="k">await</span> <span class="n">select_timeout</span><span class="p">(</span><span class="m">2.0</span><span class="p">,</span> <span class="n">slow_operation</span><span class="p">):</span>
     <span class="k">case</span> <span class="n">Some</span><span class="p">(</span><span class="n">result</span><span class="p">):</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Got: {result}&quot;</span><span class="p">)</span>
-    <span class="k">case</span> <span class="k">None</span><span class="p">:</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Timed out, using default&quot;</span><span class="p">)</span>
+    <span class="k">case</span> <span class="kc">None</span><span class="p">:</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;Timed out, using default&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="runtime-integration">Runtime Integration<a class="headerlink" href="#runtime-integration" title="Permanent link">&para;</a></h2>
 <h3 id="automatic-tokio-main">Automatic Tokio Main<a class="headerlink" href="#automatic-tokio-main" title="Permanent link">&para;</a></h3>
 <p>When your program uses async features, the <code>main()</code> function is automatically wrapped with <code>#[tokio::main]</code>:</p>
 <p>Tokio is Rust's async runtime: see the <a href="https://tokio.rs/">Tokio project</a> for a high-level overview.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="c1"># This becomes async main() under the hood</span>
 <span class="c1">    # when async primitives are used</span>
 <span class="c1">    result = await fetch_data()</span>
@@ -4944,7 +4946,7 @@ for a runnable demo of all four primitives.</p>
 <h3 id="channel-closed">Channel Closed<a class="headerlink" href="#channel-closed" title="Permanent link">&para;</a></h3>
 <p>When sending fails because the receiver was dropped, <code>SendError[T]</code> contains the value that couldn't be sent in its
 <code>.value</code> field:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">sender</span><span class="p">(</span><span class="n">tx</span><span class="p">:</span> <span class="n">Sender</span><span class="p">[</span><span class="n">Message</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span> <span class="n">sender</span><span class="p">(</span><span class="n">tx</span><span class="p">:</span> <span class="n">Sender</span><span class="p">[</span><span class="n">Message</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">msg</span> <span class="o">=</span> <span class="n">Message</span><span class="p">(</span><span class="n">id</span><span class="o">=</span><span class="m">1</span><span class="p">,</span> <span class="n">content</span><span class="o">=</span><span class="s2">&quot;important data&quot;</span><span class="p">)</span>
 
     <span class="k">match</span> <span class="k">await</span> <span class="n">tx</span><span class="p">.</span><span class="n">send</span><span class="p">(</span><span class="n">msg</span><span class="p">):</span>

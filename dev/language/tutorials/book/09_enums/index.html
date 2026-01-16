@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3735,13 +3737,13 @@ strings, <code>dataclass</code> hierarchies, or <code>Union</code> types.</p>
 to handle every case.</p>
 </div>
 <h2 id="matching-on-enums">Matching on enums<a class="headerlink" href="#matching-on-enums" title="Permanent link">&para;</a></h2>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">run</span><span class="p">(</span><span class="n">cmd</span><span class="p">:</span> <span class="n">Command</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">run</span><span class="p">(</span><span class="n">cmd</span><span class="p">:</span> <span class="n">Command</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">cmd</span><span class="p">:</span>
         <span class="n">Add</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;add {x}&quot;</span><span class="p">)</span>
         <span class="n">Remove</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;remove {x}&quot;</span><span class="p">)</span>
         <span class="n">List</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;list&quot;</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">run</span><span class="p">(</span><span class="n">Command</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="m">1</span><span class="p">))</span>     <span class="c1"># outputs: add 1</span>
 <span class="c1">    run(Command.Remove(1))  # outputs: remove 1</span>
 <span class="c1">    run(Command.List)       # outputs: list</span>
@@ -3767,7 +3769,7 @@ to handle every case.</p>
     <span class="n">Clear</span>
     <span class="n">List</span>
 
-<span class="k">def</span> <span class="n">run</span><span class="p">(</span><span class="n">cmd</span><span class="p">:</span> <span class="n">Command</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">run</span><span class="p">(</span><span class="n">cmd</span><span class="p">:</span> <span class="n">Command</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">cmd</span><span class="p">:</span>
         <span class="n">Add</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;add {x}&quot;</span><span class="p">)</span>
         <span class="n">Remove</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;remove {x}&quot;</span><span class="p">)</span>

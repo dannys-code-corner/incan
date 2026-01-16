@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3732,7 +3734,7 @@
 </code></pre></div>
 <h2 id="match-pattern-matching"><code>match</code> (pattern matching)<a class="headerlink" href="#match-pattern-matching" title="Permanent link">&para;</a></h2>
 <p><code>match</code> is the main way to branch on enums like <code>Result</code> and <code>Option</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">result</span> <span class="o">=</span> <span class="n">parse_port</span><span class="p">(</span><span class="s2">&quot;8080&quot;</span><span class="p">)</span>
 
     <span class="k">match</span> <span class="n">result</span><span class="p">:</span>
@@ -3742,7 +3744,7 @@
 <div class="admonition tip">
 <p class="admonition-title">Coming from Rust?</p>
 <p>Incan also supports a more Rust-like match-arm style using <code>=&gt;</code>:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">parse_port</span><span class="p">(</span><span class="s2">&quot;8080&quot;</span><span class="p">):</span>
         <span class="n">Ok</span><span class="p">(</span><span class="n">port</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;port={port}&quot;</span><span class="p">)</span>
         <span class="n">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error: {e}&quot;</span><span class="p">)</span>
@@ -3751,7 +3753,7 @@
 </div>
 <h2 id="for-loops"><code>for</code> loops<a class="headerlink" href="#for-loops" title="Permanent link">&para;</a></h2>
 <p>Incan supports Python-like <code>for</code> loops:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">items</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Cara&quot;</span><span class="p">]</span>
     <span class="k">for</span> <span class="n">name</span> <span class="k">in</span> <span class="n">items</span><span class="p">:</span>
         <span class="n">println</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>

@@ -48,6 +48,8 @@
       
     
     
+      <link rel="stylesheet" href="../../../stylesheets/pygments.css">
+    
     <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -3990,7 +3992,7 @@ caught values are frequently <code>unknown</code>).</p>
         <span class="k">return</span> <span class="n">Err</span><span class="p">(</span><span class="s2">&quot;division by zero&quot;</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">a</span> <span class="o">/</span> <span class="n">b</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">divide</span><span class="p">(</span><span class="m">10</span><span class="p">,</span> <span class="m">2</span><span class="p">):</span>
         <span class="n">Ok</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Result: {value}&quot;</span><span class="p">)</span>
         <span class="n">Err</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error: {msg}&quot;</span><span class="p">)</span>
@@ -4000,12 +4002,12 @@ caught values are frequently <code>unknown</code>).</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">find_user</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">User</span><span class="p">]:</span>
     <span class="k">if</span> <span class="n">id</span> <span class="k">in</span> <span class="n">users</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">Some</span><span class="p">(</span><span class="n">users</span><span class="p">[</span><span class="n">id</span><span class="p">])</span>
-    <span class="k">return</span> <span class="k">None</span>
+    <span class="k">return</span> <span class="kc">None</span>
 
-<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">match</span> <span class="n">find_user</span><span class="p">(</span><span class="m">42</span><span class="p">):</span>
         <span class="n">Some</span><span class="p">(</span><span class="n">user</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Found: {user.name}&quot;</span><span class="p">)</span>
-        <span class="k">None</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;User not found&quot;</span><span class="p">)</span>
+        <span class="kc">None</span> <span class="o">=&gt;</span> <span class="n">println</span><span class="p">(</span><span class="s2">&quot;User not found&quot;</span><span class="p">)</span>
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">Coming from Python?</p>
@@ -4027,7 +4029,7 @@ otherwise unwrap the <code>Ok(...)</code> value.</p>
 </ul>
 <h3 id="a-common-compile-time-error">A common compile-time error<a class="headerlink" href="#a-common-compile-time-error" title="Permanent link">&para;</a></h3>
 <p><code>?</code> is only allowed when the function can return an error.</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="k">None</span><span class="p">:</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span> <span class="n">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">data</span> <span class="o">=</span> <span class="n">fetch_data</span><span class="p">()</span><span class="err">?</span>  <span class="c1"># error: can&#39;t use ? in a non-Result function</span>
 </code></pre></div>
 <h2 id="structured-error-types">Structured error types<a class="headerlink" href="#structured-error-types" title="Permanent link">&para;</a></h2>
