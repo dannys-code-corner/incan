@@ -206,7 +206,6 @@ impl TypeChecker {
             ));
         }
     }
-
     fn check_trait_conformance_model(&mut self, model: &ModelDecl, trait_info: TraitInfo, trait_name: &str) {
         // Check required fields (including types)
         for (field_name, field_ty) in &trait_info.requires {

@@ -501,7 +501,6 @@ def build_user() -> Result[User, str]:
 "#;
     assert!(check_str(source).is_err());
 }
-
 // ========================================
 // Control flow
 // ========================================
