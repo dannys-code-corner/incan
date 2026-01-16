@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -14,50 +13,15 @@ IMPLEMENTED_DIR = CLOSED_DIR / "implemented"
 SUPERSEDED_DIR = CLOSED_DIR / "superseded"
 REJECTED_DIR = CLOSED_DIR / "rejected"
 
-DOCS_BASE_PREFIX = Path("/" + os.environ.get("INCAN_DOCS_BASE_PREFIX", "").strip())
 
-RFC_WIDTH = 9
-STATUS_WIDTH = 11
-TRACK_WIDTH = 20
-TITLE_WIDTH = 120 - (2 + RFC_WIDTH + 3 + STATUS_WIDTH + 3 + TRACK_WIDTH + 3 + 2)
-
-
-def _with_base_prefix(path: str) -> str:
-    """Prefix a site-root path with the configured docs base prefix."""
-    return (DOCS_BASE_PREFIX / path.lstrip("/")).as_posix()
-
-
-def _extract_rfc_metadata(md_path: Path, need_status: bool) -> tuple[str, str]:
-    """Extract title and optionally status from RFC file in one read.
-    
-    Returns:
-        (title, status) where status is "Unknown" if need_status=False or not found.
-    """
+def _first_h1_title(md_path: Path) -> str:
+    """Get the first H1 title from a markdown file."""
     text = md_path.read_text(encoding="utf-8", errors="replace")
-    
-    title = None
-    status = "Unknown"
-    
     for line in text.splitlines():
-        # Extract title (first H1)
-        if title is None:
-            if m := re.match(r"^#\s+(.+?)\s*$", line):
-                title = m.group(1).strip()
-        
-        # Extract status (only if needed for open RFCs)
-        if need_status:
-            if m := re.match(r"^\s*\*\*Status:\*\*\s*(.+?)\s*$", line):
-                status = m.group(1).strip()
-                break
-            if m := re.match(r"^\s*-\s*Status:\s*(.+?)\s*$", line):
-                status = m.group(1).strip()
-                break
-        
-        # Early exit if we have both
-        if title and (not need_status or status != "Unknown"):
-            break
-    
-    return (title or md_path.stem, status)
+        m = re.match(r"^#\s+(.+?)\s*$", line)
+        if m:
+            return m.group(1).strip()
+    return md_path.stem
 
 
 def _rfc_id_from_filename(filename: str) -> str:
@@ -71,6 +35,24 @@ def _rfc_id_from_filename(filename: str) -> str:
 def _escape_pipes(s: str) -> str:
     """Keep markdown tables valid by escaping pipes."""
     return s.replace("|", "\\|")
+
+def _extract_status(md_path: Path) -> str:
+    """
+    Extract RFC status from the RFC file.
+
+    Expected patterns:
+    - "**Status:** Draft"
+    - "- Status: Draft"
+    """
+    text = md_path.read_text(encoding="utf-8", errors="replace")
+    for line in text.splitlines():
+        m = re.match(r"^\s*\*\*Status:\*\*\s*(.+?)\s*$", line)
+        if m:
+            return m.group(1).strip()
+        m = re.match(r"^\s*-\s*Status:\s*(.+?)\s*$", line)
+        if m:
+            return m.group(1).strip()
+    return "Unknown"
 
 def _strip_rfc_prefix(title: str, rfc_id: str) -> str:
     """Convert titles like 'RFC 001: Test Fixtures' to 'Test Fixtures' for display."""
@@ -92,62 +74,45 @@ def _sorted_md_files(dir_path: Path) -> list[Path]:
     return sorted(files, key=lambda p: p.name)
 
 
-def _collect_rfc_md_files() -> list[Path]:
-    """Collect RFC markdown files under `RFCs/` (including closed/ subfolders).
-    
-    Filters out index.md and TEMPLATE.md. Returns unsorted (will be sorted by RFC ID later).
-    """
-    if not RFC_DIR.exists():
-        return []
-    files: list[Path] = []
-    for p in RFC_DIR.rglob("*.md"):
-        if not p.is_file():
-            continue
-        name_lower = p.name.lower()
-        if name_lower == "index.md" or p.name == "TEMPLATE.md":
-            continue
-        files.append(p)
-    return files
-
-
 def _collect_rows() -> list[tuple[str, str, str, str, str]]:
     """Collect RFCs and return rows: (rfc_id, title, status, track, url)."""
     rows: list[tuple[str, str, str, str, str]] = []
 
-    # One pass over all RFC markdown files; track/status are inferred from location.
-    for p in _collect_rfc_md_files():
-        rel = p.relative_to(RFC_DIR)
-
-        # Determine track and whether we need to extract status from file
-        match rel.parts:
-            case ("closed", "implemented", *_):
-                need_status = False
-                status = "Done"
-                track = "closed / implemented"
-            case ("closed", "superseded", *_):
-                need_status = False
-                status = "Superseded"
-                track = "closed / superseded"
-            case ("closed", "rejected", *_):
-                need_status = False
-                status = "Rejected"
-                track = "closed / rejected"
-            case _:
-                need_status = True
-                track = "proposed / active"
-                status = ""  # Will be extracted below
-
-        # Extract metadata in one file read
-        raw_title, extracted_status = _extract_rfc_metadata(p, need_status)
-        if need_status:
-            status = extracted_status
-
+    # Closed RFCs first (still sorted); status is read from the file, while track is inferred from location.
+    for p in _sorted_md_files(IMPLEMENTED_DIR):
         rfc_id = _rfc_id_from_filename(p.name)
-        title = _strip_rfc_prefix(raw_title, rfc_id)
+        title = _strip_rfc_prefix(_first_h1_title(p), rfc_id)
+        # For closed RFCs, infer status from location to keep the index "at a glance"
+        # even if the RFC text reflects its historical status.
+        status = "Done"
+        track = "closed / implemented"
+        url = f"/RFCs/closed/implemented/{p.stem}/"
+        rows.append((rfc_id, title, status, track, url))
 
-        # URL mirrors doc path, but uses directory URLs (`.../<name>/`).
-        url_path = f"/RFCs/{rel.with_suffix('').as_posix()}/"
-        url = _with_base_prefix(url_path)
+    for p in _sorted_md_files(SUPERSEDED_DIR):
+        rfc_id = _rfc_id_from_filename(p.name)
+        title = _strip_rfc_prefix(_first_h1_title(p), rfc_id)
+        status = "Superseded"
+        track = "closed / superseded"
+        url = f"/RFCs/closed/superseded/{p.stem}/"
+        rows.append((rfc_id, title, status, track, url))
+
+    for p in _sorted_md_files(REJECTED_DIR):
+        rfc_id = _rfc_id_from_filename(p.name)
+        title = _strip_rfc_prefix(_first_h1_title(p), rfc_id)
+        status = "Rejected"
+        track = "closed / rejected"
+        url = f"/RFCs/closed/rejected/{p.stem}/"
+        rows.append((rfc_id, title, status, track, url))
+
+    for p in _sorted_md_files(RFC_DIR):
+        if p.name in {"index.md", "TEMPLATE.md"}:
+            continue
+        rfc_id = _rfc_id_from_filename(p.name)
+        title = _strip_rfc_prefix(_first_h1_title(p), rfc_id)
+        status = _extract_status(p)
+        track = "proposed / active"
+        url = f"/RFCs/{p.stem}/"
         rows.append((rfc_id, title, status, track, url))
 
     # Sort by RFC id (string numeric sort works because ids are zero-padded)
@@ -169,13 +134,19 @@ def _render_reference_links(rows: list[tuple[str, str, str, str, str]]) -> str:
 
 def _render_table(rows: list[tuple[str, str, str, str, str]]) -> str:
     """Render the RFCs index table."""
+    RFC_WIDTH = 9
+    STATUS_WIDTH = 11
+    TRACK_WIDTH = 17
+    TITLE_WIDTH = 120 - (2 + RFC_WIDTH + 3 + STATUS_WIDTH + 3 + TRACK_WIDTH + 3 + 2)
+
     lines: list[str] = []
     lines.append("<!-- THIS FILE IS AUTOGENERATED. DO NOT EDIT BY HAND. -->")
     lines.append("")
     lines.append("<!-- markdownlint-disable MD013 MD060 MD053 MD033 -->")
 
-    lines.append("<!-- Include RFC reference links (DRY: reuse rfcs_refs.md) -->")
-    lines.append("--8<-- \"_snippets/rfcs_refs.md\"")
+    lines.append("<!-- Reference links for reuse (e.g. ROADMAP '[RFC 000]') -->")
+    for rfc_id, _title, _status, _track, url in rows:
+        lines.append(f"[RFC {rfc_id}]: {url}")
     lines.append("")
 
     lines.append("<!-- RFCs index table -->")
