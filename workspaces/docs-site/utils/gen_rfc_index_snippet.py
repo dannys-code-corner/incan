@@ -212,27 +212,31 @@ def main() -> None:
     content = _render_table(rows)
     refs = _render_reference_links(rows)
 
-    # We want two things:
-    # 1) The file to exist on disk so `pymdownx.snippets` can include it via `--8<--`.
-    # 2) The file to also exist in MkDocs' virtual file set for completeness.
     rel_path = "_snippets/tables/rfcs_index.md"
     refs_rel_path = "_snippets/rfcs_refs.md"
 
-    # (1) physical file on disk
-    (DOCS_DIR / "_snippets" / "tables").mkdir(parents=True, exist_ok=True)
-    (DOCS_DIR / rel_path).write_text(content, encoding="utf-8")
-    (DOCS_DIR / refs_rel_path).write_text(refs, encoding="utf-8")
-
-    # (2) virtual file for mkdocs (gen-files)
+    # Write to mkdocs virtual filesystem first (used during build)
     try:
         with mkdocs_gen_files.open(rel_path, "w") as f:
             f.write(content)
         with mkdocs_gen_files.open(refs_rel_path, "w") as f:
             f.write(refs)
     except ConfigurationError:
-        # Allow running this script directly from repo root where mkdocs.yml
-        # doesn't exist (it's under workspaces/docs-site/).
+        # Not running via mkdocs (standalone execution)
         pass
+    
+    # ALSO write physical files so pymdownx.snippets can find them.
+    # During CI, these will have version prefixes; locally they won't.
+    (DOCS_DIR / "_snippets" / "tables").mkdir(parents=True, exist_ok=True)
+    
+    refs_file = DOCS_DIR / refs_rel_path
+    (DOCS_DIR / rel_path).write_text(content, encoding="utf-8")
+    refs_file.write_text(refs, encoding="utf-8")
+    
+    # Log first few lines to verify prefix (visible in mkdocs build output)
+    preview = "\n".join(refs.splitlines()[:5])
+    print(f"[RFC Generator] Wrote {refs_file} with DOCS_BASE_PREFIX={os.environ.get('INCAN_DOCS_BASE_PREFIX', '(unset)')}")
+    print(f"[RFC Generator] Preview:\n{preview}")
 
 
 if __name__ == "__main__":
