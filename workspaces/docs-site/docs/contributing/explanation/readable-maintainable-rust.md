@@ -87,7 +87,7 @@ behavior.
 5. **Tooling baked in**
    - `rustfmt` and `clippy` are non-negotiable in CI; tune lints to project needs.
    - Dependency hygiene: `cargo-audit`, `cargo-deny`, `cargo-udeps`; pin MSRV.
-   - Tests include unit, integration, **doctests**, property-based (`proptest`), fuzzing (`cargo-fuzz`) for parsers.
+   - Tests include unit, integration, **doctests**, property-based (`proptest`) for parsers.
 
 6. **Safety & invariants**
    - `unsafe` is rare, isolated, and annotated with **SAFETY:** comments plus tests.
@@ -108,7 +108,7 @@ behavior.
 - ✅ **Boundaries**: Modules align with responsibilities; public surface area small and documented.
 - ✅ **Errors**: Clear `Result<T, E>` with actionable messages; categorized `E`.
 - ✅ **Ownership**: Minimal clones; predictable lifetimes; borrowing favored.
-- ✅ **Tests**: Unit + integration + doctests exist; critical logic property-tested; parser/unsafe areas fuzzed.
+- ✅ **Tests**: Unit + integration + doctests exist; critical logic property-tested.
 - ✅ **Docs**: `rustdoc` examples compile; `README` shows usage; `SAFETY:` annotations present where needed.
 - ✅ **CI**: Audit, deny, udeps, MSRV checks run; semantic versioning for releases.
 - ✅ **Async/concurrency**: Structured, cancellable; no hidden global mutable state.
