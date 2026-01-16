@@ -3795,7 +3795,7 @@ clear type mapping, codegen, and build integration.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="k">as</span> <span class="n">json</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">encode_user</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="nc">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">json</span><span class="p">::</span><span class="nb">to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">user</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">return</span> <span class="n">json</span><span class="p">::</span><span class="nb">to_string</span><span class="p">(</span><span class="o">&amp;</span><span class="n">user</span><span class="p">)</span><span class="o">?</span>
 </code></pre></div>
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">time</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Instant</span><span class="o">,</span><span class="w"> </span><span class="nn">Duration</span>
 
@@ -3806,7 +3806,7 @@ clear type mapping, codegen, and build integration.</p>
 
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetch_text</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nc">HttpError</span><span class="p">]:</span>
     <span class="n">client</span> <span class="o">=</span> <span class="nc">Client</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
-    <span class="n">resp</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span><span class="o">.</span><span class="n">send</span><span class="p">()</span><span class="err">?</span>
+    <span class="n">resp</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span><span class="o">.</span><span class="n">send</span><span class="p">()</span><span class="o">?</span>
     <span class="k">return</span> <span class="k">await</span> <span class="n">resp</span><span class="o">.</span><span class="n">text</span><span class="p">()</span>
 </code></pre></div>
 <h2 id="limitations-initial">Limitations (initial)<a class="headerlink" href="#limitations-initial" title="Permanent link">&para;</a></h2>

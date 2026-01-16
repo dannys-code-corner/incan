@@ -3771,8 +3771,8 @@ must not have to guess which implementation “wins”.</p>
 <h3 id="resource-management-without-context-managers">Resource management without context managers<a class="headerlink" href="#resource-management-without-context-managers" title="Permanent link">&para;</a></h3>
 <p>Incan’s default approach is: allocate the resource, use it, and let scope end handle cleanup.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">process_file</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-    <span class="n">file</span> <span class="o">=</span> <span class="nc">File</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;data.txt&quot;</span><span class="p">)</span><span class="err">?</span>
-    <span class="n">content</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">read_all</span><span class="p">()</span><span class="err">?</span>
+    <span class="n">file</span> <span class="o">=</span> <span class="nc">File</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;data.txt&quot;</span><span class="p">)</span><span class="o">?</span>
+    <span class="n">content</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">read_all</span><span class="p">()</span><span class="o">?</span>
     <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
 </code></pre></div>
 

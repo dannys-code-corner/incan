@@ -3771,12 +3771,12 @@ This works well for known, fixed schemas but falls short for:</p>
     <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">age</span><span class="p">:</span> <span class="nb">int</span>
 
-<span class="n">user</span> <span class="o">=</span> <span class="nc">User</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span><span class="n">json_str</span><span class="p">)</span><span class="err">?</span>
+<span class="n">user</span> <span class="o">=</span> <span class="nc">User</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span><span class="n">json_str</span><span class="p">)</span><span class="o">?</span>
 <span class="nb">println</span><span class="p">(</span><span class="n">user</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="proposed-addition">Proposed Addition<a class="headerlink" href="#proposed-addition" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Parse unknown JSON</span>
-<span class="n">data</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">json_str</span><span class="p">)</span><span class="err">?</span>
+<span class="n">data</span> <span class="o">=</span> <span class="nc">JsonValue</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">json_str</span><span class="p">)</span><span class="o">?</span>
 
 <span class="c1"># Access dynamically</span>
 <span class="n">name</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;user&quot;</span><span class="p">][</span><span class="s2">&quot;name&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">as_str</span><span class="p">()</span>

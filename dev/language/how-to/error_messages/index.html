@@ -3871,7 +3871,7 @@ where it happened, and what to do next.</p>
 </span>
 <span class="c1"># Right - use ? to unwrap</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">greet</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nc">Error</span><span class="p">]:</span>
-<span class="hll">    <span class="n">name</span> <span class="o">=</span> <span class="n">get_name</span><span class="p">()</span><span class="err">?</span>  <span class="c1"># ✅ Unwraps Ok, returns Err early</span>
+<span class="hll">    <span class="n">name</span> <span class="o">=</span> <span class="n">get_name</span><span class="p">()</span><span class="o">?</span>  <span class="c1"># ✅ Unwraps Ok, returns Err early</span>
 </span>    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Or handle explicitly</span>
@@ -3888,7 +3888,7 @@ where it happened, and what to do next.</p>
 <p><strong>Solution:</strong></p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Wrong</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">double</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="hll">    <span class="k">return</span> <span class="n">x</span><span class="err">?</span>  <span class="c1"># ❌ x is not a Result</span>
+<span class="hll">    <span class="k">return</span> <span class="n">x</span><span class="o">?</span>  <span class="c1"># ❌ x is not a Result</span>
 </span>
 <span class="c1"># Right</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">double</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>

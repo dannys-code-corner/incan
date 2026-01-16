@@ -4138,7 +4138,7 @@ the compiler.</p>
 <p>No implicit narrowing — all conversions are explicit:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">let</span> <span class="n">big</span><span class="p">:</span> <span class="kt">i64</span> <span class="o">=</span> <span class="mi">1000</span>
 <span class="k">let</span> <span class="n">small</span><span class="p">:</span> <span class="n">i16</span> <span class="o">=</span> <span class="n">big</span> <span class="k">as</span> <span class="n">i16</span>        <span class="c1"># Explicit cast (may truncate)</span>
-<span class="k">let</span> <span class="n">safe</span><span class="p">:</span> <span class="n">i16</span> <span class="o">=</span> <span class="n">i16</span><span class="o">.</span><span class="n">try_from</span><span class="p">(</span><span class="n">big</span><span class="p">)</span><span class="err">?</span> <span class="c1"># Safe conversion (returns Result)</span>
+<span class="k">let</span> <span class="n">safe</span><span class="p">:</span> <span class="n">i16</span> <span class="o">=</span> <span class="n">i16</span><span class="o">.</span><span class="n">try_from</span><span class="p">(</span><span class="n">big</span><span class="p">)</span><span class="o">?</span> <span class="c1"># Safe conversion (returns Result)</span>
 </code></pre></div>
 <h4 id="conversion-functions">Conversion Functions<a class="headerlink" href="#conversion-functions" title="Permanent link">&para;</a></h4>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Fallible conversions (return Result)</span>
@@ -4192,7 +4192,7 @@ the compiler.</p>
     <span class="k">return</span> <span class="nc">Connection</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">addr</span><span class="p">)</span>
 
 <span class="c1"># Usage</span>
-<span class="k">let</span> <span class="n">conn</span> <span class="o">=</span> <span class="n">connect</span><span class="p">(</span><span class="s2">&quot;localhost&quot;</span><span class="p">,</span> <span class="mi">8080</span><span class="n">u16</span><span class="p">)</span><span class="err">?</span>
+<span class="k">let</span> <span class="n">conn</span> <span class="o">=</span> <span class="n">connect</span><span class="p">(</span><span class="s2">&quot;localhost&quot;</span><span class="p">,</span> <span class="mi">8080</span><span class="n">u16</span><span class="p">)</span><span class="o">?</span>
 </code></pre></div>
 <h3 id="memory-efficient-arrays">Memory-Efficient Arrays<a class="headerlink" href="#memory-efficient-arrays" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Image pixel data - 3 bytes per pixel instead of 24</span>

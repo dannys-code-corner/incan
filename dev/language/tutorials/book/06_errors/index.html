@@ -3788,7 +3788,7 @@ In Incan, <code>Option[T]</code> is an explicit enum that the compiler can reaso
 <h2 id="propagating-errors-with">Propagating errors with <code>?</code><a class="headerlink" href="#propagating-errors-with" title="Permanent link">&para;</a></h2>
 <p>The <code>?</code> operator returns early on <code>Err</code>, otherwise unwraps the <code>Ok</code> value:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">greet_user</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-    <span class="n">name</span> <span class="o">=</span> <span class="n">read_username</span><span class="p">()</span><span class="err">?</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">read_username</span><span class="p">()</span><span class="o">?</span>
     <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
@@ -3823,7 +3823,7 @@ In Incan, <code>Option[T]</code> is an explicit enum that the compiler can reaso
     <span class="k">return</span> <span class="nb">Some</span><span class="p">(</span><span class="n">items</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">parse_and_divide</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-    <span class="n">denom</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">denom</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="o">?</span>
     <span class="k">return</span> <span class="n">safe_div</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">denom</span><span class="p">)</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>

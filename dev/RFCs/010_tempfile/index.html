@@ -3859,10 +3859,10 @@ Incan should provide similar ergonomic temporary file handling.</p>
 <h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
 <h3 id="tempfile">TempFile<a class="headerlink" href="#tempfile" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Create a temporary file</span>
-<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="err">?</span>
+<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="o">?</span>
 
 <span class="c1"># Write to it</span>
-<span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;some data&quot;</span><span class="p">)</span><span class="err">?</span>
+<span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;some data&quot;</span><span class="p">)</span><span class="o">?</span>
 
 <span class="c1"># Get the path (for passing to other functions)</span>
 <span class="n">path</span> <span class="o">=</span> <span class="n">temp</span><span class="o">.</span><span class="n">path</span><span class="p">()</span>
@@ -3872,47 +3872,47 @@ Incan should provide similar ergonomic temporary file handling.</p>
 </code></pre></div>
 <h3 id="tempdir">TempDir<a class="headerlink" href="#tempdir" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># Create a temporary directory</span>
-<span class="n">temp_dir</span> <span class="o">=</span> <span class="nc">TempDir</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="err">?</span>
+<span class="n">temp_dir</span> <span class="o">=</span> <span class="nc">TempDir</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="o">?</span>
 
 <span class="c1"># Create files inside it</span>
 <span class="n">config</span> <span class="o">=</span> <span class="n">temp_dir</span><span class="o">.</span><span class="n">path</span><span class="p">()</span> <span class="o">/</span> <span class="s2">&quot;config.toml&quot;</span>
-<span class="n">config</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">default_config</span><span class="p">)</span><span class="err">?</span>
+<span class="n">config</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">default_config</span><span class="p">)</span><span class="o">?</span>
 
 <span class="n">data_dir</span> <span class="o">=</span> <span class="n">temp_dir</span><span class="o">.</span><span class="n">path</span><span class="p">()</span> <span class="o">/</span> <span class="s2">&quot;data&quot;</span>
-<span class="n">data_dir</span><span class="o">.</span><span class="n">mkdir</span><span class="p">()</span><span class="err">?</span>
+<span class="n">data_dir</span><span class="o">.</span><span class="n">mkdir</span><span class="p">()</span><span class="o">?</span>
 
 <span class="c1"># Entire directory tree deleted when `temp_dir` goes out of scope</span>
 </code></pre></div>
 <h3 id="named-temporary-files">Named Temporary Files<a class="headerlink" href="#named-temporary-files" title="Permanent link">&para;</a></h3>
 <p>For cases where you need a specific suffix/prefix:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># With custom suffix</span>
-<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.json&quot;</span><span class="p">)</span><span class="err">?</span>
+<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.json&quot;</span><span class="p">)</span><span class="o">?</span>
 
 <span class="c1"># With custom prefix</span>
-<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">with_prefix</span><span class="p">(</span><span class="s2">&quot;download_&quot;</span><span class="p">)</span><span class="err">?</span>
+<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">with_prefix</span><span class="p">(</span><span class="s2">&quot;download_&quot;</span><span class="p">)</span><span class="o">?</span>
 
 <span class="c1"># With both</span>
 <span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">builder</span><span class="p">()</span>
     <span class="o">.</span><span class="n">prefix</span><span class="p">(</span><span class="s2">&quot;report_&quot;</span><span class="p">)</span>
     <span class="o">.</span><span class="n">suffix</span><span class="p">(</span><span class="s2">&quot;.pdf&quot;</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="err">?</span>
+    <span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">?</span>
 </code></pre></div>
 <h3 id="persistence-keep-on-drop">Persistence (Keep on Drop)<a class="headerlink" href="#persistence-keep-on-drop" title="Permanent link">&para;</a></h3>
 <p>Sometimes you want to create a temp file but keep it:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="err">?</span>
-<span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="err">?</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="o">?</span>
+<span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">?</span>
 
 <span class="c1"># Keep the file - returns the Path and prevents deletion</span>
-<span class="n">final_path</span> <span class="o">=</span> <span class="n">temp</span><span class="o">.</span><span class="n">persist</span><span class="p">()</span><span class="err">?</span>
+<span class="n">final_path</span> <span class="o">=</span> <span class="n">temp</span><span class="o">.</span><span class="n">persist</span><span class="p">()</span><span class="o">?</span>
 <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Saved to: </span><span class="si">{</span><span class="n">final_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="explicit-location">Explicit Location<a class="headerlink" href="#explicit-location" title="Permanent link">&para;</a></h3>
 <p>Create temp files in a specific directory:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="c1"># In a specific directory</span>
-<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">in_dir</span><span class="p">(</span><span class="nc">Path</span><span class="p">(</span><span class="s2">&quot;/var/cache/myapp&quot;</span><span class="p">))</span><span class="err">?</span>
+<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">in_dir</span><span class="p">(</span><span class="nc">Path</span><span class="p">(</span><span class="s2">&quot;/var/cache/myapp&quot;</span><span class="p">))</span><span class="o">?</span>
 
 <span class="c1"># In system temp directory (default)</span>
-<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="err">?</span>  <span class="c1"># Uses system temp dir</span>
+<span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="o">?</span>  <span class="c1"># Uses system temp dir</span>
 </code></pre></div>
 <h2 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h2>
 <h3 id="tempfile-methods">TempFile Methods<a class="headerlink" href="#tempfile-methods" title="Permanent link">&para;</a></h3>
@@ -4026,8 +4026,8 @@ This RFC introduces new surface types and methods, so the canonical spellings sh
 </ul>
 <p>Add <code>tempfile</code> to generated <code>Cargo.toml</code> when these types are used.</p>
 <h3 id="generated-code">Generated Code<a class="headerlink" href="#generated-code" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="err">?</span>
-<span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">)</span><span class="err">?</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">new</span><span class="p">()</span><span class="o">?</span>
+<span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">)</span><span class="o">?</span>
 </code></pre></div>
 <p>Generates:</p>
 <div class="language-rust highlight"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">temp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tempfile</span><span class="p">::</span><span class="n">NamedTempFile</span><span class="p">::</span><span class="n">new</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
@@ -4036,50 +4036,50 @@ This RFC introduces new surface types and methods, so the canonical spellings sh
 <h2 id="use-cases">Use Cases<a class="headerlink" href="#use-cases" title="Permanent link">&para;</a></h2>
 <h3 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">test_config_loading</span><span class="p">():</span>
-    <span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.toml&quot;</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.toml&quot;</span><span class="p">)</span><span class="o">?</span>
     <span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
 <span class="s2">        [server]</span>
 <span class="s2">        host = &quot;localhost&quot;</span>
 <span class="s2">        port = 8080</span>
-<span class="s2">    &quot;&quot;&quot;</span><span class="p">)</span><span class="err">?</span>
+<span class="s2">    &quot;&quot;&quot;</span><span class="p">)</span><span class="o">?</span>
 
-    <span class="n">config</span> <span class="o">=</span> <span class="n">load_config</span><span class="p">(</span><span class="n">temp</span><span class="o">.</span><span class="n">path</span><span class="p">())</span><span class="err">?</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">load_config</span><span class="p">(</span><span class="n">temp</span><span class="o">.</span><span class="n">path</span><span class="p">())</span><span class="o">?</span>
     <span class="k">assert</span> <span class="n">config</span><span class="o">.</span><span class="n">server</span><span class="o">.</span><span class="n">port</span> <span class="o">==</span> <span class="mi">8080</span>
     <span class="c1"># temp file cleaned up after test</span>
 </code></pre></div>
 <h3 id="safe-file-updates">Safe File Updates<a class="headerlink" href="#safe-file-updates" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">safe_save</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">,</span> <span class="n">content</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="nc">IoError</span><span class="p">]:</span>
     <span class="c1"># Write to temp file first</span>
-    <span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">in_dir</span><span class="p">(</span><span class="n">path</span><span class="o">.</span><span class="n">parent</span><span class="p">())</span><span class="err">?</span>
-    <span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">content</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">in_dir</span><span class="p">(</span><span class="n">path</span><span class="o">.</span><span class="n">parent</span><span class="p">())</span><span class="o">?</span>
+    <span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">content</span><span class="p">)</span><span class="o">?</span>
 
     <span class="c1"># Atomic rename (same filesystem)</span>
-    <span class="n">temp</span><span class="o">.</span><span class="n">persist</span><span class="p">()</span><span class="err">?</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">temp</span><span class="o">.</span><span class="n">persist</span><span class="p">()</span><span class="o">?.</span><span class="n">rename</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="o">?</span>
     <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="download-with-cleanup">Download with Cleanup<a class="headerlink" href="#download-with-cleanup" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">process_download</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Data</span><span class="p">,</span> <span class="nc">AppError</span><span class="p">]:</span>
-    <span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.zip&quot;</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">temp</span> <span class="o">=</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">&quot;.zip&quot;</span><span class="p">)</span><span class="o">?</span>
 
     <span class="c1"># Download to temp file</span>
-    <span class="k">await</span> <span class="n">download_to</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">temp</span><span class="o">.</span><span class="n">path</span><span class="p">())</span><span class="err">?</span>
+    <span class="k">await</span> <span class="n">download_to</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">temp</span><span class="o">.</span><span class="n">path</span><span class="p">())</span><span class="o">?</span>
 
     <span class="c1"># Process</span>
-    <span class="n">data</span> <span class="o">=</span> <span class="n">extract_and_parse</span><span class="p">(</span><span class="n">temp</span><span class="o">.</span><span class="n">path</span><span class="p">())</span><span class="err">?</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">extract_and_parse</span><span class="p">(</span><span class="n">temp</span><span class="o">.</span><span class="n">path</span><span class="p">())</span><span class="o">?</span>
 
     <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
     <span class="c1"># temp file deleted even if extraction fails</span>
 </code></pre></div>
 <h2 id="alternatives-considered">Alternatives Considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <h3 id="1-functions-instead-of-types">1. Functions Instead of Types<a class="headerlink" href="#1-functions-instead-of-types" title="Permanent link">&para;</a></h3>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">path</span> <span class="o">=</span> <span class="n">create_temp_file</span><span class="p">()</span><span class="err">?</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">path</span> <span class="o">=</span> <span class="n">create_temp_file</span><span class="p">()</span><span class="o">?</span>
 <span class="c1"># ... use path ...</span>
-<span class="nb">remove</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>  <span class="c1"># Manual cleanup</span>
+<span class="nb">remove</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="o">?</span>  <span class="c1"># Manual cleanup</span>
 </code></pre></div>
 <p>Rejected: Easy to forget cleanup, especially on error paths.</p>
 <h3 id="2-context-manager-syntax">2. Context Manager Syntax<a class="headerlink" href="#2-context-manager-syntax" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">with</span> <span class="nc">TempFile</span><span class="o">.</span><span class="n">new</span><span class="p">()</span> <span class="k">as</span> <span class="n">temp</span><span class="p">:</span>
-    <span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">temp</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">)</span><span class="o">?</span>
 </code></pre></div>
 <p>Rejected: Incan prefers RAII over explicit context managers.
 The type-based approach is more Rust-like and ensures cleanup even without <code>with</code>.</p>

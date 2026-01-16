@@ -4645,7 +4645,7 @@ restoration afterward.</p>
     <span class="k">def</span><span class="w"> </span><span class="nf">test_uses_tmp_path</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">let</span> <span class="n">config</span> <span class="o">=</span> <span class="n">tmp_path</span> <span class="o">/</span> <span class="s2">&quot;config.json&quot;</span>
         <span class="c1"># write/read config using an absolute path (error handling omitted in examples)</span>
-        <span class="n">config</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="p">)</span><span class="err">?</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">?</span>
         <span class="k">assert</span> <span class="n">config</span><span class="o">.</span><span class="n">exists</span><span class="p">()</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">test_relative_paths</span><span class="p">(</span><span class="n">tmp_workdir</span><span class="p">:</span> <span class="nc">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>

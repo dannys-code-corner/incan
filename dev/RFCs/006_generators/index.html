@@ -3934,7 +3934,7 @@ enabling lazy iteration with familiar <code>yield</code> syntax.</p>
 
 <span class="c1"># GENERATOR: yield multiple values lazily</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">read_lines</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
-    <span class="k">let</span> <span class="n">file</span> <span class="o">=</span> <span class="nc">File</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>
+    <span class="k">let</span> <span class="n">file</span> <span class="o">=</span> <span class="nc">File</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="o">?</span>
     <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">file</span><span class="o">.</span><span class="n">lines</span><span class="p">():</span>
         <span class="k">yield</span> <span class="n">line</span>  <span class="c1"># Multiple yields: lazy iteration</span>
 </code></pre></div>
@@ -4027,7 +4027,7 @@ enabling lazy iteration with familiar <code>yield</code> syntax.</p>
 <h3 id="file-processing">File Processing<a class="headerlink" href="#file-processing" title="Permanent link">&para;</a></h3>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">read_csv_rows</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Iterator</span><span class="p">[</span><span class="kt">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Lazily read CSV rows without loading entire file.&quot;&quot;&quot;</span>
-    <span class="n">file</span> <span class="o">=</span> <span class="nc">File</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">file</span> <span class="o">=</span> <span class="nc">File</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="o">?</span>
     <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">file</span><span class="o">.</span><span class="n">lines</span><span class="p">():</span>
         <span class="k">yield</span> <span class="n">line</span><span class="o">.</span><span class="nb">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
 

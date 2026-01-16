@@ -4038,7 +4038,7 @@ giving you Flask/FastAPI-like syntax with native Rust performance.</p>
 <p>Use <code>{name}</code> syntax for path parameters:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/users/</span><span class="si">{id}</span><span class="s2">&quot;</span><span class="p">)</span>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">get_user</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Json</span><span class="p">[</span><span class="nc">User</span><span class="p">]:</span>
-    <span class="n">user</span> <span class="o">=</span> <span class="n">find_user</span><span class="p">(</span><span class="nb">id</span><span class="p">)</span><span class="err">?</span>
+    <span class="n">user</span> <span class="o">=</span> <span class="n">find_user</span><span class="p">(</span><span class="nb">id</span><span class="p">)</span><span class="o">?</span>
     <span class="k">return</span> <span class="nc">Json</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
 
 <span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/posts/</span><span class="si">{year}</span><span class="s2">/</span><span class="si">{month}</span><span class="s2">&quot;</span><span class="p">)</span>
