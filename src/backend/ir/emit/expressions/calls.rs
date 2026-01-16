@@ -40,30 +40,32 @@ impl<'a> IrEmitter<'a> {
         // Order arguments only when keyword args are present (positional-only calls preserve previous behavior,
         // which is important for snapshots + for default-arg lowering work that happens elsewhere).
         let has_named_args = args.iter().any(|a| a.name.is_some());
-        let ordered_args: Vec<&TypedExpr> = if let Some(sig) = function_sig
-            && has_named_args
-        {
-            let mut positional: Vec<&TypedExpr> = Vec::new();
-            let mut named: std::collections::HashMap<&str, &TypedExpr> = std::collections::HashMap::new();
-            for a in args {
-                if let Some(name) = a.name.as_deref() {
-                    named.insert(name, &a.expr);
-                } else {
-                    positional.push(&a.expr);
+        let ordered_args: Vec<&TypedExpr> = if has_named_args {
+            if let Some(sig) = function_sig {
+                let mut positional: Vec<&TypedExpr> = Vec::new();
+                let mut named: std::collections::HashMap<&str, &TypedExpr> = std::collections::HashMap::new();
+                for a in args {
+                    if let Some(name) = a.name.as_deref() {
+                        named.insert(name, &a.expr);
+                    } else {
+                        positional.push(&a.expr);
+                    }
                 }
-            }
 
-            let mut pos_idx = 0usize;
-            let mut out: Vec<&TypedExpr> = Vec::new();
-            for p in &sig.params {
-                if let Some(v) = named.get(p.name.as_str()) {
-                    out.push(*v);
-                } else if pos_idx < positional.len() {
-                    out.push(positional[pos_idx]);
-                    pos_idx += 1;
+                let mut pos_idx = 0usize;
+                let mut out: Vec<&TypedExpr> = Vec::new();
+                for p in &sig.params {
+                    if let Some(v) = named.get(p.name.as_str()) {
+                        out.push(*v);
+                    } else if pos_idx < positional.len() {
+                        out.push(positional[pos_idx]);
+                        pos_idx += 1;
+                    }
                 }
+                out
+            } else {
+                args.iter().map(|a| &a.expr).collect()
             }
-            out
         } else {
             args.iter().map(|a| &a.expr).collect()
         };
