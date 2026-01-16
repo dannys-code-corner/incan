@@ -54,6 +54,20 @@ impl TypedExpr {
 /// IR expression (alias for TypedExpr for convenience)
 pub type IrExpr = TypedExpr;
 
+/// A call argument in IR.
+///
+/// This preserves named-argument information (`foo(x=1)`) so codegen can reorder arguments by parameter name
+/// (or apply targeted policies for known APIs).
+///
+/// For positional arguments, `name` is `None`.
+#[derive(Debug, Clone)]
+pub struct IrCallArg {
+    /// Optional argument name (present for `foo(x=1)`, absent for positional args).
+    pub name: Option<String>,
+    /// Argument expression.
+    pub expr: IrExpr,
+}
+
 /// Expression kinds in IR
 #[derive(Debug, Clone)]
 pub enum IrExprKind {
@@ -89,7 +103,7 @@ pub enum IrExprKind {
     // Function call (unknown/user-defined function)
     Call {
         func: Box<IrExpr>,
-        args: Vec<IrExpr>,
+        args: Vec<IrCallArg>,
     },
 
     /// Built-in function call (enum-dispatched).
@@ -105,7 +119,7 @@ pub enum IrExprKind {
     MethodCall {
         receiver: Box<IrExpr>,
         method: String,
-        args: Vec<IrExpr>,
+        args: Vec<IrCallArg>,
     },
 
     /// Known method call (enum-dispatched).
@@ -115,7 +129,7 @@ pub enum IrExprKind {
     KnownMethodCall {
         receiver: Box<IrExpr>,
         kind: MethodKind,
-        args: Vec<IrExpr>,
+        args: Vec<IrCallArg>,
     },
 
     // Field access

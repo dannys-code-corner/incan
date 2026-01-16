@@ -20,6 +20,62 @@ use incan_core::lang::types::collections::CollectionTypeId;
 use super::TypeChecker;
 
 impl TypeChecker {
+    /// Fetch a trait method signature for validation (cloned to avoid borrow conflicts).
+    fn trait_method_info(&self, trait_name: &str, method: &str) -> Option<MethodInfo> {
+        let tid = self.symbols.lookup(trait_name)?;
+        let tsym = self.symbols.get(tid)?;
+        match &tsym.kind {
+            SymbolKind::Trait(trait_info) => trait_info.methods.get(method).cloned(),
+            _ => None,
+        }
+    }
+
+    /// Validate method call arguments against a method signature.
+    fn validate_method_call_args(
+        &mut self,
+        params: &[(String, ResolvedType)],
+        args: &[CallArg],
+        arg_types: &[ResolvedType],
+    ) {
+        let mut positional: Vec<(ResolvedType, Span)> = Vec::new();
+        let mut named: std::collections::HashMap<&str, (ResolvedType, Span)> = std::collections::HashMap::new();
+
+        for (arg, ty) in args.iter().zip(arg_types.iter()) {
+            let expr = match arg {
+                CallArg::Positional(e) | CallArg::Named(_, e) => e,
+            };
+            match arg {
+                CallArg::Positional(_) => positional.push((ty.clone(), expr.span)),
+                CallArg::Named(name, _) => {
+                    named.insert(name.as_str(), (ty.clone(), expr.span));
+                }
+            }
+        }
+
+        let mut pos_idx = 0usize;
+        for (param_name, param_ty) in params {
+            let arg = if let Some(value) = named.get(param_name.as_str()) {
+                Some(value)
+            } else if pos_idx < positional.len() {
+                let value = positional.get(pos_idx);
+                pos_idx += 1;
+                value
+            } else {
+                None
+            };
+
+            if let Some((arg_ty, arg_span)) = arg {
+                if !self.types_compatible(arg_ty, param_ty) {
+                    self.errors.push(errors::type_mismatch(
+                        &param_ty.to_string(),
+                        &arg_ty.to_string(),
+                        *arg_span,
+                    ));
+                }
+            }
+        }
+    }
+
     /// Type-check an indexing expression (`base[index]`) and return the element type.
     pub(in crate::frontend::typechecker::check_expr) fn check_index(
         &mut self,
@@ -437,37 +493,33 @@ impl TypeChecker {
                 Some(type_info) => match type_info {
                     TypeInfo::Model(model) => {
                         if let Some(method_info) = model.methods.get(method) {
-                            return method_info.return_type.clone();
+                            let params = method_info.params.clone();
+                            let return_type = method_info.return_type.clone();
+                            self.validate_method_call_args(&params, args, &arg_types);
+                            return return_type;
                         }
                         for trait_name in &model.traits {
-                            if let Some(method_info) = self
-                                .symbols
-                                .lookup(trait_name)
-                                .and_then(|tid| self.symbols.get(tid))
-                                .and_then(|tsym| match &tsym.kind {
-                                    SymbolKind::Trait(trait_info) => trait_info.methods.get(method),
-                                    _ => None,
-                                })
-                            {
-                                return method_info.return_type.clone();
+                            if let Some(method_info) = self.trait_method_info(trait_name, method) {
+                                let params = method_info.params.clone();
+                                let return_type = method_info.return_type.clone();
+                                self.validate_method_call_args(&params, args, &arg_types);
+                                return return_type;
                             }
                         }
                     }
                     TypeInfo::Class(class) => {
                         if let Some(method_info) = class.methods.get(method) {
-                            return method_info.return_type.clone();
+                            let params = method_info.params.clone();
+                            let return_type = method_info.return_type.clone();
+                            self.validate_method_call_args(&params, args, &arg_types);
+                            return return_type;
                         }
                         for trait_name in &class.traits {
-                            if let Some(method_info) = self
-                                .symbols
-                                .lookup(trait_name)
-                                .and_then(|tid| self.symbols.get(tid))
-                                .and_then(|tsym| match &tsym.kind {
-                                    SymbolKind::Trait(trait_info) => trait_info.methods.get(method),
-                                    _ => None,
-                                })
-                            {
-                                return method_info.return_type.clone();
+                            if let Some(method_info) = self.trait_method_info(trait_name, method) {
+                                let params = method_info.params.clone();
+                                let return_type = method_info.return_type.clone();
+                                self.validate_method_call_args(&params, args, &arg_types);
+                                return return_type;
                             }
                         }
                     }
@@ -479,7 +531,10 @@ impl TypeChecker {
                     }
                     TypeInfo::Newtype(nt) => {
                         if let Some(method_info) = nt.methods.get(method) {
-                            return method_info.return_type.clone();
+                            let params = method_info.params.clone();
+                            let return_type = method_info.return_type.clone();
+                            self.validate_method_call_args(&params, args, &arg_types);
+                            return return_type;
                         }
                     }
                     _ => {}

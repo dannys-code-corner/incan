@@ -19,7 +19,7 @@
 //! - [`crate::backend::ir::emit::statements`]
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use std::collections::{HashMap, HashSet};
 
 use super::super::decl::IrDeclKind;
@@ -129,13 +129,13 @@ impl ImportTracker {
             IrExprKind::Call { func, args } => {
                 self.scan_expr(func);
                 for arg in args {
-                    self.scan_expr(arg);
+                    self.scan_expr(&arg.expr);
                 }
             }
             IrExprKind::MethodCall { receiver, args, .. } => {
                 self.scan_expr(receiver);
                 for arg in args {
-                    self.scan_expr(arg);
+                    self.scan_expr(&arg.expr);
                 }
             }
             IrExprKind::BinOp { left, right, .. } => {
@@ -283,12 +283,15 @@ impl<'a> IrEmitter<'a> {
                 use axum::{
                     Router,
                     routing::{get, post, put, delete, patch},
-                    Json,
-                    response::{Html, IntoResponse, Response},
                     extract::{Path, Query, State}
                 };
             });
-            items.push(quote! { use std::net::SocketAddr; });
+        }
+
+        // Web router glue (only when web is detected and we have collected routes).
+        if self.needs_axum && !self.routes.is_empty() {
+            items.push(self.emit_web_router_fn()?);
+            items.extend(self.emit_web_route_wrappers()?);
         }
 
         for decl in &program.declarations {
@@ -298,5 +301,97 @@ impl<'a> IrEmitter<'a> {
         Ok(quote! {
             #(#items)*
         })
+    }
+
+    fn emit_web_route_wrappers(&self) -> Result<Vec<TokenStream>, EmitError> {
+        let mut out = Vec::new();
+        for r in &self.routes {
+            let wrapper_name = format_ident!("__incan_web_{}", r.handler_name);
+            let handler_ident = format_ident!("{}", Self::escape_keyword(&r.handler_name));
+
+            let sig_opt = self.function_registry.get(&r.handler_name);
+            let params = sig_opt.map(|s| &s.params[..]).unwrap_or(&[]);
+
+            // For now: support 0 or 1 path params (enough for hello_web).
+            let args_pat = if params.is_empty() {
+                quote! {}
+            } else if params.len() == 1 {
+                let p = &params[0];
+                let pname = format_ident!("{}", Self::escape_keyword(&p.name));
+                let pty = self.emit_type(&p.ty);
+                quote! { axum::extract::Path(#pname): axum::extract::Path<#pty> }
+            } else {
+                return Err(EmitError::Unsupported(
+                    "web routes with multiple path params not yet supported".to_string(),
+                ));
+            };
+
+            let call = if params.is_empty() {
+                quote! { #handler_ident().await }
+            } else {
+                let pname = format_ident!("{}", Self::escape_keyword(&params[0].name));
+                quote! { #handler_ident(#pname).await }
+            };
+
+            out.push(quote! {
+                async fn #wrapper_name(#args_pat) -> impl axum::response::IntoResponse {
+                    #call
+                }
+            });
+        }
+        Ok(out)
+    }
+
+    /// Emit the axum router builder for collected `@route` handlers.
+    fn emit_web_router_fn(&self) -> Result<TokenStream, EmitError> {
+        let mut router = quote! { axum::Router::new() };
+
+        for r in &self.routes {
+            let path = Self::to_axum_path(&r.path);
+            let path_lit = proc_macro2::Literal::string(&path);
+            let wrapper_name = format_ident!("__incan_web_{}", r.handler_name);
+
+            // For now: only support GET/POST/PUT/DELETE/PATCH single-method routes.
+            let method = r.methods.first().map(|s| s.as_str()).unwrap_or("GET");
+            let route_layer = match method {
+                "GET" => quote! { axum::routing::get(#wrapper_name) },
+                "POST" => quote! { axum::routing::post(#wrapper_name) },
+                "PUT" => quote! { axum::routing::put(#wrapper_name) },
+                "DELETE" => quote! { axum::routing::delete(#wrapper_name) },
+                "PATCH" => quote! { axum::routing::patch(#wrapper_name) },
+                other => return Err(EmitError::Unsupported(format!("unsupported web method '{}'", other))),
+            };
+
+            router = quote! { #router.route(#path_lit, #route_layer) };
+        }
+
+        Ok(quote! {
+            fn __incan_web_router() -> axum::Router {
+                #router
+            }
+        })
+    }
+
+    /// Convert `{param}` placeholders to axum `:param` path segments.
+    fn to_axum_path(path: &str) -> String {
+        // Convert `/api/{name}` → `/api/:name` (axum path params)
+        let mut out = String::new();
+        let mut chars = path.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '{' {
+                let mut name = String::new();
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                    name.push(c);
+                }
+                out.push(':');
+                out.push_str(&name);
+            } else {
+                out.push(ch);
+            }
+        }
+        out
     }
 }

@@ -83,6 +83,34 @@ fn collect_fields(fields: &[Spanned<FieldDecl>], symbols: &SymbolTable) -> HashM
         .collect()
 }
 
+/// Function signatures for `from testing import ...`.
+fn testing_import_function_info(name: &str) -> Option<FunctionInfo> {
+    match name {
+        "assert" | "assert_true" | "assert_false" => Some(FunctionInfo {
+            params: vec![("condition".to_string(), ResolvedType::Bool)],
+            return_type: ResolvedType::Unit,
+            is_async: false,
+            type_params: vec![],
+        }),
+        "assert_eq" | "assert_ne" => Some(FunctionInfo {
+            params: vec![
+                ("left".to_string(), ResolvedType::TypeVar("T".to_string())),
+                ("right".to_string(), ResolvedType::TypeVar("T".to_string())),
+            ],
+            return_type: ResolvedType::Unit,
+            is_async: false,
+            type_params: vec!["T".to_string()],
+        }),
+        "fail" => Some(FunctionInfo {
+            params: vec![("msg".to_string(), ResolvedType::Str)],
+            return_type: ResolvedType::Unit,
+            is_async: false,
+            type_params: vec![],
+        }),
+        _ => None,
+    }
+}
+
 /// Inject to_json/from_json methods based on Serialize/Deserialize derives.
 fn inject_json_methods(methods: &mut HashMap<String, MethodInfo>, type_name: &str, derives: &[String]) {
     if derives
@@ -118,6 +146,57 @@ fn inject_json_methods(methods: &mut HashMap<String, MethodInfo>, type_name: &st
             },
         );
     }
+}
+
+/// Inject a `TypeName.new(...) -> Result[TypeName, E]` constructor for `@derive(Validate)` models.
+///
+/// This is a *typechecker-only* method injection to allow `User.new(...)` calls to typecheck even though the backend
+/// generates the actual Rust implementation.
+fn inject_validate_methods(
+    methods: &mut HashMap<String, MethodInfo>,
+    _type_name: &str,
+    fields: &HashMap<String, FieldInfo>,
+    field_order: &[Ident],
+    derives: &[String],
+) {
+    let has_validate = derives
+        .iter()
+        .any(|d| derives::from_str(d.as_str()) == Some(DeriveId::Validate));
+    if !has_validate {
+        return;
+    }
+
+    // Only inject if the user didn't already define it.
+    if methods.contains_key("new") {
+        return;
+    }
+
+    // Use the return type of validate() if present; otherwise use Unknown (second pass will report a better error).
+    let return_type = methods
+        .get("validate")
+        .map(|m| m.return_type.clone())
+        .unwrap_or(ResolvedType::Unknown);
+
+    // Prefer required fields only (no defaults). This keeps the signature stable and avoids needing default args.
+    let mut params: Vec<(String, ResolvedType)> = Vec::new();
+    for field_name in field_order {
+        if let Some(info) = fields.get(field_name) {
+            if !info.has_default {
+                params.push((field_name.clone(), info.ty.clone()));
+            }
+        }
+    }
+
+    methods.insert(
+        "new".to_string(),
+        MethodInfo {
+            receiver: None, // associated function via `TypeName.new(...)`
+            params,
+            return_type,
+            is_async: false,
+            has_body: true,
+        },
+    );
 }
 
 impl TypeChecker {
@@ -187,6 +266,28 @@ impl TypeChecker {
                 self.define_import_symbol(name, path.segments.clone(), false, span);
             }
             ImportKind::From { module, items } => {
+                // Special-case stdlib testing API:
+                // `from testing import assert_eq, ...` should work as normal function imports (LSP/typechecker),
+                // while backend codegen maps these to `incan_stdlib::testing::*`.
+                if module.parent_levels == 0 && !module.is_absolute && module.segments == vec!["testing".to_string()] {
+                    for item in items {
+                        let local_name = item.alias.clone().unwrap_or_else(|| item.name.clone());
+                        if let Some(info) = testing_import_function_info(&item.name) {
+                            self.symbols.define(Symbol {
+                                name: local_name,
+                                kind: SymbolKind::Function(info),
+                                span,
+                                scope: 0,
+                            });
+                        } else {
+                            let mut path = module.segments.clone();
+                            path.push(item.name.clone());
+                            self.define_import_symbol(local_name, path, false, span);
+                        }
+                    }
+                    return;
+                }
+
                 // For each item in `from module import item1, item2, ...`
                 // create a symbol as if it were `import module::item`
                 for item in items {
@@ -333,12 +434,15 @@ impl TypeChecker {
         // Inject JSON methods based on derives
         let derives = Self::extract_derive_names(&model.decorators);
         inject_json_methods(&mut methods, &model.name, &derives);
+        let field_order: Vec<Ident> = model.fields.iter().map(|f| f.node.name.clone()).collect();
+        inject_validate_methods(&mut methods, &model.name, &fields, &field_order, &derives);
 
         self.symbols.define(Symbol {
             name: model.name.clone(),
             kind: SymbolKind::Type(TypeInfo::Model(ModelInfo {
                 type_params: model.type_params.clone(),
                 traits: model.traits.clone(),
+                derives,
                 fields,
                 methods,
             })),
@@ -367,6 +471,7 @@ impl TypeChecker {
                 type_params: class.type_params.clone(),
                 extends: class.extends.clone(),
                 traits: class.traits.clone(),
+                derives,
                 fields,
                 methods,
             })),

@@ -31,8 +31,8 @@ src/
     └── constants.incn
 ```
 
-Note: Cross-module imports (module A importing from module B) require
-additional codegen work. Currently, imports from the main module work.
+Note: Cross-module imports are supported. This example builds end-to-end in CI via a build-only guardrail
+(`make examples-nested-project-build`).
 """
 
 # === 1. Basic imports (Rust-style with ::) ===

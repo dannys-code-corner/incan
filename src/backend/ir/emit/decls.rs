@@ -15,16 +15,29 @@
 
 use std::collections::HashSet;
 
-use proc_macro2::{Literal, TokenStream};
+use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
 use incan_core::lang::derives::{self, DeriveId};
+
+const ZEN_TEXT: &str = include_str!("../../../../stdlib/zen.txt");
 
 use super::super::decl::{IrDecl, IrDeclKind};
 use super::super::expr::{IrExpr, IrExprKind, MethodKind, VarAccess};
 use super::super::stmt::{AssignTarget, IrStmt, IrStmtKind};
 use super::super::types::IrType;
 use super::{EmitError, IrEmitter};
+
+fn join_path_idents(segments: &[Ident]) -> TokenStream {
+    let mut ts = TokenStream::new();
+    for (idx, seg) in segments.iter().enumerate() {
+        if idx > 0 {
+            ts.extend(quote! { :: });
+        }
+        ts.extend(quote! { #seg });
+    }
+    ts
+}
 
 impl<'a> IrEmitter<'a> {
     /// Collect the set of parameter names that are actually mutated in a function body.
@@ -128,7 +141,7 @@ impl<'a> IrEmitter<'a> {
             IrExprKind::Call { func, args } => {
                 self.scan_expr_for_param_writes(func, param_names, mutated);
                 for arg in args {
-                    self.scan_expr_for_param_writes(arg, param_names, mutated);
+                    self.scan_expr_for_param_writes(&arg.expr, param_names, mutated);
                 }
             }
             IrExprKind::BuiltinCall { args, .. } => {
@@ -144,7 +157,7 @@ impl<'a> IrEmitter<'a> {
                 }
                 self.scan_expr_for_param_writes(receiver, param_names, mutated);
                 for arg in args {
-                    self.scan_expr_for_param_writes(arg, param_names, mutated);
+                    self.scan_expr_for_param_writes(&arg.expr, param_names, mutated);
                 }
             }
             IrExprKind::KnownMethodCall {
@@ -157,7 +170,7 @@ impl<'a> IrEmitter<'a> {
                 }
                 self.scan_expr_for_param_writes(receiver, param_names, mutated);
                 for arg in args {
-                    self.scan_expr_for_param_writes(arg, param_names, mutated);
+                    self.scan_expr_for_param_writes(&arg.expr, param_names, mutated);
                 }
             }
             IrExprKind::Field { object, .. } => {
@@ -419,12 +432,24 @@ impl<'a> IrEmitter<'a> {
                     }
                 }
 
-                let path_tokens: Vec<_> = path.iter().map(|s| format_ident!("{}", s)).collect();
+                // Special-case stdlib shims:
+                // - `web` maps to `incan_stdlib::web`
+                // - `testing` maps to `incan_stdlib::testing`
+                let is_stdlib_web = path.first().map(|s| s == "web").unwrap_or(false);
+                let is_stdlib_testing = path.first().map(|s| s == "testing").unwrap_or(false);
+                let path_tokens: Vec<_> = if is_stdlib_web {
+                    vec![format_ident!("incan_stdlib"), format_ident!("web")]
+                } else if is_stdlib_testing {
+                    vec![format_ident!("incan_stdlib"), format_ident!("testing")]
+                } else {
+                    path.iter().map(|s| format_ident!("{}", s)).collect()
+                };
+                let path_ts = join_path_idents(&path_tokens);
 
                 if let Some(alias_name) = alias {
                     let alias_ident = format_ident!("{}", alias_name);
                     Ok(quote! {
-                        use #(#path_tokens)::* as #alias_ident;
+                        use #path_ts as #alias_ident;
                     })
                 } else if !items.is_empty() {
                     let item_stmts: Vec<TokenStream> = items
@@ -432,20 +457,21 @@ impl<'a> IrEmitter<'a> {
                         .map(|item| {
                             let name_ident = format_ident!("{}", &item.name);
                             let path_tokens_clone = path_tokens.clone();
+                            let path_ts_clone = join_path_idents(&path_tokens_clone);
                             if let Some(alias) = &item.alias {
                                 let alias_ident = format_ident!("{}", alias);
-                                quote! { use #(#path_tokens_clone)::*::#name_ident as #alias_ident; }
+                                quote! { use #path_ts_clone :: #name_ident as #alias_ident; }
                             } else {
-                                quote! { use #(#path_tokens_clone)::*::#name_ident; }
+                                quote! { use #path_ts_clone :: #name_ident; }
                             }
                         })
                         .collect();
                     Ok(quote! { #(#item_stmts)* })
-                } else if path.len() == 1 {
+                } else if path_tokens.len() == 1 {
                     Ok(quote! {})
                 } else {
                     Ok(quote! {
-                        use #(#path_tokens)::*;
+                        use #path_ts;
                     })
                 }
             }
@@ -579,6 +605,60 @@ impl<'a> IrEmitter<'a> {
                                 .map_err(|e| incan_stdlib::errors::json_decode_error_string(e))
                         }
                     });
+                }
+            }
+        }
+
+        // @derive(Validate): generate `TypeName::new(...) -> Result[TypeName, E]` that calls `validate()`.
+        //
+        // The typechecker injects the method signature; the backend generates the actual Rust implementation here.
+        if impl_block.trait_name.is_none() {
+            if let Some(derives) = self.struct_derives.get(&impl_block.target_type) {
+                let has_validate = derives
+                    .iter()
+                    .any(|d| derives::from_str(d.as_str()) == Some(DeriveId::Validate));
+                if has_validate && !impl_block.methods.iter().any(|m| m.name == "new") {
+                    if let Some(validate_fn) = impl_block.methods.iter().find(|m| m.name == "validate") {
+                        let ret_ty = self.emit_type(&validate_fn.return_type);
+
+                        // Required fields are those without defaults; defaults are in `struct_field_defaults`.
+                        let field_names = self
+                            .struct_field_names
+                            .get(&impl_block.target_type)
+                            .cloned()
+                            .unwrap_or_default();
+
+                        let mut params: Vec<TokenStream> = Vec::new();
+                        let mut init_fields: Vec<TokenStream> = Vec::new();
+
+                        for fname in field_names {
+                            let f_ident = format_ident!("{}", fname);
+                            if let Some(default_expr) = self
+                                .struct_field_defaults
+                                .get(&(impl_block.target_type.clone(), fname.clone()))
+                            {
+                                let default_tokens = self.emit_expr(default_expr)?;
+                                init_fields.push(quote! { #f_ident: #default_tokens });
+                            } else {
+                                let f_ty = self
+                                    .struct_field_types
+                                    .get(&(impl_block.target_type.clone(), fname.clone()))
+                                    .cloned()
+                                    .unwrap_or(IrType::Unknown);
+                                let f_ty_tokens = self.emit_type(&f_ty);
+                                params.push(quote! { #f_ident: #f_ty_tokens });
+                                init_fields.push(quote! { #f_ident });
+                            }
+                        }
+
+                        regular_methods.push(quote! {
+                            /// Construct a validated instance of this model.
+                            pub fn new(#(#params),*) -> #ret_ty {
+                                let tmp = Self { #(#init_fields),* };
+                                tmp.validate()
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -718,22 +798,16 @@ impl<'a> IrEmitter<'a> {
         };
 
         let zen_stmt = if is_main && self.emit_zen_in_main {
-            let zen_text = r#"
-┌──────────────────────────────────────────────────────────────────────┐
-│  The Zen of Incan                                                    │
-│  by Danny Meijer (inspired by Tim Peters' "The Zen of Python")       │
-└──────────────────────────────────────────────────────────────────────┘
+            quote! { println!(#ZEN_TEXT); }
+        } else {
+            quote! {}
+        };
 
-  › Readability counts          ─  clarity over cleverness
-  › Safety over silence         ─  errors surface as Result, not hide
-  › Explicit over implicit      ─  magic is opt-in and marked
-  › Fast is better than slow    ─  performance costs must be visible
-  › Namespaces are great        ─  keep modules and traits explicit
-  › One obvious way             ─  conventions beat novelty,
-                                   with escape hatches documented
-One obvious way.
-"#;
-            quote! { println!(#zen_text); }
+        let web_stmt = if is_main && self.needs_axum && !self.routes.is_empty() {
+            quote! {
+                let __router = __incan_web_router();
+                incan_stdlib::web::set_router(__router);
+            }
         } else {
             quote! {}
         };
@@ -750,6 +824,7 @@ One obvious way.
                 #tokio_main_attr
                 #vis #async_kw fn #name(#(#params),*) {
                     #zen_stmt
+                    #web_stmt
                     #(#body_stmts)*
                 }
             })
@@ -771,6 +846,8 @@ One obvious way.
         let derives: Vec<TokenStream> = s
             .derives
             .iter()
+            // `Validate` is an Incan semantic derive (not a Rust derive macro).
+            .filter(|d| derives::from_str(d.as_str()) != Some(DeriveId::Validate))
             .map(|d| match derives::from_str(d.as_str()) {
                 Some(DeriveId::Serialize) => quote! { serde::Serialize },
                 Some(DeriveId::Deserialize) => quote! { serde::Deserialize },
@@ -942,5 +1019,20 @@ One obvious way.
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ZEN_TEXT;
+
+    #[test]
+    fn zen_text_contains_one_obvious_way_once() {
+        let count = ZEN_TEXT.matches("One obvious way").count();
+        assert_eq!(
+            count, 1,
+            "Zen text should contain 'One obvious way' once, found {}",
+            count
+        );
     }
 }

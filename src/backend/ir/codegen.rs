@@ -32,6 +32,7 @@ use std::env;
 
 use crate::frontend::ast::Program;
 
+use super::emit::RouteSpec;
 use super::scanners::{
     check_for_this_import as scan_check_for_this_import, collect_routes as scan_collect_routes,
     collect_rust_crates as scan_collect_rust_crates, detect_async_usage, detect_list_helpers_usage, detect_serde_usage,
@@ -113,7 +114,7 @@ pub struct IrCodegen<'a> {
     /// Whether axum web framework is needed
     needs_axum: bool,
     /// Collected routes from @route decorators
-    routes: Vec<RouteInfo>,
+    routes: Vec<RouteSpec>,
     /// Whether generating in test mode (emit #[test] attributes)
     test_mode: bool,
     /// Specific test function to mark with #[test] (if any)
@@ -128,16 +129,6 @@ pub struct IrCodegen<'a> {
     needs_list_helpers: bool,
     /// Functions imported from external Rust crates (name -> true for external)
     external_rust_functions: HashSet<String>,
-}
-
-/// Route information collected from @route decorators
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct RouteInfo {
-    handler_name: String,
-    path: String,
-    methods: Vec<String>,
-    is_async: bool,
 }
 
 impl<'a> IrCodegen<'a> {
@@ -269,7 +260,7 @@ impl<'a> IrCodegen<'a> {
     fn collect_routes(&mut self, program: &Program) {
         let collected = scan_collect_routes(program);
         for (handler_name, path, methods, is_async) in collected {
-            self.routes.push(RouteInfo {
+            self.routes.push(RouteSpec {
                 handler_name,
                 path,
                 methods,
@@ -414,6 +405,7 @@ impl<'a> IrCodegen<'a> {
             if self.emit_zen_in_main {
                 inner.set_emit_zen(true);
             }
+            inner.set_routes(self.routes.clone());
             inner.set_needs_serde(self.needs_serde);
             inner.set_needs_tokio(self.needs_tokio);
             inner.set_needs_axum(self.needs_axum);
@@ -424,6 +416,7 @@ impl<'a> IrCodegen<'a> {
             if self.emit_zen_in_main {
                 emitter.set_emit_zen(true);
             }
+            emitter.set_routes(self.routes.clone());
             emitter.set_needs_serde(self.needs_serde);
             emitter.set_needs_tokio(self.needs_tokio);
             emitter.set_needs_axum(self.needs_axum);

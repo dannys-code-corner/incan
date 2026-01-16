@@ -5,8 +5,49 @@ use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
 
 use super::TypeChecker;
+use incan_core::lang::derives::{self, DeriveId};
 
 impl TypeChecker {
+    fn method_sig_string_named(&self, method_name: &str, m: &MethodInfo) -> String {
+        let recv = match m.receiver {
+            Some(Receiver::Mutable) => "mut self",
+            Some(Receiver::Immutable) => "self",
+            None => "",
+        };
+        let mut parts: Vec<String> = Vec::new();
+        if !recv.is_empty() {
+            parts.push(recv.to_string());
+        }
+        for (name, ty) in &m.params {
+            parts.push(format!("{name}: {ty}"));
+        }
+        let async_kw = if m.is_async { "async " } else { "" };
+        format!(
+            "{async_kw}def {name}({params}) -> {ret}",
+            name = method_name,
+            params = parts.join(", "),
+            ret = m.return_type
+        )
+    }
+
+    fn method_sigs_compatible(&self, expected: &MethodInfo, found: &MethodInfo) -> bool {
+        if expected.receiver != found.receiver {
+            return false;
+        }
+        if expected.is_async != found.is_async {
+            return false;
+        }
+        if expected.params.len() != found.params.len() {
+            return false;
+        }
+        for ((_, e_ty), (_, f_ty)) in expected.params.iter().zip(found.params.iter()) {
+            if !self.types_compatible(e_ty, f_ty) {
+                return false;
+            }
+        }
+        self.types_compatible(&expected.return_type, &found.return_type)
+    }
+
     // ========================================================================
     // Second pass: check declarations
     // ========================================================================
@@ -39,6 +80,10 @@ impl TypeChecker {
 
         // Validate @derive decorators
         self.validate_derives(&model.decorators);
+        let derives = Self::extract_derive_names(&model.decorators);
+        let has_validate = derives
+            .iter()
+            .any(|d| derives::from_str(d.as_str()) == Some(DeriveId::Validate));
 
         // Define type parameters
         for param in &model.type_params {
@@ -96,9 +141,71 @@ impl TypeChecker {
             self.check_method(&method.node, &model.name);
         }
 
+        if has_validate {
+            self.check_validate_derive_model(model);
+        }
+
         self.symbols.exit_scope();
     }
 
+    fn check_validate_derive_model(&mut self, model: &ModelDecl) {
+        // Validate that validate() exists and has the expected signature.
+        let Some(TypeInfo::Model(info)) = self.lookup_type_info(&model.name) else {
+            return;
+        };
+
+        let Some(validate) = info.methods.get("validate") else {
+            self.errors.push(errors::validate_derive_missing_validate_method(
+                &model.name,
+                Span::default(),
+            ));
+            return;
+        };
+
+        let expected = "def validate(self) -> Result[Self, E]";
+        let found_sig = self.method_sig_string_named("validate", validate);
+
+        // Receiver must exist and be immutable.
+        if validate.receiver != Some(Receiver::Immutable) || validate.is_async || !validate.params.is_empty() {
+            self.errors.push(errors::validate_derive_invalid_validate_signature(
+                &model.name,
+                expected,
+                &found_sig,
+                Span::default(),
+            ));
+            return;
+        }
+
+        // Return type must be Result[Self, E] (allow Result[ModelName, E] too).
+        let ok_matches_self = |ok: &ResolvedType| {
+            matches!(ok, ResolvedType::SelfType)
+                || matches!(ok, ResolvedType::Named(n) if n == &model.name)
+                || matches!(ok, ResolvedType::TypeVar(n) if n == &model.name)
+        };
+
+        if validate.return_type.is_result() {
+            let ok_ty = validate
+                .return_type
+                .result_ok_type()
+                .cloned()
+                .unwrap_or(ResolvedType::Unknown);
+            if !ok_matches_self(&ok_ty) {
+                self.errors.push(errors::validate_derive_invalid_validate_signature(
+                    &model.name,
+                    expected,
+                    &found_sig,
+                    Span::default(),
+                ));
+            }
+        } else {
+            self.errors.push(errors::validate_derive_invalid_validate_signature(
+                &model.name,
+                expected,
+                &found_sig,
+                Span::default(),
+            ));
+        }
+    }
     fn check_trait_conformance_model(&mut self, model: &ModelDecl, trait_info: TraitInfo, trait_name: &str) {
         // Check required fields (including types)
         for (field_name, field_ty) in &trait_info.requires {
@@ -124,10 +231,44 @@ impl TypeChecker {
         // Check required methods (those without body)
         for (method_name, method_info) in &trait_info.methods {
             if !method_info.has_body {
-                let found = model.methods.iter().any(|m| &m.node.name == method_name);
-                if !found {
-                    self.errors
-                        .push(errors::missing_trait_method(trait_name, method_name, Span::default()));
+                // Prefer symbol-table method info so we can validate signatures.
+                let model_info = self
+                    .symbols
+                    .lookup(&model.name)
+                    .and_then(|id| self.symbols.get(id))
+                    .and_then(|sym| match &sym.kind {
+                        SymbolKind::Type(TypeInfo::Model(info)) => Some(info.clone()),
+                        _ => None,
+                    });
+
+                if let Some(mi) = model_info {
+                    match mi.methods.get(method_name) {
+                        None => {
+                            self.errors
+                                .push(errors::missing_trait_method(trait_name, method_name, Span::default()))
+                        }
+                        Some(found) => {
+                            if !self.method_sigs_compatible(method_info, found) {
+                                let expected_sig = self.method_sig_string_named(method_name, method_info);
+                                let found_sig = self.method_sig_string_named(method_name, found);
+                                self.errors.push(errors::trait_method_signature_mismatch(
+                                    trait_name,
+                                    &model.name,
+                                    method_name,
+                                    &expected_sig,
+                                    &found_sig,
+                                    Span::default(),
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback: previous behavior (name-only)
+                    let found = model.methods.iter().any(|m| &m.node.name == method_name);
+                    if !found {
+                        self.errors
+                            .push(errors::missing_trait_method(trait_name, method_name, Span::default()));
+                    }
                 }
             }
         }
@@ -194,22 +335,59 @@ impl TypeChecker {
     }
 
     fn check_trait_conformance(&mut self, class: &ClassDecl, trait_info: TraitInfo, trait_name: &str) {
-        // Check required fields
-        for (field_name, _field_ty) in &trait_info.requires {
-            let found = class.fields.iter().any(|f| &f.node.name == field_name);
-            if !found {
-                self.errors
-                    .push(errors::missing_field(&class.name, field_name, Span::default()));
+        // Use the effective members view (own + inherited) from the symbol table.
+        let class_info = self
+            .symbols
+            .lookup(&class.name)
+            .and_then(|id| self.symbols.get(id))
+            .and_then(|sym| match &sym.kind {
+                SymbolKind::Type(TypeInfo::Class(info)) => Some(info.clone()),
+                _ => None,
+            });
+
+        // Check required fields (presence + type compatibility).
+        for (field_name, field_ty) in &trait_info.requires {
+            match class_info.as_ref().and_then(|ci| ci.fields.get(field_name)) {
+                None => {
+                    self.errors
+                        .push(errors::missing_field(&class.name, field_name, Span::default()));
+                }
+                Some(found) => {
+                    if !self.types_compatible(&found.ty, field_ty) {
+                        self.errors.push(errors::trait_required_field_type_mismatch(
+                            trait_name,
+                            &class.name,
+                            field_name,
+                            &field_ty.to_string(),
+                            &found.ty.to_string(),
+                            Span::default(),
+                        ));
+                    }
+                }
             }
         }
 
         // Check required methods (those without body)
         for (method_name, method_info) in &trait_info.methods {
             if !method_info.has_body {
-                let found = class.methods.iter().any(|m| &m.node.name == method_name);
-                if !found {
-                    self.errors
-                        .push(errors::missing_trait_method(trait_name, method_name, Span::default()));
+                match class_info.as_ref().and_then(|ci| ci.methods.get(method_name)) {
+                    None => self
+                        .errors
+                        .push(errors::missing_trait_method(trait_name, method_name, Span::default())),
+                    Some(found) => {
+                        if !self.method_sigs_compatible(method_info, found) {
+                            let expected_sig = self.method_sig_string_named(method_name, method_info);
+                            let found_sig = self.method_sig_string_named(method_name, found);
+                            self.errors.push(errors::trait_method_signature_mismatch(
+                                trait_name,
+                                &class.name,
+                                method_name,
+                                &expected_sig,
+                                &found_sig,
+                                Span::default(),
+                            ));
+                        }
+                    }
                 }
             }
         }

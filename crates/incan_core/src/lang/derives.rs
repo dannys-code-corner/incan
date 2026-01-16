@@ -30,6 +30,9 @@ pub enum DeriveId {
     // Serialization
     Serialize,
     Deserialize,
+
+    // Validation
+    Validate,
 }
 
 /// Metadata for a builtin derive.
@@ -80,6 +83,12 @@ pub const DERIVES: &[DeriveInfo] = &[
         DeriveId::Deserialize,
         "Deserialize",
         "Derive deserialization support (e.g. JSON).",
+        RFC::_000,
+    ),
+    info(
+        DeriveId::Validate,
+        "Validate",
+        "Enable validated construction via `TypeName.new(...)` and require a `validate(self) -> Result[Self, E]` method.",
         RFC::_000,
     ),
 ];

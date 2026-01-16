@@ -570,13 +570,37 @@ path = "src/lib.rs""#
         // Track which crates we've already added (to avoid duplicates)
         let mut added_crates: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
-        // Always add incan_stdlib for standard library support
-        // Path is relative from target/incan/<project_name>/ to workspace root
-        deps.push(r#"incan_stdlib = { path = "../../../crates/incan_stdlib" }"#.to_string());
+        // Resolve workspace-rooted paths so OUTPUT_DIR can be arbitrary.
+        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let stdlib_path = workspace_root.join("crates/incan_stdlib");
+        let derive_path = workspace_root.join("crates/incan_derive");
+
+        // Always add incan_stdlib for standard library support (enable features based on needs)
+        let mut stdlib_features = Vec::new();
+        if self.needs_axum {
+            stdlib_features.push("web");
+        }
+        if self.needs_serde {
+            stdlib_features.push("json");
+        }
+        let stdlib_dep = if stdlib_features.is_empty() {
+            format!(r#"incan_stdlib = {{ path = "{}" }}"#, stdlib_path.display())
+        } else {
+            format!(
+                r#"incan_stdlib = {{ path = "{}", features = [{}] }}"#,
+                stdlib_path.display(),
+                stdlib_features
+                    .iter()
+                    .map(|f| format!("\"{}\"", f))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        deps.push(stdlib_dep);
         added_crates.insert("incan_stdlib");
 
         // Always add incan_derive for derive macros
-        deps.push(r#"incan_derive = { path = "../../../crates/incan_derive" }"#.to_string());
+        deps.push(format!(r#"incan_derive = {{ path = "{}" }}"#, derive_path.display()));
         added_crates.insert("incan_derive");
 
         if self.needs_serde {
@@ -588,7 +612,7 @@ path = "src/lib.rs""#
 
         if self.needs_axum {
             // Axum needs tokio with net feature and full features for web serving
-            deps.push(r#"axum = "0.7""#.to_string());
+            deps.push(r#"axum = "0.8""#.to_string());
             deps.push(
                 r#"tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }"#
                     .to_string(),

@@ -9,6 +9,7 @@ use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
 use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty, option_ty, result_ty, set_ty};
 use incan_core::lang::builtins::{self, BuiltinFnId};
+use incan_core::lang::derives::{self, DeriveId};
 use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::surface::functions::{self as surface_functions, SurfaceFnId};
 use incan_core::lang::surface::math;
@@ -104,11 +105,14 @@ impl TypeChecker {
             return match cid {
                 ConstructorId::Ok | ConstructorId::Err => {
                     let arg_types = self.check_call_arg_types(args);
+                    // If we're inside a function/method that returns Result[_, E], use that E to type Ok(...) properly.
+                    // This improves common patterns like:
+                    //   def f() -> Result[T, str]:
+                    //     return Ok(value)
+                    let current_err = self.current_return_error_type.clone().unwrap_or(ResolvedType::Unknown);
+
                     let (ok_ty, err_ty) = if cid == ConstructorId::Ok {
-                        (
-                            arg_types.first().cloned().unwrap_or(ResolvedType::Unknown),
-                            ResolvedType::Unknown,
-                        )
+                        (arg_types.first().cloned().unwrap_or(ResolvedType::Unknown), current_err)
                     } else {
                         (
                             ResolvedType::Unknown,
@@ -486,6 +490,20 @@ impl TypeChecker {
         if let Expr::Ident(name) = &callee.node {
             if let Some(result) = self.check_builtin_call(name, args) {
                 return result;
+            }
+
+            // Strict validated construction: `@derive(Validate)` models must be constructed via `TypeName.new(...)`.
+            if let Some(TypeInfo::Model(m)) = self.lookup_type_info(name) {
+                if m.derives
+                    .iter()
+                    .any(|d| derives::from_str(d.as_str()) == Some(DeriveId::Validate))
+                {
+                    // Still typecheck argument expressions for better downstream errors.
+                    self.check_call_args(args);
+                    self.errors
+                        .push(errors::validate_derive_disallows_raw_construction(name, span));
+                    return ResolvedType::Unknown;
+                }
             }
 
             // Model/class constructor calls: validate field arguments at the Incan level.

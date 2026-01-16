@@ -4,7 +4,7 @@
 //! binary/unary operations, function calls, method calls, comprehensions, etc.
 
 use super::super::TypedExpr;
-use super::super::expr::{BuiltinFn, IrExpr, IrExprKind, MatchArm, MethodKind, Pattern, UnaryOp, VarAccess};
+use super::super::expr::{BuiltinFn, IrCallArg, IrExpr, IrExprKind, MatchArm, MethodKind, Pattern, UnaryOp, VarAccess};
 use super::super::types::IrType;
 use super::AstLowering;
 use super::errors::LoweringError;
@@ -104,7 +104,7 @@ impl AstLowering {
                         let contains_call = IrExprKind::MethodCall {
                             receiver: Box::new(collection),
                             method: "contains".to_string(),
-                            args: vec![item],
+                            args: vec![IrCallArg { name: None, expr: item }],
                         };
 
                         if matches!(op, ast::BinaryOp::NotIn) {
@@ -209,7 +209,10 @@ impl AstLowering {
                                 IrExprKind::MethodCall {
                                     receiver: Box::new(receiver),
                                     method: ctor.clone(),
-                                    args: vec![lowered_value],
+                                    args: vec![IrCallArg {
+                                        name: None,
+                                        expr: lowered_value,
+                                    }],
                                 },
                                 IrType::Result(Box::new(struct_ty.clone()), Box::new(IrType::Unknown)),
                             );
@@ -225,7 +228,7 @@ impl AstLowering {
                                 IrExprKind::MethodCall {
                                     receiver: Box::new(from_underlying_call),
                                     method: "expect".to_string(),
-                                    args: vec![msg],
+                                    args: vec![IrCallArg { name: None, expr: msg }],
                                 },
                                 struct_ty,
                             ));
@@ -260,7 +263,7 @@ impl AstLowering {
 
                     // Check for known builtins (enum-based dispatch)
                     if let Some(builtin) = BuiltinFn::from_name(name) {
-                        let args_ir = self.lower_call_args(args)?;
+                        let args_ir = self.lower_call_args(args)?.into_iter().map(|a| a.expr).collect();
                         return Ok(TypedExpr::new(
                             IrExprKind::BuiltinCall {
                                 func: builtin,
@@ -618,10 +621,17 @@ impl AstLowering {
     /// # Returns
     ///
     /// A vector of typed IR expressions.
-    pub(super) fn lower_call_args(&mut self, args: &[ast::CallArg]) -> Result<Vec<TypedExpr>, LoweringError> {
+    pub(super) fn lower_call_args(&mut self, args: &[ast::CallArg]) -> Result<Vec<IrCallArg>, LoweringError> {
         args.iter()
             .map(|a| match a {
-                ast::CallArg::Positional(e) | ast::CallArg::Named(_, e) => self.lower_expr(&e.node),
+                ast::CallArg::Positional(e) => Ok(IrCallArg {
+                    name: None,
+                    expr: self.lower_expr(&e.node)?,
+                }),
+                ast::CallArg::Named(name, e) => Ok(IrCallArg {
+                    name: Some(name.clone()),
+                    expr: self.lower_expr(&e.node)?,
+                }),
             })
             .collect()
     }

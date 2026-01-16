@@ -74,6 +74,8 @@ pub struct IrEmitter<'a> {
     in_return_context: RefCell<bool>,
     /// Map of const string bindings to their literal values (for const folding of string adds)
     const_string_literals: std::collections::HashMap<String, String>,
+    /// Collected routes for web emission
+    routes: Vec<RouteSpec>,
 }
 
 impl<'a> IrEmitter<'a> {
@@ -98,6 +100,7 @@ impl<'a> IrEmitter<'a> {
             struct_field_defaults: std::collections::HashMap::new(),
             in_return_context: RefCell::new(false),
             const_string_literals: std::collections::HashMap::new(),
+            routes: Vec::new(),
         }
     }
 
@@ -149,4 +152,27 @@ impl<'a> IrEmitter<'a> {
     pub fn set_emit_zen(&mut self, emit: bool) {
         self.emit_zen_in_main = emit;
     }
+
+    /// Set collected routes for web emission.
+    ///
+    /// This should be called by codegen before emitting the program so the router
+    /// wrapper and `App::run` wiring are generated when web routes exist.
+    pub fn set_routes(&mut self, routes: Vec<RouteSpec>) {
+        self.routes = routes;
+    }
+}
+
+/// Web route info collected during codegen for web emission.
+///
+/// This mirrors route metadata gathered from `@route(...)` decorators.
+#[derive(Debug, Clone)]
+pub struct RouteSpec {
+    /// Handler function name.
+    pub handler_name: String,
+    /// Route path (Incan-style, e.g. `/api/{id}`).
+    pub path: String,
+    /// HTTP methods (e.g. GET, POST).
+    pub methods: Vec<String>,
+    /// Whether the handler is async.
+    pub is_async: bool,
 }
