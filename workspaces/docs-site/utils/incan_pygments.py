@@ -2,20 +2,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
-from pygments.lexer import RegexLexer, bygroups, words
 from pygments.lexers import _mapping
-from pygments.token import (
-    Comment,
-    Keyword,
-    Name,
-    Number,
-    Operator,
-    Punctuation,
-    String,
-    Text,
-)
+from pygments.lexers.python import PythonLexer
+from pygments.token import Keyword, Name
 
 
 def _load_keywords_from_registry() -> list[str]:
@@ -31,6 +22,70 @@ def _load_keywords_from_registry() -> list[str]:
         re.DOTALL,
     )
     return sorted({match.group(1) for match in pattern.finditer(text)})
+
+
+_INFO_WITH_ALIASES = re.compile(
+    r'info\([^,]+,\s*"([^"]+)"\s*,\s*&\[(.*?)\]',
+    re.DOTALL,
+)
+_INFO_CANONICAL = re.compile(r'info\([^,]+,\s*"([^"]+)"', re.DOTALL)
+
+
+def _extract_lang_items(text: str) -> tuple[set[str], set[str]]:
+    canonicals: set[str] = set()
+    aliases: set[str] = set()
+
+    for match in _INFO_WITH_ALIASES.finditer(text):
+        canonicals.add(match.group(1))
+        alias_blob = match.group(2)
+        aliases.update(re.findall(r'"([^"]+)"', alias_blob))
+
+    for match in _INFO_CANONICAL.finditer(text):
+        canonicals.add(match.group(1))
+
+    return canonicals, aliases
+
+
+def _load_lang_items(paths: Sequence[Path]) -> tuple[set[str], set[str]]:
+    canonicals: set[str] = set()
+    aliases: set[str] = set()
+    for path in paths:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        c, a = _extract_lang_items(text)
+        canonicals.update(c)
+        aliases.update(a)
+    return canonicals, aliases
+
+
+def _load_stdlib_functions() -> set[str]:
+    repo_root = Path(__file__).resolve().parents[3]
+    base = repo_root / "crates" / "incan_core" / "src" / "lang"
+    paths = [
+        base / "builtins.rs",
+        base / "surface" / "functions.rs",
+        base / "surface" / "constructors.rs",
+        base / "surface" / "math.rs",
+        base / "surface" / "methods.rs",
+    ]
+    canonicals, aliases = _load_lang_items(paths)
+    return canonicals.union(aliases)
+
+
+def _load_stdlib_types() -> set[str]:
+    repo_root = Path(__file__).resolve().parents[3]
+    base = repo_root / "crates" / "incan_core" / "src" / "lang"
+    paths = [
+        base / "types" / "numerics.rs",
+        base / "types" / "collections.rs",
+        base / "types" / "stringlike.rs",
+        base / "surface" / "types.rs",
+        base / "derives.rs",
+        base / "errors.rs",
+    ]
+    canonicals, aliases = _load_lang_items(paths)
+    return canonicals.union(aliases)
 
 
 def _fallback_keywords() -> list[str]:
@@ -83,10 +138,12 @@ def _fallback_keywords() -> list[str]:
 
 def _keywords() -> Iterable[str]:
     keywords = _load_keywords_from_registry()
-    return keywords if keywords else _fallback_keywords()
+    # Extra doc-facing keywords not in the registry yet.
+    extras = {"module", "tests", "test", "derive"}
+    return sorted(set(keywords).union(_fallback_keywords(), extras))
 
 
-class IncanLexer(RegexLexer):
+class IncanLexer(PythonLexer):
     """Pygments lexer for the Incan programming language."""
 
     name = "Incan"
@@ -94,35 +151,32 @@ class IncanLexer(RegexLexer):
     filenames = ["*.incn"]
     mimetypes = ["text/x-incan"]
 
-    flags = re.MULTILINE | re.DOTALL
+    flags = re.MULTILINE
 
-    tokens = {
-        "root": [
-            (r"\s+", Text),
-            (r"#.*$", Comment.Single),
-            (r"//.*$", Comment.Single),
-            (r"/\*", Comment.Multiline, "comment"),
-            (words(list(_keywords()), prefix=r"\b", suffix=r"\b"), Keyword),
-            (r"\b(true|false|None)\b", Keyword.Constant),
-            (r"\b0x[0-9a-fA-F_]+\b", Number.Hex),
-            (r"\b0b[01_]+\b", Number.Bin),
-            (r"\b0o[0-7_]+\b", Number.Oct),
-            (r"\b\d+(_\d+)*(\.\d+(_\d+)*)?([eE][+-]?\d+(_\d+)*)?\b", Number),
-            (r"(fr|rf|f|r)?('''|\"\"\").*?\\2", String),
-            (r"(fr|rf|f|r)?(\"([^\"\\\\]|\\\\.)*\")", bygroups(String.Affix, String.Double)),
-            (r"(fr|rf|f|r)?('([^'\\\\]|\\\\.)*')", bygroups(String.Affix, String.Single)),
-            (r"==|!=|<=|>=|->|=>|:=|=", Operator),
-            (r"[+\-*/%<>]", Operator),
-            (r"[{}\[\](),.:]", Punctuation),
-            (r"[A-Za-z_][A-Za-z0-9_]*", Name),
-        ],
-        "comment": [
-            (r"[^*/]+", Comment.Multiline),
-            (r"/\*", Comment.Multiline, "#push"),
-            (r"\*/", Comment.Multiline, "#pop"),
-            (r"[*/]", Comment.Multiline),
-        ],
-    }
+    def __init__(self, **options):
+        super().__init__(**options)
+        self._incan_keywords = set(_keywords())
+        self._incan_types = _load_stdlib_types()
+        self._incan_functions = _load_stdlib_functions()
+
+    def get_tokens_unprocessed(self, text, stack=("root",)):
+        for index, token, value in super().get_tokens_unprocessed(text, stack=stack):
+            if token is Name and value in self._incan_keywords:
+                yield index, Keyword, value
+                continue
+            if token is Name and value in self._incan_types:
+                yield index, Keyword.Type, value
+                continue
+            if token is Name and value in self._incan_functions:
+                yield index, Name.Builtin, value
+                continue
+            if token is Name and value.startswith("assert_"):
+                yield index, Name.Function, value
+                continue
+            if token is Name and value[:1].isupper():
+                yield index, Name.Class, value
+                continue
+            yield index, token, value
 
 
 def register_incan_lexer() -> None:
