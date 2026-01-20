@@ -4156,7 +4156,7 @@ project configuration, and lock files for full flexibility.</p>
 <span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde_json</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Value</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">parse_json</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Value</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">from_str</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">.</span><span class="n">unwrap</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">from_str</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">.</span><span class="nb">unwrap</span><span class="p">()</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">data</span> <span class="o">=</span> <span class="s1">&#39;{&quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 30}&#39;</span>
@@ -4193,7 +4193,7 @@ project configuration, and lock files for full flexibility.</p>
 <span class="k">def</span><span class="w"> </span><span class="nf">count_words</span><span class="p">(</span><span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">HashMap</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
     <span class="n">counts</span> <span class="o">=</span> <span class="kt">HashMap</span><span class="o">.</span><span class="n">new</span><span class="p">()</span>
     <span class="k">for</span> <span class="n">word</span> <span class="ow">in</span> <span class="n">text</span><span class="o">.</span><span class="nb">split</span><span class="p">():</span>
-        <span class="nb">count</span> <span class="o">=</span> <span class="n">counts</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">word</span><span class="p">)</span><span class="o">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="nb">count</span> <span class="o">=</span> <span class="n">counts</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">word</span><span class="p">)</span><span class="o">.</span><span class="nb">unwrap_or</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="n">counts</span><span class="o">.</span><span class="nb">insert</span><span class="p">(</span><span class="n">word</span><span class="p">,</span> <span class="nb">count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">counts</span>
 </code></pre></div>
@@ -4202,7 +4202,7 @@ project configuration, and lock files for full flexibility.</p>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">random_int</span><span class="p">(</span><span class="nb">min</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="n">rng</span> <span class="o">=</span> <span class="n">thread_rng</span><span class="p">()</span>
-    <span class="k">return</span> <span class="n">rng</span><span class="o">.</span><span class="n">gen_range</span><span class="p">(</span><span class="nb">min</span><span class="o">..</span><span class="n">max</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">rng</span><span class="o">.</span><span class="n">gen_range</span><span class="p">(</span><span class="nb">min</span><span class="o">..</span><span class="nb">max</span><span class="p">)</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">5</span><span class="p">):</span>

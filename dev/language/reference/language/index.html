@@ -1686,6 +1686,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#option-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option methods
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#frozenlist-methods" class="md-nav__link">
     <span class="md-ellipsis">
       FrozenList methods
@@ -4285,6 +4294,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#option-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option methods
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#frozenlist-methods" class="md-nav__link">
     <span class="md-ellipsis">
       FrozenList methods
@@ -4987,6 +5005,24 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <td>Stable</td>
 </tr>
 <tr>
+<td>Min</td>
+<td><code>min</code></td>
+<td></td>
+<td>Return the minimum element of a collection.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Max</td>
+<td><code>max</code></td>
+<td></td>
+<td>Return the maximum element of a collection.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
 <td>Str</td>
 <td><code>str</code></td>
 <td></td>
@@ -5009,6 +5045,15 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <td><code>float</code></td>
 <td></td>
 <td>Convert a value to a float.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Bool</td>
+<td><code>bool</code></td>
+<td></td>
+<td>Convert a value to a boolean.</td>
 <td>RFC 000</td>
 <td>0.1</td>
 <td>Stable</td>
@@ -5045,6 +5090,15 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <td><code>zip</code></td>
 <td></td>
 <td>Zip iterables element-wise into tuples.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Sorted</td>
+<td><code>sorted</code></td>
+<td></td>
+<td>Return a sorted copy of a collection.</td>
 <td>RFC 000</td>
 <td>0.1</td>
 <td>Stable</td>
@@ -5797,7 +5851,7 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <tr>
 <td>List</td>
 <td><code>List</code></td>
-<td><code>list</code></td>
+<td><code>list</code>, <code>Vec</code></td>
 <td>Growable list (generic sequence) type.</td>
 <td>RFC 000</td>
 <td>0.1</td>
@@ -6903,6 +6957,49 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <td></td>
 <td>Return true if the set contains a value.</td>
 <td>RFC 009</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+</tbody>
+</table>
+<h3 id="option-methods">Option methods<a class="headerlink" href="#option-methods" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Id</th>
+<th>Canonical</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>RFC</th>
+<th>Since</th>
+<th>Stability</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Copied</td>
+<td><code>copied</code></td>
+<td></td>
+<td>Copy from Option[&amp;T] to Option[T] when T: Copy.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>UnwrapOr</td>
+<td><code>unwrap_or</code></td>
+<td></td>
+<td>Return the contained value or a default.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Unwrap</td>
+<td><code>unwrap</code></td>
+<td></td>
+<td>Return the contained value or panic.</td>
+<td>RFC 000</td>
 <td>0.1</td>
 <td>Stable</td>
 </tr>

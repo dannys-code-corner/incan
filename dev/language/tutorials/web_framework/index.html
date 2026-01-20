@@ -4026,12 +4026,18 @@ giving you Flask/FastAPI-like syntax with native Rust performance.</p>
 <p>Note: the first build may download Rust crates via Cargo (can take minutes) and requires internet access.</p>
 <h2 id="routes">Routes<a class="headerlink" href="#routes" title="Permanent link">&para;</a></h2>
 <p>Define routes using the <code>@route</code> decorator:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/path&quot;</span><span class="p">)</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">web</span><span class="w"> </span><span class="kn">import</span> <span class="n">route</span><span class="p">,</span> <span class="nc">Response</span><span class="p">,</span> <span class="nc">GET</span><span class="p">,</span> <span class="nc">POST</span>
+
+<span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/path&quot;</span><span class="p">)</span>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handler</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Response</span><span class="p">:</span>
     <span class="o">...</span>
 
-<span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/api/resource&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="nc">GET</span><span class="p">,</span> <span class="nc">POST</span><span class="p">])</span>
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">resource_handler</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Response</span><span class="p">:</span>
+<span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/api/resource&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="nc">GET</span><span class="p">])</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">get_resource</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Response</span><span class="p">:</span>
+    <span class="o">...</span>
+
+<span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/api/resource&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="nc">POST</span><span class="p">])</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">create_resource</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nc">Response</span><span class="p">:</span>
     <span class="o">...</span>
 </code></pre></div>
 <h3 id="path-parameters">Path Parameters<a class="headerlink" href="#path-parameters" title="Permanent link">&para;</a></h3>
@@ -4046,7 +4052,10 @@ giving you Flask/FastAPI-like syntax with native Rust performance.</p>
     <span class="k">return</span> <span class="nc">Json</span><span class="p">(</span><span class="n">fetch_posts</span><span class="p">(</span><span class="n">year</span><span class="p">,</span> <span class="n">month</span><span class="p">))</span>
 </code></pre></div>
 <h3 id="http-methods">HTTP Methods<a class="headerlink" href="#http-methods" title="Permanent link">&para;</a></h3>
-<p>Specify allowed methods with the <code>methods</code> parameter:</p>
+<p>Specify allowed methods with the <code>methods</code> parameter.
+For now, each handler supports a single method; define separate handlers per method if needed.
+Import the method constants from the web prelude (e.g. <code>GET</code>, <code>POST</code>).
+Supported methods are <code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>DELETE</code>, and <code>PATCH</code>.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">web</span><span class="w"> </span><span class="kn">import</span> <span class="nc">GET</span><span class="p">,</span> <span class="nc">POST</span><span class="p">,</span> <span class="nc">PUT</span><span class="p">,</span> <span class="nc">DELETE</span>
 
 <span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/items&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="nc">GET</span><span class="p">])</span>
@@ -4057,8 +4066,12 @@ giving you Flask/FastAPI-like syntax with native Rust performance.</p>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">create_item</span><span class="p">(</span><span class="n">body</span><span class="p">:</span> <span class="nc">Json</span><span class="p">[</span><span class="nc">CreateItem</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nc">Json</span><span class="p">[</span><span class="nc">Item</span><span class="p">]:</span>
     <span class="o">...</span>
 
-<span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/items/</span><span class="si">{id}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="nc">PUT</span><span class="p">,</span> <span class="nc">DELETE</span><span class="p">])</span>
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">modify_item</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Response</span><span class="p">:</span>
+<span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/items/</span><span class="si">{id}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="nc">PUT</span><span class="p">])</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">update_item</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Response</span><span class="p">:</span>
+    <span class="o">...</span>
+
+<span class="nd">@route</span><span class="p">(</span><span class="s2">&quot;/items/</span><span class="si">{id}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">methods</span><span class="o">=</span><span class="p">[</span><span class="nc">DELETE</span><span class="p">])</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">delete_item</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Response</span><span class="p">:</span>
     <span class="o">...</span>
 </code></pre></div>
 <h2 id="responses">Responses<a class="headerlink" href="#responses" title="Permanent link">&para;</a></h2>

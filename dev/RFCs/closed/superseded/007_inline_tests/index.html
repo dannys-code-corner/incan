@@ -4134,7 +4134,7 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 <span class="k">def</span><span class="w"> </span><span class="nf">test_divide_success</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="kt">result</span> <span class="o">=</span> <span class="n">safe_divide</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
     <span class="nf">assert_true</span><span class="p">(</span><span class="kt">result</span><span class="o">.</span><span class="n">is_ok</span><span class="p">())</span>
-    <span class="nf">assert_eq</span><span class="p">(</span><span class="kt">result</span><span class="o">.</span><span class="n">unwrap</span><span class="p">(),</span> <span class="mi">5</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="kt">result</span><span class="o">.</span><span class="nb">unwrap</span><span class="p">(),</span> <span class="mi">5</span><span class="p">)</span>
 
 <span class="nd">@test</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">test_divide_by_zero</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>

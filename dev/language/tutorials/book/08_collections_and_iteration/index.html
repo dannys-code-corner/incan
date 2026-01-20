@@ -3763,7 +3763,10 @@
 <p class="admonition-title">Coming from Rust?</p>
 <p>Incan’s built-in collections compile to the standard Rust collections:</p>
 <ul>
-<li><code>list[T]</code> / <code>List[T]</code> → <code>Vec&lt;T&gt;</code></li>
+<li><code>list[T]</code> / <code>List[T]</code> → <code>Vec&lt;T&gt;</code><ul>
+<li><code>Vec[T]</code> is accepted as an alias for <code>List[T]</code> in type annotations</li>
+</ul>
+</li>
 <li><code>dict[K, V]</code> / <code>Dict[K, V]</code> → <code>HashMap&lt;K, V&gt;</code></li>
 <li><code>set[T]</code> / <code>Set[T]</code> → <code>HashSet&lt;T&gt;</code></li>
 </ul>
@@ -3822,13 +3825,13 @@
     <span class="c1"># 2) Count occurrences</span>
     <span class="n">name_counts</span><span class="p">:</span> <span class="kt">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">normalized</span><span class="p">:</span>
-        <span class="n">current_count</span> <span class="o">=</span> <span class="n">name_counts</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">unwrap_or</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">current_count</span> <span class="o">=</span> <span class="n">name_counts</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="nb">unwrap_or</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="n">name_counts</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">current_count</span> <span class="o">+</span> <span class="mi">1</span>
 
     <span class="c1"># 3) Deduplicate + print counts (set iteration order is not guaranteed)</span>
     <span class="n">unique</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">normalized</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">unique</span><span class="p">:</span>
-        <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">name_counts</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">unwrap</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">name_counts</span><span class="o">.</span><span class="nb">get</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="nb">unwrap</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </code></pre></div>
 </details>
 <h2 id="where-to-learn-more">Where to learn more<a class="headerlink" href="#where-to-learn-more" title="Permanent link">&para;</a></h2>
