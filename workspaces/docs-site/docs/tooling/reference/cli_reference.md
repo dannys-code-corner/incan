@@ -21,6 +21,11 @@ Commands:
 - `fmt` - Format Incan source files
 - `test` - Run tests (pytest-style)
 
+## Global options
+
+- `--no-banner`: suppress the ASCII logo banner (also via `INCAN_NO_BANNER=1`).
+- `--color=auto|always|never`: control ANSI color output (respects `NO_COLOR`).
+
 ## Global options (debug)
 
 These flags take a file and run a debug pipeline stage:
@@ -129,6 +134,9 @@ incan test -x
 
 # Include slow tests
 incan test --slow
+
+# Fail if no tests are collected
+incan test --fail-on-empty
 ```
 
 ## Outputs and paths
@@ -149,6 +157,8 @@ rm -rf target/incan/
 - **`INCAN_STDLIB`**: override the stdlib directory (usually auto-detected; set only if detection fails).
 - **`INCAN_FANCY_ERRORS`**: enable “fancy” diagnostics rendering (presence-based; output may change).
 - **`INCAN_EMIT_SERVICE=1`**: toggle codegen emit mode (internal/debug; not stable).
+- **`INCAN_NO_BANNER=1`**: disable the ASCII logo banner.
+- **`NO_COLOR`**: disable ANSI color output (standard convention).
 
 ## Exit codes
 
@@ -160,6 +170,7 @@ Specific behavior:
 - **`incan test`**:
     - returns 0 if all tests pass
     - returns 0 if test files exist but no tests are collected
+    - returns 1 if `--fail-on-empty` is set and no tests are collected
     - returns 1 if no test files are discovered under the provided path
     - returns 1 if any tests fail or an xfail unexpectedly passes (XPASS)
 - **`incan fmt --check`**: returns 1 if any files would be reformatted.

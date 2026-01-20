@@ -134,6 +134,9 @@ incan test -x
 
 # Include slow tests
 incan test --slow
+
+# Fail if no tests are collected
+incan test --fail-on-empty
 ```
 
 ## Output Format
@@ -161,17 +164,17 @@ ___________ test_division ___________
 
 ## Exit Codes
 
-| Code | Meaning                  |
-| ---- | ------------------------ |
-| 0    | All tests passed         |
-| 1    | One or more tests failed |
+| Code | Meaning                                                                 |
+| ---- | ----------------------------------------------------------------------- |
+| 0    | All tests passed (or no tests collected without `--fail-on-empty`)      |
+| 1    | Any test failed, no test files found, or `--fail-on-empty` found none   |
 
 ## CI Integration
 
 ```yaml
 # GitHub Actions
 - name: Run tests
-  run: incan test tests/
+  run: incan test --fail-on-empty tests/
 ```
 
 ## Fixtures

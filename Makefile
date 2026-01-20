@@ -3,7 +3,7 @@
 
 .PHONY: help
 help: build-quiet  ## Display this help message
-	@./target/debug/incan --version
+	@INCAN_NO_BANNER=1 ./target/debug/incan --version
 	@echo ""
 	@echo "\033[1mBuild:\033[0m"
 	@grep -E '^.PHONY: .*?## build - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## build - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
@@ -105,22 +105,22 @@ test:
 .PHONY: examples  ## test - Smoke test examples (check all, run entrypoints with timeout)
 examples: release
 	@echo "\033[1mRunning examples...\033[0m"
-	@INCAN_EXAMPLES_TIMEOUT=$${INCAN_EXAMPLES_TIMEOUT:-5} bash scripts/run_examples.sh
+	@INCAN_NO_BANNER=1 INCAN_EXAMPLES_TIMEOUT=$${INCAN_EXAMPLES_TIMEOUT:-5} bash scripts/run_examples.sh
 
 .PHONY: benchmarks  ## test - Run benchmark suite (requires hyperfine)
 benchmarks: release
 	@echo "\033[1mRunning benchmarks...\033[0m"
-	@bash benchmarks/run_all.sh
+	@INCAN_NO_BANNER=1 bash benchmarks/run_all.sh
 
 .PHONY: benchmarks-rust  ## test - Run benchmarks (Incan vs Rust only; no Python)
 benchmarks-rust: release
 	@echo "\033[1mRunning benchmarks (Incan vs Rust; no Python)...\033[0m"
-	@SKIP_PYTHON=true bash benchmarks/run_all.sh
+	@INCAN_NO_BANNER=1 SKIP_PYTHON=true bash benchmarks/run_all.sh
 
 .PHONY: benchmarks-incan  ## test - Smoke-check benchmark .incn files (build only; no Python/Rust runs)
 benchmarks-incan: release
 	@echo "\033[1mChecking benchmarks (Incan build only)...\033[0m"
-	@bash benchmarks/check_incan.sh
+	@INCAN_NO_BANNER=1 bash benchmarks/check_incan.sh
 
 .PHONY: smoke-test  ## test - Smoke test: build + test + examples + benchmarks-incan
 smoke-test:
@@ -162,19 +162,19 @@ lsp:
 .PHONY: test-incan-canary  ## test - End-to-end Incan test canary (assertion codegen)
 test-incan-canary: release
 	@echo "\033[1mRunning Incan assertion canary...\033[0m"
-	@./target/release/incan test tests/fixtures/test_assert_canary.incn
+	@INCAN_NO_BANNER=1 ./target/release/incan test tests/fixtures/test_assert_canary.incn
 	@echo "\033[32m✓ Incan assertion canary passed\033[0m"
 
 .PHONY: examples-web-build  ## test - Build-only web example (no run)
 examples-web-build: release
 	@echo "\033[1mBuilding web example (build-only)...\033[0m"
-	@./target/release/incan build examples/web/hello_web.incn
+	@INCAN_NO_BANNER=1 ./target/release/incan build examples/web/hello_web.incn
 	@echo "\033[32m✓ Web example built\033[0m"
 
 .PHONY: examples-nested-project-build  ## test - Build-only nested_project example (multi-module imports)
 examples-nested-project-build: release
 	@echo "\033[1mBuilding nested_project example (build-only)...\033[0m"
-	@./target/release/incan build examples/advanced/nested_project/src/main.incn
+	@INCAN_NO_BANNER=1 ./target/release/incan build examples/advanced/nested_project/src/main.incn
 	@echo "\033[32m✓ Nested project example built\033[0m"
 
 .PHONY: vscode-package  ## tool - Package VS Code extension
@@ -199,7 +199,7 @@ run:
 .PHONY: zen  ## misc - Print the Zen of Incan
 zen:
 	@cargo build --release -q 2>/dev/null
-	@./target/release/incan run -c "import this"
+	@INCAN_NO_BANNER=1 ./target/release/incan run -c "import this"
 
 .PHONY: clean  ## misc - Clean build artifacts
 clean:

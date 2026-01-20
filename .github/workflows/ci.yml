@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  INCAN_NO_BANNER: 1
 
 jobs:
   fmt:
