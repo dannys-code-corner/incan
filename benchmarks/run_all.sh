@@ -175,7 +175,7 @@ run_benchmark "Collatz (1M)" "$SCRIPT_DIR/compute/collatz" "collatz"
 run_benchmark "GCD (10M)" "$SCRIPT_DIR/compute/gcd" "gcd"
 run_benchmark "Mandelbrot (2K)" "$SCRIPT_DIR/compute/mandelbrot" "mandelbrot"
 run_benchmark "N-Body (500K)" "$SCRIPT_DIR/compute/nbody" "nbody"
-run_benchmark "Prime Sieve (10M)" "$SCRIPT_DIR/compute/primes" "primes"
+run_benchmark "Prime Sieve (50M)" "$SCRIPT_DIR/compute/primes" "primes"
 
 echo ""
 echo -e "${BLUE}=== Sorting Benchmarks ===${NC}"
