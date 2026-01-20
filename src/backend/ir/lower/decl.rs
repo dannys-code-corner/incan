@@ -14,6 +14,8 @@ use super::super::{IrSpan, Mutability};
 use super::AstLowering;
 use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
+use incan_core::lang::decorators::{self, DecoratorId};
+use incan_core::lang::keywords::{self, KeywordId};
 
 impl AstLowering {
     /// Map frontend visibility (`pub` / private) to IR visibility for Rust emission.
@@ -171,7 +173,7 @@ impl AstLowering {
         let mut derives = Vec::new();
 
         for decorator in decorators {
-            if decorator.node.name == "derive" {
+            if decorators::from_str(decorator.node.name.as_str()) == Some(DecoratorId::Derive) {
                 // Extract derive arguments: @derive(Serialize, Deserialize)
                 for arg in &decorator.node.args {
                     if let ast::DecoratorArg::Positional(expr) = arg {
@@ -595,7 +597,7 @@ impl AstLowering {
                     } else {
                         Mutability::Immutable
                     },
-                    is_self: p.node.name == "self",
+                    is_self: p.node.name == keywords::as_str(KeywordId::SelfKw),
                 }
             })
             .collect();

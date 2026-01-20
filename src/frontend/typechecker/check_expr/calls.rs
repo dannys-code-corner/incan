@@ -247,7 +247,10 @@ impl TypeChecker {
                                         | CollectionTypeId::Result
                                 )
                             )
-                    ) || matches!(arg_ty, ResolvedType::FrozenList(_) | ResolvedType::FrozenDict(_, _) | ResolvedType::FrozenSet(_));
+                    ) || matches!(
+                        arg_ty,
+                        ResolvedType::FrozenList(_) | ResolvedType::FrozenDict(_, _) | ResolvedType::FrozenSet(_)
+                    );
 
                     if !ok {
                         self.errors.push(CompileError::type_error(

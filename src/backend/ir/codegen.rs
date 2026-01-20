@@ -271,11 +271,12 @@ impl<'a> IrCodegen<'a> {
     /// Collect routes from @route decorators
     fn collect_routes(&mut self, program: &Program) {
         let collected = scan_collect_routes(program);
-        for (handler_name, path, methods, is_async) in collected {
+        for (handler_name, path, methods, unknown_methods, is_async) in collected {
             self.routes.push(RouteSpec {
                 handler_name,
                 path,
                 methods,
+                unknown_methods,
                 is_async,
             });
         }

@@ -200,13 +200,17 @@ def main() -> None:
 | Print | `print` | `println` | Print values to stdout. | RFC 000 | 0.1 | Stable |
 | Len | `len` |  | Return the length of a collection/string. | RFC 000 | 0.1 | Stable |
 | Sum | `sum` |  | Sum a numeric iterable/collection. | RFC 000 | 0.1 | Stable |
+| Min | `min` |  | Return the minimum element of a collection. | RFC 000 | 0.1 | Stable |
+| Max | `max` |  | Return the maximum element of a collection. | RFC 000 | 0.1 | Stable |
 | Str | `str` |  | Convert a value to a string. | RFC 000 | 0.1 | Stable |
 | Int | `int` |  | Convert a value to an integer. | RFC 000 | 0.1 | Stable |
 | Float | `float` |  | Convert a value to a float. | RFC 000 | 0.1 | Stable |
+| Bool | `bool` |  | Convert a value to a boolean. | RFC 000 | 0.1 | Stable |
 | Abs | `abs` |  | Absolute value (numeric). | RFC 000 | 0.1 | Stable |
 | Range | `range` |  | Create a range of integers. | RFC 000 | 0.1 | Stable |
 | Enumerate | `enumerate` |  | Enumerate an iterable into (index, value) pairs. | RFC 000 | 0.1 | Stable |
 | Zip | `zip` |  | Zip iterables element-wise into tuples. | RFC 000 | 0.1 | Stable |
+| Sorted | `sorted` |  | Return a sorted copy of a collection. | RFC 000 | 0.1 | Stable |
 | ReadFile | `read_file` |  | Read a file from disk into a string/bytes. | RFC 000 | 0.1 | Stable |
 | WriteFile | `write_file` |  | Write a string/bytes to a file on disk. | RFC 000 | 0.1 | Stable |
 | JsonStringify | `json_stringify` |  | Serialize a value to JSON. | RFC 000 | 0.1 | Stable |
@@ -313,7 +317,7 @@ def main() -> None:
 
 | Id | Canonical | Aliases | Description | RFC | Since | Stability |
 |---|---|---|---|---|---|---|
-| List | `List` | `list` | Growable list (generic sequence) type. | RFC 000 | 0.1 | Stable |
+| List | `List` | `list`, `Vec` | Growable list (generic sequence) type. | RFC 000 | 0.1 | Stable |
 | Dict | `Dict` | `dict`, `HashMap` | Key/value map type. | RFC 000 | 0.1 | Stable |
 | Set | `Set` | `set` | Unordered set type. | RFC 000 | 0.1 | Stable |
 | Tuple | `Tuple` | `tuple` | Fixed-length heterogeneous tuple type. | RFC 000 | 0.1 | Stable |
@@ -475,6 +479,15 @@ def main() -> None:
 | Id | Canonical | Aliases | Description | RFC | Since | Stability |
 |---|---|---|---|---|---|---|
 | Contains | `contains` |  | Return true if the set contains a value. | RFC 009 | 0.1 | Stable |
+
+
+### Option methods
+
+| Id | Canonical | Aliases | Description | RFC | Since | Stability |
+|---|---|---|---|---|---|---|
+| Copied | `copied` |  | Copy from Option[&T] to Option[T] when T: Copy. | RFC 000 | 0.1 | Stable |
+| UnwrapOr | `unwrap_or` |  | Return the contained value or a default. | RFC 000 | 0.1 | Stable |
+| Unwrap | `unwrap` |  | Return the contained value or panic. | RFC 000 | 0.1 | Stable |
 
 
 ### FrozenList methods

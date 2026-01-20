@@ -10,6 +10,8 @@ use super::super::super::conversions::{ConversionContext, determine_conversion};
 use super::super::super::expr::{IrCallArg, IrExprKind, MethodKind, TypedExpr, VarRefKind};
 use super::super::super::types::IrType;
 use super::super::{EmitError, IrEmitter};
+use incan_core::lang::magic_methods;
+use incan_core::lang::surface::web as web_surface;
 
 mod collection_methods;
 mod string_methods;
@@ -102,7 +104,10 @@ impl<'a> IrEmitter<'a> {
         match kind {
             // ---- Internal/special methods ----
             MethodKind::Slice => self.emit_runtime_str_slice(&info, &arg_exprs),
-            _ => unreachable!("string methods are handled via emit_string_method"),
+            _ => Err(EmitError::Unsupported(format!(
+                "unexpected method kind during emission: {:?}",
+                kind
+            ))),
         }
     }
 
@@ -131,7 +136,7 @@ impl<'a> IrEmitter<'a> {
         }
 
         // Handle special methods (legacy string-based dispatch)
-        if method == "__slice__" {
+        if magic_methods::from_str(method) == Some(magic_methods::MagicMethodId::Slice) {
             return self.emit_runtime_str_slice(&info, &arg_exprs);
         }
 
@@ -187,13 +192,17 @@ impl<'a> IrEmitter<'a> {
         // Regular method call
         let m = format_ident!("{}", method);
         // Temporary targeted support: `app.run(port=8080)` should map to `app.run("127.0.0.1", 8080)`.
-        if method == "run" && args.iter().any(|a| a.name.as_deref() == Some("port")) {
+        if method == web_surface::APP_RUN_METHOD
+            && args
+                .iter()
+                .any(|a| a.name.as_deref() == Some(web_surface::APP_RUN_ARG_PORT))
+        {
             let mut host: Option<TokenStream> = None;
             let mut port: Option<TokenStream> = None;
             for a in args {
                 match a.name.as_deref() {
-                    Some("host") => host = Some(self.emit_expr(&a.expr)?),
-                    Some("port") => port = Some(self.emit_expr(&a.expr)?),
+                    Some(web_surface::APP_RUN_ARG_HOST) => host = Some(self.emit_expr(&a.expr)?),
+                    Some(web_surface::APP_RUN_ARG_PORT) => port = Some(self.emit_expr(&a.expr)?),
                     _ => {}
                 }
             }

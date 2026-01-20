@@ -24,11 +24,18 @@
 //! - `cargo run -p incan_core --bin generate_lang_reference` to generate Markdown reference tables.
 
 pub mod builtins;
+pub mod conventions;
+pub mod decorators;
 pub mod derives;
+pub mod enum_helpers;
 pub mod errors;
+pub mod http;
 pub mod keywords;
+pub mod magic_methods;
 pub mod operators;
 pub mod punctuation;
 pub mod registry;
+pub mod rust_keywords;
+pub mod stdlib;
 pub mod surface;
 pub mod types;

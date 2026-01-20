@@ -28,6 +28,7 @@ static ROUTER: OnceLock<Router> = OnceLock::new();
 ///
 /// This only captures the first router; subsequent calls are ignored.
 pub fn set_router(router: Router) {
+    // TODO: report duplicate router registration instead of ignoring.
     let _ = ROUTER.set(router);
 }
 
@@ -47,6 +48,7 @@ impl App {
     /// Panics if the bind address is invalid, the Tokio runtime cannot be created,
     /// the TCP listener fails to bind, or the server returns an error.
     pub fn run(&self, host: &str, port: i64) {
+        // TODO: return a Result and surface runtime errors without panicking.
         let addr: SocketAddr = format!("{host}:{port}")
             .parse()
             .unwrap_or_else(|e| panic!("invalid bind address: {e}"));

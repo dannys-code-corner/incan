@@ -510,7 +510,9 @@ impl MethodKind {
     /// Returns `None` for unknown methods (which pass through as regular method calls).
     pub fn from_name(name: &str) -> Option<Self> {
         // Internal
-        if name == "__slice__" {
+        if incan_core::lang::magic_methods::from_str(name)
+            == Some(incan_core::lang::magic_methods::MagicMethodId::Slice)
+        {
             return Some(Self::Slice);
         }
 

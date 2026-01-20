@@ -5,17 +5,19 @@ This page explains the common ones and how they map to Incan.
 
 ## Quick mapping
 
-| Rust type       | Incan mental model | Notes |
-| -------------- | ------------------ | ----- |
-| `Vec[T]`       | `List[T]`          | Growable list |
-| `HashMap[K, V]`| `Dict[K, V]`       | Key/value map |
-| `HashSet[T]`   | `Set[T]`           | Unordered unique items |
-| `String`       | `str`              | Owned string |
+| Rust type      | Incan mental model | Notes                                                              |
+| -------------- | ------------------ | ------------------------------------------------------------------ |
+| `Vec[T]`       | `List[T]`          | Growable list                                                      |
+| `HashMap[K, V]`| `Dict[K, V]`       | Key/value map                                                      |
+| `HashSet[T]`   | `Set[T]`           | Unordered unique items                                             |
+| `String`       | `str`              | Owned string                                                       |
 | `&str`         | `str`              | Borrowed string slice — avoid as an API type in Incan when you can |
-| `Option[T]`    | `Option[T]`        | `Some(x)` or `None` |
-| `Result[T, E]` | `Result[T, E]`     | `Ok(x)` or `Err(e)` |
-| `Instant`      | “time point”       | For measuring elapsed time |
-| `Duration`     | “time span”        | Length of time |
+| `Option[T]`    | `Option[T]`        | `Some(x)` or `None`                                                |
+| `Result[T, E]` | `Result[T, E]`     | `Ok(x)` or `Err(e)`                                                |
+| `Instant`      | “time point”       | For measuring elapsed time                                         |
+| `Duration`     | “time span”        | Length of time                                                     |
+
+Note: In Incan type annotations, `Vec[T]` is accepted as an alias for `List[T]` to mirror Rust APIs.
 
 ## Dict vs HashMap
 
@@ -31,13 +33,13 @@ counts: HashMap[str, int] = HashMap.new()
 
 ## Method naming conventions you may see
 
-| Python habit               | Rust / interop pattern                    | Notes |
-| ------------------------- | ----------------------------------------- | ----- |
-| `dict.get(key)`           | `map.get(&key)`                            | Returns `Option` |
-| `dict[key]`               | `map[&key]`                                | Panics if missing |
-| `dict.get(key, default)`  | `map.get(&key).unwrap_or(default)`         | Default if missing |
-| `str(x)`                  | `x.to_string()`                            | Convert to string |
-| `len(x)`                  | `x.len()`                                  | Length |
+| Python habit              | Rust / interop pattern             | Notes              |
+| ------------------------- | ---------------------------------- | ------------------ |
+| `dict.get(key)`           | `map.get(&key)`                    | Returns `Option`   |
+| `dict[key]`               | `map[&key]`                        | Panics if missing  |
+| `dict.get(key, default)`  | `map.get(&key).unwrap_or(default)` | Default if missing |
+| `str(x)`                  | `x.to_string()`                    | Convert to string  |
+| `len(x)`                  | `x.len()`                          | Length             |
 
 ## Option and Result: unwrap-like patterns
 

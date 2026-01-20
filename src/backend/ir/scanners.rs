@@ -8,7 +8,10 @@ use std::collections::HashSet;
 use crate::frontend::ast::{self, Declaration, Expr, Literal, Program, Spanned, Statement};
 use crate::frontend::ast::{CallArg, DecoratorArg, FStringPart, ImportKind};
 use incan_core::lang::builtins::{self, BuiltinFnId};
+use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::derives::{self, DeriveId};
+use incan_core::lang::http;
+use incan_core::lang::stdlib;
 
 /// Detect whether serde derives are used anywhere in the program
 pub fn detect_serde_usage(program: &Program) -> bool {
@@ -20,7 +23,7 @@ pub fn detect_serde_usage(program: &Program) -> bool {
         };
 
         for dec in decorators {
-            if dec.node.name == "derive" {
+            if decorators::from_str(dec.node.name.as_str()) == Some(DecoratorId::Derive) {
                 for arg in &dec.node.args {
                     if let DecoratorArg::Positional(expr) = arg {
                         if let Expr::Ident(name) = &expr.node {
@@ -341,19 +344,23 @@ pub fn detect_web_usage(program: &Program) -> bool {
         match &decl.node {
             Declaration::Import(import) => match &import.kind {
                 ImportKind::Module(path) if !path.segments.is_empty() => {
-                    if path.segments[0] == "web" {
+                    if path.segments[0] == stdlib::STDLIB_WEB {
                         return true;
                     }
                 }
                 ImportKind::From { module, .. } if !module.segments.is_empty() => {
-                    if module.segments[0] == "web" {
+                    if module.segments[0] == stdlib::STDLIB_WEB {
                         return true;
                     }
                 }
                 _ => {}
             },
             Declaration::Function(func) => {
-                if func.decorators.iter().any(|d| d.node.name == "route") {
+                if func
+                    .decorators
+                    .iter()
+                    .any(|d| decorators::from_str(d.node.name.as_str()) == Some(DecoratorId::Route))
+                {
                     return true;
                 }
             }
@@ -444,15 +451,19 @@ fn expr_uses_list_helpers(expr: &Expr) -> bool {
     }
 }
 
+/// Collected route metadata: (handler, path, methods, unknown_methods, is_async).
+pub type RouteScan = (String, String, Vec<http::HttpMethodId>, Vec<String>, bool);
+
 /// Collect routes from `@route` decorators
-pub fn collect_routes(program: &Program) -> Vec<(String, String, Vec<String>, bool)> {
+pub fn collect_routes(program: &Program) -> Vec<RouteScan> {
     let mut routes = Vec::new();
     for decl in &program.declarations {
         if let Declaration::Function(func) = &decl.node {
             for dec in &func.decorators {
-                if dec.node.name == "route" {
+                if decorators::from_str(dec.node.name.as_str()) == Some(DecoratorId::Route) {
                     let mut path = String::new();
-                    let mut methods = vec!["GET".to_string()];
+                    let mut methods = vec![http::HttpMethodId::Get];
+                    let mut unknown_methods: Vec<String> = Vec::new();
                     for arg in &dec.node.args {
                         match arg {
                             DecoratorArg::Positional(expr) => {
@@ -463,19 +474,29 @@ pub fn collect_routes(program: &Program) -> Vec<(String, String, Vec<String>, bo
                                 }
                             }
                             DecoratorArg::Named(name, value) => {
-                                if name == "methods" {
+                                if name == decorators::ROUTE_METHODS_ARG {
                                     if let ast::DecoratorArgValue::Expr(expr) = value {
                                         if let Expr::List(items) = &expr.node {
-                                            methods = items
-                                                .iter()
-                                                .filter_map(|item| {
-                                                    if let Expr::Literal(Literal::String(s)) = &item.node {
-                                                        Some(s.clone())
+                                            let mut method_strings = Vec::new();
+                                            for item in items {
+                                                if let Expr::Literal(Literal::String(s)) = &item.node {
+                                                    method_strings.push(s.clone());
+                                                }
+                                            }
+                                            if !method_strings.is_empty() {
+                                                // TODO: support multiple HTTP methods per route.
+                                                let mut selected: Option<http::HttpMethodId> = None;
+                                                for method in method_strings {
+                                                    if let Some(id) = http::from_str(method.as_str()) {
+                                                        if selected.is_none() {
+                                                            selected = Some(id);
+                                                        }
                                                     } else {
-                                                        None
+                                                        unknown_methods.push(method);
                                                     }
-                                                })
-                                                .collect();
+                                                }
+                                                methods = selected.into_iter().collect();
+                                            }
                                         }
                                     }
                                 }
@@ -483,7 +504,7 @@ pub fn collect_routes(program: &Program) -> Vec<(String, String, Vec<String>, bo
                         }
                     }
                     if !path.is_empty() {
-                        routes.push((func.name.clone(), path, methods, func.is_async));
+                        routes.push((func.name.clone(), path, methods, unknown_methods, func.is_async));
                     }
                 }
             }
@@ -499,12 +520,12 @@ pub fn collect_rust_crates(program: &Program) -> HashSet<String> {
         if let Declaration::Import(import) = &decl.node {
             match &import.kind {
                 ImportKind::RustCrate { crate_name, .. } => {
-                    if crate_name != "std" {
+                    if crate_name != stdlib::STDLIB_ROOT {
                         crates.insert(crate_name.clone());
                     }
                 }
                 ImportKind::RustFrom { crate_name, .. } => {
-                    if crate_name != "std" {
+                    if crate_name != stdlib::STDLIB_ROOT {
                         crates.insert(crate_name.clone());
                     }
                 }
@@ -520,7 +541,7 @@ pub fn check_for_this_import(program: &Program) -> bool {
     for decl in &program.declarations {
         if let Declaration::Import(import) = &decl.node {
             if let ImportKind::Module(path) = &import.kind {
-                if path.segments.len() == 1 && path.segments[0] == "this" {
+                if path.segments.len() == 1 && path.segments[0] == stdlib::STDLIB_THIS {
                     return true;
                 }
             }

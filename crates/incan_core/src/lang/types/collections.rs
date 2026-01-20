@@ -51,7 +51,7 @@ pub const COLLECTION_TYPES: &[CollectionTypeInfo] = &[
     info(
         CollectionTypeId::List,
         "List",
-        &["list"],
+        &["list", "Vec"],
         "Growable list (generic sequence) type.",
         RFC::_000,
         Since(0, 1),

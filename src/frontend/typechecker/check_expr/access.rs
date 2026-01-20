@@ -10,12 +10,15 @@ use crate::frontend::typechecker::helpers::{
     collection_name, collection_type_id, is_frozen_bytes, is_frozen_str, is_intlike_for_index, list_ty, option_ty,
     string_method_return,
 };
+use incan_core::lang::conventions;
+use incan_core::lang::magic_methods;
 use incan_core::lang::surface::types as surface_types;
 use incan_core::lang::surface::{
     dict_methods, float_methods, frozen_bytes_methods, frozen_dict_methods, frozen_list_methods, frozen_set_methods,
     list_methods, set_methods,
 };
 use incan_core::lang::types::collections::CollectionTypeId;
+use incan_core::lang::{enum_helpers, surface::option_methods};
 
 use super::TypeChecker;
 
@@ -276,7 +279,7 @@ impl TypeChecker {
                             }
                         }
                         TypeInfo::Newtype(nt) => {
-                            if field == "0" {
+                            if field == conventions::NEWTYPE_TUPLE_FIELD {
                                 return nt.underlying.clone();
                             }
                         }
@@ -408,8 +411,8 @@ impl TypeChecker {
         // in Rust.
         if base_ty.is_option() {
             let inner = base_ty.option_inner_type().cloned().unwrap_or(ResolvedType::Unknown);
-            match method {
-                "copied" => {
+            match option_methods::from_str(method) {
+                Some(option_methods::OptionMethodId::Copied) => {
                     // Rust: `Option<&T>::copied() -> Option<T>` (for `T: Copy`).
                     if let ResolvedType::Ref(t) = inner {
                         let t = (*t).clone();
@@ -418,7 +421,7 @@ impl TypeChecker {
                         }
                     }
                 }
-                "unwrap_or" => {
+                Some(option_methods::OptionMethodId::UnwrapOr) => {
                     // Rust: `Option<T>::unwrap_or(default: T) -> T`
                     //
                     // For `Option<&T>`, this is `unwrap_or(default: &T) -> &T`.
@@ -430,10 +433,10 @@ impl TypeChecker {
                     }
                     return inner;
                 }
-                "unwrap" => {
+                Some(option_methods::OptionMethodId::Unwrap) => {
                     return inner;
                 }
-                _ => {}
+                None => {}
             }
         }
 
@@ -527,7 +530,7 @@ impl TypeChecker {
                     }
                     TypeInfo::Enum(_enum_info) => {
                         // Be permissive for common error/display helpers on enums
-                        if method == "message" {
+                        if enum_helpers::from_str(method) == Some(enum_helpers::EnumHelperId::Message) {
                             return ResolvedType::Str;
                         }
                     }
@@ -544,9 +547,9 @@ impl TypeChecker {
             }
         }
 
-        // For dunder-like helpers that codegen injects (e.g., __class_name__, __fields__),
+        // For magic helpers that codegen injects (e.g., __class_name__, __fields__),
         // be permissive at typecheck time since they are backend-provided.
-        if method.starts_with("__") {
+        if magic_methods::from_str(method).is_some() {
             return ResolvedType::Unknown;
         }
 

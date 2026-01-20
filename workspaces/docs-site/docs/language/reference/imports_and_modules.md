@@ -107,6 +107,7 @@ Many types have a canonical (generated-reference) name and a lowercase alias use
 
 - Canonical: `List[T]`, `Dict[K, V]`, `Set[T]`
 - Aliases: `list[T]`, `dict[K, V]`, `set[T]`
+- Rust interop alias: `Vec[T]` (accepted as `List[T]`)
 
 The generated language reference shows the canonical name and aliases in one place:
 [Language reference (generated)](language.md).

@@ -6,7 +6,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use super::super::super::conversions::{BinOpEmitKind, ConversionContext, determine_binop_plan, determine_conversion};
-use super::super::super::expr::{BinOp, IrCallArg, IrExprKind, TypedExpr, VarAccess};
+use super::super::super::expr::{BinOp, IrCallArg, IrExprKind, TypedExpr, VarAccess, VarRefKind};
 use super::super::super::types::{IrType, Mutability};
 use super::super::{EmitError, IrEmitter};
 
@@ -110,9 +110,9 @@ impl<'a> IrEmitter<'a> {
 
                 // Determine conversion context based on whether this is an Incan or Rust function
                 let in_return = *self.in_return_context.borrow();
-                let context = if let IrExprKind::Var { name, .. } = &func.kind {
-                    // External Rust functions: either explicit rust:: prefix or imported from Rust crate
-                    if name.starts_with("rust::") || self.external_rust_functions.contains(name) {
+                let context = if let IrExprKind::Var { name, ref_kind, .. } = &func.kind {
+                    // External Rust functions: explicit rust imports or collected Rust-from imports
+                    if matches!(ref_kind, VarRefKind::ExternalName) || self.external_rust_functions.contains(name) {
                         ConversionContext::ExternalFunctionArg
                     } else if in_return {
                         ConversionContext::IncanFunctionArgInReturn

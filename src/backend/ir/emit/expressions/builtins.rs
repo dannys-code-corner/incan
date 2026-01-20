@@ -84,7 +84,8 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     let elem_type = list_elem_type(&arg.ty);
-                    let empty_err = quote! { incan_stdlib::errors::raise_value_error("min() arg is an empty sequence") };
+                    let empty_err =
+                        quote! { incan_stdlib::errors::raise_value_error("min() arg is an empty sequence") };
                     let tokens = match elem_type {
                         IrType::Float => quote! {
                             #a.iter().copied().reduce(f64::min).unwrap_or_else(|| #empty_err)
@@ -105,7 +106,8 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     let elem_type = list_elem_type(&arg.ty);
-                    let empty_err = quote! { incan_stdlib::errors::raise_value_error("max() arg is an empty sequence") };
+                    let empty_err =
+                        quote! { incan_stdlib::errors::raise_value_error("max() arg is an empty sequence") };
                     let tokens = match elem_type {
                         IrType::Float => quote! {
                             #a.iter().copied().reduce(f64::max).unwrap_or_else(|| #empty_err)
@@ -337,7 +339,8 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     let elem_type = list_elem_type(&arg.ty);
-                    let empty_err = quote! { incan_stdlib::errors::raise_value_error("min() arg is an empty sequence") };
+                    let empty_err =
+                        quote! { incan_stdlib::errors::raise_value_error("min() arg is an empty sequence") };
                     let tokens = match elem_type {
                         IrType::Float => quote! {
                             #a.iter().copied().reduce(f64::min).unwrap_or_else(|| #empty_err)
@@ -358,7 +361,8 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     let elem_type = list_elem_type(&arg.ty);
-                    let empty_err = quote! { incan_stdlib::errors::raise_value_error("max() arg is an empty sequence") };
+                    let empty_err =
+                        quote! { incan_stdlib::errors::raise_value_error("max() arg is an empty sequence") };
                     let tokens = match elem_type {
                         IrType::Float => quote! {
                             #a.iter().copied().reduce(f64::max).unwrap_or_else(|| #empty_err)

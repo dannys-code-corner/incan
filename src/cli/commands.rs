@@ -11,6 +11,7 @@ use crate::backend::{IrCodegen, ProjectGenerator};
 use crate::format::{format_diff, format_source};
 use crate::frontend::ast::Program;
 use crate::frontend::{diagnostics, lexer, parser, typechecker};
+use incan_core::lang::stdlib;
 
 use super::prelude::ParsedModule;
 use super::{CliError, CliResult, ExitCode};
@@ -595,12 +596,12 @@ pub fn collect_rust_crates(ast: &crate::frontend::ast::Program) -> Vec<String> {
         if let crate::frontend::ast::Declaration::Import(import) = &decl.node {
             match &import.kind {
                 ImportKind::RustCrate { crate_name, .. } => {
-                    if crate_name != "std" && !crates.contains(crate_name) {
+                    if crate_name != stdlib::STDLIB_ROOT && !crates.contains(crate_name) {
                         crates.push(crate_name.clone());
                     }
                 }
                 ImportKind::RustFrom { crate_name, .. } => {
-                    if crate_name != "std" && !crates.contains(crate_name) {
+                    if crate_name != stdlib::STDLIB_ROOT && !crates.contains(crate_name) {
                         crates.push(crate_name.clone());
                     }
                 }

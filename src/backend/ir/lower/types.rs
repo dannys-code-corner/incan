@@ -14,6 +14,7 @@ use super::AstLowering;
 use crate::frontend::ast;
 use crate::frontend::symbols::ResolvedType;
 use crate::numeric_adapters::{ir_type_to_numeric_ty, numeric_op_from_ast};
+use incan_core::lang::conventions;
 use incan_core::lang::types::collections::{self, CollectionTypeId};
 use incan_core::lang::types::numerics::{self, NumericTypeId};
 use incan_core::lang::types::stringlike::{self, StringLikeId};
@@ -22,15 +23,10 @@ use incan_core::{NumericTy, PowExponentKind, result_numeric_type};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GenericBaseKind {
     Collection(CollectionTypeId),
-    /// Rust interop convenience: treat `Vec[T]` like `List[T]`.
-    Vec,
     Other,
 }
 
 fn classify_generic_base(name: &str) -> GenericBaseKind {
-    if name == "Vec" {
-        return GenericBaseKind::Vec;
-    }
     if let Some(id) = collections::from_str(name) {
         return GenericBaseKind::Collection(id);
     }
@@ -51,7 +47,7 @@ impl AstLowering {
             ast::Type::Simple(name) => {
                 let n = name.as_str();
 
-                if n == "None" || n == "Unit" {
+                if n == conventions::NONE_TYPE_NAME || n == conventions::UNIT_TYPE_NAME {
                     return IrType::Unit;
                 }
 
@@ -85,7 +81,7 @@ impl AstLowering {
                     .map(|p| self.lower_const_annotation_type(&p.node))
                     .collect();
                 match classify_generic_base(base.as_str()) {
-                    GenericBaseKind::Vec | GenericBaseKind::Collection(CollectionTypeId::List) => IrType::NamedGeneric(
+                    GenericBaseKind::Collection(CollectionTypeId::List) => IrType::NamedGeneric(
                         collections::as_str(CollectionTypeId::FrozenList).to_string(),
                         params_lowered,
                     ),
@@ -143,7 +139,7 @@ impl AstLowering {
             ResolvedType::Named(name) => IrType::Struct(name.clone()),
             ResolvedType::Ref(inner) => IrType::Ref(Box::new(self.lower_resolved_type(inner))),
             ResolvedType::Generic(name, args) => match classify_generic_base(name.as_str()) {
-                GenericBaseKind::Vec | GenericBaseKind::Collection(CollectionTypeId::List) => IrType::List(Box::new(
+                GenericBaseKind::Collection(CollectionTypeId::List) => IrType::List(Box::new(
                     args.first()
                         .map(|t| self.lower_resolved_type(t))
                         .unwrap_or(IrType::Unknown),
@@ -229,7 +225,7 @@ impl AstLowering {
             ast::Type::Simple(name) => {
                 let n = name.as_str();
 
-                if n == "None" || n == "Unit" {
+                if n == conventions::NONE_TYPE_NAME || n == conventions::UNIT_TYPE_NAME {
                     return IrType::Unit;
                 }
 
@@ -262,14 +258,12 @@ impl AstLowering {
             ast::Type::Generic(base, params) => {
                 let lowered_params: Vec<_> = params.iter().map(|p| self.lower_type(&p.node)).collect();
                 match classify_generic_base(base.as_str()) {
-                    GenericBaseKind::Vec | GenericBaseKind::Collection(CollectionTypeId::List) => {
-                        IrType::List(Box::new(
-                            params
-                                .first()
-                                .map(|p| self.lower_type(&p.node))
-                                .unwrap_or(IrType::Unknown),
-                        ))
-                    }
+                    GenericBaseKind::Collection(CollectionTypeId::List) => IrType::List(Box::new(
+                        params
+                            .first()
+                            .map(|p| self.lower_type(&p.node))
+                            .unwrap_or(IrType::Unknown),
+                    )),
                     GenericBaseKind::Collection(CollectionTypeId::Dict) => IrType::Dict(
                         Box::new(
                             params

@@ -27,6 +27,7 @@ use super::super::expr::IrExprKind;
 use super::super::types::IrType;
 use super::super::{IrDecl, IrProgram, IrStmt, IrStmtKind, TypedExpr};
 use super::{EmitError, IrEmitter};
+use incan_core::lang::http::HttpMethodId;
 
 /// Import tracking for warning-free codegen.
 #[derive(Default)]
@@ -347,19 +348,21 @@ impl<'a> IrEmitter<'a> {
         let mut router = quote! { axum::Router::new() };
 
         for r in &self.routes {
+            if let Some(bad) = r.unknown_methods.first() {
+                return Err(EmitError::Unsupported(format!("unsupported web method '{}'", bad)));
+            }
             let path = Self::to_axum_path(&r.path);
             let path_lit = proc_macro2::Literal::string(&path);
             let wrapper_name = format_ident!("__incan_web_{}", r.handler_name);
 
             // For now: only support GET/POST/PUT/DELETE/PATCH single-method routes.
-            let method = r.methods.first().map(|s| s.as_str()).unwrap_or("GET");
+            let method = r.methods.first().copied().unwrap_or(HttpMethodId::Get);
             let route_layer = match method {
-                "GET" => quote! { axum::routing::get(#wrapper_name) },
-                "POST" => quote! { axum::routing::post(#wrapper_name) },
-                "PUT" => quote! { axum::routing::put(#wrapper_name) },
-                "DELETE" => quote! { axum::routing::delete(#wrapper_name) },
-                "PATCH" => quote! { axum::routing::patch(#wrapper_name) },
-                other => return Err(EmitError::Unsupported(format!("unsupported web method '{}'", other))),
+                HttpMethodId::Get => quote! { axum::routing::get(#wrapper_name) },
+                HttpMethodId::Post => quote! { axum::routing::post(#wrapper_name) },
+                HttpMethodId::Put => quote! { axum::routing::put(#wrapper_name) },
+                HttpMethodId::Delete => quote! { axum::routing::delete(#wrapper_name) },
+                HttpMethodId::Patch => quote! { axum::routing::patch(#wrapper_name) },
             };
 
             router = quote! { #router.route(#path_lit, #route_layer) };

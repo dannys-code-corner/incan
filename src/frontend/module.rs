@@ -11,6 +11,7 @@ use super::ast::{Declaration, ImportDecl, ImportKind, Program, Span, Visibility}
 use super::diagnostics::CompileError;
 use super::lexer;
 use super::parser;
+use incan_core::lang::stdlib;
 
 /// Represents a resolved module with its AST and metadata
 #[derive(Debug)]
@@ -147,7 +148,7 @@ pub fn resolve_import_path(base_dir: &Path, import: &ImportDecl) -> Option<PathB
 
     // Skip standard library imports (std::*)
     if let Some(first) = path.first() {
-        if first == "std" {
+        if first == stdlib::STDLIB_ROOT {
             return None;
         }
     }
