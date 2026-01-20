@@ -6,6 +6,7 @@ Incan has Python-like collections and a familiar `for` loop.
     Incan’s built-in collections compile to the standard Rust collections:
 
     - `list[T]` / `List[T]` → `Vec<T>`
+        - `Vec[T]` is accepted as an alias for `List[T]` in type annotations
     - `dict[K, V]` / `Dict[K, V]` → `HashMap<K, V>`
     - `set[T]` / `Set[T]` → `HashSet<T>`
 
@@ -101,6 +102,3 @@ def main() -> None:
 Back: [7. Strings and formatting](07_strings_and_formatting.md)
 
 Next chapter: [9. Enums and better `match`](09_enums.md)
-
-
-

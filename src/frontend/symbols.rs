@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use crate::frontend::ast::{Receiver, Span, Type};
 use incan_core::lang::builtins::{self, BuiltinFnId};
+use incan_core::lang::conventions;
 use incan_core::lang::surface::functions::{self as surface_functions, SurfaceFnId};
 use incan_core::lang::surface::types as surface_types;
 use incan_core::lang::types::collections;
@@ -729,7 +730,7 @@ pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
             }
 
             match name.as_str() {
-                "Unit" | "None" => ResolvedType::Unit,
+                conventions::UNIT_TYPE_NAME | conventions::NONE_TYPE_NAME => ResolvedType::Unit,
                 _ => {
                     // Check if it's a known type
                     if symbols.lookup(name).is_some() {

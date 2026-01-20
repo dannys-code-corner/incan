@@ -15,7 +15,11 @@ use std::fs;
 fn generate_rust(source: &str) -> String {
     let tokens = lexer::lex(source).expect("lexer failed");
     let ast = parser::parse(&tokens).expect("parser failed");
-    normalize_codegen_output(&IrCodegen::new().generate(&ast))
+    normalize_codegen_output(
+        &IrCodegen::new()
+            .try_generate(&ast)
+            .expect("codegen snapshot inputs must typecheck"),
+    )
 }
 
 /// Normalize generated output so snapshots don't churn on version bumps.
@@ -259,6 +263,13 @@ fn test_rust_interop_associated_functions_codegen() {
     let source = load_test_file("rust_interop_associated_functions");
     let rust_code = generate_rust(&source);
     insta::assert_snapshot!("rust_interop_associated_functions", rust_code);
+}
+
+#[test]
+fn test_titlecase_var_not_type_codegen() {
+    let source = load_test_file("titlecase_var_not_type");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("titlecase_var_not_type", rust_code);
 }
 
 // ============================================================================

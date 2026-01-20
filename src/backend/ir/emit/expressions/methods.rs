@@ -7,9 +7,11 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::super::super::conversions::{ConversionContext, determine_conversion};
-use super::super::super::expr::{IrCallArg, IrExprKind, MethodKind, TypedExpr};
+use super::super::super::expr::{IrCallArg, IrExprKind, MethodKind, TypedExpr, VarRefKind};
 use super::super::super::types::IrType;
 use super::super::{EmitError, IrEmitter};
+use incan_core::lang::magic_methods;
+use incan_core::lang::surface::web as web_surface;
 
 mod collection_methods;
 mod string_methods;
@@ -52,28 +54,22 @@ impl ReceiverInfo {
 }
 
 impl<'a> IrEmitter<'a> {
-    /// Check whether a variable name looks like a Rust type name (TitleCase).
+    /// Check if the receiver is a type-like identifier.
     ///
-    /// This heuristic is used to decide whether `Type.method(...)` should be emitted as an associated function call
-    /// `Type::method(...)` in Rust.
+    /// This is used to determine if the receiver is a type name or an external import placeholder.
     ///
     /// ## Parameters
     ///
-    /// - `name`: Identifier text from IR (not yet escaped).
+    /// - `receiver`: The receiver expression
     ///
     /// ## Returns
     ///
-    /// - `true`: if `name` looks like `TitleCase` (first char uppercase and contains at least one lowercase char).
-    /// - `false`: otherwise.
-    ///
-    /// ## Notes
-    ///
-    /// - This is intentionally conservative: it avoids rewriting ALLCAPS constants as types.
-    /// - When we have stronger information (e.g. enum variant registries), prefer that over heuristics.
-    fn is_title_case_type_name(name: &str) -> bool {
-        let has_upper = name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false);
-        let has_lower = name.chars().any(|c| c.is_ascii_lowercase());
-        has_upper && has_lower
+    /// - `true` if the receiver is a type-like identifier, `false` otherwise
+    fn receiver_is_type_like(receiver: &TypedExpr) -> bool {
+        match &receiver.kind {
+            IrExprKind::Var { ref_kind, .. } => !matches!(ref_kind, VarRefKind::Value),
+            _ => false,
+        }
     }
 
     /// Emit a known method call using enum-based dispatch.
@@ -108,7 +104,10 @@ impl<'a> IrEmitter<'a> {
         match kind {
             // ---- Internal/special methods ----
             MethodKind::Slice => self.emit_runtime_str_slice(&info, &arg_exprs),
-            _ => unreachable!("string methods are handled via emit_string_method"),
+            _ => Err(EmitError::Unsupported(format!(
+                "unexpected method kind during emission: {:?}",
+                kind
+            ))),
         }
     }
 
@@ -137,7 +136,7 @@ impl<'a> IrEmitter<'a> {
         }
 
         // Handle special methods (legacy string-based dispatch)
-        if method == "__slice__" {
+        if magic_methods::from_str(method) == Some(magic_methods::MagicMethodId::Slice) {
             return self.emit_runtime_str_slice(&info, &arg_exprs);
         }
 
@@ -157,21 +156,11 @@ impl<'a> IrEmitter<'a> {
         // This is needed for external Rust types like `Uuid`, `Instant`, `HashMap`, and also for
         // Incan-generated impl methods called in a "static" style (e.g. `User.from_json(...)`).
         if let IrExprKind::Var { name, .. } = &receiver.kind {
-            // Rewrite `Type.method(...)` to `Type::method(...)` only when we know the identifier is a type,
-            // using backend metadata (struct/enum registries). Avoid rewriting runtime variables.
-            let is_known_struct = self.struct_field_names.contains_key(name);
-            let is_known_enum = self.enum_variant_fields.keys().any(|(etype, _)| etype == name);
-            // External Rust interop types (e.g. Uuid/Instant/HashMap) don't populate our registries.
-            // In those cases the receiver typically has `Unknown` IR type (not a bound value), so fall back
-            // to a conservative TitleCase heuristic.
-            // TODO: #52 Remove this TitleCase heuristic by carrying explicit “type-name vs value-binding” metadata from
-            // the frontend/typechecker into IR. Today we only use this when `receiver.ty` is `Unknown` to support Rust
-            // interop associated fns (Uuid::new_v4, HashMap::new, Instant::now), but a TitleCase runtime variable that
-            // remains `Unknown` could be mis-emitted as `Type::method`.
-            let is_external_rust_type_like =
-                matches!(receiver.ty, IrType::Unknown) && Self::is_title_case_type_name(name);
-
-            if is_known_struct || is_known_enum || is_external_rust_type_like {
+            // Rewrite `Type.method(...)` to `Type::method(...)` only when we have explicit metadata that this is
+            // a type-like identifier (type name or external import placeholder).
+            //
+            // This avoids capitalization heuristics that can mis-emit runtime variables named `TitleCase`.
+            if Self::receiver_is_type_like(receiver) {
                 let type_ident = format_ident!("{}", name);
                 let m = format_ident!("{}", method);
                 // Apply Incan-style argument conversions when calling associated functions on Incan-owned types
@@ -181,9 +170,8 @@ impl<'a> IrEmitter<'a> {
                 //
                 // For unknown/external types, keep the previous behavior to avoid accidental conversions for Rust APIs
                 // that truly want `&str`.
-                let apply_incan_arg_conversions = is_known_struct
-                    || is_known_enum
-                    || matches!(receiver.ty, IrType::Struct(_) | IrType::Enum(_) | IrType::Trait(_));
+                let apply_incan_arg_conversions =
+                    matches!(receiver.ty, IrType::Struct(_) | IrType::Enum(_) | IrType::Trait(_));
 
                 let arg_tokens: Vec<TokenStream> = if apply_incan_arg_conversions {
                     arg_exprs
@@ -204,13 +192,17 @@ impl<'a> IrEmitter<'a> {
         // Regular method call
         let m = format_ident!("{}", method);
         // Temporary targeted support: `app.run(port=8080)` should map to `app.run("127.0.0.1", 8080)`.
-        if method == "run" && args.iter().any(|a| a.name.as_deref() == Some("port")) {
+        if method == web_surface::APP_RUN_METHOD
+            && args
+                .iter()
+                .any(|a| a.name.as_deref() == Some(web_surface::APP_RUN_ARG_PORT))
+        {
             let mut host: Option<TokenStream> = None;
             let mut port: Option<TokenStream> = None;
             for a in args {
                 match a.name.as_deref() {
-                    Some("host") => host = Some(self.emit_expr(&a.expr)?),
-                    Some("port") => port = Some(self.emit_expr(&a.expr)?),
+                    Some(web_surface::APP_RUN_ARG_HOST) => host = Some(self.emit_expr(&a.expr)?),
+                    Some(web_surface::APP_RUN_ARG_PORT) => port = Some(self.emit_expr(&a.expr)?),
                     _ => {}
                 }
             }

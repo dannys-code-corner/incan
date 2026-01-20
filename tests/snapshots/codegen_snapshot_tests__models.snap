@@ -204,11 +204,10 @@ fn main() {
         port: 8080,
         timeout: 30,
     };
-    let config_copy = config.clone();
     println!(
         "{}", { let __parts : [& str; 2usize] = ["Config port: ", ""]; let __args : Vec <
-        String > = vec![format!("{}", config_copy.port)];
-        incan_stdlib::strings::fstring(& __parts, & __args) }
+        String > = vec![format!("{}", config.port)]; incan_stdlib::strings::fstring(&
+        __parts, & __args) }
     );
     let data1 = OptionalData {
         required: "must have".to_string(),

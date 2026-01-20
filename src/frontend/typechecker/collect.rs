@@ -9,6 +9,7 @@ use crate::frontend::symbols::*;
 use crate::frontend::typechecker::helpers::freeze_const_type;
 
 use super::TypeChecker;
+use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::derives::{self, DeriveId};
 
 // ============================================================================
@@ -16,11 +17,10 @@ use incan_core::lang::derives::{self, DeriveId};
 // ============================================================================
 
 /// Find decorators by name.
-fn decorators_named<'a>(
-    decorators: &'a [Spanned<Decorator>],
-    name: &str,
-) -> impl Iterator<Item = &'a Spanned<Decorator>> {
-    decorators.iter().filter(move |d| d.node.name == name)
+fn decorators_named(decorators: &[Spanned<Decorator>], id: DecoratorId) -> impl Iterator<Item = &Spanned<Decorator>> {
+    decorators
+        .iter()
+        .filter(move |d| decorators::from_str(d.node.name.as_str()) == Some(id))
 }
 
 /// Extract positional identifier names from decorator arguments.
@@ -521,7 +521,7 @@ impl TypeChecker {
 
     /// Validate @derive decorator arguments and report errors for unknown derives.
     pub(crate) fn validate_derives(&mut self, decorators: &[Spanned<Decorator>]) {
-        for dec in decorators_named(decorators, "derive") {
+        for dec in decorators_named(decorators, DecoratorId::Derive) {
             // Collect all derive names with their spans
             let derive_items: Vec<_> = dec
                 .node
@@ -583,7 +583,7 @@ impl TypeChecker {
         let mut seen: HashSet<String> = HashSet::new();
         let mut requires: Vec<(String, ResolvedType)> = Vec::new();
 
-        for dec in decorators_named(decorators, "requires") {
+        for dec in decorators_named(decorators, DecoratorId::Requires) {
             for arg in &dec.node.args {
                 if let DecoratorArg::Named(name, DecoratorArgValue::Type(ty)) = arg {
                     if !seen.insert(name.clone()) {
@@ -599,7 +599,7 @@ impl TypeChecker {
 
     /// Extract derive names from @derive decorators.
     pub(crate) fn extract_derive_names(decorators: &[Spanned<Decorator>]) -> Vec<String> {
-        decorators_named(decorators, "derive")
+        decorators_named(decorators, DecoratorId::Derive)
             .flat_map(|dec| positional_idents(&dec.node.args))
             .map(|(name, _)| name.to_string())
             .collect()

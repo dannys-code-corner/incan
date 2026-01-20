@@ -42,7 +42,9 @@ fn test_function_calls() {
     let upper = incan_stdlib::strings::str_upper(&"test");
     let lower = incan_stdlib::strings::str_lower(&"TEST");
     let stripped = incan_stdlib::strings::str_strip(&"  spaces  ");
-    let result = incan_stdlib::strings::str_upper(&"hello world").trim().to_string();
+    let result = incan_stdlib::strings::str_strip(
+        &incan_stdlib::strings::str_upper(&"hello world"),
+    );
     let numbers = vec![1, 2, 3];
     numbers.push(4);
     let popped = numbers.pop().unwrap_or_default();

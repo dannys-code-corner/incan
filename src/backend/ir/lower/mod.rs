@@ -39,6 +39,8 @@ use super::types::IrType;
 use super::{IrProgram, Mutability};
 use crate::frontend::ast;
 use crate::frontend::typechecker::TypeCheckInfo;
+use incan_core::lang::conventions;
+use incan_core::lang::types::collections::{self, CollectionTypeId};
 
 // Re-export error types
 pub use errors::{LoweringError, LoweringErrors};
@@ -98,7 +100,7 @@ impl AstLowering {
             let ast::Type::Generic(name, args) = ty else {
                 return false;
             };
-            if name != "Result" || args.is_empty() {
+            if collections::from_str(name.as_str()) != Some(CollectionTypeId::Result) || args.is_empty() {
                 return false;
             }
             matches!(&args[0].node, ast::Type::Simple(t) if t == newtype_name)
@@ -134,7 +136,10 @@ impl AstLowering {
             .collect();
 
         // Prefer from_underlying
-        if let Some(m) = candidates.iter().find(|m| m.name == "from_underlying") {
+        if let Some(m) = candidates
+            .iter()
+            .find(|m| m.name == conventions::NEWTYPE_FROM_UNDERLYING_METHOD)
+        {
             return Some(m.name.clone());
         }
 
@@ -371,8 +376,8 @@ impl AstLowering {
                     match self.lower_declaration(&decl.node) {
                         Ok(ir_decl) => {
                             if let IrDeclKind::Function(ref func) = ir_decl.kind {
-                                if func.name == "main" {
-                                    ir_program.entry_point = Some("main".to_string());
+                                if func.name == conventions::ENTRYPOINT_NAME {
+                                    ir_program.entry_point = Some(conventions::ENTRYPOINT_NAME.to_string());
                                 }
                             }
                             ir_program.declarations.push(ir_decl);

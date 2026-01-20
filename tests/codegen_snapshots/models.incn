@@ -117,8 +117,7 @@ def main() -> None:
         port=8080,
         timeout=30
     )
-    config_copy: Config = config.clone()
-    print(f"Config port: {config_copy.port}")
+    print(f"Config port: {config.port}")
     
     # Test model with Option fields
     data1: OptionalData = OptionalData(

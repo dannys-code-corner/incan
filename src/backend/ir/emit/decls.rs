@@ -18,7 +18,10 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
+use incan_core::lang::conventions;
 use incan_core::lang::derives::{self, DeriveId};
+use incan_core::lang::magic_methods;
+use incan_core::lang::stdlib;
 
 const ZEN_TEXT: &str = include_str!("../../../../stdlib/zen.txt");
 
@@ -126,7 +129,7 @@ impl<'a> IrEmitter<'a> {
     /// Scan an IR expression and record any writes that target a function parameter.
     fn scan_expr_for_param_writes(&self, expr: &IrExpr, param_names: &HashSet<String>, mutated: &mut HashSet<String>) {
         match &expr.kind {
-            IrExprKind::Var { name, access } => {
+            IrExprKind::Var { name, access, .. } => {
                 if *access == VarAccess::BorrowMut && param_names.contains(name) {
                     mutated.insert(name.clone());
                 }
@@ -435,8 +438,8 @@ impl<'a> IrEmitter<'a> {
                 // Special-case stdlib shims:
                 // - `web` maps to `incan_stdlib::web`
                 // - `testing` maps to `incan_stdlib::testing`
-                let is_stdlib_web = path.first().map(|s| s == "web").unwrap_or(false);
-                let is_stdlib_testing = path.first().map(|s| s == "testing").unwrap_or(false);
+                let is_stdlib_web = path.first().map(|s| s == stdlib::STDLIB_WEB).unwrap_or(false);
+                let is_stdlib_testing = path.first().map(|s| s == stdlib::STDLIB_TESTING).unwrap_or(false);
                 let path_tokens: Vec<_> = if is_stdlib_web {
                     vec![format_ident!("incan_stdlib"), format_ident!("web")]
                 } else if is_stdlib_testing {
@@ -547,8 +550,8 @@ impl<'a> IrEmitter<'a> {
         let mut trait_impls = Vec::new();
 
         for method in &impl_block.methods {
-            match method.name.as_str() {
-                "__eq__" => {
+            match magic_methods::from_str(method.name.as_str()) {
+                Some(magic_methods::MagicMethodId::Eq) => {
                     let body_stmts: Vec<TokenStream> = method
                         .body
                         .iter()
@@ -562,7 +565,7 @@ impl<'a> IrEmitter<'a> {
                         }
                     });
                 }
-                "__str__" => {
+                Some(magic_methods::MagicMethodId::Str) => {
                     regular_methods.push(self.emit_method(method)?);
                     trait_impls.push(quote! {
                         impl std::fmt::Display for #target_type {
@@ -572,7 +575,9 @@ impl<'a> IrEmitter<'a> {
                         }
                     });
                 }
-                "__class_name__" | "__fields__" => regular_methods.push(self.emit_method(method)?),
+                Some(magic_methods::MagicMethodId::ClassName) | Some(magic_methods::MagicMethodId::Fields) => {
+                    regular_methods.push(self.emit_method(method)?)
+                }
                 _ => regular_methods.push(self.emit_method(method)?),
             }
         }
@@ -617,8 +622,12 @@ impl<'a> IrEmitter<'a> {
                 let has_validate = derives
                     .iter()
                     .any(|d| derives::from_str(d.as_str()) == Some(DeriveId::Validate));
-                if has_validate && !impl_block.methods.iter().any(|m| m.name == "new") {
-                    if let Some(validate_fn) = impl_block.methods.iter().find(|m| m.name == "validate") {
+                if has_validate && !impl_block.methods.iter().any(|m| m.name == conventions::NEW_METHOD) {
+                    if let Some(validate_fn) = impl_block
+                        .methods
+                        .iter()
+                        .find(|m| m.name == conventions::VALIDATE_METHOD)
+                    {
                         let ret_ty = self.emit_type(&validate_fn.return_type);
 
                         // Required fields are those without defaults; defaults are in `struct_field_defaults`.
@@ -753,7 +762,7 @@ impl<'a> IrEmitter<'a> {
 
     fn emit_function(&self, func: &super::super::decl::IrFunction) -> Result<TokenStream, EmitError> {
         let name = format_ident!("{}", &func.name);
-        let is_main = func.name == "main";
+        let is_main = func.name == conventions::ENTRYPOINT_NAME;
         let mutated_params = self.collect_mutated_params(func);
 
         let vis = if is_main {

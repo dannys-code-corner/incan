@@ -41,12 +41,18 @@ Note: the first build may download Rust crates via Cargo (can take minutes) and 
 Define routes using the `@route` decorator:
 
 ```incan
+from web import route, Response, GET, POST
+
 @route("/path")
 async def handler() -> Response:
     ...
 
-@route("/api/resource", methods=[GET, POST])
-async def resource_handler() -> Response:
+@route("/api/resource", methods=[GET])
+async def get_resource() -> Response:
+    ...
+
+@route("/api/resource", methods=[POST])
+async def create_resource() -> Response:
     ...
 ```
 
@@ -67,7 +73,10 @@ async def get_posts(year: int, month: int) -> Json[list[Post]]:
 
 ### HTTP Methods
 
-Specify allowed methods with the `methods` parameter:
+Specify allowed methods with the `methods` parameter.
+For now, each handler supports a single method; define separate handlers per method if needed.
+Import the method constants from the web prelude (e.g. `GET`, `POST`).
+Supported methods are `GET`, `POST`, `PUT`, `DELETE`, and `PATCH`.
 
 ```incan
 from web import GET, POST, PUT, DELETE
@@ -80,8 +89,12 @@ async def list_items() -> Json[list[Item]]:
 async def create_item(body: Json[CreateItem]) -> Json[Item]:
     ...
 
-@route("/items/{id}", methods=[PUT, DELETE])
-async def modify_item(id: int) -> Response:
+@route("/items/{id}", methods=[PUT])
+async def update_item(id: int) -> Response:
+    ...
+
+@route("/items/{id}", methods=[DELETE])
+async def delete_item(id: int) -> Response:
     ...
 ```
 

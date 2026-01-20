@@ -4,11 +4,14 @@
 //! binary/unary operations, function calls, method calls, comprehensions, etc.
 
 use super::super::TypedExpr;
-use super::super::expr::{BuiltinFn, IrCallArg, IrExpr, IrExprKind, MatchArm, MethodKind, Pattern, UnaryOp, VarAccess};
+use super::super::expr::{
+    BuiltinFn, IrCallArg, IrExpr, IrExprKind, MatchArm, MethodKind, Pattern, UnaryOp, VarAccess, VarRefKind,
+};
 use super::super::types::IrType;
 use super::AstLowering;
 use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
+use crate::frontend::typechecker::IdentKind;
 use incan_core::PowExponentKind;
 
 impl AstLowering {
@@ -31,6 +34,18 @@ impl AstLowering {
                     IrType::RefMut(_) => IrType::RefMut(Box::new(inner)),
                     _ => inner,
                 };
+            }
+            if let Some(kind) = info.ident_kind(expr.span) {
+                if let IrExprKind::Var { ref mut ref_kind, .. } = lowered.kind {
+                    *ref_kind = match kind {
+                        IdentKind::Value => VarRefKind::Value,
+                        IdentKind::TypeName => VarRefKind::TypeName,
+                        IdentKind::Variant => VarRefKind::TypeName,
+                        IdentKind::Module => VarRefKind::ExternalName,
+                        IdentKind::RustImport => VarRefKind::ExternalName,
+                        IdentKind::Trait => VarRefKind::TypeName,
+                    };
+                }
             }
         }
         Ok(lowered)
@@ -69,6 +84,7 @@ impl AstLowering {
                     IrExprKind::Var {
                         name: name.clone(),
                         access,
+                        ref_kind: VarRefKind::Value,
                     },
                     ty,
                 )
@@ -87,6 +103,7 @@ impl AstLowering {
                 IrExprKind::Var {
                     name: "self".to_string(),
                     access: VarAccess::Borrow,
+                    ref_kind: VarRefKind::Value,
                 },
                 IrType::Unknown,
             ),
@@ -202,6 +219,7 @@ impl AstLowering {
                                 IrExprKind::Var {
                                     name: name.clone(),
                                     access: VarAccess::Copy,
+                                    ref_kind: VarRefKind::TypeName,
                                 },
                                 struct_ty.clone(),
                             );
@@ -292,7 +310,7 @@ impl AstLowering {
             }
 
             ast::Expr::MethodCall(o, m, args) => {
-                let receiver = self.lower_expr(&o.node)?;
+                let receiver = self.lower_expr_spanned(o)?;
                 let args_ir = self.lower_call_args(args)?;
 
                 // Check for known methods (enum-based dispatch)

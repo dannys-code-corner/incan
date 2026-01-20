@@ -12,6 +12,27 @@ use super::super::super::types::IrType;
 use super::super::{EmitError, IrEmitter};
 use incan_core::lang::builtins::{self, BuiltinFnId};
 
+/// Get the element type of a list.
+fn list_elem_type(ty: &IrType) -> &IrType {
+    match ty {
+        IrType::List(elem) => elem.as_ref(),
+        IrType::Ref(inner) | IrType::RefMut(inner) => match inner.as_ref() {
+            IrType::List(elem) => elem.as_ref(),
+            other => other,
+        },
+        other => other,
+    }
+}
+
+/// Check if a type is a named generic.
+fn is_named_generic(ty: &IrType, name: &str) -> bool {
+    match ty {
+        IrType::NamedGeneric(n, _) => n == name,
+        IrType::Ref(inner) | IrType::RefMut(inner) => matches!(inner.as_ref(), IrType::NamedGeneric(n, _) if n == name),
+        _ => false,
+    }
+}
+
 impl<'a> IrEmitter<'a> {
     /// Emit a builtin function call using enum-based dispatch.
     ///
@@ -48,14 +69,7 @@ impl<'a> IrEmitter<'a> {
             BuiltinFn::Sum => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
-                    let elem_type = match &arg.ty {
-                        IrType::List(elem) => elem.as_ref(),
-                        IrType::Ref(inner) | IrType::RefMut(inner) => match inner.as_ref() {
-                            IrType::List(elem) => elem.as_ref(),
-                            _ => &IrType::Unknown,
-                        },
-                        _ => &IrType::Unknown,
-                    };
+                    let elem_type = list_elem_type(&arg.ty);
                     let sum_tokens = if matches!(elem_type, IrType::Bool) {
                         quote! { #a.iter().map(|v| if *v { 1i64 } else { 0i64 }).sum::<i64>() }
                     } else {
@@ -64,6 +78,50 @@ impl<'a> IrEmitter<'a> {
                     Ok(sum_tokens)
                 } else {
                     Ok(quote! { 0i64 })
+                }
+            }
+            BuiltinFn::Min => {
+                if let Some(arg) = args.first() {
+                    let a = self.emit_expr(arg)?;
+                    let elem_type = list_elem_type(&arg.ty);
+                    let empty_err =
+                        quote! { incan_stdlib::errors::raise_value_error("min() arg is an empty sequence") };
+                    let tokens = match elem_type {
+                        IrType::Float => quote! {
+                            #a.iter().copied().reduce(f64::min).unwrap_or_else(|| #empty_err)
+                        },
+                        IrType::String | IrType::FrozenStr => quote! {
+                            #a.iter().min().cloned().unwrap_or_else(|| #empty_err)
+                        },
+                        _ => quote! {
+                            #a.iter().min().copied().unwrap_or_else(|| #empty_err)
+                        },
+                    };
+                    Ok(tokens)
+                } else {
+                    Ok(quote! { incan_stdlib::errors::raise_value_error("min() missing argument") })
+                }
+            }
+            BuiltinFn::Max => {
+                if let Some(arg) = args.first() {
+                    let a = self.emit_expr(arg)?;
+                    let elem_type = list_elem_type(&arg.ty);
+                    let empty_err =
+                        quote! { incan_stdlib::errors::raise_value_error("max() arg is an empty sequence") };
+                    let tokens = match elem_type {
+                        IrType::Float => quote! {
+                            #a.iter().copied().reduce(f64::max).unwrap_or_else(|| #empty_err)
+                        },
+                        IrType::String | IrType::FrozenStr => quote! {
+                            #a.iter().max().cloned().unwrap_or_else(|| #empty_err)
+                        },
+                        _ => quote! {
+                            #a.iter().max().copied().unwrap_or_else(|| #empty_err)
+                        },
+                    };
+                    Ok(tokens)
+                } else {
+                    Ok(quote! { incan_stdlib::errors::raise_value_error("max() missing argument") })
                 }
             }
             BuiltinFn::Str => {
@@ -103,6 +161,30 @@ impl<'a> IrEmitter<'a> {
                     Ok(quote! { 0.0f64 })
                 }
             }
+            BuiltinFn::Bool => {
+                if let Some(arg) = args.first() {
+                    let a = self.emit_expr(arg)?;
+                    match &arg.ty {
+                        IrType::Bool => Ok(quote! { #a }),
+                        IrType::Int => Ok(quote! { (#a) != 0 }),
+                        IrType::Float => Ok(quote! { (#a) != 0.0 }),
+                        IrType::String => Ok(quote! { !(#a).is_empty() }),
+                        IrType::FrozenStr => Ok(quote! { !(#a).is_empty() }),
+                        IrType::FrozenBytes => Ok(quote! { !(#a).is_empty() }),
+                        IrType::List(_) => Ok(quote! { !(#a).is_empty() }),
+                        IrType::Dict(_, _) => Ok(quote! { !(#a).is_empty() }),
+                        IrType::Set(_) => Ok(quote! { !(#a).is_empty() }),
+                        IrType::Option(_) => Ok(quote! { (#a).is_some() }),
+                        IrType::Result(_, _) => Ok(quote! { (#a).is_ok() }),
+                        _ if is_named_generic(&arg.ty, "FrozenList") => Ok(quote! { !(#a).is_empty() }),
+                        _ if is_named_generic(&arg.ty, "FrozenSet") => Ok(quote! { !(#a).is_empty() }),
+                        _ if is_named_generic(&arg.ty, "FrozenDict") => Ok(quote! { !(#a).is_empty() }),
+                        _ => Ok(quote! { true }),
+                    }
+                } else {
+                    Ok(quote! { false })
+                }
+            }
             BuiltinFn::Abs => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
@@ -129,6 +211,43 @@ impl<'a> IrEmitter<'a> {
                     Ok(quote! { #a.iter().zip(#b.iter()) })
                 } else {
                     Ok(quote! { std::iter::empty::<((), ())>() })
+                }
+            }
+            BuiltinFn::Sorted => {
+                if let Some(arg) = args.first() {
+                    let a = self.emit_expr(arg)?;
+                    let elem_type = list_elem_type(&arg.ty);
+                    let from_frozen_list = is_named_generic(&arg.ty, "FrozenList");
+                    let tokens = if from_frozen_list {
+                        match elem_type {
+                            IrType::Float => quote! {{
+                                let mut __v = (#a).as_slice().to_vec();
+                                __v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                __v
+                            }},
+                            _ => quote! {{
+                                let mut __v = (#a).as_slice().to_vec();
+                                __v.sort();
+                                __v
+                            }},
+                        }
+                    } else {
+                        match elem_type {
+                            IrType::Float => quote! {{
+                                let mut __v = (#a).clone();
+                                __v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                __v
+                            }},
+                            _ => quote! {{
+                                let mut __v = (#a).clone();
+                                __v.sort();
+                                __v
+                            }},
+                        }
+                    };
+                    Ok(tokens)
+                } else {
+                    Ok(quote! { Vec::new() })
                 }
             }
             BuiltinFn::ReadFile => {
@@ -204,14 +323,7 @@ impl<'a> IrEmitter<'a> {
             BuiltinFnId::Sum => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
-                    let elem_type = match &arg.ty {
-                        IrType::List(elem) => elem.as_ref(),
-                        IrType::Ref(inner) | IrType::RefMut(inner) => match inner.as_ref() {
-                            IrType::List(elem) => elem.as_ref(),
-                            _ => &IrType::Unknown,
-                        },
-                        _ => &IrType::Unknown,
-                    };
+                    let elem_type = list_elem_type(&arg.ty);
 
                     let sum_tokens = if matches!(elem_type, IrType::Bool) {
                         quote! { #a.iter().map(|v| if *v { 1i64 } else { 0i64 }).sum::<i64>() }
@@ -219,6 +331,50 @@ impl<'a> IrEmitter<'a> {
                         quote! { #a.iter().sum::<i64>() }
                     };
                     Ok(Some(sum_tokens))
+                } else {
+                    Ok(None)
+                }
+            }
+            BuiltinFnId::Min => {
+                if let Some(arg) = args.first() {
+                    let a = self.emit_expr(arg)?;
+                    let elem_type = list_elem_type(&arg.ty);
+                    let empty_err =
+                        quote! { incan_stdlib::errors::raise_value_error("min() arg is an empty sequence") };
+                    let tokens = match elem_type {
+                        IrType::Float => quote! {
+                            #a.iter().copied().reduce(f64::min).unwrap_or_else(|| #empty_err)
+                        },
+                        IrType::String | IrType::FrozenStr => quote! {
+                            #a.iter().min().cloned().unwrap_or_else(|| #empty_err)
+                        },
+                        _ => quote! {
+                            #a.iter().min().copied().unwrap_or_else(|| #empty_err)
+                        },
+                    };
+                    Ok(Some(tokens))
+                } else {
+                    Ok(None)
+                }
+            }
+            BuiltinFnId::Max => {
+                if let Some(arg) = args.first() {
+                    let a = self.emit_expr(arg)?;
+                    let elem_type = list_elem_type(&arg.ty);
+                    let empty_err =
+                        quote! { incan_stdlib::errors::raise_value_error("max() arg is an empty sequence") };
+                    let tokens = match elem_type {
+                        IrType::Float => quote! {
+                            #a.iter().copied().reduce(f64::max).unwrap_or_else(|| #empty_err)
+                        },
+                        IrType::String | IrType::FrozenStr => quote! {
+                            #a.iter().max().cloned().unwrap_or_else(|| #empty_err)
+                        },
+                        _ => quote! {
+                            #a.iter().max().copied().unwrap_or_else(|| #empty_err)
+                        },
+                    };
+                    Ok(Some(tokens))
                 } else {
                     Ok(None)
                 }
@@ -260,6 +416,28 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
+            BuiltinFnId::Bool => {
+                if let Some(arg) = args.first() {
+                    let a = self.emit_expr(arg)?;
+                    let tokens = match &arg.ty {
+                        IrType::Bool => quote! { #a },
+                        IrType::Int => quote! { (#a) != 0 },
+                        IrType::Float => quote! { (#a) != 0.0 },
+                        IrType::String | IrType::FrozenStr => quote! { !(#a).is_empty() },
+                        IrType::FrozenBytes => quote! { !(#a).is_empty() },
+                        IrType::List(_) | IrType::Dict(_, _) | IrType::Set(_) => quote! { !(#a).is_empty() },
+                        IrType::Option(_) => quote! { (#a).is_some() },
+                        IrType::Result(_, _) => quote! { (#a).is_ok() },
+                        _ if is_named_generic(&arg.ty, "FrozenList") => quote! { !(#a).is_empty() },
+                        _ if is_named_generic(&arg.ty, "FrozenSet") => quote! { !(#a).is_empty() },
+                        _ if is_named_generic(&arg.ty, "FrozenDict") => quote! { !(#a).is_empty() },
+                        _ => quote! { true },
+                    };
+                    Ok(Some(tokens))
+                } else {
+                    Ok(None)
+                }
+            }
             BuiltinFnId::Abs => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
@@ -282,6 +460,43 @@ impl<'a> IrEmitter<'a> {
                     let a = self.emit_expr(&args[0])?;
                     let b = self.emit_expr(&args[1])?;
                     Ok(Some(quote! { #a.iter().zip(#b.iter()) }))
+                } else {
+                    Ok(None)
+                }
+            }
+            BuiltinFnId::Sorted => {
+                if let Some(arg) = args.first() {
+                    let a = self.emit_expr(arg)?;
+                    let elem_type = list_elem_type(&arg.ty);
+                    let from_frozen_list = is_named_generic(&arg.ty, "FrozenList");
+                    let tokens = if from_frozen_list {
+                        match elem_type {
+                            IrType::Float => quote! {{
+                                let mut __v = (#a).as_slice().to_vec();
+                                __v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                __v
+                            }},
+                            _ => quote! {{
+                                let mut __v = (#a).as_slice().to_vec();
+                                __v.sort();
+                                __v
+                            }},
+                        }
+                    } else {
+                        match elem_type {
+                            IrType::Float => quote! {{
+                                let mut __v = (#a).clone();
+                                __v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                __v
+                            }},
+                            _ => quote! {{
+                                let mut __v = (#a).clone();
+                                __v.sort();
+                                __v
+                            }},
+                        }
+                    };
+                    Ok(Some(tokens))
                 } else {
                     Ok(None)
                 }
@@ -324,7 +539,7 @@ impl<'a> IrEmitter<'a> {
                 } else {
                     Ok(None)
                 }
-            } // No string-fallback support for other builtins here.
+            }
         }
     }
 

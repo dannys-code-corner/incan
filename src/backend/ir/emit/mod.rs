@@ -1,7 +1,7 @@
 //! Emit Rust source code from typed IR.
 //!
-//! This module defines [`IrEmitter`] and wires together the focused submodules that implement
-//! IR → Rust emission. The heavy lifting lives in those submodules; `mod.rs` is intentionally thin.
+//! This module defines [`IrEmitter`] and wires together the focused submodules that implement IR → Rust emission.
+//! The heavy lifting lives in those submodules; `mod.rs` is intentionally thin.
 //!
 //! ## Notes
 //! - Emission produces a Rust syntax tree (`syn`) and formats it via `prettyplease`.
@@ -32,6 +32,7 @@ use std::cell::RefCell;
 use super::FunctionRegistry;
 use super::decl::VariantFields;
 use super::types::IrType;
+use incan_core::lang::rust_keywords;
 
 /// Emit Rust source code from typed IR.
 ///
@@ -128,18 +129,14 @@ impl<'a> IrEmitter<'a> {
     ///
     /// Note: `self` and `Self` cannot be raw identifiers.
     fn escape_keyword(name: &str) -> String {
-        match name {
-            "self" | "Self" => name.to_string(),
-            // Strict + reserved keywords
-            "as" | "break" | "const" | "continue" | "crate" | "else" | "enum" | "extern" | "false" | "fn" | "for"
-            | "if" | "impl" | "in" | "let" | "loop" | "match" | "mod" | "move" | "mut" | "pub" | "ref" | "return"
-            | "static" | "struct" | "super" | "trait" | "true" | "type" | "unsafe" | "use" | "where" | "while"
-            | "async" | "await" | "dyn" | "abstract" | "become" | "box" | "do" | "final" | "macro" | "override"
-            | "priv" | "typeof" | "unsized" | "virtual" | "yield" | "try" => {
-                format!("r#{}", name)
-            }
-            _ => name.to_string(),
+        if matches!(name, "self" | "Self") {
+            return name.to_string();
         }
+        // Strict + reserved keywords
+        if rust_keywords::is_keyword(name) {
+            return format!("r#{}", name);
+        }
+        name.to_string()
     }
 
     /// Disable clippy allows (for strict warning-free codegen).
@@ -172,7 +169,9 @@ pub struct RouteSpec {
     /// Route path (Incan-style, e.g. `/api/{id}`).
     pub path: String,
     /// HTTP methods (e.g. GET, POST).
-    pub methods: Vec<String>,
+    pub methods: Vec<incan_core::lang::http::HttpMethodId>,
+    /// Any unrecognized method spellings collected from decorators.
+    pub unknown_methods: Vec<String>,
     /// Whether the handler is async.
     pub is_async: bool,
 }

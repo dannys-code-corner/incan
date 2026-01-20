@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use crate::backend::{IrCodegen, ProjectGenerator};
 use crate::frontend::{lexer, parser};
+use incan_core::lang::decorators::{self, DecoratorId};
 
 #[allow(unused_imports)]
 use super::test_interfaces::{
@@ -602,7 +603,9 @@ pub fn discover_tests_and_fixtures(file_path: &Path) -> Result<DiscoveryResult, 
 }
 
 fn has_fixture_decorator(decorators: &[crate::frontend::ast::Spanned<crate::frontend::ast::Decorator>]) -> bool {
-    decorators.iter().any(|d| d.node.name == "fixture")
+    decorators
+        .iter()
+        .any(|d| decorators::from_str(d.node.name.as_str()) == Some(DecoratorId::Fixture))
 }
 
 fn extract_fixture_args(
@@ -612,23 +615,23 @@ fn extract_fixture_args(
     let mut autouse = false;
 
     for dec in decorators {
-        if dec.node.name == "fixture" {
+        if decorators::from_str(dec.node.name.as_str()) == Some(DecoratorId::Fixture) {
             for arg in &dec.node.args {
                 if let crate::frontend::ast::DecoratorArg::Named(name, value) = arg {
-                    if name == "scope" {
+                    if name == decorators::FIXTURE_SCOPE_ARG {
                         if let crate::frontend::ast::DecoratorArgValue::Expr(expr) = value {
                             if let crate::frontend::ast::Expr::Literal(crate::frontend::ast::Literal::String(s)) =
                                 &expr.node
                             {
                                 scope = match s.as_str() {
-                                    "function" => FixtureScope::Function,
-                                    "module" => FixtureScope::Module,
-                                    "session" => FixtureScope::Session,
+                                    decorators::FIXTURE_SCOPE_FUNCTION => FixtureScope::Function,
+                                    decorators::FIXTURE_SCOPE_MODULE => FixtureScope::Module,
+                                    decorators::FIXTURE_SCOPE_SESSION => FixtureScope::Session,
                                     _ => FixtureScope::Function,
                                 };
                             }
                         }
-                    } else if name == "autouse" {
+                    } else if name == decorators::FIXTURE_AUTOUSE_ARG {
                         if let crate::frontend::ast::DecoratorArgValue::Expr(expr) = value {
                             if let crate::frontend::ast::Expr::Literal(crate::frontend::ast::Literal::Bool(b)) =
                                 &expr.node

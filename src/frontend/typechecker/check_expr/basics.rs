@@ -6,6 +6,7 @@
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
+use crate::frontend::typechecker::IdentKind;
 
 use super::TypeChecker;
 
@@ -18,20 +19,58 @@ impl TypeChecker {
         if let Some(id) = self.symbols.lookup(name) {
             if let Some(sym) = self.symbols.get(id) {
                 match &sym.kind {
-                    SymbolKind::Variable(info) => info.ty.clone(),
-                    SymbolKind::Function(info) => ResolvedType::Function(
-                        info.params.iter().map(|(_, ty)| ty.clone()).collect(),
-                        Box::new(info.return_type.clone()),
-                    ),
-                    SymbolKind::Type(_) => ResolvedType::Named(name.to_string()),
+                    SymbolKind::Variable(info) => {
+                        self.type_info
+                            .ident_kinds
+                            .insert((span.start, span.end), IdentKind::Value);
+                        info.ty.clone()
+                    }
+                    SymbolKind::Function(info) => {
+                        self.type_info
+                            .ident_kinds
+                            .insert((span.start, span.end), IdentKind::Value);
+                        ResolvedType::Function(
+                            info.params.iter().map(|(_, ty)| ty.clone()).collect(),
+                            Box::new(info.return_type.clone()),
+                        )
+                    }
+                    SymbolKind::Type(_) => {
+                        self.type_info
+                            .ident_kinds
+                            .insert((span.start, span.end), IdentKind::TypeName);
+                        ResolvedType::Named(name.to_string())
+                    }
                     SymbolKind::Variant(info) => {
+                        self.type_info
+                            .ident_kinds
+                            .insert((span.start, span.end), IdentKind::Variant);
                         // Return the enum type
                         ResolvedType::Named(info.enum_name.clone())
                     }
-                    SymbolKind::Field(info) => info.ty.clone(),
-                    SymbolKind::Module(_) => ResolvedType::Named(name.to_string()),
-                    SymbolKind::Trait(_) => ResolvedType::Named(name.to_string()),
-                    SymbolKind::RustModule { .. } => ResolvedType::Named(name.to_string()),
+                    SymbolKind::Field(info) => {
+                        self.type_info
+                            .ident_kinds
+                            .insert((span.start, span.end), IdentKind::Value);
+                        info.ty.clone()
+                    }
+                    SymbolKind::Module(_) => {
+                        self.type_info
+                            .ident_kinds
+                            .insert((span.start, span.end), IdentKind::Module);
+                        ResolvedType::Named(name.to_string())
+                    }
+                    SymbolKind::Trait(_) => {
+                        self.type_info
+                            .ident_kinds
+                            .insert((span.start, span.end), IdentKind::Trait);
+                        ResolvedType::Named(name.to_string())
+                    }
+                    SymbolKind::RustModule { .. } => {
+                        self.type_info
+                            .ident_kinds
+                            .insert((span.start, span.end), IdentKind::RustImport);
+                        ResolvedType::Named(name.to_string())
+                    }
                 }
             } else {
                 ResolvedType::Unknown
