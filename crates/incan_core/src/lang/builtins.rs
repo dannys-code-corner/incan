@@ -17,7 +17,7 @@
 //! assert_eq!(builtins::as_str(BuiltinFnId::Print), "print");
 //! ```
 
-use super::registry::{LangItemInfo, RFC, RfcId, Stability};
+use super::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
 /// Stable identifier for a builtin function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,6 +53,7 @@ pub const BUILTIN_FUNCTIONS: &[BuiltinFnInfo] = &[
         &["println"],
         "Print values to stdout.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         BuiltinFnId::Len,
@@ -60,6 +61,7 @@ pub const BUILTIN_FUNCTIONS: &[BuiltinFnInfo] = &[
         &[],
         "Return the length of a collection/string.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         BuiltinFnId::Sum,
@@ -67,14 +69,23 @@ pub const BUILTIN_FUNCTIONS: &[BuiltinFnInfo] = &[
         &[],
         "Sum a numeric iterable/collection.",
         RFC::_000,
+        Since(0, 1),
     ),
-    info(BuiltinFnId::Str, "str", &[], "Convert a value to a string.", RFC::_000),
+    info(
+        BuiltinFnId::Str,
+        "str",
+        &[],
+        "Convert a value to a string.",
+        RFC::_000,
+        Since(0, 1),
+    ),
     info(
         BuiltinFnId::Int,
         "int",
         &[],
         "Convert a value to an integer.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         BuiltinFnId::Float,
@@ -82,14 +93,23 @@ pub const BUILTIN_FUNCTIONS: &[BuiltinFnInfo] = &[
         &[],
         "Convert a value to a float.",
         RFC::_000,
+        Since(0, 1),
     ),
-    info(BuiltinFnId::Abs, "abs", &[], "Absolute value (numeric).", RFC::_000),
+    info(
+        BuiltinFnId::Abs,
+        "abs",
+        &[],
+        "Absolute value (numeric).",
+        RFC::_000,
+        Since(0, 1),
+    ),
     info(
         BuiltinFnId::Range,
         "range",
         &[],
         "Create a range of integers.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         BuiltinFnId::Enumerate,
@@ -97,6 +117,7 @@ pub const BUILTIN_FUNCTIONS: &[BuiltinFnInfo] = &[
         &[],
         "Enumerate an iterable into (index, value) pairs.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         BuiltinFnId::Zip,
@@ -104,6 +125,7 @@ pub const BUILTIN_FUNCTIONS: &[BuiltinFnInfo] = &[
         &[],
         "Zip iterables element-wise into tuples.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         BuiltinFnId::ReadFile,
@@ -111,6 +133,7 @@ pub const BUILTIN_FUNCTIONS: &[BuiltinFnInfo] = &[
         &[],
         "Read a file from disk into a string/bytes.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         BuiltinFnId::WriteFile,
@@ -118,6 +141,7 @@ pub const BUILTIN_FUNCTIONS: &[BuiltinFnInfo] = &[
         &[],
         "Write a string/bytes to a file on disk.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         BuiltinFnId::JsonStringify,
@@ -125,8 +149,16 @@ pub const BUILTIN_FUNCTIONS: &[BuiltinFnInfo] = &[
         &[],
         "Serialize a value to JSON.",
         RFC::_000,
+        Since(0, 1),
     ),
-    info(BuiltinFnId::Sleep, "sleep", &[], "Sleep for a duration.", RFC::_000),
+    info(
+        BuiltinFnId::Sleep,
+        "sleep",
+        &[],
+        "Sleep for a duration.",
+        RFC::_000,
+        Since(0, 1),
+    ),
 ];
 
 /// Return the canonical spelling for a builtin function.
@@ -205,6 +237,7 @@ const fn info(
     aliases: &'static [&'static str],
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> BuiltinFnInfo {
     LangItemInfo {
         id,
@@ -212,7 +245,7 @@ const fn info(
         aliases,
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }

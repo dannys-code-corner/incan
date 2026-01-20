@@ -8,7 +8,7 @@
 //!   macros under the hood.
 //! - Matching is **case-sensitive** (Rust trait names are case-sensitive).
 
-use super::registry::{LangItemInfo, RFC, RfcId, Stability};
+use super::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
 /// Stable identifier for a builtin derive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -45,51 +45,71 @@ pub const DERIVES: &[DeriveInfo] = &[
         "Debug",
         "Derive Rust-style debug formatting.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         DeriveId::Display,
         "Display",
         "Derive user-facing string formatting.",
         RFC::_000,
+        Since(0, 1),
     ),
-    info(DeriveId::Eq, "Eq", "Derive equality comparisons.", RFC::_000),
-    info(DeriveId::Ord, "Ord", "Derive ordering comparisons.", RFC::_000),
+    info(
+        DeriveId::Eq,
+        "Eq",
+        "Derive equality comparisons.",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info(
+        DeriveId::Ord,
+        "Ord",
+        "Derive ordering comparisons.",
+        RFC::_000,
+        Since(0, 1),
+    ),
     info(
         DeriveId::Hash,
         "Hash",
         "Derive hashing support (for map/set keys).",
         RFC::_000,
+        Since(0, 1),
     ),
-    info(DeriveId::Clone, "Clone", "Derive deep cloning.", RFC::_000),
+    info(DeriveId::Clone, "Clone", "Derive deep cloning.", RFC::_000, Since(0, 1)),
     info(
         DeriveId::Copy,
         "Copy",
         "Derive copy semantics for simple value types.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         DeriveId::Default,
         "Default",
         "Derive a default value constructor.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         DeriveId::Serialize,
         "Serialize",
         "Derive serialization support (e.g. JSON).",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         DeriveId::Deserialize,
         "Deserialize",
         "Derive deserialization support (e.g. JSON).",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         DeriveId::Validate,
         "Validate",
         "Enable validated construction via `TypeName.new(...)` and require a `validate(self) -> Result[Self, E]` method.",
         RFC::_000,
+        Since(0, 1),
     ),
 ];
 
@@ -123,6 +143,7 @@ const fn info(
     canonical: &'static str,
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> DeriveInfo {
     LangItemInfo {
         id,
@@ -130,7 +151,7 @@ const fn info(
         aliases: &[],
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }

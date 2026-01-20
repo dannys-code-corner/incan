@@ -21,7 +21,7 @@
 //! ## See also
 //! - [`crate::lang::operators`] for operator precedence/fixity metadata.
 
-use super::registry::{Example, RFC, RfcId, SinceVersion, Stability};
+use super::registry::{Example, RFC, RfcId, Since, Stability};
 
 /// Stable identifier for every reserved keyword.
 ///
@@ -138,7 +138,7 @@ pub struct KeywordInfo {
     pub category: KeywordCategory,
     pub usage: &'static [KeywordUsage],
     pub introduced_in_rfc: RfcId,
-    pub since_version: Option<SinceVersion>,
+    pub since: Since,
     pub stability: Stability,
     pub examples: &'static [Example],
 }
@@ -156,6 +156,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement, KeywordUsage::Expression],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Else,
@@ -164,6 +165,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Elif,
@@ -172,6 +174,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Match,
@@ -180,6 +183,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement, KeywordUsage::Expression],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Case,
@@ -188,6 +192,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::While,
@@ -196,6 +201,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::For,
@@ -204,6 +210,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Break,
@@ -212,6 +219,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Continue,
@@ -220,6 +228,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Return,
@@ -228,6 +237,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Yield,
@@ -236,6 +246,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement, KeywordUsage::Expression],
         RFC::_001,
+        Since(0, 1),
     ),
     info(
         KeywordId::Pass,
@@ -244,6 +255,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::ControlFlow,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     // Definitions / declarations
     info_with_aliases(
@@ -253,6 +265,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Async,
@@ -261,6 +274,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Modifier],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Await,
@@ -269,6 +283,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Expression],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Class,
@@ -277,6 +292,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Model,
@@ -285,6 +301,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Trait,
@@ -293,6 +310,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Enum,
@@ -301,6 +319,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Type,
@@ -309,6 +328,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Newtype,
@@ -317,6 +337,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::With,
@@ -325,6 +346,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Modifier],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Extends,
@@ -333,6 +355,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Modifier],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Pub,
@@ -341,6 +364,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Definition,
         &[KeywordUsage::Modifier],
         RFC::_000,
+        Since(0, 1),
     ),
     // Imports / modules / interop
     info(
@@ -350,6 +374,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Import,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::From,
@@ -358,6 +383,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Import,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::As,
@@ -366,6 +392,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Import,
         &[KeywordUsage::Modifier],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Rust,
@@ -374,6 +401,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Import,
         &[KeywordUsage::Modifier],
         RFC::_005,
+        Since(0, 1),
     ),
     info(
         KeywordId::Python,
@@ -382,6 +410,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Import,
         &[KeywordUsage::Modifier],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Super,
@@ -390,6 +419,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Import,
         &[KeywordUsage::Expression],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Crate,
@@ -398,6 +428,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Import,
         &[KeywordUsage::Expression],
         RFC::_005,
+        Since(0, 1),
     ),
     // Bindings / receivers
     info(
@@ -407,6 +438,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Binding,
         &[KeywordUsage::Statement],
         RFC::_008,
+        Since(0, 1),
     ),
     info(
         KeywordId::Let,
@@ -415,6 +447,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Binding,
         &[KeywordUsage::Statement],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Mut,
@@ -423,6 +456,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Binding,
         &[KeywordUsage::Modifier],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::SelfKw,
@@ -431,6 +465,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Binding,
         &[KeywordUsage::ReceiverOnly],
         RFC::_000,
+        Since(0, 1),
     ),
     // Literals
     info_with_aliases(
@@ -440,6 +475,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Literal,
         &[KeywordUsage::Expression],
         RFC::_000,
+        Since(0, 1),
     ),
     info_with_aliases(
         KeywordId::False,
@@ -448,6 +484,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Literal,
         &[KeywordUsage::Expression],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::None,
@@ -456,6 +493,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Literal,
         &[KeywordUsage::Expression],
         RFC::_000,
+        Since(0, 1),
     ),
     // Word operators
     info(
@@ -465,6 +503,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Operator,
         &[KeywordUsage::Operator],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Or,
@@ -473,6 +512,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Operator,
         &[KeywordUsage::Operator],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Not,
@@ -481,6 +521,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Operator,
         &[KeywordUsage::Operator],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::In,
@@ -489,6 +530,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Operator,
         &[KeywordUsage::Operator],
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         KeywordId::Is,
@@ -497,6 +539,7 @@ pub const KEYWORDS: &[KeywordInfo] = &[
         KeywordCategory::Operator,
         &[KeywordUsage::Operator],
         RFC::_000,
+        Since(0, 1),
     ),
 ];
 
@@ -591,6 +634,7 @@ const fn info(
     category: KeywordCategory,
     usage: &'static [KeywordUsage],
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> KeywordInfo {
     KeywordInfo {
         id,
@@ -599,7 +643,7 @@ const fn info(
         category,
         usage,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }
@@ -612,6 +656,7 @@ const fn info_with_aliases(
     category: KeywordCategory,
     usage: &'static [KeywordUsage],
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> KeywordInfo {
-    info(id, canonical, aliases, category, usage, introduced_in_rfc)
+    info(id, canonical, aliases, category, usage, introduced_in_rfc, since)
 }

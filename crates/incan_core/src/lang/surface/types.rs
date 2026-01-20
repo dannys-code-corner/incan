@@ -3,7 +3,7 @@
 //! These types are part of the language surface (documented, user-facing), but are not “core”
 //! builtin types like `int`/`str` and do not belong in `lang::types::*` registries.
 
-use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
 /// Stable identifier for a surface type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,6 +51,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Async/runtime mutex.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceTypeId::RwLock,
@@ -59,6 +60,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Async/runtime read-write lock.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceTypeId::Semaphore,
@@ -67,6 +69,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Named,
         "Async/runtime semaphore.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceTypeId::Barrier,
@@ -75,6 +78,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Named,
         "Async/runtime barrier.",
         RFC::_000,
+        Since(0, 1),
     ),
     // Task handles
     info(
@@ -84,6 +88,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Handle to a spawned task.",
         RFC::_000,
+        Since(0, 1),
     ),
     // Channels
     info(
@@ -93,6 +98,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Bounded channel sender.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceTypeId::Receiver,
@@ -101,6 +107,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Bounded channel receiver.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceTypeId::UnboundedSender,
@@ -109,6 +116,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Unbounded channel sender.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceTypeId::UnboundedReceiver,
@@ -117,6 +125,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Unbounded channel receiver.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceTypeId::OneshotSender,
@@ -125,6 +134,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Oneshot channel sender.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceTypeId::OneshotReceiver,
@@ -133,6 +143,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Oneshot channel receiver.",
         RFC::_000,
+        Since(0, 1),
     ),
     // Interop
     info(
@@ -142,6 +153,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Rust interop `Vec<T>`.",
         RFC::_005,
+        Since(0, 1),
     ),
     info(
         SurfaceTypeId::HashMap,
@@ -150,6 +162,7 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
         SurfaceTypeKind::Generic,
         "Rust interop `HashMap<K, V>`.",
         RFC::_005,
+        Since(0, 1),
     ),
 ];
 
@@ -184,6 +197,7 @@ const fn info(
     kind: SurfaceTypeKind,
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> SurfaceTypeInfo {
     SurfaceTypeInfo {
         kind,
@@ -193,7 +207,7 @@ const fn info(
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         },

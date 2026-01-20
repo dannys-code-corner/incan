@@ -144,7 +144,7 @@ fn render_keywords_section(out: &mut String) {
                 .join(", ")
         };
         let rfc = k.introduced_in_rfc;
-        let since = k.since_version.unwrap_or("");
+        let since = k.since;
         let stability = format!("{:?}", k.stability);
 
         out.push_str(&format!(
@@ -192,7 +192,7 @@ fn render_exceptions_section(out: &mut String) {
         };
         let desc = e.description;
         let rfc = e.introduced_in_rfc;
-        let since = e.since_version.unwrap_or("");
+        let since = e.since;
         let stability = format!("{:?}", e.stability);
 
         out.push_str(&format!(
@@ -240,7 +240,7 @@ fn render_builtins_section(out: &mut String) {
         };
         let desc = b.description;
         let rfc = b.introduced_in_rfc;
-        let since = b.since_version.unwrap_or("");
+        let since = b.since;
         let stability = format!("{:?}", b.stability);
 
         out.push_str(&format!(
@@ -270,7 +270,7 @@ fn render_derives_section(out: &mut String) {
         };
         let desc = d.description;
         let rfc = d.introduced_in_rfc;
-        let since = d.since_version.unwrap_or("");
+        let since = d.since;
         let stability = format!("{:?}", d.stability);
 
         out.push_str(&format!(
@@ -311,7 +311,7 @@ fn render_operators_section(out: &mut String) {
         let fixity = format!("{:?}", o.fixity);
         let is_kw = o.is_keyword_spelling;
         let rfc = o.introduced_in_rfc;
-        let since = o.since_version.unwrap_or("");
+        let since = o.since;
         let stability = format!("{:?}", o.stability);
 
         out.push_str(&format!(
@@ -341,7 +341,7 @@ fn render_punctuation_section(out: &mut String) {
         };
         let category = format!("{:?}", p.category);
         let rfc = p.introduced_in_rfc;
-        let since = p.since_version.unwrap_or("");
+        let since = p.since;
         let stability = format!("{:?}", p.stability);
 
         out.push_str(&format!(
@@ -373,7 +373,7 @@ fn render_types_section(out: &mut String) {
         };
         let desc = t.description;
         let rfc = t.introduced_in_rfc;
-        let since = t.since_version.unwrap_or("");
+        let since = t.since;
         let stability = format!("{:?}", t.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -397,7 +397,7 @@ fn render_types_section(out: &mut String) {
         };
         let desc = t.description;
         let rfc = t.introduced_in_rfc;
-        let since = t.since_version.unwrap_or("");
+        let since = t.since;
         let stability = format!("{:?}", t.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -421,7 +421,7 @@ fn render_types_section(out: &mut String) {
         };
         let desc = t.description;
         let rfc = t.introduced_in_rfc;
-        let since = t.since_version.unwrap_or("");
+        let since = t.since;
         let stability = format!("{:?}", t.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -450,7 +450,7 @@ fn render_surface_constructors_section(out: &mut String) {
         };
         let desc = c.description;
         let rfc = c.introduced_in_rfc;
-        let since = c.since_version.unwrap_or("");
+        let since = c.since;
         let stability = format!("{:?}", c.stability);
 
         out.push_str(&format!(
@@ -480,7 +480,7 @@ fn render_surface_functions_section(out: &mut String) {
         };
         let desc = f.description;
         let rfc = f.introduced_in_rfc;
-        let since = f.since_version.unwrap_or("");
+        let since = f.since;
         let stability = format!("{:?}", f.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -509,7 +509,7 @@ fn render_surface_math_section(out: &mut String) {
         };
         let desc = f.description;
         let rfc = f.introduced_in_rfc;
-        let since = f.since_version.unwrap_or("");
+        let since = f.since;
         let stability = format!("{:?}", f.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -534,7 +534,7 @@ fn render_surface_math_section(out: &mut String) {
         };
         let desc = c.description;
         let rfc = c.introduced_in_rfc;
-        let since = c.since_version.unwrap_or("");
+        let since = c.since;
         let stability = format!("{:?}", c.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -563,7 +563,7 @@ fn render_surface_string_methods_section(out: &mut String) {
         };
         let desc = m.description;
         let rfc = m.introduced_in_rfc;
-        let since = m.since_version.unwrap_or("");
+        let since = m.since;
         let stability = format!("{:?}", m.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -594,7 +594,7 @@ fn render_surface_types_section(out: &mut String) {
         let kind = format!("{:?}", t.kind);
         let desc = t.item.description;
         let rfc = t.item.introduced_in_rfc;
-        let since = t.item.since_version.unwrap_or("");
+        let since = t.item.since;
         let stability = format!("{:?}", t.item.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {kind} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -627,7 +627,7 @@ fn render_surface_methods_section(out: &mut String) {
         };
         let desc = m.description;
         let rfc = m.introduced_in_rfc;
-        let since = m.since_version.unwrap_or("");
+        let since = m.since;
         let stability = format!("{:?}", m.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -652,7 +652,7 @@ fn render_surface_methods_section(out: &mut String) {
         };
         let desc = m.description;
         let rfc = m.introduced_in_rfc;
-        let since = m.since_version.unwrap_or("");
+        let since = m.since;
         let stability = format!("{:?}", m.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -677,7 +677,7 @@ fn render_surface_methods_section(out: &mut String) {
         };
         let desc = m.description;
         let rfc = m.introduced_in_rfc;
-        let since = m.since_version.unwrap_or("");
+        let since = m.since;
         let stability = format!("{:?}", m.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -702,7 +702,7 @@ fn render_surface_methods_section(out: &mut String) {
         };
         let desc = m.description;
         let rfc = m.introduced_in_rfc;
-        let since = m.since_version.unwrap_or("");
+        let since = m.since;
         let stability = format!("{:?}", m.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -727,7 +727,7 @@ fn render_surface_methods_section(out: &mut String) {
         };
         let desc = m.description;
         let rfc = m.introduced_in_rfc;
-        let since = m.since_version.unwrap_or("");
+        let since = m.since;
         let stability = format!("{:?}", m.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -751,7 +751,7 @@ fn render_surface_methods_section(out: &mut String) {
         };
         let desc = m.description;
         let rfc = m.introduced_in_rfc;
-        let since = m.since_version.unwrap_or("");
+        let since = m.since;
         let stability = format!("{:?}", m.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -775,7 +775,7 @@ fn render_surface_methods_section(out: &mut String) {
         };
         let desc = m.description;
         let rfc = m.introduced_in_rfc;
-        let since = m.since_version.unwrap_or("");
+        let since = m.since;
         let stability = format!("{:?}", m.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
@@ -799,7 +799,7 @@ fn render_surface_methods_section(out: &mut String) {
         };
         let desc = m.description;
         let rfc = m.introduced_in_rfc;
-        let since = m.since_version.unwrap_or("");
+        let since = m.since;
         let stability = format!("{:?}", m.stability);
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"

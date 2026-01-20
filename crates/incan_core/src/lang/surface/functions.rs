@@ -4,7 +4,7 @@
 //! narrow sense, but are part of the language’s standard surface (especially async/time/channel
 //! helpers).
 
-use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
 /// Stable identifier for a surface function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,6 +37,7 @@ pub const SURFACE_FUNCTIONS: &[SurfaceFnInfo] = &[
         &[],
         "Sleep for N milliseconds.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceFnId::Timeout,
@@ -44,6 +45,7 @@ pub const SURFACE_FUNCTIONS: &[SurfaceFnInfo] = &[
         &[],
         "Run an async operation with a timeout.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceFnId::TimeoutMs,
@@ -51,6 +53,7 @@ pub const SURFACE_FUNCTIONS: &[SurfaceFnInfo] = &[
         &[],
         "Run an async operation with a timeout in milliseconds.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceFnId::SelectTimeout,
@@ -58,6 +61,7 @@ pub const SURFACE_FUNCTIONS: &[SurfaceFnInfo] = &[
         &[],
         "Select between futures with a timeout.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceFnId::YieldNow,
@@ -65,14 +69,23 @@ pub const SURFACE_FUNCTIONS: &[SurfaceFnInfo] = &[
         &[],
         "Yield execution back to the async scheduler.",
         RFC::_000,
+        Since(0, 1),
     ),
-    info(SurfaceFnId::Spawn, "spawn", &[], "Spawn an async task.", RFC::_000),
+    info(
+        SurfaceFnId::Spawn,
+        "spawn",
+        &[],
+        "Spawn an async task.",
+        RFC::_000,
+        Since(0, 1),
+    ),
     info(
         SurfaceFnId::SpawnBlocking,
         "spawn_blocking",
         &[],
         "Spawn a blocking task on a dedicated thread pool.",
         RFC::_004,
+        Since(0, 1),
     ),
     info(
         SurfaceFnId::Channel,
@@ -80,6 +93,7 @@ pub const SURFACE_FUNCTIONS: &[SurfaceFnInfo] = &[
         &[],
         "Create a bounded channel (sender, receiver).",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceFnId::UnboundedChannel,
@@ -87,6 +101,7 @@ pub const SURFACE_FUNCTIONS: &[SurfaceFnInfo] = &[
         &[],
         "Create an unbounded channel (sender, receiver).",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         SurfaceFnId::Oneshot,
@@ -94,6 +109,7 @@ pub const SURFACE_FUNCTIONS: &[SurfaceFnInfo] = &[
         &[],
         "Create a oneshot channel (sender, receiver).",
         RFC::_000,
+        Since(0, 1),
     ),
 ];
 
@@ -127,6 +143,7 @@ const fn info(
     aliases: &'static [&'static str],
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> SurfaceFnInfo {
     LangItemInfo {
         id,
@@ -134,7 +151,7 @@ const fn info(
         aliases,
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }

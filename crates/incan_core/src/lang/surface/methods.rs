@@ -39,7 +39,7 @@ pub mod string_methods {
     //!
     //! These are the user-facing method names available on `str`/`FrozenStr` in the language surface.
 
-    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
     /// Stable identifier for a string method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -63,14 +63,29 @@ pub mod string_methods {
 
     /// Registry of all string methods.
     pub const STRING_METHODS: &[StringMethodInfo] = &[
-        info(StringMethodId::Upper, "upper", &[], "Convert to uppercase.", RFC::_009),
-        info(StringMethodId::Lower, "lower", &[], "Convert to lowercase.", RFC::_009),
+        info(
+            StringMethodId::Upper,
+            "upper",
+            &[],
+            "Convert to uppercase.",
+            RFC::_009,
+            Since(0, 1),
+        ),
+        info(
+            StringMethodId::Lower,
+            "lower",
+            &[],
+            "Convert to lowercase.",
+            RFC::_009,
+            Since(0, 1),
+        ),
         info(
             StringMethodId::Strip,
             "strip",
             &[],
             "Strip leading and trailing whitespace.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::Replace,
@@ -78,6 +93,7 @@ pub mod string_methods {
             &[],
             "Replace occurrences of a substring.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::Join,
@@ -85,6 +101,7 @@ pub mod string_methods {
             &[],
             "Join an iterable/list of strings with this separator.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::ToString,
@@ -92,6 +109,7 @@ pub mod string_methods {
             &[],
             "Return a string representation (identity for strings).",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::SplitWhitespace,
@@ -99,6 +117,7 @@ pub mod string_methods {
             &[],
             "Split on Unicode whitespace.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::Split,
@@ -106,6 +125,7 @@ pub mod string_methods {
             &[],
             "Split on a separator substring.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::Contains,
@@ -113,6 +133,7 @@ pub mod string_methods {
             &[],
             "Return true if the substring occurs within the string.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::StartsWith,
@@ -120,6 +141,7 @@ pub mod string_methods {
             &["starts_with"],
             "Return true if the string starts with a prefix.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::EndsWith,
@@ -127,6 +149,7 @@ pub mod string_methods {
             &["ends_with"],
             "Return true if the string ends with a suffix.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::Len,
@@ -134,6 +157,7 @@ pub mod string_methods {
             &[],
             "Return the length (in Unicode scalars).",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             StringMethodId::IsEmpty,
@@ -141,6 +165,7 @@ pub mod string_methods {
             &[],
             "Return true if the length is zero.",
             RFC::_009,
+            Since(0, 1),
         ),
     ];
 
@@ -168,6 +193,7 @@ pub mod string_methods {
         aliases: &'static [&'static str],
         description: &'static str,
         introduced_in_rfc: RfcId,
+        since: Since,
     ) -> StringMethodInfo {
         LangItemInfo {
             id,
@@ -175,7 +201,7 @@ pub mod string_methods {
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         }
@@ -185,7 +211,7 @@ pub mod string_methods {
 pub mod set_methods {
     //! Set method surface vocabulary.
 
-    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
     /// Stable identifier for a set method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -202,6 +228,7 @@ pub mod set_methods {
         &[],
         "Return true if the set contains a value.",
         RFC::_009,
+        Since(0, 1),
     )];
 
     /// Resolve a set method spelling to its stable id.
@@ -228,6 +255,7 @@ pub mod set_methods {
         aliases: &'static [&'static str],
         description: &'static str,
         introduced_in_rfc: RfcId,
+        since: Since,
     ) -> SetMethodInfo {
         LangItemInfo {
             id,
@@ -235,7 +263,7 @@ pub mod set_methods {
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         }
@@ -245,7 +273,7 @@ pub mod set_methods {
 pub mod list_methods {
     //! List method surface vocabulary.
 
-    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
     /// Stable identifier for a list method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -271,6 +299,7 @@ pub mod list_methods {
             &[],
             "Append an element to the end of the list.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             ListMethodId::Pop,
@@ -278,6 +307,7 @@ pub mod list_methods {
             &[],
             "Remove and return the last element.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             ListMethodId::Contains,
@@ -285,6 +315,7 @@ pub mod list_methods {
             &[],
             "Return true if the list contains a value.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             ListMethodId::Swap,
@@ -292,6 +323,7 @@ pub mod list_methods {
             &[],
             "Swap two elements by index.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             ListMethodId::Reserve,
@@ -299,6 +331,7 @@ pub mod list_methods {
             &[],
             "Reserve capacity for at least N more elements.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             ListMethodId::ReserveExact,
@@ -306,6 +339,7 @@ pub mod list_methods {
             &[],
             "Reserve capacity for exactly N more elements.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             ListMethodId::Remove,
@@ -313,6 +347,7 @@ pub mod list_methods {
             &[],
             "Remove and return the element at the given index.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             ListMethodId::Count,
@@ -320,6 +355,7 @@ pub mod list_methods {
             &[],
             "Count occurrences of a value.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             ListMethodId::Index,
@@ -327,6 +363,7 @@ pub mod list_methods {
             &[],
             "Return the index of a value (or error if not found).",
             RFC::_009,
+            Since(0, 1),
         ),
     ];
 
@@ -354,6 +391,7 @@ pub mod list_methods {
         aliases: &'static [&'static str],
         description: &'static str,
         introduced_in_rfc: RfcId,
+        since: Since,
     ) -> ListMethodInfo {
         LangItemInfo {
             id,
@@ -361,7 +399,7 @@ pub mod list_methods {
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         }
@@ -371,7 +409,7 @@ pub mod list_methods {
 pub mod dict_methods {
     //! Dict method surface vocabulary.
 
-    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
     /// Stable identifier for a dict method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -392,6 +430,7 @@ pub mod dict_methods {
             &[],
             "Return an iterable/list of keys.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             DictMethodId::Values,
@@ -399,6 +438,7 @@ pub mod dict_methods {
             &[],
             "Return an iterable/list of values.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             DictMethodId::Get,
@@ -406,6 +446,7 @@ pub mod dict_methods {
             &[],
             "Get a value by key, optionally with a default.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             DictMethodId::Insert,
@@ -413,6 +454,7 @@ pub mod dict_methods {
             &[],
             "Insert or overwrite a key/value pair.",
             RFC::_009,
+            Since(0, 1),
         ),
     ];
 
@@ -440,6 +482,7 @@ pub mod dict_methods {
         aliases: &'static [&'static str],
         description: &'static str,
         introduced_in_rfc: RfcId,
+        since: Since,
     ) -> DictMethodInfo {
         LangItemInfo {
             id,
@@ -447,7 +490,7 @@ pub mod dict_methods {
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         }
@@ -457,7 +500,7 @@ pub mod dict_methods {
 pub mod frozen_set_methods {
     //! FrozenSet method surface vocabulary.
 
-    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
     /// Stable identifier for a frozen set method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -477,6 +520,7 @@ pub mod frozen_set_methods {
             &[],
             "Return the number of elements.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FrozenSetMethodId::IsEmpty,
@@ -484,6 +528,7 @@ pub mod frozen_set_methods {
             &[],
             "Return true if the set is empty.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FrozenSetMethodId::Contains,
@@ -491,6 +536,7 @@ pub mod frozen_set_methods {
             &[],
             "Return true if the set contains a value.",
             RFC::_009,
+            Since(0, 1),
         ),
     ];
 
@@ -518,6 +564,7 @@ pub mod frozen_set_methods {
         aliases: &'static [&'static str],
         description: &'static str,
         introduced_in_rfc: RfcId,
+        since: Since,
     ) -> FrozenSetMethodInfo {
         LangItemInfo {
             id,
@@ -525,7 +572,7 @@ pub mod frozen_set_methods {
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         }
@@ -535,7 +582,7 @@ pub mod frozen_set_methods {
 pub mod frozen_list_methods {
     //! FrozenList method surface vocabulary.
 
-    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
     /// Stable identifier for a frozen list method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -554,6 +601,7 @@ pub mod frozen_list_methods {
             &[],
             "Return the number of elements.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FrozenListMethodId::IsEmpty,
@@ -561,6 +609,7 @@ pub mod frozen_list_methods {
             &[],
             "Return true if the list is empty.",
             RFC::_009,
+            Since(0, 1),
         ),
     ];
 
@@ -588,6 +637,7 @@ pub mod frozen_list_methods {
         aliases: &'static [&'static str],
         description: &'static str,
         introduced_in_rfc: RfcId,
+        since: Since,
     ) -> FrozenListMethodInfo {
         LangItemInfo {
             id,
@@ -595,7 +645,7 @@ pub mod frozen_list_methods {
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         }
@@ -605,7 +655,7 @@ pub mod frozen_list_methods {
 pub mod frozen_dict_methods {
     //! FrozenDict method surface vocabulary.
 
-    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
     /// Stable identifier for a frozen dict method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -625,6 +675,7 @@ pub mod frozen_dict_methods {
             &[],
             "Return the number of entries.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FrozenDictMethodId::IsEmpty,
@@ -632,6 +683,7 @@ pub mod frozen_dict_methods {
             &[],
             "Return true if the dict is empty.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FrozenDictMethodId::ContainsKey,
@@ -639,6 +691,7 @@ pub mod frozen_dict_methods {
             &[],
             "Return true if the dict contains a key.",
             RFC::_009,
+            Since(0, 1),
         ),
     ];
 
@@ -666,6 +719,7 @@ pub mod frozen_dict_methods {
         aliases: &'static [&'static str],
         description: &'static str,
         introduced_in_rfc: RfcId,
+        since: Since,
     ) -> FrozenDictMethodInfo {
         LangItemInfo {
             id,
@@ -673,7 +727,7 @@ pub mod frozen_dict_methods {
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         }
@@ -683,7 +737,7 @@ pub mod frozen_dict_methods {
 pub mod frozen_bytes_methods {
     //! FrozenBytes method surface vocabulary.
 
-    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
     /// Stable identifier for a frozen bytes method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -702,6 +756,7 @@ pub mod frozen_bytes_methods {
             &[],
             "Return the number of bytes.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FrozenBytesMethodId::IsEmpty,
@@ -709,6 +764,7 @@ pub mod frozen_bytes_methods {
             &[],
             "Return true if the byte string is empty.",
             RFC::_009,
+            Since(0, 1),
         ),
     ];
 
@@ -736,6 +792,7 @@ pub mod frozen_bytes_methods {
         aliases: &'static [&'static str],
         description: &'static str,
         introduced_in_rfc: RfcId,
+        since: Since,
     ) -> FrozenBytesMethodInfo {
         LangItemInfo {
             id,
@@ -743,7 +800,7 @@ pub mod frozen_bytes_methods {
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         }
@@ -755,7 +812,7 @@ pub mod float_methods {
     //!
     //! These are the user-facing methods that the typechecker treats as available on `float`.
 
-    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+    use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
     /// Stable identifier for a float method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -788,14 +845,22 @@ pub mod float_methods {
 
     /// Registry of all float methods.
     pub const FLOAT_METHODS: &[FloatMethodInfo] = &[
-        info(FloatMethodId::Sqrt, "sqrt", &[], "Square root.", RFC::_009),
-        info(FloatMethodId::Abs, "abs", &[], "Absolute value.", RFC::_009),
+        info(FloatMethodId::Sqrt, "sqrt", &[], "Square root.", RFC::_009, Since(0, 1)),
+        info(
+            FloatMethodId::Abs,
+            "abs",
+            &[],
+            "Absolute value.",
+            RFC::_009,
+            Since(0, 1),
+        ),
         info(
             FloatMethodId::Floor,
             "floor",
             &[],
             "Round down to the nearest integer (as float).",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FloatMethodId::Ceil,
@@ -803,6 +868,7 @@ pub mod float_methods {
             &[],
             "Round up to the nearest integer (as float).",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FloatMethodId::Round,
@@ -810,20 +876,50 @@ pub mod float_methods {
             &[],
             "Round to the nearest integer (as float).",
             RFC::_009,
+            Since(0, 1),
         ),
-        info(FloatMethodId::Sin, "sin", &[], "Sine.", RFC::_009),
-        info(FloatMethodId::Cos, "cos", &[], "Cosine.", RFC::_009),
-        info(FloatMethodId::Tan, "tan", &[], "Tangent.", RFC::_009),
-        info(FloatMethodId::Exp, "exp", &[], "Exponentiation (e^x).", RFC::_009),
-        info(FloatMethodId::Ln, "ln", &[], "Natural logarithm.", RFC::_009),
-        info(FloatMethodId::Log2, "log2", &[], "Base-2 logarithm.", RFC::_009),
-        info(FloatMethodId::Log10, "log10", &[], "Base-10 logarithm.", RFC::_009),
+        info(FloatMethodId::Sin, "sin", &[], "Sine.", RFC::_009, Since(0, 1)),
+        info(FloatMethodId::Cos, "cos", &[], "Cosine.", RFC::_009, Since(0, 1)),
+        info(FloatMethodId::Tan, "tan", &[], "Tangent.", RFC::_009, Since(0, 1)),
+        info(
+            FloatMethodId::Exp,
+            "exp",
+            &[],
+            "Exponentiation (e^x).",
+            RFC::_009,
+            Since(0, 1),
+        ),
+        info(
+            FloatMethodId::Ln,
+            "ln",
+            &[],
+            "Natural logarithm.",
+            RFC::_009,
+            Since(0, 1),
+        ),
+        info(
+            FloatMethodId::Log2,
+            "log2",
+            &[],
+            "Base-2 logarithm.",
+            RFC::_009,
+            Since(0, 1),
+        ),
+        info(
+            FloatMethodId::Log10,
+            "log10",
+            &[],
+            "Base-10 logarithm.",
+            RFC::_009,
+            Since(0, 1),
+        ),
         info(
             FloatMethodId::IsNan,
             "is_nan",
             &[],
             "Return true if this value is NaN.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FloatMethodId::IsInfinite,
@@ -831,6 +927,7 @@ pub mod float_methods {
             &[],
             "Return true if this value is ±infinity.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FloatMethodId::IsFinite,
@@ -838,6 +935,7 @@ pub mod float_methods {
             &[],
             "Return true if this value is finite.",
             RFC::_009,
+            Since(0, 1),
         ),
         info(
             FloatMethodId::Powi,
@@ -845,8 +943,16 @@ pub mod float_methods {
             &[],
             "Raise to an integer power.",
             RFC::_009,
+            Since(0, 1),
         ),
-        info(FloatMethodId::Powf, "powf", &[], "Raise to a float power.", RFC::_009),
+        info(
+            FloatMethodId::Powf,
+            "powf",
+            &[],
+            "Raise to a float power.",
+            RFC::_009,
+            Since(0, 1),
+        ),
     ];
 
     /// Resolve a float method spelling to its stable id.
@@ -873,6 +979,7 @@ pub mod float_methods {
         aliases: &'static [&'static str],
         description: &'static str,
         introduced_in_rfc: RfcId,
+        since: Since,
     ) -> FloatMethodInfo {
         LangItemInfo {
             id,
@@ -880,7 +987,7 @@ pub mod float_methods {
             aliases,
             description,
             introduced_in_rfc,
-            since_version: None,
+            since,
             stability: Stability::Stable,
             examples: &[],
         }

@@ -15,7 +15,7 @@
 //! assert_eq!(punctuation::as_str(PunctuationId::FatArrow), "=>");
 //! ```
 
-use super::registry::{Example, RFC, RfcId, SinceVersion, Stability};
+use super::registry::{Example, RFC, RfcId, Since, Stability};
 
 /// Broad syntactic grouping for punctuation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,7 +69,7 @@ pub struct PunctuationInfo {
     pub aliases: &'static [&'static str],
     pub category: PunctuationCategory,
     pub introduced_in_rfc: RfcId,
-    pub since_version: Option<SinceVersion>,
+    pub since: Since,
     pub stability: Stability,
     pub examples: &'static [Example],
 }
@@ -83,6 +83,7 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Separator,
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         PunctuationId::Colon,
@@ -90,6 +91,7 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Separator,
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         PunctuationId::Question,
@@ -97,25 +99,49 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Marker,
         RFC::_000,
+        Since(0, 1),
     ),
-    info(PunctuationId::At, "@", &[], PunctuationCategory::Marker, RFC::_000),
+    info(
+        PunctuationId::At,
+        "@",
+        &[],
+        PunctuationCategory::Marker,
+        RFC::_000,
+        Since(0, 1),
+    ),
     // Access / path
-    info(PunctuationId::Dot, ".", &[], PunctuationCategory::Access, RFC::_000),
+    info(
+        PunctuationId::Dot,
+        ".",
+        &[],
+        PunctuationCategory::Access,
+        RFC::_000,
+        Since(0, 1),
+    ),
     info(
         PunctuationId::ColonColon,
         "::",
         &[],
         PunctuationCategory::Access,
         RFC::_000,
+        Since(0, 1),
     ),
     // Arrows
-    info(PunctuationId::Arrow, "->", &[], PunctuationCategory::Arrow, RFC::_000),
+    info(
+        PunctuationId::Arrow,
+        "->",
+        &[],
+        PunctuationCategory::Arrow,
+        RFC::_000,
+        Since(0, 1),
+    ),
     info(
         PunctuationId::FatArrow,
         "=>",
         &[],
         PunctuationCategory::Arrow,
         RFC::_000,
+        Since(0, 1),
     ),
     // Special markers
     info(
@@ -124,6 +150,7 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Marker,
         RFC::_000,
+        Since(0, 1),
     ),
     // Delimiters
     info(
@@ -132,6 +159,7 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Delimiter,
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         PunctuationId::RParen,
@@ -139,6 +167,7 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Delimiter,
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         PunctuationId::LBracket,
@@ -146,6 +175,7 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Delimiter,
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         PunctuationId::RBracket,
@@ -153,6 +183,7 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Delimiter,
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         PunctuationId::LBrace,
@@ -160,6 +191,7 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Delimiter,
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         PunctuationId::RBrace,
@@ -167,6 +199,7 @@ pub const PUNCTUATION: &[PunctuationInfo] = &[
         &[],
         PunctuationCategory::Delimiter,
         RFC::_000,
+        Since(0, 1),
     ),
 ];
 
@@ -219,6 +252,7 @@ const fn info(
     aliases: &'static [&'static str],
     category: PunctuationCategory,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> PunctuationInfo {
     PunctuationInfo {
         id,
@@ -226,7 +260,7 @@ const fn info(
         aliases,
         category,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }
