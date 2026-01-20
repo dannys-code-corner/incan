@@ -17,6 +17,7 @@
 //! Default implementations preserve current behavior.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -72,11 +73,20 @@ pub struct TestSummary {
 #[derive(Default)]
 pub struct ConsoleReporter {
     pub verbose: bool,
+    pub use_color: bool,
 }
 
 impl ConsoleReporter {
-    pub fn new(verbose: bool) -> Self {
-        Self { verbose }
+    pub fn new(verbose: bool, use_color: bool) -> Self {
+        Self { verbose, use_color }
+    }
+}
+
+fn style<T: fmt::Display>(text: T, code: &str, use_color: bool) -> String {
+    if use_color {
+        format!("\x1b[{}m{}\x1b[0m", code, text)
+    } else {
+        text.to_string()
     }
 }
 
@@ -94,32 +104,33 @@ impl TestReporter for ConsoleReporter {
     }
 
     fn on_test_complete(&mut self, test: &TestInfo, result: &TestResult) {
+        let use_color = self.use_color;
         let status = match result {
             TestResult::Passed(d) => {
                 if self.verbose {
-                    format!("\x1b[32mPASSED\x1b[0m ({:.0}ms)", d.as_millis())
+                    format!("{} ({:.0}ms)", style("PASSED", "32", use_color), d.as_millis())
                 } else {
-                    "\x1b[32m.\x1b[0m".to_string()
+                    style(".", "32", use_color)
                 }
             }
             TestResult::Failed(d, _) => {
                 if self.verbose {
-                    format!("\x1b[31mFAILED\x1b[0m ({:.0}ms)", d.as_millis())
+                    format!("{} ({:.0}ms)", style("FAILED", "31", use_color), d.as_millis())
                 } else {
-                    "\x1b[31mF\x1b[0m".to_string()
+                    style("F", "31", use_color)
                 }
             }
             TestResult::Skipped(reason) => {
                 if reason.is_empty() {
-                    "\x1b[33mSKIPPED\x1b[0m".to_string()
+                    style("SKIPPED", "33", use_color)
                 } else {
-                    format!("\x1b[33mSKIPPED\x1b[0m ({})", reason)
+                    format!("{} ({})", style("SKIPPED", "33", use_color), reason)
                 }
             }
             TestResult::XFailed(_, reason) => {
-                format!("\x1b[33mXFAIL\x1b[0m ({})", reason)
+                format!("{} ({})", style("XFAIL", "33", use_color), reason)
             }
-            TestResult::XPassed(_) => "\x1b[31mXPASS\x1b[0m".to_string(),
+            TestResult::XPassed(_) => style("XPASS", "31", use_color),
         };
 
         if self.verbose {
@@ -130,12 +141,13 @@ impl TestReporter for ConsoleReporter {
 
         // Print failure details
         if let TestResult::Failed(_, error) = result {
-            eprintln!("\n\x1b[31m{}\x1b[0m", test.function_name);
+            eprintln!("\n{}", style(&test.function_name, "31", use_color));
             eprintln!("{}", error);
         }
     }
 
     fn on_run_complete(&mut self, summary: &TestSummary) {
+        let use_color = self.use_color;
         if !self.verbose {
             eprintln!();
         }
@@ -143,16 +155,16 @@ impl TestReporter for ConsoleReporter {
 
         let mut parts = Vec::new();
         if summary.passed > 0 {
-            parts.push(format!("\x1b[32m{} passed\x1b[0m", summary.passed));
+            parts.push(style(format!("{} passed", summary.passed), "32", use_color));
         }
         if summary.failed > 0 {
-            parts.push(format!("\x1b[31m{} failed\x1b[0m", summary.failed));
+            parts.push(style(format!("{} failed", summary.failed), "31", use_color));
         }
         if summary.skipped > 0 {
-            parts.push(format!("\x1b[33m{} skipped\x1b[0m", summary.skipped));
+            parts.push(style(format!("{} skipped", summary.skipped), "33", use_color));
         }
         if summary.xfailed > 0 {
-            parts.push(format!("\x1b[33m{} xfailed\x1b[0m", summary.xfailed));
+            parts.push(style(format!("{} xfailed", summary.xfailed), "33", use_color));
         }
 
         eprintln!(
@@ -227,6 +239,8 @@ pub fn run_tests(
     stop_on_fail: bool,
     include_slow: bool,
     filter: Option<&str>,
+    use_color: bool,
+    fail_on_empty: bool,
 ) -> CliResult<ExitCode> {
     let start_time = Instant::now();
 
@@ -306,10 +320,20 @@ pub fn run_tests(
 
     if filtered_tests.is_empty() {
         eprintln!("No tests collected");
+        if fail_on_empty {
+            return Err(CliError::new("", ExitCode::FAILURE));
+        }
         return Ok(ExitCode::SUCCESS); // "no tests collected" is not a failure
     }
 
-    println!("\x1b[1m=================== test session starts ===================\x1b[0m");
+    println!(
+        "{}",
+        style(
+            "=================== test session starts ===================",
+            "1",
+            use_color
+        )
+    );
     println!("collected {} item(s)", filtered_tests.len());
     println!();
 
@@ -323,7 +347,7 @@ pub fn run_tests(
     for test in filtered_tests {
         if let Some(TestMarker::Skip(reason)) = test.markers.iter().find(|m| matches!(m, TestMarker::Skip(_))) {
             let result = TestResult::Skipped(reason.clone());
-            print_test_result(&test, &result, verbose);
+            print_test_result(&test, &result, verbose, use_color);
             skipped += 1;
             results.push((test, result));
             continue;
@@ -365,7 +389,7 @@ pub fn run_tests(
             result
         };
 
-        print_test_result(&test, &result, verbose);
+        print_test_result(&test, &result, verbose, use_color);
 
         if stop_on_fail && matches!(result, TestResult::Failed(_, _)) {
             results.push((test, result));
@@ -382,16 +406,29 @@ pub fn run_tests(
 
     if !failures.is_empty() {
         println!();
-        println!("\x1b[1;31m=================== FAILURES ===================\x1b[0m");
+        println!(
+            "{}",
+            style("=================== FAILURES ===================", "1;31", use_color)
+        );
         for (test, result) in failures {
             println!();
-            println!("\x1b[1m___________ {} ___________\x1b[0m", test.function_name);
+            println!(
+                "{}",
+                style(
+                    format!("___________ {} ___________", test.function_name),
+                    "1",
+                    use_color
+                )
+            );
             if let TestResult::Failed(_, msg) = result {
                 println!();
                 println!("    {}", msg);
             } else if let TestResult::XPassed(_) = result {
                 println!();
-                println!("    \x1b[33mTest passed but was expected to fail (xfail)\x1b[0m");
+                println!(
+                    "    {}",
+                    style("Test passed but was expected to fail (xfail)", "33", use_color)
+                );
             }
             println!();
             println!("    {}::{}", test.file_path.display(), test.function_name);
@@ -400,12 +437,14 @@ pub fn run_tests(
 
     let total_time = start_time.elapsed();
     println!();
-    let summary_color = if failed > 0 || xpassed > 0 {
-        "\x1b[1;31m"
+    let summary_border = if failed > 0 || xpassed > 0 {
+        // 31 is red
+        style("===================", "1;31", use_color)
     } else {
-        "\x1b[1;32m"
+        // 32 is green
+        style("===================", "1;32", use_color)
     };
-    print!("{}===================", summary_color);
+    print!("{}", summary_border);
 
     let mut parts = Vec::new();
     if passed > 0 {
@@ -425,7 +464,7 @@ pub fn run_tests(
     }
 
     print!(" {} in {:.2}s ", parts.join(", "), total_time.as_secs_f64());
-    println!("===================\x1b[0m");
+    println!("{}", summary_border);
 
     if failed > 0 || xpassed > 0 {
         // Tests failed - return error with empty message (summary already printed)
@@ -435,39 +474,39 @@ pub fn run_tests(
     }
 }
 
-fn print_test_result(test: &TestInfo, result: &TestResult, verbose: bool) {
+fn print_test_result(test: &TestInfo, result: &TestResult, verbose: bool, use_color: bool) {
     let file_stem = test.file_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
 
     let status = match result {
         TestResult::Passed(d) => {
             if verbose {
-                format!("\x1b[32mPASSED\x1b[0m ({:.0}ms)", d.as_millis())
+                format!("{} ({:.0}ms)", style("PASSED", "32", use_color), d.as_millis())
             } else {
-                "\x1b[32mPASSED\x1b[0m".to_string()
+                style("PASSED", "32", use_color)
             }
         }
         TestResult::Failed(d, _) => {
             if verbose {
-                format!("\x1b[31mFAILED\x1b[0m ({:.0}ms)", d.as_millis())
+                format!("{} ({:.0}ms)", style("FAILED", "31", use_color), d.as_millis())
             } else {
-                "\x1b[31mFAILED\x1b[0m".to_string()
+                style("FAILED", "31", use_color)
             }
         }
         TestResult::Skipped(reason) => {
             if reason.is_empty() {
-                "\x1b[33mSKIPPED\x1b[0m".to_string()
+                style("SKIPPED", "33", use_color)
             } else {
-                format!("\x1b[33mSKIPPED\x1b[0m ({})", reason)
+                format!("{} ({})", style("SKIPPED", "33", use_color), reason)
             }
         }
         TestResult::XFailed(_, reason) => {
             if reason.is_empty() {
-                "\x1b[33mXFAIL\x1b[0m".to_string()
+                style("XFAIL", "33", use_color)
             } else {
-                format!("\x1b[33mXFAIL\x1b[0m ({})", reason)
+                format!("{} ({})", style("XFAIL", "33", use_color), reason)
             }
         }
-        TestResult::XPassed(_) => "\x1b[31mXPASS\x1b[0m".to_string(),
+        TestResult::XPassed(_) => style("XPASS", "31", use_color),
     };
 
     println!("{}::{} {}", file_stem, test.function_name, status);

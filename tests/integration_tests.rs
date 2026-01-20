@@ -2,6 +2,8 @@
 
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use incan::frontend::{lexer, parser, typechecker};
 
@@ -19,6 +21,18 @@ fn compile_source(source: &str) -> Result<(), Vec<String>> {
     typechecker::check(&ast).map_err(|errs| errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
 
     Ok(())
+}
+
+/// Make a temporary test directory to be able to run the CLI tests.
+fn make_temp_test_dir() -> std::path::PathBuf {
+    let mut dir = std::env::temp_dir();
+    let uniq = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    dir.push(format!("incan_cli_test_{}", uniq));
+    std::fs::create_dir_all(&dir).expect("failed to create temp test dir");
+    dir
 }
 
 /// Regression: float compound-assign with int RHS should typecheck (Python-like / promotion).
@@ -79,6 +93,102 @@ fn test_invalid_fixtures() {
             );
         }
     }
+}
+
+#[test]
+fn test_help_is_banner_free() {
+    let output = Command::new("target/debug/incan")
+        .arg("--help")
+        .output()
+        .expect("failed to run incan --help");
+    assert!(
+        output.status.success(),
+        "incan --help failed: status={:?} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("░░███") && !stderr.contains("░░███"),
+        "logo leaked into help output"
+    );
+}
+
+#[test]
+fn test_version_is_single_line_and_banner_free() {
+    let output = Command::new("target/debug/incan")
+        .arg("--version")
+        .output()
+        .expect("failed to run incan --version");
+    assert!(
+        output.status.success(),
+        "incan --version failed: status={:?} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("░░███") && !stderr.contains("░░███"),
+        "logo leaked into version output"
+    );
+    assert_eq!(stdout.lines().count(), 1, "expected single-line version output");
+}
+
+#[test]
+fn test_parse_error_is_banner_free() {
+    let output = Command::new("target/debug/incan")
+        .arg("--definitely-not-a-flag")
+        .output()
+        .expect("failed to run incan with invalid args");
+    assert!(
+        !output.status.success(),
+        "expected invalid args to fail, status={:?}",
+        output.status
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("░░███") && !stderr.contains("░░███"),
+        "logo leaked into parse error output"
+    );
+}
+
+#[test]
+fn test_fail_on_empty_collection() {
+    let dir = make_temp_test_dir();
+    let test_file = dir.join("test_empty.incn");
+    std::fs::write(
+        &test_file,
+        r#"
+def helper() -> Unit:
+  pass
+"#,
+    )
+    .expect("failed to write test file");
+
+    let output = Command::new("target/debug/incan")
+        .args(["test", dir.to_string_lossy().as_ref()])
+        .output()
+        .expect("failed to run incan test");
+    assert!(
+        output.status.success(),
+        "expected empty collection to succeed by default: status={:?} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new("target/debug/incan")
+        .args(["test", "--fail-on-empty", dir.to_string_lossy().as_ref()])
+        .output()
+        .expect("failed to run incan test --fail-on-empty");
+    assert!(
+        !output.status.success(),
+        "expected empty collection to fail with --fail-on-empty: status={:?} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Test specific lexer behavior

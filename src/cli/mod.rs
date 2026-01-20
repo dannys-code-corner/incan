@@ -33,10 +33,11 @@ pub mod test_runner;
 use std::env;
 use std::fmt;
 use std::fs;
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::process;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 // ============================================================================
 // CLI Error handling
@@ -107,7 +108,6 @@ const VERSION: &str = crate::version::INCAN_VERSION;
 #[command(name = "incan")]
 #[command(version = VERSION)]
 #[command(about = "The Incan programming language compiler", long_about = None)]
-#[command(before_help = get_logo())]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -136,6 +136,21 @@ pub struct Cli {
     /// Enable strict mode for --emit-rust (warning-clean output)
     #[arg(long = "strict", requires = "emit_rust_file")]
     pub strict: bool,
+
+    /// Disable the ASCII logo banner
+    #[arg(long = "no-banner")]
+    pub no_banner: bool,
+
+    /// Control ANSI color output
+    #[arg(long = "color", value_enum, default_value = "auto")]
+    pub color: ColorMode,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorMode {
+    Auto,
+    Always,
+    Never,
 }
 
 #[derive(Subcommand, Debug)]
@@ -190,13 +205,10 @@ pub enum Command {
         /// Filter tests by keyword expression
         #[arg(short = 'k', value_name = "EXPR")]
         filter: Option<String>,
+        /// Fail if no tests are collected
+        #[arg(long = "fail-on-empty")]
+        fail_on_empty: bool,
     },
-}
-
-/// Generate the logo string for clap
-fn get_logo() -> &'static str {
-    // Return just the raw logo - colors will be handled in print_logo()
-    LOGO
 }
 
 // ============================================================================
@@ -208,14 +220,25 @@ fn get_logo() -> &'static str {
 /// This is the only place where `process::exit` is called. All command
 /// implementations return `CliResult` and errors are handled here.
 pub fn run() {
-    // Print colored logo before clap runs
-    if env::args().len() == 1 || env::args().any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V") {
-        print_logo();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            let kind = err.kind();
+            let _ = err.print();
+            let exit_code = match kind {
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => ExitCode::SUCCESS,
+                _ => ExitCode::FAILURE,
+            };
+            process::exit(exit_code.0);
+        }
+    };
+
+    let use_color = should_use_color(cli.color);
+    if should_print_banner(&cli, use_color) {
+        print_logo(use_color);
     }
 
-    let cli = Cli::parse();
-
-    match execute(cli) {
+    match execute(cli, use_color) {
         Ok(exit_code) => {
             if exit_code.0 != 0 {
                 process::exit(exit_code.0);
@@ -231,7 +254,7 @@ pub fn run() {
 }
 
 /// Execute the CLI command and return result.
-fn execute(cli: Cli) -> CliResult<ExitCode> {
+fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
     // Handle debug flags first
     if let Some(file) = cli.lex_file {
         return commands::lex_file(&file.to_string_lossy());
@@ -260,7 +283,16 @@ fn execute(cli: Cli) -> CliResult<ExitCode> {
             stop_on_fail,
             slow,
             filter,
-        }) => test_runner::run_tests(&path.to_string_lossy(), verbose, stop_on_fail, slow, filter.as_deref()),
+            fail_on_empty,
+        }) => test_runner::run_tests(
+            &path.to_string_lossy(),
+            verbose,
+            stop_on_fail,
+            slow,
+            filter.as_deref(),
+            use_color,
+            fail_on_empty,
+        ),
         None => {
             // Default: type check the file if provided
             if let Some(file) = cli.file {
@@ -309,7 +341,7 @@ fn execute_run(file: Option<PathBuf>, code: Option<String>) -> CliResult<ExitCod
 }
 
 /// Print colored logo to stderr
-fn print_logo() {
+fn print_logo(use_color: bool) {
     // Color scheme inspired by the wordmark:
     // - Solid blocks (█) = Gold
     // - Shadow blocks (░) = Cyan/Magenta based on position
@@ -324,18 +356,59 @@ fn print_logo() {
         let len = chars.len();
 
         for (i, ch) in chars.iter().enumerate() {
-            let color = if *ch == '░' {
-                // Shadow chars: cyan on left half, magenta on right half (diagonal effect)
-                if i < len / 2 { cyan } else { magenta }
+            if use_color {
+                let color = if *ch == '░' {
+                    // Shadow chars: cyan on left half, magenta on right half (diagonal effect)
+                    if i < len / 2 { cyan } else { magenta }
+                } else {
+                    // Solid blocks and all other characters get gold
+                    gold
+                };
+                colored_line.push_str(color);
+                colored_line.push(*ch);
             } else {
-                // Solid blocks and all other characters get gold
-                gold
-            };
-            colored_line.push_str(color);
-            colored_line.push(*ch);
+                colored_line.push(*ch);
+            }
         }
-        eprintln!("{}{}", colored_line, reset);
+        if use_color {
+            eprintln!("{}{}", colored_line, reset);
+        } else {
+            eprintln!("{}", colored_line);
+        }
     }
+}
+
+/// Decide whether ANSI color output is enabled.
+///
+/// Note: `NO_COLOR` only affects `ColorMode::Auto`; explicit user flags
+/// (`--color=always` / `--color=never`) override the environment.
+fn should_use_color(color: ColorMode) -> bool {
+    match color {
+        ColorMode::Always => true,
+        ColorMode::Never => false,
+        ColorMode::Auto => {
+            if env::var_os("NO_COLOR").is_some() {
+                return false;
+            }
+            io::stdout().is_terminal() && io::stderr().is_terminal()
+        }
+    }
+}
+
+/// Decide whether to print the ASCII logo banner.
+///
+/// Banner suppression (`--no-banner` / `INCAN_NO_BANNER`) always wins.
+/// Banners are also suppressed when output is not a TTY (script-friendly).
+fn should_print_banner(cli: &Cli, _use_color: bool) -> bool {
+    if cli.no_banner || env::var_os("INCAN_NO_BANNER").is_some() {
+        return false;
+    }
+
+    if !io::stdout().is_terminal() || !io::stderr().is_terminal() {
+        return false;
+    }
+
+    true
 }
 
 // ============================================================================
