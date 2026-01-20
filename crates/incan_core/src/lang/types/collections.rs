@@ -17,7 +17,7 @@
 //! assert_eq!(collections::as_str(CollectionTypeId::Option), "Option");
 //! ```
 
-use crate::lang::registry::{Example, RFC, RfcId, SinceVersion, Stability};
+use crate::lang::registry::{Example, RFC, RfcId, Since, Stability};
 
 /// Stable identifier for collection/generic-base builtin types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,7 +41,7 @@ pub struct CollectionTypeInfo {
     pub aliases: &'static [&'static str],
     pub description: &'static str,
     pub introduced_in_rfc: RfcId,
-    pub since_version: Option<SinceVersion>,
+    pub since: Since,
     pub stability: Stability,
     pub examples: &'static [Example],
 }
@@ -54,6 +54,7 @@ pub const COLLECTION_TYPES: &[CollectionTypeInfo] = &[
         &["list"],
         "Growable list (generic sequence) type.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         CollectionTypeId::Dict,
@@ -61,14 +62,23 @@ pub const COLLECTION_TYPES: &[CollectionTypeInfo] = &[
         &["dict", "HashMap"],
         "Key/value map type.",
         RFC::_000,
+        Since(0, 1),
     ),
-    info(CollectionTypeId::Set, "Set", &["set"], "Unordered set type.", RFC::_000),
+    info(
+        CollectionTypeId::Set,
+        "Set",
+        &["set"],
+        "Unordered set type.",
+        RFC::_000,
+        Since(0, 1),
+    ),
     info(
         CollectionTypeId::Tuple,
         "Tuple",
         &["tuple"],
         "Fixed-length heterogeneous tuple type.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         CollectionTypeId::Option,
@@ -76,6 +86,7 @@ pub const COLLECTION_TYPES: &[CollectionTypeInfo] = &[
         &["option"],
         "Optional value type (`Some`/`None`).",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         CollectionTypeId::Result,
@@ -83,6 +94,7 @@ pub const COLLECTION_TYPES: &[CollectionTypeInfo] = &[
         &["result"],
         "Result type (`Ok`/`Err`).",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         CollectionTypeId::FrozenList,
@@ -90,6 +102,7 @@ pub const COLLECTION_TYPES: &[CollectionTypeInfo] = &[
         &["frozenlist"],
         "Immutable/const-friendly list type.",
         RFC::_009,
+        Since(0, 1),
     ),
     info(
         CollectionTypeId::FrozenDict,
@@ -97,6 +110,7 @@ pub const COLLECTION_TYPES: &[CollectionTypeInfo] = &[
         &["frozendict"],
         "Immutable/const-friendly dict type.",
         RFC::_009,
+        Since(0, 1),
     ),
     info(
         CollectionTypeId::FrozenSet,
@@ -104,6 +118,7 @@ pub const COLLECTION_TYPES: &[CollectionTypeInfo] = &[
         &["frozenset"],
         "Immutable/const-friendly set type.",
         RFC::_009,
+        Since(0, 1),
     ),
 ];
 
@@ -165,6 +180,7 @@ const fn info(
     aliases: &'static [&'static str],
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> CollectionTypeInfo {
     CollectionTypeInfo {
         id,
@@ -172,7 +188,7 @@ const fn info(
         aliases,
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }

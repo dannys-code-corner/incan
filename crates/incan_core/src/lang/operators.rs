@@ -18,7 +18,7 @@
 //! assert_eq!(operators::info_for(OperatorId::Plus).precedence, 50);
 //! ```
 
-use super::registry::{Example, RFC, RfcId, SinceVersion, Stability};
+use super::registry::{Example, RFC, RfcId, Since, Stability};
 
 /// Define how operators associate when chained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -91,7 +91,7 @@ pub struct OperatorInfo {
     pub fixity: Fixity,
     pub is_keyword_spelling: bool,
     pub introduced_in_rfc: RfcId,
-    pub since_version: Option<SinceVersion>,
+    pub since: Since,
     pub stability: Stability,
     pub examples: &'static [Example],
 }
@@ -107,6 +107,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::Minus,
@@ -116,6 +117,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::Star,
@@ -125,6 +127,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::StarStar,
@@ -134,6 +137,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::Slash,
@@ -143,6 +147,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::SlashSlash,
@@ -152,6 +157,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::Percent,
@@ -161,6 +167,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     // Comparison
     op(
@@ -171,6 +178,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::NotEq,
@@ -180,6 +188,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::Lt,
@@ -189,6 +198,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::LtEq,
@@ -198,6 +208,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::Gt,
@@ -207,6 +218,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::GtEq,
@@ -216,6 +228,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     // Assignment
     op(
@@ -226,6 +239,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::PlusEq,
@@ -235,6 +249,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::MinusEq,
@@ -244,6 +259,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::StarEq,
@@ -253,6 +269,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::SlashEq,
@@ -262,6 +279,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::SlashSlashEq,
@@ -271,6 +289,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::PercentEq,
@@ -280,6 +299,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     // Ranges
     op(
@@ -290,6 +310,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::DotDotEq,
@@ -299,6 +320,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         false,
         RFC::_000,
+        Since(0, 1),
     ),
     // Word operators (keyword spellings)
     op(
@@ -309,6 +331,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         true,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::Or,
@@ -318,6 +341,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         true,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::Not,
@@ -327,6 +351,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Prefix,
         true,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::In,
@@ -336,6 +361,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         true,
         RFC::_000,
+        Since(0, 1),
     ),
     op(
         OperatorId::Is,
@@ -345,6 +371,7 @@ pub const OPERATORS: &[OperatorInfo] = &[
         Fixity::Infix,
         true,
         RFC::_000,
+        Since(0, 1),
     ),
 ];
 
@@ -384,7 +411,7 @@ pub fn from_str(spelling: &str) -> Option<OperatorId> {
 }
 
 // --- helpers -----------------------------------------------------------------
-
+#[allow(clippy::too_many_arguments)]
 const fn op(
     id: OperatorId,
     spellings: &'static [&'static str],
@@ -393,6 +420,7 @@ const fn op(
     fixity: Fixity,
     is_keyword_spelling: bool,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> OperatorInfo {
     OperatorInfo {
         id,
@@ -402,7 +430,7 @@ const fn op(
         fixity,
         is_keyword_spelling,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }

@@ -15,7 +15,7 @@
 //! assert_eq!(stringlike::as_str(StringLikeId::Bytes), "bytes");
 //! ```
 
-use crate::lang::registry::{Example, RFC, RfcId, SinceVersion, Stability};
+use crate::lang::registry::{Example, RFC, RfcId, Since, Stability};
 
 /// Stable identifier for string-like builtin types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -35,20 +35,28 @@ pub struct StringLikeInfo {
     pub aliases: &'static [&'static str],
     pub description: &'static str,
     pub introduced_in_rfc: RfcId,
-    pub since_version: Option<SinceVersion>,
+    pub since: Since,
     pub stability: Stability,
     pub examples: &'static [Example],
 }
 
 /// Registry of string-like builtin types.
 pub const STRING_LIKE_TYPES: &[StringLikeInfo] = &[
-    info(StringLikeId::Str, "str", &[], "Builtin UTF-8 string type.", RFC::_000),
+    info(
+        StringLikeId::Str,
+        "str",
+        &[],
+        "Builtin UTF-8 string type.",
+        RFC::_000,
+        Since(0, 1),
+    ),
     info(
         StringLikeId::Bytes,
         "bytes",
         &[],
         "Builtin byte buffer type.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         StringLikeId::FrozenStr,
@@ -56,6 +64,7 @@ pub const STRING_LIKE_TYPES: &[StringLikeInfo] = &[
         &["FrozenStr"],
         "Immutable/const-friendly string type.",
         RFC::_009,
+        Since(0, 1),
     ),
     info(
         StringLikeId::FrozenBytes,
@@ -63,6 +72,7 @@ pub const STRING_LIKE_TYPES: &[StringLikeInfo] = &[
         &["FrozenBytes"],
         "Immutable/const-friendly bytes type.",
         RFC::_009,
+        Since(0, 1),
     ),
     info(
         StringLikeId::FString,
@@ -70,6 +80,7 @@ pub const STRING_LIKE_TYPES: &[StringLikeInfo] = &[
         &["FString"],
         "Formatted string result type.",
         RFC::_000,
+        Since(0, 1),
     ),
 ];
 
@@ -131,6 +142,7 @@ const fn info(
     aliases: &'static [&'static str],
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> StringLikeInfo {
     StringLikeInfo {
         id,
@@ -138,7 +150,7 @@ const fn info(
         aliases,
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }

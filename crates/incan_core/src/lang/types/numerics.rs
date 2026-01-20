@@ -15,7 +15,7 @@
 //! assert_eq!(numerics::as_str(NumericTypeId::Float), "float");
 //! ```
 
-use crate::lang::registry::{Example, RFC, RfcId, SinceVersion, Stability};
+use crate::lang::registry::{Example, RFC, RfcId, Since, Stability};
 
 /// Stable identifier for numeric builtin types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,7 +33,7 @@ pub struct NumericTypeInfo {
     pub aliases: &'static [&'static str],
     pub description: &'static str,
     pub introduced_in_rfc: RfcId,
-    pub since_version: Option<SinceVersion>,
+    pub since: Since,
     pub stability: Stability,
     pub examples: &'static [Example],
 }
@@ -46,6 +46,7 @@ pub const NUMERIC_TYPES: &[NumericTypeInfo] = &[
         &["i64", "i32"],
         "Builtin signed integer type.",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         NumericTypeId::Float,
@@ -53,8 +54,16 @@ pub const NUMERIC_TYPES: &[NumericTypeInfo] = &[
         &["f64", "f32"],
         "Builtin floating-point type.",
         RFC::_000,
+        Since(0, 1),
     ),
-    info(NumericTypeId::Bool, "bool", &[], "Builtin boolean type.", RFC::_000),
+    info(
+        NumericTypeId::Bool,
+        "bool",
+        &[],
+        "Builtin boolean type.",
+        RFC::_000,
+        Since(0, 1),
+    ),
 ];
 
 /// Resolve a type name to a [`NumericTypeId`].
@@ -112,6 +121,7 @@ const fn info(
     aliases: &'static [&'static str],
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> NumericTypeInfo {
     NumericTypeInfo {
         id,
@@ -119,7 +129,7 @@ const fn info(
         aliases,
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }

@@ -5,7 +5,7 @@
 
 use crate::errors::ErrorKind;
 
-use super::registry::{Example, LangItemInfo, RFC, Stability};
+use super::registry::{Example, LangItemInfo, RFC, Since, Stability};
 
 /// Metadata for a builtin exception kind.
 pub type ExceptionInfo = LangItemInfo<ErrorKind>;
@@ -17,6 +17,7 @@ pub const EXCEPTIONS: &[ExceptionInfo] = &[
         "ValueError",
         "Raised when an operation receives a value of the right type but an invalid value.",
         RFC::_000,
+        Since(0, 1),
         &[
             Example {
                 code: r#"def main() -> None:
@@ -51,6 +52,7 @@ pub const EXCEPTIONS: &[ExceptionInfo] = &[
         "TypeError",
         "Raised when an operation receives a value of an inappropriate type.",
         RFC::_000,
+        Since(0, 1),
         &[Example {
             code: r#"def main() -> None:
     # Example: JSON serialization failures (e.g. NaN/Inf) raise TypeError
@@ -64,6 +66,7 @@ pub const EXCEPTIONS: &[ExceptionInfo] = &[
         "ZeroDivisionError",
         "Raised when dividing or taking modulo by zero (Python-like numeric semantics).",
         RFC::_000,
+        Since(0, 1),
         &[Example {
             code: r#"def main() -> None:
     print(1 / 0)
@@ -76,6 +79,7 @@ pub const EXCEPTIONS: &[ExceptionInfo] = &[
         "IndexError",
         "Raised when an index is out of bounds (e.g. string/list indexing).",
         RFC::_000,
+        Since(0, 1),
         &[
             Example {
                 code: r#"def main() -> None:
@@ -97,6 +101,7 @@ pub const EXCEPTIONS: &[ExceptionInfo] = &[
         "KeyError",
         "Raised when a dict key is missing.",
         RFC::_000,
+        Since(0, 1),
         &[Example {
             code: r#"def main() -> None:
     d: Dict[str, int] = {"a": 1}
@@ -110,6 +115,7 @@ pub const EXCEPTIONS: &[ExceptionInfo] = &[
         "JSONDecodeError",
         "Raised when parsing JSON fails (Python-like).",
         RFC::_000,
+        Since(0, 1),
         &[Example {
             code: r#"@derive(Deserialize)
 model User:
@@ -172,6 +178,7 @@ const fn info(
     canonical: &'static str,
     description: &'static str,
     introduced_in_rfc: super::registry::RfcId,
+    since: Since,
     examples: &'static [Example],
 ) -> ExceptionInfo {
     LangItemInfo {
@@ -180,7 +187,7 @@ const fn info(
         aliases: &[],
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples,
     }

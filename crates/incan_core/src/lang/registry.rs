@@ -73,18 +73,24 @@ impl RFC {
 
 /// Identify the language/compiler version a vocabulary item is available since.
 ///
-/// ## Notes
-/// - This is currently a free-form string (e.g. `"0.1.0"`). We can tighten this later once the project formalizes
-///   versioning.
+/// This is intentionally **minor-only**: we track `major.minor` and do not model patch versions
+/// (patch releases must not introduce new language features).
 ///
 /// ## Examples
 /// ```rust
-/// use incan_core::lang::registry::SinceVersion;
+/// use incan_core::lang::registry::Since;
 ///
-/// let since: SinceVersion = "0.1.0";
-/// assert!(!since.is_empty());
+/// let since = Since(0, 1);
+/// assert_eq!(since.to_string(), "0.1");
 /// ```
-pub type SinceVersion = &'static str;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Since(pub u16, pub u16);
+
+impl std::fmt::Display for Since {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.0, self.1)
+    }
+}
 
 /// Describe the lifecycle status of a language vocabulary item.
 ///
@@ -133,7 +139,7 @@ pub struct Example {
 /// - stable identity (`id`)
 /// - accepted spellings (`canonical` + `aliases`)
 /// - documentation (`description` + `examples`)
-/// - provenance (`introduced_in_rfc`, `since_version`, `stability`)
+/// - provenance (`introduced_in_rfc`, `since`, `stability`)
 ///
 /// Registries that need extra per-item data (e.g. operator precedence, keyword category/usage) should wrap this
 /// struct in an “extension” info type.
@@ -148,7 +154,7 @@ pub struct LangItemInfo<Id> {
     pub aliases: &'static [&'static str],
     pub description: &'static str,
     pub introduced_in_rfc: RfcId,
-    pub since_version: Option<SinceVersion>,
+    pub since: Since,
     pub stability: Stability,
     pub examples: &'static [Example],
 }

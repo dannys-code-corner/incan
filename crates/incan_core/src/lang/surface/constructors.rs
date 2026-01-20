@@ -3,7 +3,7 @@
 //! These are callable names in the global namespace that behave like constructors for common sum types
 //! (e.g. `Ok(...)`, `Err(...)`, `Some(...)`).
 
-use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
 /// Stable identifier for a surface constructor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,6 +25,7 @@ pub const CONSTRUCTORS: &[ConstructorInfo] = &[
         &[],
         "Construct an `Ok(T)` variant (Result success).",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         ConstructorId::Err,
@@ -32,6 +33,7 @@ pub const CONSTRUCTORS: &[ConstructorInfo] = &[
         &[],
         "Construct an `Err(E)` variant (Result failure).",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         ConstructorId::Some,
@@ -39,6 +41,7 @@ pub const CONSTRUCTORS: &[ConstructorInfo] = &[
         &[],
         "Construct a `Some(T)` variant (Option present).",
         RFC::_000,
+        Since(0, 1),
     ),
     info(
         ConstructorId::None,
@@ -46,6 +49,7 @@ pub const CONSTRUCTORS: &[ConstructorInfo] = &[
         &[],
         "Construct a `None` variant (Option absent).",
         RFC::_000,
+        Since(0, 1),
     ),
 ];
 
@@ -79,6 +83,7 @@ const fn info(
     aliases: &'static [&'static str],
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> ConstructorInfo {
     LangItemInfo {
         id,
@@ -86,7 +91,7 @@ const fn info(
         aliases,
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }

@@ -2,7 +2,7 @@
 //!
 //! This is the vocabulary for the `math` module used by docs/examples (`math.sqrt(...)`, `math.pi`, ...).
 
-use crate::lang::registry::{LangItemInfo, RFC, RfcId, Stability};
+use crate::lang::registry::{LangItemInfo, RFC, RfcId, Since, Stability};
 
 pub const MATH_MODULE_NAME: &str = "math";
 
@@ -33,25 +33,67 @@ pub enum MathFnId {
 pub type MathFnInfo = LangItemInfo<MathFnId>;
 
 pub const MATH_FUNCTIONS: &[MathFnInfo] = &[
-    info_fn(MathFnId::Sqrt, "sqrt", &[], "Square root.", RFC::_000),
-    info_fn(MathFnId::Abs, "abs", &[], "Absolute value.", RFC::_000),
-    info_fn(MathFnId::Floor, "floor", &[], "Floor (round down).", RFC::_000),
-    info_fn(MathFnId::Ceil, "ceil", &[], "Ceil (round up).", RFC::_000),
-    info_fn(MathFnId::Pow, "pow", &[], "Power function.", RFC::_000),
-    info_fn(MathFnId::Exp, "exp", &[], "Exponentiation (e^x).", RFC::_000),
-    info_fn(MathFnId::Log, "log", &[], "Natural logarithm.", RFC::_000),
-    info_fn(MathFnId::Log10, "log10", &[], "Base-10 logarithm.", RFC::_000),
-    info_fn(MathFnId::Log2, "log2", &[], "Base-2 logarithm.", RFC::_000),
-    info_fn(MathFnId::Sin, "sin", &[], "Sine.", RFC::_000),
-    info_fn(MathFnId::Cos, "cos", &[], "Cosine.", RFC::_000),
-    info_fn(MathFnId::Tan, "tan", &[], "Tangent.", RFC::_000),
-    info_fn(MathFnId::Asin, "asin", &[], "Arcsine.", RFC::_000),
-    info_fn(MathFnId::Acos, "acos", &[], "Arccosine.", RFC::_000),
-    info_fn(MathFnId::Atan, "atan", &[], "Arctangent.", RFC::_000),
-    info_fn(MathFnId::Sinh, "sinh", &[], "Hyperbolic sine.", RFC::_000),
-    info_fn(MathFnId::Cosh, "cosh", &[], "Hyperbolic cosine.", RFC::_000),
-    info_fn(MathFnId::Tanh, "tanh", &[], "Hyperbolic tangent.", RFC::_000),
-    info_fn(MathFnId::Atan2, "atan2", &[], "Two-argument arctangent.", RFC::_000),
+    info_fn(MathFnId::Sqrt, "sqrt", &[], "Square root.", RFC::_000, Since(0, 1)),
+    info_fn(MathFnId::Abs, "abs", &[], "Absolute value.", RFC::_000, Since(0, 1)),
+    info_fn(
+        MathFnId::Floor,
+        "floor",
+        &[],
+        "Floor (round down).",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info_fn(MathFnId::Ceil, "ceil", &[], "Ceil (round up).", RFC::_000, Since(0, 1)),
+    info_fn(MathFnId::Pow, "pow", &[], "Power function.", RFC::_000, Since(0, 1)),
+    info_fn(
+        MathFnId::Exp,
+        "exp",
+        &[],
+        "Exponentiation (e^x).",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info_fn(MathFnId::Log, "log", &[], "Natural logarithm.", RFC::_000, Since(0, 1)),
+    info_fn(
+        MathFnId::Log10,
+        "log10",
+        &[],
+        "Base-10 logarithm.",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info_fn(MathFnId::Log2, "log2", &[], "Base-2 logarithm.", RFC::_000, Since(0, 1)),
+    info_fn(MathFnId::Sin, "sin", &[], "Sine.", RFC::_000, Since(0, 1)),
+    info_fn(MathFnId::Cos, "cos", &[], "Cosine.", RFC::_000, Since(0, 1)),
+    info_fn(MathFnId::Tan, "tan", &[], "Tangent.", RFC::_000, Since(0, 1)),
+    info_fn(MathFnId::Asin, "asin", &[], "Arcsine.", RFC::_000, Since(0, 1)),
+    info_fn(MathFnId::Acos, "acos", &[], "Arccosine.", RFC::_000, Since(0, 1)),
+    info_fn(MathFnId::Atan, "atan", &[], "Arctangent.", RFC::_000, Since(0, 1)),
+    info_fn(MathFnId::Sinh, "sinh", &[], "Hyperbolic sine.", RFC::_000, Since(0, 1)),
+    info_fn(
+        MathFnId::Cosh,
+        "cosh",
+        &[],
+        "Hyperbolic cosine.",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info_fn(
+        MathFnId::Tanh,
+        "tanh",
+        &[],
+        "Hyperbolic tangent.",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info_fn(
+        MathFnId::Atan2,
+        "atan2",
+        &[],
+        "Two-argument arctangent.",
+        RFC::_000,
+        Since(0, 1),
+    ),
 ];
 
 pub fn fn_from_str(name: &str) -> Option<MathFnId> {
@@ -91,11 +133,32 @@ pub enum MathConstId {
 pub type MathConstInfo = LangItemInfo<MathConstId>;
 
 pub const MATH_CONSTANTS: &[MathConstInfo] = &[
-    info_const(MathConstId::Pi, "pi", &[], "The constant π.", RFC::_000),
-    info_const(MathConstId::E, "e", &[], "The constant e.", RFC::_000),
-    info_const(MathConstId::Tau, "tau", &[], "The constant τ (2π).", RFC::_000),
-    info_const(MathConstId::Inf, "inf", &[], "Positive infinity.", RFC::_000),
-    info_const(MathConstId::Nan, "nan", &[], "Not a number (NaN).", RFC::_000),
+    info_const(MathConstId::Pi, "pi", &[], "The constant π.", RFC::_000, Since(0, 1)),
+    info_const(MathConstId::E, "e", &[], "The constant e.", RFC::_000, Since(0, 1)),
+    info_const(
+        MathConstId::Tau,
+        "tau",
+        &[],
+        "The constant τ (2π).",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info_const(
+        MathConstId::Inf,
+        "inf",
+        &[],
+        "Positive infinity.",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info_const(
+        MathConstId::Nan,
+        "nan",
+        &[],
+        "Not a number (NaN).",
+        RFC::_000,
+        Since(0, 1),
+    ),
 ];
 
 pub fn const_from_str(name: &str) -> Option<MathConstId> {
@@ -128,6 +191,7 @@ const fn info_fn(
     aliases: &'static [&'static str],
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> MathFnInfo {
     LangItemInfo {
         id,
@@ -135,7 +199,7 @@ const fn info_fn(
         aliases,
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }
@@ -147,6 +211,7 @@ const fn info_const(
     aliases: &'static [&'static str],
     description: &'static str,
     introduced_in_rfc: RfcId,
+    since: Since,
 ) -> MathConstInfo {
     LangItemInfo {
         id,
@@ -154,7 +219,7 @@ const fn info_const(
         aliases,
         description,
         introduced_in_rfc,
-        since_version: None,
+        since,
         stability: Stability::Stable,
         examples: &[],
     }
