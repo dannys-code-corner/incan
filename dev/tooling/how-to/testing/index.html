@@ -4141,6 +4141,9 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 
 <span class="c1"># Include slow tests</span>
 incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--slow
+
+<span class="c1"># Fail if no tests are collected</span>
+incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--fail-on-empty
 </code></pre></div>
 <h2 id="output-format">Output Format<a class="headerlink" href="#output-format" title="Permanent link">&para;</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span class="o">===================</span><span class="w"> </span><span class="nb">test</span><span class="w"> </span>session<span class="w"> </span><span class="nv">starts</span><span class="w"> </span><span class="o">===================</span>
@@ -4173,18 +4176,18 @@ ___________<span class="w"> </span>test_division<span class="w"> </span>________
 <tbody>
 <tr>
 <td>0</td>
-<td>All tests passed</td>
+<td>All tests passed (or no tests collected without <code>--fail-on-empty</code>)</td>
 </tr>
 <tr>
 <td>1</td>
-<td>One or more tests failed</td>
+<td>Any test failed, no test files found, or <code>--fail-on-empty</code> found none</td>
 </tr>
 </tbody>
 </table>
 <h2 id="ci-integration">CI Integration<a class="headerlink" href="#ci-integration" title="Permanent link">&para;</a></h2>
 <div class="language-yaml highlight"><pre><span></span><code><span class="c1"># GitHub Actions</span>
 <span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Run tests</span>
-<span class="w">  </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">incan test tests/</span>
+<span class="w">  </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">incan test --fail-on-empty tests/</span>
 </code></pre></div>
 <h2 id="fixtures">Fixtures<a class="headerlink" href="#fixtures" title="Permanent link">&para;</a></h2>
 <p>Fixtures provide setup/teardown and dependency injection for tests.</p>

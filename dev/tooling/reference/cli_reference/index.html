@@ -2763,6 +2763,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#global-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global options
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#global-options-debug" class="md-nav__link">
     <span class="md-ellipsis">
       Global options (debug)
@@ -3708,6 +3717,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#global-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global options
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#global-options-debug" class="md-nav__link">
     <span class="md-ellipsis">
       Global options (debug)
@@ -3851,6 +3869,11 @@
 <li><code>fmt</code> - Format Incan source files</li>
 <li><code>test</code> - Run tests (pytest-style)</li>
 </ul>
+<h2 id="global-options">Global options<a class="headerlink" href="#global-options" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>--no-banner</code>: suppress the ASCII logo banner (also via <code>INCAN_NO_BANNER=1</code>).</li>
+<li><code>--color=auto|always|never</code>: control ANSI color output (respects <code>NO_COLOR</code>).</li>
+</ul>
 <h2 id="global-options-debug">Global options (debug)<a class="headerlink" href="#global-options-debug" title="Permanent link">&para;</a></h2>
 <p>These flags take a file and run a debug pipeline stage:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>--lex<span class="w"> </span>path/to/file.incn
@@ -3921,6 +3944,9 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 
 <span class="c1"># Include slow tests</span>
 incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--slow
+
+<span class="c1"># Fail if no tests are collected</span>
+incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--fail-on-empty
 </code></pre></div>
 <h2 id="outputs-and-paths">Outputs and paths<a class="headerlink" href="#outputs-and-paths" title="Permanent link">&para;</a></h2>
 <p>Build outputs:</p>
@@ -3936,6 +3962,8 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 <li><strong><code>INCAN_STDLIB</code></strong>: override the stdlib directory (usually auto-detected; set only if detection fails).</li>
 <li><strong><code>INCAN_FANCY_ERRORS</code></strong>: enable “fancy” diagnostics rendering (presence-based; output may change).</li>
 <li><strong><code>INCAN_EMIT_SERVICE=1</code></strong>: toggle codegen emit mode (internal/debug; not stable).</li>
+<li><strong><code>INCAN_NO_BANNER=1</code></strong>: disable the ASCII logo banner.</li>
+<li><strong><code>NO_COLOR</code></strong>: disable ANSI color output (standard convention).</li>
 </ul>
 <h2 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">&para;</a></h2>
 <p>General rule: success is exit code 0; errors are non-zero.</p>
@@ -3945,6 +3973,7 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 <li><strong><code>incan test</code></strong>:<ul>
 <li>returns 0 if all tests pass</li>
 <li>returns 0 if test files exist but no tests are collected</li>
+<li>returns 1 if <code>--fail-on-empty</code> is set and no tests are collected</li>
 <li>returns 1 if no test files are discovered under the provided path</li>
 <li>returns 1 if any tests fail or an xfail unexpectedly passes (XPASS)</li>
 </ul>
