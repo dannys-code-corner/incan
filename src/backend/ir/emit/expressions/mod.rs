@@ -95,7 +95,7 @@ impl<'a> IrEmitter<'a> {
                 Ok(lit.to_token_stream())
             }
 
-            IrExprKind::Var { name, access: _ } => {
+            IrExprKind::Var { name, access: _, .. } => {
                 let n = format_ident!("{}", Self::escape_keyword(name));
                 Ok(quote! { #n })
             }

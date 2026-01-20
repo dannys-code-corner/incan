@@ -21,8 +21,11 @@ def test_augmented_assignments() -> None:
     x += 5   # x = 15
     x -= 3   # x = 12
     x *= 2   # x = 24
-    x /= 4   # x = 6
     x %= 4   # x = 2
+
+    # Division always yields float in Incan, so keep a float-typed variable here
+    mut xf: float = 24.0
+    xf /= 4   # xf = 6.0
     
     # String concatenation
     mut s: str = "hello"

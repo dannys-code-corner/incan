@@ -85,6 +85,11 @@ pub enum IrExprKind {
         name: String,
         /// Whether this is a move, borrow, or copy
         access: VarAccess,
+        /// Whether this identifier refers to a value binding or a type-like name.
+        ///
+        /// This is used to eliminate emitter heuristics like TitleCase detection for deciding whether
+        /// `Type.method(...)` should be emitted as `Type::method(...)`.
+        ref_kind: VarRefKind,
     },
 
     // Binary operations
@@ -278,6 +283,18 @@ pub enum VarAccess {
     Copy,
 }
 
+/// Whether an identifier expression refers to a value binding or a type-like name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VarRefKind {
+    /// A value binding (local/param/field), i.e. should behave like `value.method(...)`.
+    #[default]
+    Value,
+    /// A type name (models/classes/enums/newtypes) in expression position, i.e. `Type.method(...)`.
+    TypeName,
+    /// An externally-imported name (e.g. `from rust::... import Foo`) which behaves namespace-like in Rust.
+    ExternalName,
+}
+
 /// Binary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
@@ -369,12 +386,18 @@ pub enum BuiltinFn {
     Len,
     /// `sum(x)` → `x.iter().sum::<i64>()`
     Sum,
+    /// `min(xs)` → minimum element
+    Min,
+    /// `max(xs)` → maximum element
+    Max,
     /// `str(x)` → `x.to_string()`
     Str,
     /// `int(x)` → parse or cast to i64
     Int,
     /// `float(x)` → parse or cast to f64
     Float,
+    /// `bool(x)` → convert to bool
+    Bool,
     /// `abs(x)` → `x.abs()`
     Abs,
     /// `range(...)` → Rust range expressions
@@ -383,6 +406,8 @@ pub enum BuiltinFn {
     Enumerate,
     /// `zip(a, b)` → `a.iter().zip(b.iter())`
     Zip,
+    /// `sorted(xs)` → sorted copy
+    Sorted,
     /// `read_file(path)` → `std::fs::read_to_string(path)`
     ReadFile,
     /// `write_file(path, content)` → `std::fs::write(path, content)`
@@ -403,13 +428,17 @@ impl BuiltinFn {
             BuiltinFnId::Print => Self::Print,
             BuiltinFnId::Len => Self::Len,
             BuiltinFnId::Sum => Self::Sum,
+            BuiltinFnId::Min => Self::Min,
+            BuiltinFnId::Max => Self::Max,
             BuiltinFnId::Str => Self::Str,
             BuiltinFnId::Int => Self::Int,
             BuiltinFnId::Float => Self::Float,
+            BuiltinFnId::Bool => Self::Bool,
             BuiltinFnId::Abs => Self::Abs,
             BuiltinFnId::Range => Self::Range,
             BuiltinFnId::Enumerate => Self::Enumerate,
             BuiltinFnId::Zip => Self::Zip,
+            BuiltinFnId::Sorted => Self::Sorted,
             BuiltinFnId::ReadFile => Self::ReadFile,
             BuiltinFnId::WriteFile => Self::WriteFile,
             BuiltinFnId::JsonStringify => Self::JsonStringify,

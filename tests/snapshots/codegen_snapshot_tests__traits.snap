@@ -217,13 +217,16 @@ fn calculate_area(shape: Shape) -> f64 {
     return shape.area();
 }
 fn main() {
-    let dog = Dog("Buddy".to_string());
+    let dog = Dog { name: "Buddy".to_string() };
     println!(
         "{}", { let __parts : [& str; 2usize] = ["Dog name: ", ""]; let __args : Vec <
         String > = vec![format!("{}", dog.name)]; incan_stdlib::strings::fstring(&
         __parts, & __args) }
     );
-    let rect = Rectangle(5f64, 3f64);
+    let rect = Rectangle {
+        width: 5f64,
+        height: 3f64,
+    };
     let rect_area = rect.area();
     let rect_perimeter = rect.perimeter();
     println!(
@@ -231,10 +234,10 @@ fn main() {
         ""]; let __args : Vec < String > = vec![format!("{}", rect_area), format!("{}",
         rect_perimeter)]; incan_stdlib::strings::fstring(& __parts, & __args) }
     );
-    let circle = Circle(2.5f64);
+    let circle = Circle { radius: 2.5f64 };
     let circle_drawing = circle.draw();
     println!("{}", circle_drawing);
-    let square = Square(4f64);
+    let square = Square { side: 4f64 };
     let square_area = square.area();
     let square_drawing = square.draw();
     println!(
@@ -243,7 +246,11 @@ fn main() {
         __parts, & __args) }
     );
     println!("{}", square_drawing);
-    let mut carton = Carton(2f64, 3f64, 4f64);
+    let mut carton = Carton {
+        width: 2f64,
+        height: 3f64,
+        depth: 4f64,
+    };
     let original_volume = carton.volume();
     println!(
         "{}", { let __parts : [& str; 2usize] = ["Original volume: ", ""]; let __args :
@@ -257,7 +264,10 @@ fn main() {
         String > = vec![format!("{}", new_volume)]; incan_stdlib::strings::fstring(&
         __parts, & __args) }
     );
-    let doc = Document("README".to_string(), "This is the content".to_string());
+    let doc = Document {
+        title: "README".to_string(),
+        content: "This is the content".to_string(),
+    };
     let doc_str = doc.to_string();
     let doc_serial = doc.serialize();
     println!("{}", doc_str);

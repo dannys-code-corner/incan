@@ -98,29 +98,29 @@ def calculate_area(shape: Shape) -> float:
 
 def main() -> None:
     # Test simple trait implementation
-    dog: Dog = Dog("Buddy")
+    dog: Dog = Dog(name="Buddy")
     print(f"Dog name: {dog.name}")
     
     # Test Shape trait implementations
-    rect: Rectangle = Rectangle(5.0, 3.0)
+    rect: Rectangle = Rectangle(width=5.0, height=3.0)
     rect_area: float = rect.area()
     rect_perimeter: float = rect.perimeter()
     print(f"Rectangle area: {rect_area}, perimeter: {rect_perimeter}")
     
     # Test Drawable trait
-    circle: Circle = Circle(2.5)
+    circle: Circle = Circle(radius=2.5)
     circle_drawing: str = circle.draw()
     print(circle_drawing)
     
     # Test multiple trait implementation
-    square: Square = Square(4.0)
+    square: Square = Square(side=4.0)
     square_area: float = square.area()
     square_drawing: str = square.draw()
     print(f"Square area: {square_area}")
     print(square_drawing)
     
     # Test mutable trait
-    mut carton: Carton = Carton(2.0, 3.0, 4.0)
+    mut carton: Carton = Carton(width=2.0, height=3.0, depth=4.0)
     original_volume: float = carton.volume()
     print(f"Original volume: {original_volume}")
     carton.resize(2.0)
@@ -128,7 +128,7 @@ def main() -> None:
     print(f"New volume: {new_volume}")
     
     # Test document with multiple traits
-    doc: Document = Document("README", "This is the content")
+    doc: Document = Document(title="README", content="This is the content")
     doc_str: str = doc.to_string()
     doc_serial: str = doc.serialize()
     print(doc_str)

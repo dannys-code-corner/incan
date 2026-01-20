@@ -5,7 +5,7 @@
 //! small utilities to type-check call argument lists consistently.
 
 use crate::frontend::ast::*;
-use crate::frontend::diagnostics::errors;
+use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::*;
 use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty, option_ty, result_ty, set_ty};
 use incan_core::lang::builtins::{self, BuiltinFnId};
@@ -99,7 +99,12 @@ impl TypeChecker {
     }
 
     /// Handle a known builtin call (if the callee is a builtin name).
-    fn check_builtin_call(&mut self, name: &str, args: &[CallArg]) -> Option<ResolvedType> {
+    fn check_builtin_call(&mut self, name: &str, args: &[CallArg], call_span: Span) -> Option<ResolvedType> {
+        // Helper function to create an arity (number of arguments) error.
+        fn arity_err(name: &str, expected: usize, found: usize, span: Span) -> CompileError {
+            CompileError::type_error(format!("{name}() expects {expected} argument(s), got {found}"), span)
+        }
+
         // Constructors (variant-like)
         if let Some(cid) = constructors::from_str(name) {
             return match cid {
@@ -145,6 +150,55 @@ impl TypeChecker {
                     self.check_call_args(args);
                     Some(ResolvedType::Int)
                 }
+                BuiltinFnId::Min | BuiltinFnId::Max => {
+                    if args.len() != 1 {
+                        self.errors.push(arity_err(name, 1, args.len(), call_span));
+                        self.check_call_args(args);
+                        return Some(ResolvedType::Unknown);
+                    }
+                    let arg_expr = Self::call_arg_expr(&args[0]);
+                    let arg_ty = self.check_expr(arg_expr);
+
+                    // Only support list-like collections for now.
+                    let inner = if let ResolvedType::Generic(n, type_args) = &arg_ty {
+                        if matches!(
+                            collection_type_id(n.as_str()),
+                            Some(CollectionTypeId::List | CollectionTypeId::FrozenList)
+                        ) {
+                            type_args.first().cloned().unwrap_or(ResolvedType::Unknown)
+                        } else {
+                            ResolvedType::Unknown
+                        }
+                    } else if let ResolvedType::FrozenList(t) = &arg_ty {
+                        (**t).clone()
+                    } else {
+                        ResolvedType::Unknown
+                    };
+
+                    if matches!(inner, ResolvedType::Unknown) {
+                        self.errors.push(CompileError::type_error(
+                            format!("{name}() expects a list, got {}", arg_ty),
+                            call_span,
+                        ));
+                        return Some(ResolvedType::Unknown);
+                    }
+
+                    // Require comparable scalar element types (keep narrow for now).
+                    match inner {
+                        ResolvedType::Int
+                        | ResolvedType::Float
+                        | ResolvedType::Bool
+                        | ResolvedType::Str
+                        | ResolvedType::FrozenStr => Some(inner),
+                        other => {
+                            self.errors.push(CompileError::type_error(
+                                format!("{name}() does not support list element type {}", other),
+                                call_span,
+                            ));
+                            Some(ResolvedType::Unknown)
+                        }
+                    }
+                }
                 BuiltinFnId::Str => {
                     self.check_call_args(args);
                     Some(ResolvedType::Str)
@@ -156,6 +210,52 @@ impl TypeChecker {
                 BuiltinFnId::Float => {
                     self.check_call_args(args);
                     Some(ResolvedType::Float)
+                }
+                BuiltinFnId::Bool => {
+                    if args.len() != 1 {
+                        self.errors.push(arity_err(name, 1, args.len(), call_span));
+                        self.check_call_args(args);
+                        return Some(ResolvedType::Bool);
+                    }
+                    let arg_expr = Self::call_arg_expr(&args[0]);
+                    let arg_ty = self.check_expr(arg_expr);
+
+                    let ok = matches!(
+                        arg_ty,
+                        ResolvedType::Bool
+                            | ResolvedType::Int
+                            | ResolvedType::Float
+                            | ResolvedType::Str
+                            | ResolvedType::FrozenStr
+                            | ResolvedType::Bytes
+                            | ResolvedType::FrozenBytes
+                            | ResolvedType::Unknown
+                    ) || matches!(
+                        &arg_ty,
+                        ResolvedType::Generic(n, _)
+                            if matches!(
+                                collection_type_id(n.as_str()),
+                                Some(
+                                    CollectionTypeId::List
+                                        | CollectionTypeId::FrozenList
+                                        | CollectionTypeId::Dict
+                                        | CollectionTypeId::FrozenDict
+                                        | CollectionTypeId::Set
+                                        | CollectionTypeId::FrozenSet
+                                        | CollectionTypeId::Tuple
+                                        | CollectionTypeId::Option
+                                        | CollectionTypeId::Result
+                                )
+                            )
+                    ) || matches!(arg_ty, ResolvedType::FrozenList(_) | ResolvedType::FrozenDict(_, _) | ResolvedType::FrozenSet(_));
+
+                    if !ok {
+                        self.errors.push(CompileError::type_error(
+                            format!("bool() does not support type {}", arg_ty),
+                            call_span,
+                        ));
+                    }
+                    Some(ResolvedType::Bool)
                 }
                 BuiltinFnId::Abs => {
                     self.check_call_args(args);
@@ -217,6 +317,53 @@ impl TypeChecker {
                     }
                     self.check_call_args(args);
                     Some(list_ty(ResolvedType::Tuple(vec![ty1, ty2])))
+                }
+                BuiltinFnId::Sorted => {
+                    if args.len() != 1 {
+                        self.errors.push(arity_err(name, 1, args.len(), call_span));
+                        self.check_call_args(args);
+                        return Some(ResolvedType::Unknown);
+                    }
+                    let arg_expr = Self::call_arg_expr(&args[0]);
+                    let arg_ty = self.check_expr(arg_expr);
+
+                    let inner = if let ResolvedType::Generic(n, type_args) = &arg_ty {
+                        if matches!(
+                            collection_type_id(n.as_str()),
+                            Some(CollectionTypeId::List | CollectionTypeId::FrozenList)
+                        ) {
+                            type_args.first().cloned().unwrap_or(ResolvedType::Unknown)
+                        } else {
+                            ResolvedType::Unknown
+                        }
+                    } else if let ResolvedType::FrozenList(t) = &arg_ty {
+                        (**t).clone()
+                    } else {
+                        ResolvedType::Unknown
+                    };
+
+                    if matches!(inner, ResolvedType::Unknown) {
+                        self.errors.push(CompileError::type_error(
+                            format!("sorted() expects a list, got {}", arg_ty),
+                            call_span,
+                        ));
+                        return Some(ResolvedType::Unknown);
+                    }
+
+                    match inner {
+                        ResolvedType::Int
+                        | ResolvedType::Float
+                        | ResolvedType::Bool
+                        | ResolvedType::Str
+                        | ResolvedType::FrozenStr => Some(list_ty(inner)),
+                        other => {
+                            self.errors.push(CompileError::type_error(
+                                format!("sorted() does not support list element type {}", other),
+                                call_span,
+                            ));
+                            Some(ResolvedType::Unknown)
+                        }
+                    }
                 }
                 BuiltinFnId::ReadFile => {
                     self.check_call_args(args);
@@ -488,7 +635,7 @@ impl TypeChecker {
         }
 
         if let Expr::Ident(name) = &callee.node {
-            if let Some(result) = self.check_builtin_call(name, args) {
+            if let Some(result) = self.check_builtin_call(name, args, span) {
                 return result;
             }
 

@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::super::expr::{IrExprKind, Pattern, VarAccess};
+use super::super::expr::{IrExprKind, Pattern, VarAccess, VarRefKind};
 use super::super::stmt::{AssignTarget, IrStmt, IrStmtKind};
 use super::super::types::IrType;
 use super::super::{IrSpan, Mutability, TypedExpr};
@@ -247,6 +247,7 @@ impl AstLowering {
                     IrExprKind::Var {
                         name: ca.name.clone(),
                         access: VarAccess::Move,
+                        ref_kind: VarRefKind::Value,
                     },
                     lhs_ty.clone(),
                 );
@@ -346,6 +347,7 @@ impl AstLowering {
                         IrExprKind::Var {
                             name: source.clone(),
                             access: if ty.is_copy() { VarAccess::Copy } else { VarAccess::Move },
+                            ref_kind: VarRefKind::Value,
                         },
                         ty.clone(),
                     );

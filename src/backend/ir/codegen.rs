@@ -31,6 +31,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 
 use crate::frontend::ast::Program;
+use crate::frontend::diagnostics::CompileError;
 
 use super::emit::RouteSpec;
 use super::scanners::{
@@ -63,6 +64,8 @@ use super::{AstLowering, EmitError, EmitService, IrEmitter, LoweringErrors};
 /// ```
 #[derive(Debug)]
 pub enum GenerationError {
+    /// Errors during frontend typechecking.
+    TypeCheck(Vec<CompileError>),
     /// Errors during AST to IR lowering (may contain multiple errors)
     Lowering(LoweringErrors),
     /// Error during IR to Rust emission
@@ -72,6 +75,14 @@ pub enum GenerationError {
 impl std::fmt::Display for GenerationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            GenerationError::TypeCheck(errs) => {
+                if errs.is_empty() {
+                    write!(f, "typecheck failed")
+                } else {
+                    // We intentionally avoid rich source formatting here (no file/source context at this layer).
+                    write!(f, "typecheck failed ({} errors): {}", errs.len(), errs[0].message)
+                }
+            }
             GenerationError::Lowering(e) => write!(f, "{}", e),
             GenerationError::Emission(e) => write!(f, "emission error: {}", e),
         }
@@ -81,6 +92,7 @@ impl std::fmt::Display for GenerationError {
 impl std::error::Error for GenerationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            GenerationError::TypeCheck(_) => None,
             GenerationError::Lowering(e) => Some(e),
             GenerationError::Emission(e) => Some(e),
         }
@@ -363,8 +375,9 @@ impl<'a> IrCodegen<'a> {
 
     /// Generate code via the IR pipeline (fallible version)
     fn try_generate_via_ir(&self, program: &Program) -> Result<String, GenerationError> {
-        // Attempt to typecheck to obtain reusable type information for lowering.
-        // If typechecking fails (should be pre-validated by CLI), fall back gracefully.
+        // Typecheck to obtain reusable type information for lowering.
+        //
+        // Strict policy: if typechecking fails, do NOT proceed to lowering/codegen.
         let type_info_opt = {
             use crate::frontend::typechecker::TypeChecker;
             let mut tc = TypeChecker::new();
@@ -374,16 +387,13 @@ impl<'a> IrCodegen<'a> {
                 .map(|(name, ast)| (*name, *ast))
                 .collect();
             match tc.check_with_imports(program, &deps) {
-                Ok(()) => Some(tc.type_info().clone()),
-                Err(_errs) => None,
+                Ok(()) => tc.type_info().clone(),
+                Err(errs) => return Err(GenerationError::TypeCheck(errs)),
             }
         };
 
         // Lower AST to IR using typechecker output when available
-        let mut lowering = match type_info_opt {
-            Some(info) => AstLowering::new_with_type_info(info),
-            None => AstLowering::new(),
-        };
+        let mut lowering = AstLowering::new_with_type_info(type_info_opt);
         let ir_program = lowering.lower_program(program)?;
 
         // Build unified function registry including imported module functions
@@ -639,7 +649,7 @@ mod tests {
     fn generate(source: &str) -> String {
         let tokens = lexer::lex(source).unwrap();
         let ast = parser::parse(&tokens).unwrap();
-        IrCodegen::new().generate(&ast)
+        IrCodegen::new().try_generate(&ast).unwrap()
     }
 
     #[test]

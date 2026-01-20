@@ -342,7 +342,7 @@ mod codegen_tests {
         let tokens = lexer::lex(&source).unwrap();
         let ast = parser::parse(&tokens).unwrap();
         typechecker::check(&ast).unwrap(); // Verify it type-checks
-        let rust_code = IrCodegen::new().generate(&ast);
+        let rust_code = IrCodegen::new().try_generate(&ast).unwrap();
 
         // Verify the generated code contains expected elements
         assert!(rust_code.contains("fn main()"), "Should have main function");
@@ -409,7 +409,7 @@ mod codegen_tests {
         let ast = parser::parse(&tokens).unwrap();
         typechecker::check(&ast).unwrap();
 
-        let rust_code = IrCodegen::new().generate(&ast);
+        let rust_code = IrCodegen::new().try_generate(&ast).unwrap();
 
         // Regression: Vec::swap indices must be cast to usize.
         let mut ok = true;

@@ -88,15 +88,43 @@ use incan_core::lang::types::stringlike::StringLikeId;
 pub struct TypeCheckInfo {
     /// Map from expression span (start,end) -> resolved type.
     pub expr_types: HashMap<(usize, usize), ResolvedType>,
+    /// Map from identifier expression span (start,end) -> how it resolved (value vs type vs module).
+    ///
+    /// This exists so downstream stages (IR lowering/codegen) can reliably distinguish:
+    /// - `x.method(...)` where `x` is a value binding, from
+    /// - `Type.method(...)` where `Type` is a type name (emits `Type::method(...)` in Rust), and
+    /// - imported placeholders (e.g. `from rust::... import Foo`) which are not value bindings.
+    pub ident_kinds: HashMap<(usize, usize), IdentKind>,
     /// Const category classification (RFC 008): const name -> kind.
     pub const_kinds: HashMap<String, const_eval::ConstKind>,
     /// Computed const values (when available), keyed by const name.
     pub const_values: HashMap<String, ConstValue>,
 }
 
+/// How an identifier expression resolved in the symbol table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentKind {
+    /// A value binding (variable/field), or a callable value (function).
+    Value,
+    /// A type name (models/classes/enums/newtypes).
+    TypeName,
+    /// An enum variant constructor identifier.
+    Variant,
+    /// A module-like namespace (e.g. imported module placeholders).
+    Module,
+    /// A Rust import placeholder (`import rust::...` / `from rust::... import ...`).
+    RustImport,
+    /// A trait name (may be used as a type-like namespace).
+    Trait,
+}
+
 impl TypeCheckInfo {
     pub fn expr_type(&self, span: Span) -> Option<&ResolvedType> {
         self.expr_types.get(&(span.start, span.end))
+    }
+
+    pub fn ident_kind(&self, span: Span) -> Option<IdentKind> {
+        self.ident_kinds.get(&(span.start, span.end)).copied()
     }
 
     pub fn const_value(&self, name: &str) -> Option<&ConstValue> {

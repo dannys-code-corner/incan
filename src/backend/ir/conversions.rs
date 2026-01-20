@@ -555,7 +555,7 @@ pub fn determine_conversion(expr: &IrExpr, target_ty: Option<&IrType>, context: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::ir::expr::VarAccess;
+    use crate::backend::ir::expr::{VarAccess, VarRefKind};
 
     // === IncanFunctionArg Tests ===
 
@@ -574,6 +574,7 @@ mod tests {
             IrExprKind::Var {
                 name: "s".to_string(),
                 access: VarAccess::Move,
+                ref_kind: VarRefKind::Value,
             },
             IrType::String,
         );
@@ -589,6 +590,7 @@ mod tests {
             IrExprKind::Var {
                 name: "items".to_string(),
                 access: VarAccess::Move,
+                ref_kind: VarRefKind::Value,
             },
             IrType::List(Box::new(IrType::String)),
         );
@@ -644,6 +646,7 @@ mod tests {
             IrExprKind::Var {
                 name: "s".to_string(),
                 access: VarAccess::Move,
+                ref_kind: VarRefKind::Value,
             },
             IrType::String,
         );
@@ -685,6 +688,7 @@ mod tests {
             IrExprKind::Var {
                 name: "name".to_string(),
                 access: VarAccess::Move,
+                ref_kind: VarRefKind::Value,
             },
             IrType::String,
         );
