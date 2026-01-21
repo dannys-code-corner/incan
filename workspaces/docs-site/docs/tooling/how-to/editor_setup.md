@@ -20,21 +20,24 @@ On this page:
 
 The Incan extension provides full syntax highlighting for `.incn` files.
 
-**Installation:**
+**Installation (recommended):**
 
-1. Copy the `editors/vscode/` folder to your VS Code extensions directory:
+1. Download the `.vsix` from the latest Incan GitHub release.
+2. In VS Code/Cursor: Extensions → “Install from VSIX…”
+3. Restart VS Code/Cursor
+4. Open any `.incn` file - syntax highlighting should work automatically
 
-   ```bash
-   # macOS/Linux
-   cp -r editors/vscode ~/.vscode/extensions/incan-language
-   
-   # Or for Cursor
-   cp -r editors/vscode ~/.cursor/extensions/incan-language
-   ```
+**Installation (dev/fallback):**
 
-2. Restart VS Code/Cursor
+If you’re working from a clone of this repo, you can copy the extension folder directly:
 
-3. Open any `.incn` file - syntax highlighting should work automatically
+```bash
+# macOS/Linux
+cp -r editors/vscode ~/.vscode/extensions/incan-language
+
+# Or for Cursor
+cp -r editors/vscode ~/.cursor/extensions/incan-language
+```
 
 **Features:**
 

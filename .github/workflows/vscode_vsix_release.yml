@@ -1,0 +1,32 @@
+name: VS Code Extension VSIX
+
+on:
+  push:
+    tags:
+      - "v*"  # TODO: revisit this once we finalize our release process
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    name: Build VSIX and Upload Release Asset
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci
+      - name: Compile extension
+        run: npm run compile
+      - name: Package VSIX
+        run: npx @vscode/vsce package
+      - name: Upload VSIX to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: editors/vscode/*.vsix
