@@ -159,6 +159,13 @@ lsp:
 	@cargo build --release --bin incan-lsp
 	@echo "\033[32m✓ LSP server built: target/release/incan-lsp\033[0m"
 
+.PHONY: install-lsp  ## tool - Install incan-lsp to ~/.cargo/bin
+install-lsp:
+	@echo "\033[1mInstalling incan-lsp...\033[0m"
+	@cargo install --path . --bin incan-lsp --force
+	@echo "\033[32m✓ Installed to ~/.cargo/bin/incan-lsp\033[0m"
+	@echo "\033[33mℹ Ensure ~/.cargo/bin is on your PATH\033[0m"
+
 .PHONY: test-incan-canary  ## test - End-to-end Incan test canary (assertion codegen)
 test-incan-canary: release
 	@echo "\033[1mRunning Incan assertion canary...\033[0m"
@@ -180,7 +187,9 @@ examples-nested-project-build: release
 .PHONY: vscode-package  ## tool - Package VS Code extension
 vscode-package:
 	@echo "\033[1mPackaging VS Code extension...\033[0m"
-	@cd editors/vscode && vsce package
+	@cd editors/vscode && npm ci
+	@cd editors/vscode && npm run compile
+	@cd editors/vscode && npx @vscode/vsce package
 	@echo "\033[32m✓ Extension packaged\033[0m"
 
 .PHONY: watch  ## tool - Watch for changes and rebuild (requires cargo-watch)

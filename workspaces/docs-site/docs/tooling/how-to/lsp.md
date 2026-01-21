@@ -29,10 +29,19 @@ Add the binary to your PATH:
 export PATH="$PATH:/path/to/incan-programming-language/target/release"
 ```
 
-Or symlink it:
+If you prefer installing the binary into a user-writable location, you can run:
 
 ```bash
-sudo ln -s /path/to/incan-programming-language/target/release/incan-lsp /usr/local/bin/
+cd /path/to/incan-programming-language
+cargo install --path . --bin incan-lsp --force
+```
+
+This installs to `~/.cargo/bin` by default, which is typically already on PATH.
+
+If you're in the Incan repo, you can also use the Makefile shortcut:
+
+```bash
+make install-lsp
 ```
 
 ### 3. Install VS Code Extension
