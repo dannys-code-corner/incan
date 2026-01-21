@@ -3818,24 +3818,21 @@
 
 <h3 id="vs-code-cursor-recommended">VS Code / Cursor (Recommended)<a class="headerlink" href="#vs-code-cursor-recommended" title="Permanent link">&para;</a></h3>
 <p>The Incan extension provides full syntax highlighting for <code>.incn</code> files.</p>
-<p><strong>Installation:</strong></p>
+<p><strong>Installation (recommended):</strong></p>
 <ol>
-<li>Copy the <code>editors/vscode/</code> folder to your VS Code extensions directory:</li>
+<li>Download the <code>.vsix</code> from the latest Incan GitHub release.</li>
+<li>In VS Code/Cursor: Extensions → “Install from VSIX…”</li>
+<li>Restart VS Code/Cursor</li>
+<li>Open any <code>.incn</code> file - syntax highlighting should work automatically</li>
 </ol>
+<p><strong>Installation (dev/fallback):</strong></p>
+<p>If you’re working from a clone of this repo, you can copy the extension folder directly:</p>
 <div class="language-bash highlight"><pre><span></span><code><span class="c1"># macOS/Linux</span>
 cp<span class="w"> </span>-r<span class="w"> </span>editors/vscode<span class="w"> </span>~/.vscode/extensions/incan-language
 
 <span class="c1"># Or for Cursor</span>
 cp<span class="w"> </span>-r<span class="w"> </span>editors/vscode<span class="w"> </span>~/.cursor/extensions/incan-language
 </code></pre></div>
-<ol>
-<li>
-<p>Restart VS Code/Cursor</p>
-</li>
-<li>
-<p>Open any <code>.incn</code> file - syntax highlighting should work automatically</p>
-</li>
-</ol>
 <p><strong>Features:</strong></p>
 <ul>
 <li>Full syntax highlighting for all Incan constructs</li>

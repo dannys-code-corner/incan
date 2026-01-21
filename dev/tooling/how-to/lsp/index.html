@@ -4004,8 +4004,13 @@ make<span class="w"> </span>lsp
 <div class="language-bash highlight"><pre><span></span><code><span class="c1"># Add to .bashrc, .zshrc, or your shell profile</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$PATH</span><span class="s2">:/path/to/incan-programming-language/target/release&quot;</span>
 </code></pre></div>
-<p>Or symlink it:</p>
-<div class="language-bash highlight"><pre><span></span><code>sudo<span class="w"> </span>ln<span class="w"> </span>-s<span class="w"> </span>/path/to/incan-programming-language/target/release/incan-lsp<span class="w"> </span>/usr/local/bin/
+<p>If you prefer installing the binary into a user-writable location, you can run:</p>
+<div class="language-bash highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/path/to/incan-programming-language
+cargo<span class="w"> </span>install<span class="w"> </span>--path<span class="w"> </span>.<span class="w"> </span>--bin<span class="w"> </span>incan-lsp<span class="w"> </span>--force
+</code></pre></div>
+<p>This installs to <code>~/.cargo/bin</code> by default, which is typically already on PATH.</p>
+<p>If you're in the Incan repo, you can also use the Makefile shortcut:</p>
+<div class="language-bash highlight"><pre><span></span><code>make<span class="w"> </span>install-lsp
 </code></pre></div>
 <h3 id="3-install-vs-code-extension">3. Install VS Code Extension<a class="headerlink" href="#3-install-vs-code-extension" title="Permanent link">&para;</a></h3>
 <p>See <a href="../editor_setup/">Editor Setup</a> for VS Code/Cursor extension installation.</p>
