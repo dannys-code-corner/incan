@@ -1,7 +1,9 @@
 # RFC 019: Test Runner, CLI, and Ecosystem
 
-**Status:** Draft  
+**Status:** Planned  
 **Created:** 2026-01-14  
+**Author(s):** Danny Meijer (@danny-meijer)  
+**Related:** RFC 018 (language primitives for testing)  
 **Supersedes:** RFC 007 (runner semantics), RFC 001/002 (runner portions)  
 
 ## Summary
@@ -522,6 +524,13 @@ def test_config(tmp_path: Path, name: str) -> None:
 If an expression required to be const-evaluable does not meet this, a **test collection error** (`TestCollectionError`)
 will be raised.
 
+Evaluation responsibility:
+
+- Collection-time expressions are evaluated by the **test runner** during test collection (not by the compiler at compile
+  time). This allows collection-time probes like `platform()` and `feature(name)` to inspect the runtime environment
+  while still requiring the expression structure to be const-evaluable.
+- The compiler validates that the expression is structurally const-evaluable; the runner evaluates it at collection time.
+
 ### Error categories (reference rules)
 
 The test runner distinguishes the following error categories:
@@ -647,7 +656,15 @@ Failure behavior:
 
 ### Fixture teardown via `yield` (reference rules)
 
-A fixture may optionally provide teardown logic using a `yield` expression.
+A fixture may optionally provide teardown logic using a `yield` expression, following Python/pytest's model.
+
+Design note (Python alignment):
+
+- A fixture that uses `yield` is a **generator function**. This is the same semantics as Python: `yield` in a function
+  body makes it a generator.
+- The test runner detects generator-based fixtures and consumes them: it calls the generator to get the yielded value
+  (setup), injects that value into tests, and then resumes/exhausts the generator after the test (teardown).
+- This means `yield` has one meaning in the language (generator), and the runner uses that mechanism for setup/teardown.
 
 Form:
 
@@ -856,7 +873,10 @@ Format (conceptual):
 
 Rules:
 
-- `<relative_path>` is the path relative to the `incan test` invocation root (or workspace root if ambiguous).
+- `<relative_path>` is the path relative to the **stable id root**, determined as follows (in order):
+    1. If `incan test` is invoked with an explicit directory argument, that directory is the stable id root.
+    2. Otherwise, if a project root exists (detected via `incan.toml` per RFC 015), the project root is the stable id root.
+    3. Otherwise, the current working directory is the stable id root.
 - `<context>` is:
     - `file` for test-file context (the entire file is a test context), OR
     - `tests` for inline `module tests:` context
@@ -1047,6 +1067,17 @@ Resources declared per-case are merged with decorator-level resources for schedu
 Any file named `conftest.incn` under `tests/` is discovered automatically and may contribute fixtures to tests in its
 directory subtree.
 
+Recognized constructs in `conftest.incn`:
+
+- `@fixture`-decorated functions (fixture definitions)
+- `const TEST_MARKS: List[str]` (default marks for the subtree)
+- `const TEST_MARKERS: List[str]` (marker registry for strict mode)
+- imports required by the above
+
+Arbitrary top-level code in `conftest.incn` is **not executed** at collection time. Unlike pytest's conftest.py (which
+executes as a normal Python module), `conftest.incn` is parsed declaratively for fixture and marker definitions only.
+This avoids import-time side effects and keeps collection deterministic.
+
 Resolution:
 
 - Fixtures defined in the same file as the test take precedence over fixtures from `conftest.incn`.
@@ -1149,6 +1180,14 @@ Future direction:
 - Existing name-based discovery (`test_*` functions in `test_*.incn` files) remains valid.
 - Inline test discovery depends on the language-level `module tests:` block (RFC 018).
 - New runner features are additive, but change defaults for capture and xfail policy as specified.
+
+CLI reference reconciliation:
+
+- This RFC supersedes the `incan test` section of the CLI reference (`docs/tooling/reference/cli_reference.md`) for all
+  flags and behaviors specified here.
+- Flags in the current CLI reference that are not mentioned in this RFC (e.g. `--fail-on-empty`, `-v`) remain valid unless
+  explicitly contradicted.
+- Once this RFC is implemented, the CLI reference must be updated to reflect the authoritative surface defined here.
 
 ## Alternatives considered
 

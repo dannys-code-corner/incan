@@ -58,6 +58,7 @@ hooks:
 markdown_extensions:
   - admonition
   - attr_list
+  - footnotes
   - pymdownx.arithmatex:
       generic: true
   - md_in_html

@@ -1,7 +1,8 @@
 # RFC 018: Language Primitives for Testing
 
-**Status:** Draft  
+**Status:** Planned  
 **Created:** 2026-01-14  
+**Author(s):** Danny Meijer (@danny-meijer)  
 **Supersedes:** RFC 001 (language portions), RFC 002 (language portions)  
 
 ## Summary
@@ -309,6 +310,21 @@ Runtime error model:
 - “Runtime error” refers to a panic-style failure (not a `Result`-returning error). It aborts the current test case.
 - `ErrorType` in `assert ... raises ErrorType` must denote a runtime error type.
 
+#### Runtime error types (normative; scope for this RFC)
+
+This RFC uses the term **runtime error** to mean a panic-style failure that aborts execution (in contrast to
+`Result`-returning errors that are explicitly handled with `?` and pattern matching).
+
+Rules:
+
+- This RFC requires at minimum the built-in runtime error type `AssertionError`.
+- This RFC does **not** define a general, user-extensible runtime error hierarchy.
+    - User-defined errors should use `Result`/`Option` (Incan’s primary error-handling model).
+- Subtyping among runtime error types is **optional**:
+    - If the implementation supports runtime error subtyping, `assert ... raises BaseType` must match subtypes.
+    - If not, implementations MUST - at minimum - match the exact runtime error type named by `ErrorType` (as already
+      specified in the raises rules below).
+
 #### Exhaustive mapping to `testing.assert_*` helpers (required behavior)
 
 | `testing.*` helper | `assert ...` surface form               | Lowers to                                        |
@@ -330,14 +346,20 @@ Full signatures (required `testing` API surface for this RFC):
 assert(condition: bool, msg: str = "") -> None
 assert_true(condition: bool, msg: str = "") -> None
 assert_false(condition: bool, msg: str = "") -> None
-assert_eq[T](left: T, right: T, msg: str = "") -> None
-assert_ne[T](left: T, right: T, msg: str = "") -> None
+assert_eq[T: Debug](left: T, right: T, msg: str = "") -> None
+assert_ne[T: Debug](left: T, right: T, msg: str = "") -> None
 assert_is_some[T](option: Option[T], msg: str = "") -> T
 assert_is_none[T](option: Option[T], msg: str = "") -> None
 assert_is_ok[T, E](result: Result[T, E], msg: str = "") -> T
 assert_is_err[T, E](result: Result[T, E], msg: str = "") -> E
 assert_raises[E](block: () -> None, msg: str = "") -> E
 ```
+
+Trait bounds for formatting:
+
+- `assert_eq` and `assert_ne` require `T: Debug` so that failure output can render both values.
+- If `T` does not implement `Debug`, the compiler must emit a diagnostic suggesting `@derive(Debug)` on the type.
+- Other assertion helpers do not require `Debug` on their type parameters (they only report success/failure, not values).
 
 Desugaring rule used by the compiler:
 
@@ -445,6 +467,15 @@ The inline test module:
 - may access names from the surrounding file (like Rust’s `use super::*` unit-test pattern)
 - introduces a scope boundary so test-only helpers/imports do not pollute the production namespace
 
+Visibility rules (normative):
+
+- Names declared in the enclosing module (including private names not marked `pub`) are visible inside `module tests:`.
+- This is **lexical visibility**, not an implicit import: the test block can reference any name that is in scope at
+  the file level, as if the test block were nested code in the same file.
+- Names declared inside `module tests:` (functions, imports, bindings) are **not** visible outside the test block.
+- The test block does not introduce a separate module namespace for the purpose of `pub` visibility; it is purely a
+  scoped block that can be stripped.
+
 This RFC does **not** define a general-purpose module system beyond existing file/module semantics; `module tests:`
 inside a file is specifically a scoped block that can be stripped in non-test compilation modes.
 
@@ -522,6 +553,7 @@ Conformance tests to add (turn the guide-level examples into real tests):
 - [ ] `assert a == b` lowers to `testing.assert_eq(a, b)` (rich equality diagnostics)
 - [ ] `assert a == b, "msg"` lowers to `testing.assert_eq(a, b, "msg")`
 - [ ] `assert a != b` lowers to `testing.assert_ne(a, b)`
+- [ ] `assert a == b` where `T` lacks `Debug` emits a diagnostic suggesting `@derive(Debug)`
 - [ ] `assert x > y, "msg"` lowers to `testing.assert(x > y, "msg")`
 - [ ] `assert x > y` lowers to `testing.assert(x > y)`
 - [ ] boolean logic: `assert a and b`, `assert not a`, `assert (a and b) or c`
@@ -534,11 +566,14 @@ Conformance tests to add (turn the guide-level examples into real tests):
 - [ ] `assert res is Ok(v)` / `assert res is Err(e)` binding behavior
 - [ ] `assert call() raises ErrorType` lowers to `testing.assert_raises[ErrorType](lambda: call())`
 - [ ] `assert call() raises ErrorType, "msg"` lowers to `testing.assert_raises[ErrorType](lambda: call(), "msg")`
-- [ ] `assert call() raises BaseError` matches subtypes of `BaseError` (if subtyping is supported)
+- [ ] `assert call() raises E` matches exact runtime error type `E` (and matches subtypes only if runtime error subtyping
+  is supported)
 - [ ] `from testing import *` is a compile-time error
 - [ ] `assert opt is Some(v)` rejects shadowing `v` in the same block
 - [ ] `module tests:` is stripped in `incan build`/`incan run` and type-checked in `incan --check`
 - [ ] only one `module tests:` per file (duplicate is a compile error)
+- [ ] `module tests:` can access private (non-`pub`) names from the enclosing module
+- [ ] names declared inside `module tests:` are not visible outside the test block
 
 ## References
 
