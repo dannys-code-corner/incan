@@ -3683,6 +3683,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#runtime-error-types-normative-scope-for-this-rfc" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runtime error types (normative; scope for this RFC)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#exhaustive-mapping-to-testingassert_-helpers-required-behavior" class="md-nav__link">
     <span class="md-ellipsis">
       Exhaustive mapping to testing.assert_* helpers (required behavior)
@@ -3855,7 +3864,7 @@
 
 
 <h1 id="rfc-018-language-primitives-for-testing">RFC 018: Language Primitives for Testing<a class="headerlink" href="#rfc-018-language-primitives-for-testing" title="Permanent link">&para;</a></h1>
-<p><strong>Status:</strong> Draft<br />
+<p><strong>Status:</strong> Planned<br />
 <strong>Created:</strong> 2026-01-14<br />
 <strong>Supersedes:</strong> RFC 001 (language portions), RFC 002 (language portions)  </p>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
@@ -4097,6 +4106,23 @@ assertion failure output.</p>
 <li>“Runtime error” refers to a panic-style failure (not a <code>Result</code>-returning error). It aborts the current test case.</li>
 <li><code>ErrorType</code> in <code>assert ... raises ErrorType</code> must denote a runtime error type.</li>
 </ul>
+<h4 id="runtime-error-types-normative-scope-for-this-rfc">Runtime error types (normative; scope for this RFC)<a class="headerlink" href="#runtime-error-types-normative-scope-for-this-rfc" title="Permanent link">&para;</a></h4>
+<p>This RFC uses the term <strong>runtime error</strong> to mean a panic-style failure that aborts execution (in contrast to
+<code>Result</code>-returning errors that are explicitly handled with <code>?</code> and pattern matching).</p>
+<p>Rules:</p>
+<ul>
+<li>This RFC requires at minimum the built-in runtime error type <code>AssertionError</code>.</li>
+<li>This RFC does <strong>not</strong> define a general, user-extensible runtime error hierarchy.<ul>
+<li>User-defined errors should use <code>Result</code>/<code>Option</code> (Incan’s primary error-handling model).</li>
+</ul>
+</li>
+<li>Subtyping among runtime error types is <strong>optional</strong>:<ul>
+<li>If the implementation supports runtime error subtyping, <code>assert ... raises BaseType</code> must match subtypes.</li>
+<li>If not, implementations MUST - at minimum - match the exact runtime error type named by <code>ErrorType</code> (as already
+  specified in the raises rules below).</li>
+</ul>
+</li>
+</ul>
 <h4 id="exhaustive-mapping-to-testingassert_-helpers-required-behavior">Exhaustive mapping to <code>testing.assert_*</code> helpers (required behavior)<a class="headerlink" href="#exhaustive-mapping-to-testingassert_-helpers-required-behavior" title="Permanent link">&para;</a></h4>
 <table>
 <thead>
@@ -4163,14 +4189,20 @@ assertion failure output.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">assert</span><span class="p">(</span><span class="n">condition</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 <span class="nf">assert_true</span><span class="p">(</span><span class="n">condition</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 <span class="nf">assert_false</span><span class="p">(</span><span class="n">condition</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
-<span class="nf">assert_eq</span><span class="p">[</span><span class="nc">T</span><span class="p">](</span><span class="n">left</span><span class="p">:</span> <span class="nc">T</span><span class="p">,</span> <span class="n">right</span><span class="p">:</span> <span class="nc">T</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
-<span class="nf">assert_ne</span><span class="p">[</span><span class="nc">T</span><span class="p">](</span><span class="n">left</span><span class="p">:</span> <span class="nc">T</span><span class="p">,</span> <span class="n">right</span><span class="p">:</span> <span class="nc">T</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<span class="nf">assert_eq</span><span class="p">[</span><span class="nc">T</span><span class="p">:</span> <span class="kt">Debug</span><span class="p">](</span><span class="n">left</span><span class="p">:</span> <span class="nc">T</span><span class="p">,</span> <span class="n">right</span><span class="p">:</span> <span class="nc">T</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<span class="nf">assert_ne</span><span class="p">[</span><span class="nc">T</span><span class="p">:</span> <span class="kt">Debug</span><span class="p">](</span><span class="n">left</span><span class="p">:</span> <span class="nc">T</span><span class="p">,</span> <span class="n">right</span><span class="p">:</span> <span class="nc">T</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 <span class="nf">assert_is_some</span><span class="p">[</span><span class="nc">T</span><span class="p">](</span><span class="kt">option</span><span class="p">:</span> <span class="kt">Option</span><span class="p">[</span><span class="nc">T</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">T</span>
 <span class="nf">assert_is_none</span><span class="p">[</span><span class="nc">T</span><span class="p">](</span><span class="kt">option</span><span class="p">:</span> <span class="kt">Option</span><span class="p">[</span><span class="nc">T</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 <span class="nf">assert_is_ok</span><span class="p">[</span><span class="nc">T</span><span class="p">,</span> <span class="nc">E</span><span class="p">](</span><span class="kt">result</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">T</span><span class="p">,</span> <span class="nc">E</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">T</span>
 <span class="nf">assert_is_err</span><span class="p">[</span><span class="nc">T</span><span class="p">,</span> <span class="nc">E</span><span class="p">](</span><span class="kt">result</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">T</span><span class="p">,</span> <span class="nc">E</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">E</span>
 <span class="nf">assert_raises</span><span class="p">[</span><span class="nc">E</span><span class="p">](</span><span class="n">block</span><span class="p">:</span> <span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">E</span>
 </code></pre></div>
+<p>Trait bounds for formatting:</p>
+<ul>
+<li><code>assert_eq</code> and <code>assert_ne</code> require <code>T: Debug</code> so that failure output can render both values.</li>
+<li>If <code>T</code> does not implement <code>Debug</code>, the compiler must emit a diagnostic suggesting <code>@derive(Debug)</code> on the type.</li>
+<li>Other assertion helpers do not require <code>Debug</code> on their type parameters (they only report success/failure, not values).</li>
+</ul>
 <p>Desugaring rule used by the compiler:</p>
 <p>Let the optional message be <code>msg</code> when present (i.e. <code>assert &lt;expr&gt;, msg</code>).</p>
 <ul>
@@ -4277,6 +4309,15 @@ explicitly passed as a path argument.</p>
 <ul>
 <li>may access names from the surrounding file (like Rust’s <code>use super::*</code> unit-test pattern)</li>
 <li>introduces a scope boundary so test-only helpers/imports do not pollute the production namespace</li>
+</ul>
+<p>Visibility rules (normative):</p>
+<ul>
+<li>Names declared in the enclosing module (including private names not marked <code>pub</code>) are visible inside <code>module tests:</code>.</li>
+<li>This is <strong>lexical visibility</strong>, not an implicit import: the test block can reference any name that is in scope at
+  the file level, as if the test block were nested code in the same file.</li>
+<li>Names declared inside <code>module tests:</code> (functions, imports, bindings) are <strong>not</strong> visible outside the test block.</li>
+<li>The test block does not introduce a separate module namespace for the purpose of <code>pub</code> visibility; it is purely a
+  scoped block that can be stripped.</li>
 </ul>
 <p>This RFC does <strong>not</strong> define a general-purpose module system beyond existing file/module semantics; <code>module tests:</code>
 inside a file is specifically a scoped block that can be stripped in non-test compilation modes.</p>
@@ -4404,6 +4445,7 @@ order.</p>
 <li>[ ] <code>assert a == b</code> lowers to <code>testing.assert_eq(a, b)</code> (rich equality diagnostics)</li>
 <li>[ ] <code>assert a == b, "msg"</code> lowers to <code>testing.assert_eq(a, b, "msg")</code></li>
 <li>[ ] <code>assert a != b</code> lowers to <code>testing.assert_ne(a, b)</code></li>
+<li>[ ] <code>assert a == b</code> where <code>T</code> lacks <code>Debug</code> emits a diagnostic suggesting <code>@derive(Debug)</code></li>
 <li>[ ] <code>assert x &gt; y, "msg"</code> lowers to <code>testing.assert(x &gt; y, "msg")</code></li>
 <li>[ ] <code>assert x &gt; y</code> lowers to <code>testing.assert(x &gt; y)</code></li>
 <li>[ ] boolean logic: <code>assert a and b</code>, <code>assert not a</code>, <code>assert (a and b) or c</code></li>
@@ -4416,11 +4458,14 @@ order.</p>
 <li>[ ] <code>assert res is Ok(v)</code> / <code>assert res is Err(e)</code> binding behavior</li>
 <li>[ ] <code>assert call() raises ErrorType</code> lowers to <code>testing.assert_raises[ErrorType](lambda: call())</code></li>
 <li>[ ] <code>assert call() raises ErrorType, "msg"</code> lowers to <code>testing.assert_raises[ErrorType](lambda: call(), "msg")</code></li>
-<li>[ ] <code>assert call() raises BaseError</code> matches subtypes of <code>BaseError</code> (if subtyping is supported)</li>
+<li>[ ] <code>assert call() raises E</code> matches exact runtime error type <code>E</code> (and matches subtypes only if runtime error subtyping
+  is supported)</li>
 <li>[ ] <code>from testing import *</code> is a compile-time error</li>
 <li>[ ] <code>assert opt is Some(v)</code> rejects shadowing <code>v</code> in the same block</li>
 <li>[ ] <code>module tests:</code> is stripped in <code>incan build</code>/<code>incan run</code> and type-checked in <code>incan --check</code></li>
 <li>[ ] only one <code>module tests:</code> per file (duplicate is a compile error)</li>
+<li>[ ] <code>module tests:</code> can access private (non-<code>pub</code>) names from the enclosing module</li>
+<li>[ ] names declared inside <code>module tests:</code> are not visible outside the test block</li>
 </ul>
 <h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
 <ul>

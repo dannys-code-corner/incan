@@ -4236,7 +4236,7 @@
 
 
 <h1 id="rfc-019-test-runner-cli-and-ecosystem">RFC 019: Test Runner, CLI, and Ecosystem<a class="headerlink" href="#rfc-019-test-runner-cli-and-ecosystem" title="Permanent link">&para;</a></h1>
-<p><strong>Status:</strong> Draft<br />
+<p><strong>Status:</strong> Planned<br />
 <strong>Created:</strong> 2026-01-14<br />
 <strong>Supersedes:</strong> RFC 007 (runner semantics), RFC 001/002 (runner portions)  </p>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
@@ -4702,6 +4702,13 @@ conditions, <code>@parametrize</code> data (and ids), <code>TEST_MARKS</code>, a
 </code></pre></div>
 <p>If an expression required to be const-evaluable does not meet this, a <strong>test collection error</strong> (<code>TestCollectionError</code>)
 will be raised.</p>
+<p>Evaluation responsibility:</p>
+<ul>
+<li>Collection-time expressions are evaluated by the <strong>test runner</strong> during test collection (not by the compiler at compile
+  time). This allows collection-time probes like <code>platform()</code> and <code>feature(name)</code> to inspect the runtime environment
+  while still requiring the expression structure to be const-evaluable.</li>
+<li>The compiler validates that the expression is structurally const-evaluable; the runner evaluates it at collection time.</li>
+</ul>
 <h3 id="error-categories-reference-rules">Error categories (reference rules)<a class="headerlink" href="#error-categories-reference-rules" title="Permanent link">&para;</a></h3>
 <p>The test runner distinguishes the following error categories:</p>
 <ul>
@@ -4825,7 +4832,15 @@ relaxed in a future RFC once the feature is implemented and exercised in real co
   does not run). Teardown for already-created fixtures is best-effort.</li>
 </ul>
 <h3 id="fixture-teardown-via-yield-reference-rules">Fixture teardown via <code>yield</code> (reference rules)<a class="headerlink" href="#fixture-teardown-via-yield-reference-rules" title="Permanent link">&para;</a></h3>
-<p>A fixture may optionally provide teardown logic using a <code>yield</code> expression.</p>
+<p>A fixture may optionally provide teardown logic using a <code>yield</code> expression, following Python/pytest's model.</p>
+<p>Design note (Python alignment):</p>
+<ul>
+<li>A fixture that uses <code>yield</code> is a <strong>generator function</strong>. This is the same semantics as Python: <code>yield</code> in a function
+  body makes it a generator.</li>
+<li>The test runner detects generator-based fixtures and consumes them: it calls the generator to get the yielded value
+  (setup), injects that value into tests, and then resumes/exhausts the generator after the test (teardown).</li>
+<li>This means <code>yield</code> has one meaning in the language (generator), and the runner uses that mechanism for setup/teardown.</li>
+</ul>
 <p>Form:</p>
 <ul>
 <li>The fixture function body contains exactly one <code>yield</code> statement.</li>
@@ -5034,7 +5049,12 @@ relaxed in a future RFC once the feature is implemented and exercised in real co
 </ul>
 <p>Rules:</p>
 <ul>
-<li><code>&lt;relative_path&gt;</code> is the path relative to the <code>incan test</code> invocation root (or workspace root if ambiguous).</li>
+<li><code>&lt;relative_path&gt;</code> is the path relative to the <strong>stable id root</strong>, determined as follows (in order):<ol>
+<li>If <code>incan test</code> is invoked with an explicit directory argument, that directory is the stable id root.</li>
+<li>Otherwise, if a project root exists (detected via <code>incan.toml</code> per RFC 015), the project root is the stable id root.</li>
+<li>Otherwise, the current working directory is the stable id root.</li>
+</ol>
+</li>
 <li><code>&lt;context&gt;</code> is:<ul>
 <li><code>file</code> for test-file context (the entire file is a test context), OR</li>
 <li><code>tests</code> for inline <code>module tests:</code> context</li>
@@ -5225,6 +5245,16 @@ function into multiple test cases.</p>
 <h3 id="shared-fixtures-via-conftestincn-reference-rules">Shared fixtures via <code>conftest.incn</code> (reference rules)<a class="headerlink" href="#shared-fixtures-via-conftestincn-reference-rules" title="Permanent link">&para;</a></h3>
 <p>Any file named <code>conftest.incn</code> under <code>tests/</code> is discovered automatically and may contribute fixtures to tests in its
 directory subtree.</p>
+<p>Recognized constructs in <code>conftest.incn</code>:</p>
+<ul>
+<li><code>@fixture</code>-decorated functions (fixture definitions)</li>
+<li><code>const TEST_MARKS: List[str]</code> (default marks for the subtree)</li>
+<li><code>const TEST_MARKERS: List[str]</code> (marker registry for strict mode)</li>
+<li>imports required by the above</li>
+</ul>
+<p>Arbitrary top-level code in <code>conftest.incn</code> is <strong>not executed</strong> at collection time. Unlike pytest's conftest.py (which
+executes as a normal Python module), <code>conftest.incn</code> is parsed declaratively for fixture and marker definitions only.
+This avoids import-time side effects and keeps collection deterministic.</p>
 <p>Resolution:</p>
 <ul>
 <li>Fixtures defined in the same file as the test take precedence over fixtures from <code>conftest.incn</code>.</li>
@@ -5332,6 +5362,14 @@ directory subtree.</p>
 <li>Existing name-based discovery (<code>test_*</code> functions in <code>test_*.incn</code> files) remains valid.</li>
 <li>Inline test discovery depends on the language-level <code>module tests:</code> block (RFC 018).</li>
 <li>New runner features are additive, but change defaults for capture and xfail policy as specified.</li>
+</ul>
+<p>CLI reference reconciliation:</p>
+<ul>
+<li>This RFC supersedes the <code>incan test</code> section of the CLI reference (<code>docs/tooling/reference/cli_reference.md</code>) for all
+  flags and behaviors specified here.</li>
+<li>Flags in the current CLI reference that are not mentioned in this RFC (e.g. <code>--fail-on-empty</code>, <code>-v</code>) remain valid unless
+  explicitly contradicted.</li>
+<li>Once this RFC is implemented, the CLI reference must be updated to reflect the authoritative surface defined here.</li>
 </ul>
 <h2 id="alternatives-considered">Alternatives considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <ul>
