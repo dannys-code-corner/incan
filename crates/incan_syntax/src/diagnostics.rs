@@ -289,8 +289,13 @@ pub mod errors {
     }
 
     pub fn unknown_derive(name: &str, span: Span) -> CompileError {
+        let valid_derives = derives::DERIVES
+            .iter()
+            .map(|d| d.canonical)
+            .collect::<Vec<_>>()
+            .join(", ");
         CompileError::type_error(format!("Unknown derive '{}'", name), span)
-            .with_hint("Valid derives: Debug, Display, Eq, Ord, Hash, Clone, Copy, Default, Serialize, Deserialize")
+            .with_hint(format!("Valid derives: {valid_derives}"))
             .with_hint("Hint: Use 'with TraitName' syntax for custom trait implementations")
     }
 
@@ -604,11 +609,11 @@ pub mod errors {
         }
 
         match derives::from_str(trait_name) {
-            Some(DeriveId::Eq) => {
+            Some(DeriveId::Eq) | Some(DeriveId::PartialEq) => {
                 error = error.with_hint("Add @derive(Eq) to enable equality comparison (==, !=)");
                 error = error.with_hint("Or implement __eq__ manually for custom comparison logic");
             }
-            Some(DeriveId::Ord) => {
+            Some(DeriveId::Ord) | Some(DeriveId::PartialOrd) => {
                 error = error.with_hint("Add @derive(Ord) to enable ordering comparison (<, >, <=, >=)");
                 error = error.with_hint("Or implement __lt__ manually for custom ordering");
             }

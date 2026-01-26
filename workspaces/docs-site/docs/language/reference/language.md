@@ -12,6 +12,7 @@
 - [Builtin exceptions](#builtin-exceptions)
 - [Builtin functions](#builtin-functions)
 - [Derives](#derives)
+- [Builtin traits](#builtin-traits)
 - [Operators](#operators)
 - [Punctuation](#punctuation)
 - [Builtin types](#builtin-types)
@@ -223,7 +224,9 @@ def main() -> None:
 | Debug | `Debug` |  | Derive Rust-style debug formatting. | RFC 000 | 0.1 | Stable |
 | Display | `Display` |  | Derive user-facing string formatting. | RFC 000 | 0.1 | Stable |
 | Eq | `Eq` |  | Derive equality comparisons. | RFC 000 | 0.1 | Stable |
+| PartialEq | `PartialEq` |  | Derive partial equality comparisons. | RFC 000 | 0.1 | Stable |
 | Ord | `Ord` |  | Derive ordering comparisons. | RFC 000 | 0.1 | Stable |
+| PartialOrd | `PartialOrd` |  | Derive partial ordering comparisons. | RFC 000 | 0.1 | Stable |
 | Hash | `Hash` |  | Derive hashing support (for map/set keys). | RFC 000 | 0.1 | Stable |
 | Clone | `Clone` |  | Derive deep cloning. | RFC 000 | 0.1 | Stable |
 | Copy | `Copy` |  | Derive copy semantics for simple value types. | RFC 000 | 0.1 | Stable |
@@ -231,6 +234,27 @@ def main() -> None:
 | Serialize | `Serialize` |  | Derive serialization support (e.g. JSON). | RFC 000 | 0.1 | Stable |
 | Deserialize | `Deserialize` |  | Derive deserialization support (e.g. JSON). | RFC 000 | 0.1 | Stable |
 | Validate | `Validate` |  | Enable validated construction via `TypeName.new(...)` and require a `validate(self) -> Result[Self, E]` method. | RFC 000 | 0.1 | Stable |
+
+## Builtin traits
+
+| Id | Canonical | Aliases | Description | RFC | Since | Stability |
+|---|---|---|---|---|---|---|
+| Debug | `Debug` |  | Trait for debug formatting output. | RFC 000 | 0.1 | Stable |
+| Display | `Display` |  | Trait for user-facing string formatting. | RFC 000 | 0.1 | Stable |
+| Eq | `Eq` |  | Trait for equality comparisons. | RFC 000 | 0.1 | Stable |
+| PartialEq | `PartialEq` |  | Trait for partial equality comparisons. | RFC 000 | 0.1 | Stable |
+| Ord | `Ord` |  | Trait for ordering comparisons. | RFC 000 | 0.1 | Stable |
+| PartialOrd | `PartialOrd` |  | Trait for partial ordering comparisons. | RFC 000 | 0.1 | Stable |
+| Hash | `Hash` |  | Trait for hashing support. | RFC 000 | 0.1 | Stable |
+| Clone | `Clone` |  | Trait for cloning values. | RFC 000 | 0.1 | Stable |
+| Default | `Default` |  | Trait for default value construction. | RFC 000 | 0.1 | Stable |
+| From | `From` |  | Trait for conversions. | RFC 000 | 0.1 | Stable |
+| Into | `Into` |  | Trait for conversions. | RFC 000 | 0.1 | Stable |
+| TryFrom | `TryFrom` |  | Trait for fallible conversions. | RFC 000 | 0.1 | Stable |
+| TryInto | `TryInto` |  | Trait for fallible conversions. | RFC 000 | 0.1 | Stable |
+| Iterator | `Iterator` |  | Trait for iterator behavior. | RFC 000 | 0.1 | Stable |
+| IntoIterator | `IntoIterator` |  | Trait for conversion into iterators. | RFC 000 | 0.1 | Stable |
+| Error | `Error` |  | Trait for error-like values. | RFC 000 | 0.1 | Stable |
 
 ## Operators
 

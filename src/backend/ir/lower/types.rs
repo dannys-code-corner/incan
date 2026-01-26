@@ -39,9 +39,9 @@ impl AstLowering {
     /// Maps container/string annotations to their frozen/static IR equivalents:
     /// - `str` -> `StaticStr`
     /// - `bytes` -> `StaticBytes`
-    /// - `List[T]` -> `NamedGeneric("FrozenList", [T])`
-    /// - `Dict[K, V]` -> `NamedGeneric("FrozenDict", [K, V])`
-    /// - `Set[T]` -> `NamedGeneric("FrozenSet", [T])`
+    /// - `List[T]` -> `NamedGeneric(FrozenList, [T])`
+    /// - `Dict[K, V]` -> `NamedGeneric(FrozenDict, [K, V])`
+    /// - `Set[T]` -> `NamedGeneric(FrozenSet, [T])`
     pub(super) fn lower_const_annotation_type(&self, ty: &ast::Type) -> IrType {
         match ty {
             ast::Type::Simple(name) => {

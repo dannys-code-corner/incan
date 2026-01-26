@@ -6,6 +6,7 @@ use incan_core::lang::keywords;
 use incan_core::lang::operators;
 use incan_core::lang::punctuation;
 use incan_core::lang::types::{collections, numerics, stringlike};
+use std::path::{Path, PathBuf};
 
 #[test]
 fn keywords_spellings_unique_and_resolvable() {
@@ -267,4 +268,132 @@ fn types_spellings_unique_and_resolvable() {
             );
         }
     }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Drift guardrails for closed-set vocabulary (string literals).
+// -------------------------------------------------------------------------------------------------
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("repo root missing")
+        .to_path_buf()
+}
+
+fn collect_rs_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
+fn find_string_literals(paths: &[PathBuf], literals: &[&str]) -> Vec<String> {
+    fn is_comment_line(line: &str) -> bool {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("//") || trimmed.starts_with("///") || trimmed.starts_with("//!")
+    }
+
+    let mut hits: Vec<String> = Vec::new();
+    for path in paths {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in content.lines().enumerate() {
+            if is_comment_line(line) {
+                continue;
+            }
+            for &literal in literals {
+                let needle = format!("\"{literal}\"");
+                if line.contains(&needle) {
+                    hits.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+                }
+            }
+        }
+    }
+    hits
+}
+
+fn compiler_layer_rs_files() -> Vec<PathBuf> {
+    let root = repo_root();
+    let targets = [
+        root.join("src/frontend"),
+        root.join("src/backend"),
+        root.join("src/lsp"),
+    ];
+    let mut files = Vec::new();
+    for dir in &targets {
+        files.extend(collect_rs_files(dir));
+    }
+    files
+}
+
+#[test]
+fn no_builtin_trait_string_literals_in_compiler_layers() {
+    let files = compiler_layer_rs_files();
+
+    let trait_literals = [
+        "Debug",
+        "Display",
+        "Eq",
+        "PartialEq",
+        "Ord",
+        "PartialOrd",
+        "Hash",
+        "Clone",
+        "Default",
+        "From",
+        "Into",
+        "TryFrom",
+        "TryInto",
+        "Iterator",
+        "IntoIterator",
+        "Error",
+    ];
+
+    let hits = find_string_literals(&files, &trait_literals);
+    assert!(
+        hits.is_empty(),
+        "builtin trait spellings must come from incan_core::lang::traits; found:\n{}",
+        hits.join("\n")
+    );
+}
+
+#[test]
+fn no_constructor_string_literals_in_compiler_layers() {
+    let files = compiler_layer_rs_files();
+
+    let constructor_literals = ["Ok", "Err", "Some", "None"];
+    let hits = find_string_literals(&files, &constructor_literals);
+    assert!(
+        hits.is_empty(),
+        "constructor spellings must come from incan_core::lang::surface::constructors; found:\n{}",
+        hits.join("\n")
+    );
+}
+
+#[test]
+fn no_frozen_collection_string_literals_in_compiler_layers() {
+    let files = compiler_layer_rs_files();
+
+    let frozen_literals = ["FrozenList", "FrozenSet", "FrozenDict"];
+    let hits = find_string_literals(&files, &frozen_literals);
+    assert!(
+        hits.is_empty(),
+        "frozen collection spellings must come from incan_core::lang::types::collections; found:\n{}",
+        hits.join("\n")
+    );
 }

@@ -38,4 +38,5 @@ pub mod registry;
 pub mod rust_keywords;
 pub mod stdlib;
 pub mod surface;
+pub mod traits;
 pub mod types;

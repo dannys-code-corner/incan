@@ -19,7 +19,9 @@ pub enum DeriveId {
 
     // Comparison
     Eq,
+    PartialEq,
     Ord,
+    PartialOrd,
     Hash,
 
     // Copying / defaults
@@ -62,9 +64,23 @@ pub const DERIVES: &[DeriveInfo] = &[
         Since(0, 1),
     ),
     info(
+        DeriveId::PartialEq,
+        "PartialEq",
+        "Derive partial equality comparisons.",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info(
         DeriveId::Ord,
         "Ord",
         "Derive ordering comparisons.",
+        RFC::_000,
+        Since(0, 1),
+    ),
+    info(
+        DeriveId::PartialOrd,
+        "PartialOrd",
+        "Derive partial ordering comparisons.",
         RFC::_000,
         Since(0, 1),
     ),

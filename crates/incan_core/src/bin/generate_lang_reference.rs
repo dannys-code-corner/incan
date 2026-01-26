@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use incan_core::lang::types::{collections, numerics, stringlike};
-use incan_core::lang::{builtins, derives, errors, keywords, operators, punctuation, surface};
+use incan_core::lang::{builtins, derives, errors, keywords, operators, punctuation, surface, traits};
 
 fn trim_trailing_newlines_to_at_most_two(out: &mut String) {
     let mut count = 0usize;
@@ -77,7 +77,7 @@ fn write_language_reference(path: &Path) {
     out.push_str("!!! warning \"Generated file\"\n");
     out.push_str("    Do not edit this page by hand.\n");
     out.push_str("    If it looks wrong/outdated, regenerate it from source and commit the result.\n");
-    out.push_str("\n");
+    out.push('\n');
     out.push_str("    Regenerate with: `cargo run -p incan_core --bin generate_lang_reference`\n\n");
 
     out.push_str("## Contents\n\n");
@@ -85,6 +85,7 @@ fn write_language_reference(path: &Path) {
     out.push_str("- [Builtin exceptions](#builtin-exceptions)\n");
     out.push_str("- [Builtin functions](#builtin-functions)\n");
     out.push_str("- [Derives](#derives)\n");
+    out.push_str("- [Builtin traits](#builtin-traits)\n");
     out.push_str("- [Operators](#operators)\n");
     out.push_str("- [Punctuation](#punctuation)\n");
     out.push_str("- [Builtin types](#builtin-types)\n");
@@ -99,6 +100,7 @@ fn write_language_reference(path: &Path) {
     render_exceptions_section(&mut out);
     render_builtins_section(&mut out);
     render_derives_section(&mut out);
+    render_traits_section(&mut out);
     render_operators_section(&mut out);
     render_punctuation_section(&mut out);
     render_types_section(&mut out);
@@ -272,6 +274,36 @@ fn render_derives_section(out: &mut String) {
         let rfc = d.introduced_in_rfc;
         let since = d.since;
         let stability = format!("{:?}", d.stability);
+
+        out.push_str(&format!(
+            "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"
+        ));
+    }
+    out.push('\n');
+}
+
+fn render_traits_section(out: &mut String) {
+    start_section(out, "## Builtin traits");
+
+    out.push_str("| Id | Canonical | Aliases | Description | RFC | Since | Stability |\n");
+    out.push_str("|---|---|---|---|---|---|---|\n");
+
+    for t in traits::TRAITS {
+        let id = format!("{:?}", t.id);
+        let canonical = format!("`{}`", t.canonical);
+        let aliases = if t.aliases.is_empty() {
+            String::new()
+        } else {
+            t.aliases
+                .iter()
+                .map(|a| format!("`{}`", a))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let desc = t.description;
+        let rfc = t.introduced_in_rfc;
+        let since = t.since;
+        let stability = format!("{:?}", t.stability);
 
         out.push_str(&format!(
             "| {id} | {canonical} | {aliases} | {desc} | {rfc} | {since} | {stability} |\n"

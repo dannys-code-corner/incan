@@ -14,6 +14,9 @@ use crate::frontend::ast::{Declaration, Program, Span, Type};
 use crate::frontend::module::resolve_import_path;
 use crate::frontend::{lexer, parser, typechecker};
 use crate::lsp::diagnostics::{compile_error_to_diagnostic, position_to_offset, span_to_range};
+use incan_core::lang::keywords;
+use incan_core::lang::surface::constructors;
+use incan_core::lang::types::collections;
 
 /// Document state stored by the LSP
 #[derive(Debug, Clone)]
@@ -594,21 +597,41 @@ impl LanguageServer for IncanLanguageServer {
             None => return Ok(None),
         };
 
-        let mut items = Vec::new();
+        let mut items: Vec<CompletionItem> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
 
-        // Add keywords
-        let keywords = [
-            "def", "async", "await", "return", "if", "elif", "else", "match", "case", "for", "in", "while", "let",
-            "mut", "model", "class", "trait", "enum", "newtype", "import", "from", "as", "with", "extends", "pub",
-            "const", "True", "False", "None", "Ok", "Err", "Some", "Result", "Option",
-        ];
+        let mut push_vocab = |label: &str, kind: CompletionItemKind| {
+            if seen.insert(label.to_string()) {
+                items.push(CompletionItem {
+                    label: label.to_string(),
+                    kind: Some(kind),
+                    ..Default::default()
+                });
+            }
+        };
 
-        for kw in keywords {
-            items.push(CompletionItem {
-                label: kw.to_string(),
-                kind: Some(CompletionItemKind::KEYWORD),
-                ..Default::default()
-            });
+        // Add keywords from the registry (canonical + aliases).
+        for info in keywords::KEYWORDS {
+            push_vocab(info.canonical, CompletionItemKind::KEYWORD);
+            for &alias in info.aliases {
+                push_vocab(alias, CompletionItemKind::KEYWORD);
+            }
+        }
+
+        // Add surface constructors (`Ok`, `Err`, `Some`, `None`).
+        for info in constructors::CONSTRUCTORS {
+            push_vocab(info.canonical, CompletionItemKind::CONSTRUCTOR);
+            for &alias in info.aliases {
+                push_vocab(alias, CompletionItemKind::CONSTRUCTOR);
+            }
+        }
+
+        // Add core collection/generic type names (`Option`, `Result`, frozen variants, etc.).
+        for info in collections::COLLECTION_TYPES {
+            push_vocab(info.canonical, CompletionItemKind::CLASS);
+            for &alias in info.aliases {
+                push_vocab(alias, CompletionItemKind::CLASS);
+            }
         }
 
         // Add symbols from the current document
@@ -616,56 +639,68 @@ impl LanguageServer for IncanLanguageServer {
             for decl in &ast.declarations {
                 match &decl.node {
                     Declaration::Const(konst) => {
-                        items.push(CompletionItem {
-                            label: konst.name.clone(),
-                            kind: Some(CompletionItemKind::CONSTANT),
-                            detail: Some(if let Some(ty) = &konst.ty {
-                                format!("const {}: {}", konst.name, format_type(&ty.node))
-                            } else {
-                                format!("const {}", konst.name)
-                            }),
-                            ..Default::default()
-                        });
+                        if seen.insert(konst.name.clone()) {
+                            items.push(CompletionItem {
+                                label: konst.name.clone(),
+                                kind: Some(CompletionItemKind::CONSTANT),
+                                detail: Some(if let Some(ty) = &konst.ty {
+                                    format!("const {}: {}", konst.name, format_type(&ty.node))
+                                } else {
+                                    format!("const {}", konst.name)
+                                }),
+                                ..Default::default()
+                            });
+                        }
                     }
                     Declaration::Function(func) => {
-                        items.push(CompletionItem {
-                            label: func.name.clone(),
-                            kind: Some(CompletionItemKind::FUNCTION),
-                            detail: Some(format_function_signature(func)),
-                            ..Default::default()
-                        });
+                        if seen.insert(func.name.clone()) {
+                            items.push(CompletionItem {
+                                label: func.name.clone(),
+                                kind: Some(CompletionItemKind::FUNCTION),
+                                detail: Some(format_function_signature(func)),
+                                ..Default::default()
+                            });
+                        }
                     }
                     Declaration::Model(model) => {
-                        items.push(CompletionItem {
-                            label: model.name.clone(),
-                            kind: Some(CompletionItemKind::STRUCT),
-                            detail: Some(format!("model {}", model.name)),
-                            ..Default::default()
-                        });
+                        if seen.insert(model.name.clone()) {
+                            items.push(CompletionItem {
+                                label: model.name.clone(),
+                                kind: Some(CompletionItemKind::STRUCT),
+                                detail: Some(format!("model {}", model.name)),
+                                ..Default::default()
+                            });
+                        }
                     }
                     Declaration::Class(class) => {
-                        items.push(CompletionItem {
-                            label: class.name.clone(),
-                            kind: Some(CompletionItemKind::CLASS),
-                            detail: Some(format!("class {}", class.name)),
-                            ..Default::default()
-                        });
+                        if seen.insert(class.name.clone()) {
+                            items.push(CompletionItem {
+                                label: class.name.clone(),
+                                kind: Some(CompletionItemKind::CLASS),
+                                detail: Some(format!("class {}", class.name)),
+                                ..Default::default()
+                            });
+                        }
                     }
                     Declaration::Trait(tr) => {
-                        items.push(CompletionItem {
-                            label: tr.name.clone(),
-                            kind: Some(CompletionItemKind::INTERFACE),
-                            detail: Some(format!("trait {}", tr.name)),
-                            ..Default::default()
-                        });
+                        if seen.insert(tr.name.clone()) {
+                            items.push(CompletionItem {
+                                label: tr.name.clone(),
+                                kind: Some(CompletionItemKind::INTERFACE),
+                                detail: Some(format!("trait {}", tr.name)),
+                                ..Default::default()
+                            });
+                        }
                     }
                     Declaration::Enum(en) => {
-                        items.push(CompletionItem {
-                            label: en.name.clone(),
-                            kind: Some(CompletionItemKind::ENUM),
-                            detail: Some(format!("enum {}", en.name)),
-                            ..Default::default()
-                        });
+                        if seen.insert(en.name.clone()) {
+                            items.push(CompletionItem {
+                                label: en.name.clone(),
+                                kind: Some(CompletionItemKind::ENUM),
+                                detail: Some(format!("enum {}", en.name)),
+                                ..Default::default()
+                            });
+                        }
                     }
                     _ => {}
                 }

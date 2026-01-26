@@ -7,8 +7,10 @@ use std::collections::HashMap;
 use crate::frontend::ast::{Receiver, Span, Type};
 use incan_core::lang::builtins::{self, BuiltinFnId};
 use incan_core::lang::conventions;
+use incan_core::lang::surface::constructors;
 use incan_core::lang::surface::functions::{self as surface_functions, SurfaceFnId};
 use incan_core::lang::surface::types as surface_types;
+use incan_core::lang::traits;
 use incan_core::lang::types::collections;
 use incan_core::lang::types::collections::CollectionTypeId;
 use incan_core::lang::types::numerics;
@@ -63,8 +65,8 @@ impl SymbolTable {
             builtin_types.extend_from_slice(t.item.aliases);
         }
         // Unit-ish types that are not yet modeled in `incan_core::lang::types`.
-        builtin_types.push("Unit");
-        builtin_types.push("None");
+        builtin_types.push(conventions::UNIT_TYPE_NAME);
+        builtin_types.push(conventions::NONE_TYPE_NAME);
 
         // Deduplicate to avoid defining the same builtin twice.
         let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
@@ -78,28 +80,9 @@ impl SymbolTable {
         }
 
         // Builtin traits
-        let builtin_traits = [
-            "Debug",
-            "Display",
-            "Eq",
-            "PartialEq",
-            "Ord",
-            "PartialOrd",
-            "Hash",
-            "Clone",
-            "Default",
-            "From",
-            "Into",
-            "TryFrom",
-            "TryInto",
-            "Iterator",
-            "IntoIterator",
-            "Error",
-        ];
-
-        for name in builtin_traits {
+        for info in traits::TRAITS {
             self.define(Symbol {
-                name: name.to_string(),
+                name: info.canonical.to_string(),
                 kind: SymbolKind::Trait(TraitInfo {
                     type_params: vec![],
                     methods: HashMap::new(),
@@ -113,18 +96,18 @@ impl SymbolTable {
         // Builtin variants for Result and Option
         // Ok(T) and Err(E) for Result
         self.define(Symbol {
-            name: "Ok".to_string(),
+            name: constructors::as_str(constructors::ConstructorId::Ok).to_string(),
             kind: SymbolKind::Variant(VariantInfo {
-                enum_name: "Result".to_string(),
+                enum_name: collections::as_str(CollectionTypeId::Result).to_string(),
                 fields: vec![ResolvedType::TypeVar("T".to_string())],
             }),
             span: Span::default(),
             scope: 0,
         });
         self.define(Symbol {
-            name: "Err".to_string(),
+            name: constructors::as_str(constructors::ConstructorId::Err).to_string(),
             kind: SymbolKind::Variant(VariantInfo {
-                enum_name: "Result".to_string(),
+                enum_name: collections::as_str(CollectionTypeId::Result).to_string(),
                 fields: vec![ResolvedType::TypeVar("E".to_string())],
             }),
             span: Span::default(),
@@ -132,18 +115,18 @@ impl SymbolTable {
         });
         // Some(T) and None for Option
         self.define(Symbol {
-            name: "Some".to_string(),
+            name: constructors::as_str(constructors::ConstructorId::Some).to_string(),
             kind: SymbolKind::Variant(VariantInfo {
-                enum_name: "Option".to_string(),
+                enum_name: collections::as_str(CollectionTypeId::Option).to_string(),
                 fields: vec![ResolvedType::TypeVar("T".to_string())],
             }),
             span: Span::default(),
             scope: 0,
         });
         self.define(Symbol {
-            name: "None".to_string(),
+            name: constructors::as_str(constructors::ConstructorId::None).to_string(),
             kind: SymbolKind::Variant(VariantInfo {
-                enum_name: "Option".to_string(),
+                enum_name: collections::as_str(CollectionTypeId::Option).to_string(),
                 fields: vec![],
             }),
             span: Span::default(),
@@ -151,28 +134,21 @@ impl SymbolTable {
         });
 
         // Builtin functions
-        self.define(Symbol {
-            name: "println".to_string(),
-            kind: SymbolKind::Function(FunctionInfo {
-                params: vec![("msg".to_string(), ResolvedType::Str)],
-                return_type: ResolvedType::Unit,
-                is_async: false,
-                type_params: vec![],
-            }),
-            span: Span::default(),
-            scope: 0,
-        });
-        self.define(Symbol {
-            name: builtins::as_str(BuiltinFnId::Print).to_string(),
-            kind: SymbolKind::Function(FunctionInfo {
-                params: vec![("msg".to_string(), ResolvedType::Str)],
-                return_type: ResolvedType::Unit,
-                is_async: false,
-                type_params: vec![],
-            }),
-            span: Span::default(),
-            scope: 0,
-        });
+        for name in std::iter::once(builtins::as_str(BuiltinFnId::Print))
+            .chain(builtins::aliases(BuiltinFnId::Print).iter().copied())
+        {
+            self.define(Symbol {
+                name: name.to_string(),
+                kind: SymbolKind::Function(FunctionInfo {
+                    params: vec![("msg".to_string(), ResolvedType::Str)],
+                    return_type: ResolvedType::Unit,
+                    is_async: false,
+                    type_params: vec![],
+                }),
+                span: Span::default(),
+                scope: 0,
+            });
+        }
         self.define(Symbol {
             name: builtins::as_str(BuiltinFnId::Len).to_string(),
             kind: SymbolKind::Function(FunctionInfo {
