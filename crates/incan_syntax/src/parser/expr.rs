@@ -568,13 +568,19 @@ impl<'a> Parser<'a> {
                 Span::new(start, end),
             ))
         } else {
-            let expr = self.expression()?;
-            let end = expr.span.end;
+            let stmt = self.inline_statement()?;
+            self.match_token(&TokenKind::Newline);
+            let end = stmt.span.end;
+            let body = if let Statement::Expr(expr) = &stmt.node {
+                MatchBody::Expr(expr.clone())
+            } else {
+                MatchBody::Block(vec![stmt])
+            };
             Ok(Spanned::new(
                 MatchArm {
                     pattern,
                     guard: None,
-                    body: MatchBody::Expr(expr),
+                    body,
                 },
                 Span::new(start, end),
             ))
