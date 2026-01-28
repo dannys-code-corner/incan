@@ -216,8 +216,8 @@ fn main() {
     };
     let data2 = OptionalData {
         required: "also must have".to_string(),
-        optional: (),
-        maybe_number: (),
+        optional: None::<_>,
+        maybe_number: None::<_>,
     };
     let student = StudentData {
         name: "Bob".to_string(),

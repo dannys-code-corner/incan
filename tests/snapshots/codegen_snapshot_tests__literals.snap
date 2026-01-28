@@ -22,7 +22,7 @@ fn test_literals() {
     let quote = "single".to_string();
     let yes = true;
     let no = false;
-    let maybe = ();
+    let maybe = None::<_>;
 }
 fn main() {
     test_literals();

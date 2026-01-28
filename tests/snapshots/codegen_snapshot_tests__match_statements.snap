@@ -30,7 +30,7 @@ fn test_match_with_option() {
         Some(n) => {
             println!("{}", n);
         }
-        () => {
+        None => {
             println!("{}", "nothing");
         }
     };

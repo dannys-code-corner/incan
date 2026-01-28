@@ -16,7 +16,7 @@ fn test_lowercase_types() {
     let data = [("a", 1), ("b", 2)].into_iter().collect::<HashMap<_, _>>();
     let unique = [1, 2, 3].into_iter().collect::<HashSet<_>>();
     let pair = (42, "hello");
-    let maybe = ();
+    let maybe = None::<_>;
     println!("{}", "All lowercase types work!");
 }
 fn main() {

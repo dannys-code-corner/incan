@@ -96,7 +96,7 @@ impl AstLowering {
                 ast::Literal::String(s) => (IrExprKind::String(s.clone()), IrType::String),
                 ast::Literal::Bytes(bytes) => (IrExprKind::Bytes(bytes.clone()), IrType::Unknown),
                 ast::Literal::Bool(b) => (IrExprKind::Bool(*b), IrType::Bool),
-                ast::Literal::None => (IrExprKind::Unit, IrType::Unit),
+                ast::Literal::None => (IrExprKind::None, IrType::Option(Box::new(IrType::Unknown))),
             },
 
             ast::Expr::SelfExpr => (
