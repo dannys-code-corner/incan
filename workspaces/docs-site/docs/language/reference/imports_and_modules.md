@@ -191,7 +191,7 @@ def main() -> None:
 
 ## Rust standard library access
 
-Incan can import from Rust’s standard library:
+Incan can import from Rust’s standard library.
 
 ```incan
 import std::fs
@@ -200,8 +200,22 @@ import std::path::Path
 import std::time
 ```
 
+This is equivalent to using the explicit Rust interop prefix:
+
+```incan
+import rust::std::fs
+```
+
 Note: using these requires understanding the underlying Rust types. Prefer Incan built-ins (`read_file`, `write_file`,
 etc.) where available.
+
+## Rust crates vs Incan modules (important)
+
+- **External crates**: Prefer `rust::...` imports (e.g. `import rust::serde_json`), which also enables automatic
+  dependency management for generated `Cargo.toml`.
+- **Incan project modules** (multi-file projects): imports like `from db.schema import Database` refer to modules in
+  the current crate and are emitted as `crate::db::schema::Database` in generated Rust so they compile reliably from
+  submodules.
 
 ## Current status and limitations
 

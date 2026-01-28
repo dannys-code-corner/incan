@@ -765,6 +765,28 @@ impl AstLowering {
             ast::ImportKind::Python(s) => (vec![s.clone()], vec![]),
         };
 
+        let qualifier = match &i.kind {
+            ast::ImportKind::Module(p) => {
+                if p.parent_levels > 0 {
+                    super::super::decl::IrImportQualifier::Super(p.parent_levels)
+                } else if p.is_absolute {
+                    super::super::decl::IrImportQualifier::Crate
+                } else {
+                    super::super::decl::IrImportQualifier::Auto
+                }
+            }
+            ast::ImportKind::From { module, .. } => {
+                if module.parent_levels > 0 {
+                    super::super::decl::IrImportQualifier::Super(module.parent_levels)
+                } else if module.is_absolute {
+                    super::super::decl::IrImportQualifier::Crate
+                } else {
+                    super::super::decl::IrImportQualifier::Auto
+                }
+            }
+            _ => super::super::decl::IrImportQualifier::None,
+        };
+
         // Convert AST import items to IR import items
         let ir_items: Vec<super::super::decl::IrImportItem> = ast_items
             .iter()
@@ -775,6 +797,7 @@ impl AstLowering {
             .collect();
 
         IrDeclKind::Import {
+            qualifier,
             path,
             alias: i.alias.clone(),
             items: ir_items,

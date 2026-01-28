@@ -371,11 +371,15 @@ impl<'a> IrCodegen<'a> {
         }
 
         // Use the IR pipeline: AST → IR → Rust
-        self.try_generate_via_ir(program)
+        self.try_generate_via_ir(program, &HashSet::new())
     }
 
     /// Generate code via the IR pipeline (fallible version)
-    fn try_generate_via_ir(&self, program: &Program) -> Result<String, GenerationError> {
+    fn try_generate_via_ir(
+        &self,
+        program: &Program,
+        internal_module_roots: &HashSet<String>,
+    ) -> Result<String, GenerationError> {
         // Typecheck to obtain reusable type information for lowering.
         //
         // Strict policy: if typechecking fails, do NOT proceed to lowering/codegen.
@@ -413,6 +417,7 @@ impl<'a> IrCodegen<'a> {
             let mut svc = EmitService::new_from_program(&ir_program);
             // Configure inner emitter
             let inner = svc.inner_mut();
+            inner.set_internal_module_roots(internal_module_roots.clone());
             if self.emit_zen_in_main {
                 inner.set_emit_zen(true);
             }
@@ -424,6 +429,7 @@ impl<'a> IrCodegen<'a> {
             Ok(svc.emit_program(&ir_program)?)
         } else {
             let mut emitter = IrEmitter::new(&unified_registry);
+            emitter.set_internal_module_roots(internal_module_roots.clone());
             if self.emit_zen_in_main {
                 emitter.set_emit_zen(true);
             }
@@ -458,12 +464,22 @@ impl<'a> IrCodegen<'a> {
         let mut lowering = AstLowering::new();
         let ir_program = lowering.lower_program(program)?;
 
+        // Best-effort: treat registered dependency module names as internal roots.
+        // (This is most relevant for the non-nested multi-file API.)
+        let internal_roots: HashSet<String> = self
+            .dependency_modules
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect();
+
         let use_emit_service = env::var("INCAN_EMIT_SERVICE").ok().as_deref() == Some("1");
         if use_emit_service {
             let mut svc = EmitService::new_from_program(&ir_program);
+            svc.inner_mut().set_internal_module_roots(internal_roots);
             Ok(svc.emit_program(&ir_program)?)
         } else {
             let mut emitter = IrEmitter::new(&ir_program.function_registry);
+            emitter.set_internal_module_roots(internal_roots);
             if self.emit_zen_in_main {
                 emitter.set_emit_zen(true);
             }
@@ -527,8 +543,10 @@ impl<'a> IrCodegen<'a> {
             self.collect_rust_crates(dep_ast);
         }
 
+        let internal_roots: HashSet<String> = module_names.iter().map(|s| (*s).to_string()).collect();
+
         // Generate main file
-        let main_code = self.try_generate_via_ir(program)?;
+        let main_code = self.try_generate_via_ir(program, &internal_roots)?;
 
         // Generate module files
         let mut modules = HashMap::new();
@@ -539,9 +557,11 @@ impl<'a> IrCodegen<'a> {
                 let use_emit_service = env::var("INCAN_EMIT_SERVICE").ok().as_deref() == Some("1");
                 let module_code = if use_emit_service {
                     let mut svc = EmitService::new_from_program(&ir);
+                    svc.inner_mut().set_internal_module_roots(internal_roots.clone());
                     svc.emit_program(&ir)?
                 } else {
                     let mut emitter = IrEmitter::new(&ir.function_registry);
+                    emitter.set_internal_module_roots(internal_roots.clone());
                     emitter.emit_program(&ir)?
                 };
                 modules.insert(name.to_string(), module_code);
@@ -604,8 +624,10 @@ impl<'a> IrCodegen<'a> {
             self.collect_rust_crates(dep_ast);
         }
 
+        let internal_roots: HashSet<String> = module_paths.iter().filter_map(|p| p.first().cloned()).collect();
+
         // Generate main file
-        let main_code = self.try_generate_via_ir(program)?;
+        let main_code = self.try_generate_via_ir(program, &internal_roots)?;
 
         // Generate module files by path
         let mut modules = HashMap::new();
@@ -620,9 +642,11 @@ impl<'a> IrCodegen<'a> {
                     let use_emit_service = env::var("INCAN_EMIT_SERVICE").ok().as_deref() == Some("1");
                     let module_code = if use_emit_service {
                         let mut svc = EmitService::new_from_program(&ir);
+                        svc.inner_mut().set_internal_module_roots(internal_roots.clone());
                         svc.emit_program(&ir)?
                     } else {
                         let mut emitter = IrEmitter::new(&ir.function_registry);
+                        emitter.set_internal_module_roots(internal_roots.clone());
                         emitter.emit_program(&ir)?
                     };
                     modules.insert(path.clone(), module_code);
@@ -651,6 +675,64 @@ mod tests {
         let tokens = lexer::lex(source).unwrap();
         let ast = parser::parse(&tokens).unwrap();
         IrCodegen::new().try_generate(&ast).unwrap()
+    }
+
+    /// Parse an Incan program into an AST
+    fn parse_program(source: &str) -> Program {
+        let tokens = lexer::lex(source).unwrap();
+        parser::parse(&tokens).unwrap()
+    }
+
+    fn db_module_program() -> Program {
+        parse_program(
+            r#"
+model Database:
+  id: int
+"#,
+        )
+    }
+
+    fn main_module_program() -> Program {
+        parse_program(
+            r#"
+def main() -> None:
+  return
+"#,
+        )
+    }
+
+    fn generate_nested_store_code(store_source: &str) -> String {
+        let db_module = db_module_program();
+        let store_module = parse_program(store_source);
+        let main_module = main_module_program();
+
+        let mut codegen = IrCodegen::new();
+        codegen.add_module("db_schema", &db_module);
+        codegen.add_module("store_json_store", &store_module);
+
+        let db_path = vec!["db".to_string(), "schema".to_string()];
+        let store_path = vec!["store".to_string(), "json_store".to_string()];
+        let (_main_code, rust_modules) = codegen
+            .try_generate_multi_file_nested(&main_module, &[db_path.clone(), store_path.clone()])
+            .unwrap();
+
+        rust_modules.get(&store_path).unwrap().to_string()
+    }
+
+    fn generate_non_nested_store_code(store_source: &str, db_module_name: &str) -> String {
+        let db_module = db_module_program();
+        let store_module = parse_program(store_source);
+        let main_module = main_module_program();
+
+        let mut codegen = IrCodegen::new();
+        codegen.add_module(db_module_name, &db_module);
+        codegen.add_module("store", &store_module);
+
+        let (_main_code, modules) = codegen
+            .try_generate_multi_file(&main_module, &[db_module_name, "store"])
+            .unwrap();
+
+        modules.get("store").unwrap().to_string()
     }
 
     #[test]
@@ -801,5 +883,84 @@ enum Status:
         assert!(code.contains("enum Status"));
         assert!(code.contains("Active"));
         assert!(code.contains("Inactive"));
+    }
+
+    #[test]
+    fn test_multi_file_imports_use_crate_prefix() {
+        let store_code = generate_nested_store_code(
+            r#"
+from db.schema import Database
+"#,
+        );
+        assert!(store_code.contains("use crate::db::schema::Database;"));
+        assert!(!store_code.contains("use db::schema::Database;"));
+    }
+
+    #[test]
+    fn test_rust_imports_do_not_use_crate_prefix() {
+        let code = generate(
+            r#"
+from rust::time import Duration
+"#,
+        );
+        assert!(code.contains("use time::Duration;"));
+        assert!(!code.contains("use crate::time::Duration;"));
+    }
+
+    #[test]
+    fn test_rust_style_external_crate_import_is_not_forced_under_crate() {
+        let code = generate(
+            r#"
+import serde::Serialize
+"#,
+        );
+        assert!(code.contains("use serde::Serialize;"));
+        assert!(!code.contains("use crate::serde::Serialize;"));
+    }
+
+    #[test]
+    fn test_relative_from_import_uses_super_prefix() {
+        let store_code = generate_nested_store_code(
+            r#"
+from ..db.schema import Database
+"#,
+        );
+        assert!(store_code.contains("use super::db::schema::Database;"));
+        assert!(!store_code.contains("use crate::db::schema::Database;"));
+    }
+
+    #[test]
+    fn test_multi_file_imports_rust_style_module_import_uses_crate_prefix() {
+        let store_code = generate_nested_store_code(
+            r#"
+import db::schema::Database
+"#,
+        );
+        assert!(store_code.contains("use crate::db::schema::Database;"));
+        assert!(!store_code.contains("use db::schema::Database;"));
+    }
+
+    #[test]
+    fn test_non_nested_multi_file_api_sets_internal_module_roots() {
+        let store_code = generate_non_nested_store_code(
+            r#"
+from db import Database
+"#,
+            "db",
+        );
+        assert!(store_code.contains("use crate::db::Database;"));
+        assert!(!store_code.contains("use db::Database;"));
+    }
+
+    #[test]
+    fn test_non_nested_multi_file_nested_modules_use_crate_prefix() {
+        let store_code = generate_non_nested_store_code(
+            r#"
+from db.schema import Database
+"#,
+            "db_schema",
+        );
+        assert!(store_code.contains("use crate::db::schema::Database;"));
+        assert!(!store_code.contains("use db::schema::Database;"));
     }
 }

@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 
-use proc_macro2::{Ident, Literal, TokenStream};
+use proc_macro2::{Literal, TokenStream};
 use quote::{format_ident, quote};
 
 use incan_core::lang::conventions;
@@ -25,19 +25,19 @@ use incan_core::lang::stdlib;
 
 const ZEN_TEXT: &str = include_str!("../../../../stdlib/zen.txt");
 
-use super::super::decl::{IrDecl, IrDeclKind};
+use super::super::decl::{IrDecl, IrDeclKind, IrImportQualifier};
 use super::super::expr::{IrExpr, IrExprKind, MethodKind, VarAccess};
 use super::super::stmt::{AssignTarget, IrStmt, IrStmtKind};
 use super::super::types::IrType;
 use super::{EmitError, IrEmitter};
 
-fn join_path_idents(segments: &[Ident]) -> TokenStream {
+fn join_path_tokens(segments: &[TokenStream]) -> TokenStream {
     let mut ts = TokenStream::new();
     for (idx, seg) in segments.iter().enumerate() {
         if idx > 0 {
             ts.extend(quote! { :: });
         }
-        ts.extend(quote! { #seg });
+        ts.extend(seg.clone());
     }
     ts
 }
@@ -421,7 +421,12 @@ impl<'a> IrEmitter<'a> {
                     #vis const #name_ident: #ty_tokens = #value_tokens;
                 })
             }
-            IrDeclKind::Import { path, alias, items } => {
+            IrDeclKind::Import {
+                qualifier,
+                path,
+                alias,
+                items,
+            } => {
                 // Skip serde imports if we're already importing them automatically
                 if self.needs_serde && path.len() == 1 && path[0] == "serde" {
                     let is_serde_trait = items.iter().any(|item| {
@@ -440,14 +445,38 @@ impl<'a> IrEmitter<'a> {
                 // - `testing` maps to `incan_stdlib::testing`
                 let is_stdlib_web = path.first().map(|s| s == stdlib::STDLIB_WEB).unwrap_or(false);
                 let is_stdlib_testing = path.first().map(|s| s == stdlib::STDLIB_TESTING).unwrap_or(false);
-                let path_tokens: Vec<_> = if is_stdlib_web {
-                    vec![format_ident!("incan_stdlib"), format_ident!("web")]
+                let mapped_path_tokens: Vec<_> = if is_stdlib_web {
+                    vec![quote! { incan_stdlib }, quote! { web }]
                 } else if is_stdlib_testing {
-                    vec![format_ident!("incan_stdlib"), format_ident!("testing")]
+                    vec![quote! { incan_stdlib }, quote! { testing }]
                 } else {
-                    path.iter().map(|s| format_ident!("{}", s)).collect()
+                    path.iter()
+                        .map(|s| {
+                            let ident = format_ident!("{}", s);
+                            quote! { #ident }
+                        })
+                        .collect()
                 };
-                let path_ts = join_path_idents(&path_tokens);
+                let mut path_tokens: Vec<TokenStream> = Vec::new();
+                let apply_prefix = !(is_stdlib_web || is_stdlib_testing);
+                if apply_prefix {
+                    match qualifier {
+                        IrImportQualifier::Auto => {
+                            if self.is_internal_module_path(path) {
+                                path_tokens.push(quote! { crate });
+                            }
+                        }
+                        IrImportQualifier::Crate => path_tokens.push(quote! { crate }),
+                        IrImportQualifier::Super(levels) => {
+                            for _ in 0..*levels {
+                                path_tokens.push(quote! { super });
+                            }
+                        }
+                        IrImportQualifier::None => {}
+                    }
+                }
+                path_tokens.extend(mapped_path_tokens);
+                let path_ts = join_path_tokens(&path_tokens);
 
                 if let Some(alias_name) = alias {
                     let alias_ident = format_ident!("{}", alias_name);
@@ -460,7 +489,7 @@ impl<'a> IrEmitter<'a> {
                         .map(|item| {
                             let name_ident = format_ident!("{}", &item.name);
                             let path_tokens_clone = path_tokens.clone();
-                            let path_ts_clone = join_path_idents(&path_tokens_clone);
+                            let path_ts_clone = join_path_tokens(&path_tokens_clone);
                             if let Some(alias) = &item.alias {
                                 let alias_ident = format_ident!("{}", alias);
                                 quote! { use #path_ts_clone :: #name_ident as #alias_ident; }
@@ -470,7 +499,7 @@ impl<'a> IrEmitter<'a> {
                         })
                         .collect();
                     Ok(quote! { #(#item_stmts)* })
-                } else if path_tokens.len() == 1 {
+                } else if path.len() == 1 && !is_stdlib_web && !is_stdlib_testing {
                     Ok(quote! {})
                 } else {
                     Ok(quote! {

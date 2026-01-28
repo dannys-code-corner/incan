@@ -51,6 +51,7 @@ pub enum IrDeclKind {
 
     /// Import (preserved for codegen)
     Import {
+        qualifier: IrImportQualifier,
         path: Vec<String>,
         alias: Option<String>,
         /// Specific items being imported (for `from x import a, b`)
@@ -59,6 +60,32 @@ pub enum IrDeclKind {
 
     /// Impl block for methods on structs/enums
     Impl(IrImpl),
+}
+
+/// How an import path should be qualified in generated Rust.
+///
+/// ## Background (why this exists)
+/// In Rust 2018+ module paths in `use ...` are **not implicitly crate-rooted** when emitted inside a submodule.
+/// For example, inside `store::json_store`, `use db::schema::Database;` resolves as `store::json_store::db::...`
+/// (or an external crate), not `crate::db::...`. For multi-file Incan projects this commonly needs an explicit
+/// `crate::` (or `super::`) prefix for correctness.
+///
+/// We preserve the required qualification intent in IR so codegen can emit correct `use` paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IrImportQualifier {
+    /// No qualifier (external crate or special-case import).
+    None,
+    /// Decide at emit-time whether this should be `crate::...` or unqualified.
+    ///
+    /// This is used to avoid semantic regressions: `import serde::Serialize` should remain an external crate import
+    /// unless `serde` is a known internal module root in the current compilation unit.
+    ///
+    /// The emitter uses the set of known internal module roots (for multi-file builds) to decide whether to prefix.
+    Auto,
+    /// Prefix with `crate::` (absolute import in the current crate).
+    Crate,
+    /// Prefix with `super::` repeated N times (relative import).
+    Super(usize),
 }
 
 /// An item in a from ... import statement
