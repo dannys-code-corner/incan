@@ -144,6 +144,41 @@ def handle(opt: Option[int]) -> int:
     }
 
     #[test]
+    fn test_parse_match_fat_arrow_inline_return() {
+        let source = r#"
+def f() -> int:
+  match Ok(1):
+    Ok(x) => return x
+    Err(_) => return 0
+"#;
+        let program = parse_str(source).unwrap();
+        assert_eq!(program.declarations.len(), 1);
+        let func = match &program.declarations[0].node {
+            Declaration::Function(func) => func,
+            _ => panic!("Expected function declaration"),
+        };
+        assert_eq!(func.body.len(), 1);
+        let match_expr = match &func.body[0].node {
+            Statement::Expr(expr) => expr,
+            _ => panic!("Expected match expression statement"),
+        };
+        let arms = match &match_expr.node {
+            Expr::Match(_, arms) => arms,
+            _ => panic!("Expected match expression"),
+        };
+        assert_eq!(arms.len(), 2);
+        for arm in arms {
+            match &arm.node.body {
+                MatchBody::Block(stmts) => {
+                    assert_eq!(stmts.len(), 1);
+                    assert!(matches!(stmts[0].node, Statement::Return(_)));
+                }
+                MatchBody::Expr(_) => panic!("Expected inline return to parse as statement block"),
+            }
+        }
+    }
+
+    #[test]
     fn test_parse_const_decl() {
         let source = r#"
 const ANSWER: int = 42
