@@ -15,6 +15,7 @@ use super::AstLowering;
 use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
 use incan_core::lang::decorators::{self, DecoratorId};
+use incan_core::lang::derives::{self, DeriveId};
 use incan_core::lang::keywords::{self, KeywordId};
 
 impl AstLowering {
@@ -186,21 +187,29 @@ impl AstLowering {
             }
         }
 
+        fn has(derives: &[String], name: &str) -> bool {
+            derives.iter().any(|d| d == name)
+        }
+
         // Add prerequisite derives automatically
         // Eq requires PartialEq
-        if derives.contains(&"Eq".to_string()) && !derives.contains(&"PartialEq".to_string()) {
-            derives.push("PartialEq".to_string());
+        let eq = derives::as_str(DeriveId::Eq);
+        let partial_eq = derives::as_str(DeriveId::PartialEq);
+        if has(&derives, eq) && !has(&derives, partial_eq) {
+            derives.push(partial_eq.to_string());
         }
         // Ord requires PartialOrd and Eq (and thus PartialEq)
-        if derives.contains(&"Ord".to_string()) {
-            if !derives.contains(&"PartialOrd".to_string()) {
-                derives.push("PartialOrd".to_string());
+        let ord = derives::as_str(DeriveId::Ord);
+        let partial_ord = derives::as_str(DeriveId::PartialOrd);
+        if has(&derives, ord) {
+            if !has(&derives, partial_ord) {
+                derives.push(partial_ord.to_string());
             }
-            if !derives.contains(&"Eq".to_string()) {
-                derives.push("Eq".to_string());
+            if !has(&derives, eq) {
+                derives.push(eq.to_string());
             }
-            if !derives.contains(&"PartialEq".to_string()) {
-                derives.push("PartialEq".to_string());
+            if !has(&derives, partial_eq) {
+                derives.push(partial_eq.to_string());
             }
         }
 
@@ -227,12 +236,14 @@ impl AstLowering {
 
         let mut derives = self.extract_derives(&m.decorators);
 
+        let debug = derives::as_str(DeriveId::Debug);
+        let clone = derives::as_str(DeriveId::Clone);
         // Models always get Debug and Clone by default
-        if !derives.contains(&"Debug".to_string()) {
-            derives.push("Debug".to_string());
+        if !derives.iter().any(|d| d == debug) {
+            derives.push(debug.to_string());
         }
-        if !derives.contains(&"Clone".to_string()) {
-            derives.push("Clone".to_string());
+        if !derives.iter().any(|d| d == clone) {
+            derives.push(clone.to_string());
         }
         // Models always get FieldInfo for reflection
         if !derives.contains(&"FieldInfo".to_string()) {
@@ -279,12 +290,14 @@ impl AstLowering {
 
         let mut derives = self.extract_derives(&c.decorators);
 
+        let debug = derives::as_str(DeriveId::Debug);
+        let clone = derives::as_str(DeriveId::Clone);
         // Classes always get Debug and Clone by default
-        if !derives.contains(&"Debug".to_string()) {
-            derives.push("Debug".to_string());
+        if !derives.iter().any(|d| d == debug) {
+            derives.push(debug.to_string());
         }
-        if !derives.contains(&"Clone".to_string()) {
-            derives.push("Clone".to_string());
+        if !derives.iter().any(|d| d == clone) {
+            derives.push(clone.to_string());
         }
         // Classes always get FieldInfo for reflection
         if !derives.contains(&"FieldInfo".to_string()) {
@@ -374,9 +387,11 @@ impl AstLowering {
         }];
         // Newtypes auto-derive Debug, Clone
         // Only add Copy if underlying type is Copy (int, float, bool)
-        let mut derives = vec!["Debug".to_string(), "Clone".to_string()];
+        let debug = derives::as_str(DeriveId::Debug).to_string();
+        let clone = derives::as_str(DeriveId::Clone).to_string();
+        let mut derives = vec![debug, clone];
         if underlying_ty.is_copy() {
-            derives.push("Copy".to_string());
+            derives.push(derives::as_str(DeriveId::Copy).to_string());
         }
         Ok(IrStruct {
             name: n.name.clone(),
@@ -713,7 +728,11 @@ impl AstLowering {
             .collect();
 
         // Enums always get Debug, Clone, PartialEq by default
-        let derives = vec!["Debug".to_string(), "Clone".to_string(), "PartialEq".to_string()];
+        let derives = vec![
+            derives::as_str(DeriveId::Debug).to_string(),
+            derives::as_str(DeriveId::Clone).to_string(),
+            derives::as_str(DeriveId::PartialEq).to_string(),
+        ];
 
         Ok(IrEnum {
             name: e.name.clone(),

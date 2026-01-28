@@ -7,6 +7,7 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
 use crate::frontend::typechecker::IdentKind;
+use incan_core::lang::types::collections::{self, CollectionTypeId};
 
 use super::TypeChecker;
 
@@ -89,7 +90,10 @@ impl TypeChecker {
             Literal::String(_) => ResolvedType::Str,
             Literal::Bytes(_) => ResolvedType::Bytes,
             Literal::Bool(_) => ResolvedType::Bool,
-            Literal::None => ResolvedType::Generic("Option".to_string(), vec![ResolvedType::Unknown]),
+            Literal::None => ResolvedType::Generic(
+                collections::as_str(CollectionTypeId::Option).to_string(),
+                vec![ResolvedType::Unknown],
+            ),
         }
     }
 

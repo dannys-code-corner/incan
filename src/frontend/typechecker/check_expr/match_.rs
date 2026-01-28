@@ -161,9 +161,15 @@ impl TypeChecker {
             }
         } else if subject_ty.is_result() || subject_ty.is_option() {
             if subject_ty.is_result() {
-                Some(vec!["Ok".to_string(), "Err".to_string()])
+                Some(vec![
+                    constructors::as_str(ConstructorId::Ok).to_string(),
+                    constructors::as_str(ConstructorId::Err).to_string(),
+                ])
             } else {
-                Some(vec!["Some".to_string(), "None".to_string()])
+                Some(vec![
+                    constructors::as_str(ConstructorId::Some).to_string(),
+                    constructors::as_str(ConstructorId::None).to_string(),
+                ])
             }
         } else {
             None
@@ -179,7 +185,7 @@ impl TypeChecker {
                         has_wildcard = true;
                     }
                     Pattern::Literal(Literal::None) if subject_ty.is_option() => {
-                        covered.insert("None".to_string());
+                        covered.insert(constructors::as_str(ConstructorId::None).to_string());
                     }
                     Pattern::Constructor(name, _) => {
                         let variant_name = if name.contains("::") {

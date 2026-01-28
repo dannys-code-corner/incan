@@ -11,6 +11,7 @@ use super::super::super::expr::{BuiltinFn, IrExprKind, TypedExpr};
 use super::super::super::types::IrType;
 use super::super::{EmitError, IrEmitter};
 use incan_core::lang::builtins::{self, BuiltinFnId};
+use incan_core::lang::types::collections::{self, CollectionTypeId};
 
 /// Get the element type of a list.
 fn list_elem_type(ty: &IrType) -> &IrType {
@@ -31,6 +32,16 @@ fn is_named_generic(ty: &IrType, name: &str) -> bool {
         IrType::Ref(inner) | IrType::RefMut(inner) => matches!(inner.as_ref(), IrType::NamedGeneric(n, _) if n == name),
         _ => false,
     }
+}
+
+fn is_frozen_collection_named_generic(ty: &IrType) -> bool {
+    [
+        CollectionTypeId::FrozenList,
+        CollectionTypeId::FrozenSet,
+        CollectionTypeId::FrozenDict,
+    ]
+    .iter()
+    .any(|id| is_named_generic(ty, collections::as_str(*id)))
 }
 
 impl<'a> IrEmitter<'a> {
@@ -176,9 +187,7 @@ impl<'a> IrEmitter<'a> {
                         IrType::Set(_) => Ok(quote! { !(#a).is_empty() }),
                         IrType::Option(_) => Ok(quote! { (#a).is_some() }),
                         IrType::Result(_, _) => Ok(quote! { (#a).is_ok() }),
-                        _ if is_named_generic(&arg.ty, "FrozenList") => Ok(quote! { !(#a).is_empty() }),
-                        _ if is_named_generic(&arg.ty, "FrozenSet") => Ok(quote! { !(#a).is_empty() }),
-                        _ if is_named_generic(&arg.ty, "FrozenDict") => Ok(quote! { !(#a).is_empty() }),
+                        _ if is_frozen_collection_named_generic(&arg.ty) => Ok(quote! { !(#a).is_empty() }),
                         _ => Ok(quote! { true }),
                     }
                 } else {
@@ -217,7 +226,7 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     let elem_type = list_elem_type(&arg.ty);
-                    let from_frozen_list = is_named_generic(&arg.ty, "FrozenList");
+                    let from_frozen_list = is_named_generic(&arg.ty, collections::as_str(CollectionTypeId::FrozenList));
                     let tokens = if from_frozen_list {
                         match elem_type {
                             IrType::Float => quote! {{
@@ -428,9 +437,7 @@ impl<'a> IrEmitter<'a> {
                         IrType::List(_) | IrType::Dict(_, _) | IrType::Set(_) => quote! { !(#a).is_empty() },
                         IrType::Option(_) => quote! { (#a).is_some() },
                         IrType::Result(_, _) => quote! { (#a).is_ok() },
-                        _ if is_named_generic(&arg.ty, "FrozenList") => quote! { !(#a).is_empty() },
-                        _ if is_named_generic(&arg.ty, "FrozenSet") => quote! { !(#a).is_empty() },
-                        _ if is_named_generic(&arg.ty, "FrozenDict") => quote! { !(#a).is_empty() },
+                        _ if is_frozen_collection_named_generic(&arg.ty) => quote! { !(#a).is_empty() },
                         _ => quote! { true },
                     };
                     Ok(Some(tokens))
@@ -468,7 +475,7 @@ impl<'a> IrEmitter<'a> {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
                     let elem_type = list_elem_type(&arg.ty);
-                    let from_frozen_list = is_named_generic(&arg.ty, "FrozenList");
+                    let from_frozen_list = is_named_generic(&arg.ty, collections::as_str(CollectionTypeId::FrozenList));
                     let tokens = if from_frozen_list {
                         match elem_type {
                             IrType::Float => quote! {{

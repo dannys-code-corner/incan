@@ -109,10 +109,12 @@ Detailed pages:
 
 Some derives imply prerequisite derives (the compiler adds them automatically):
 
-| If you request | Compiler also adds |
-| --- | --- |
-| `Eq` | `PartialEq` |
-| `Ord` | `Eq`, `PartialEq`, `PartialOrd` |
+| If you request | Compiler also adds              |
+| -------------- | ------------------------------- |
+| `Eq`           | `PartialEq`                     |
+| `Ord`          | `Eq`, `PartialEq`, `PartialOrd` |
+
+Note: you may also request `PartialEq` and `PartialOrd` explicitly via `@derive(PartialEq)` / `@derive(PartialOrd)`.
 
 Semantic requirements (not “auto-added”):
 
