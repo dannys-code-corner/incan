@@ -1601,6 +1601,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#rust-crates-vs-incan-modules-important" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rust crates vs Incan modules (important)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#current-status-and-limitations" class="md-nav__link">
     <span class="md-ellipsis">
       Current status and limitations
@@ -3957,6 +3966,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#rust-crates-vs-incan-modules-important" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rust crates vs Incan modules (important)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#current-status-and-limitations" class="md-nav__link">
     <span class="md-ellipsis">
       Current status and limitations
@@ -4294,14 +4312,25 @@
 </tbody>
 </table>
 <h2 id="rust-standard-library-access">Rust standard library access<a class="headerlink" href="#rust-standard-library-access" title="Permanent link">&para;</a></h2>
-<p>Incan can import from Rust’s standard library:</p>
+<p>Incan can import from Rust’s standard library.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">std</span><span class="p">::</span><span class="n">fs</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">std</span><span class="p">::</span><span class="n">env</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">std</span><span class="p">::</span><span class="n">path</span><span class="p">::</span><span class="nc">Path</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">std</span><span class="p">::</span><span class="n">time</span>
 </code></pre></div>
+<p>This is equivalent to using the explicit Rust interop prefix:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">std</span><span class="p">::</span><span class="n">fs</span>
+</code></pre></div>
 <p>Note: using these requires understanding the underlying Rust types. Prefer Incan built-ins (<code>read_file</code>, <code>write_file</code>,
 etc.) where available.</p>
+<h2 id="rust-crates-vs-incan-modules-important">Rust crates vs Incan modules (important)<a class="headerlink" href="#rust-crates-vs-incan-modules-important" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>External crates</strong>: Prefer <code>rust::...</code> imports (e.g. <code>import rust::serde_json</code>), which also enables automatic
+  dependency management for generated <code>Cargo.toml</code>.</li>
+<li><strong>Incan project modules</strong> (multi-file projects): imports like <code>from db.schema import Database</code> refer to modules in
+  the current crate and are emitted as <code>crate::db::schema::Database</code> in generated Rust so they compile reliably from
+  submodules.</li>
+</ul>
 <h2 id="current-status-and-limitations">Current status and limitations<a class="headerlink" href="#current-status-and-limitations" title="Permanent link">&para;</a></h2>
 <p>Supported:</p>
 <ul>

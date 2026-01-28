@@ -1246,6 +1246,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Importing Rust Crates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#note-on-rust-style-imports-without-rust" class="md-nav__link">
+    <span class="md-ellipsis">
+      Note on Rust-style imports without rust::
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3783,6 +3798,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Importing Rust Crates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#note-on-rust-style-imports-without-rust" class="md-nav__link">
+    <span class="md-ellipsis">
+      Note on Rust-style imports without rust::
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3991,6 +4021,13 @@
 <span class="c1"># Import nested items</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">serde_json</span><span class="p">::</span><span class="nc">Value</span>
 </code></pre></div>
+<h3 id="note-on-rust-style-imports-without-rust">Note on Rust-style imports without <code>rust::</code><a class="headerlink" href="#note-on-rust-style-imports-without-rust" title="Permanent link">&para;</a></h3>
+<p>Incan also supports Rust-style module paths in regular imports (e.g. <code>import std::fs</code>).</p>
+<ul>
+<li>For the Rust standard library, <code>std::...</code> is supported as a convenience.</li>
+<li>For crates from crates.io (e.g. <code>serde</code>, <code>regex</code>, <code>reqwest</code>), prefer <code>rust::...</code> so the compiler can manage
+  dependencies in the generated <code>Cargo.toml</code>.</li>
+</ul>
 <h2 id="automatic-dependency-management">Automatic Dependency Management<a class="headerlink" href="#automatic-dependency-management" title="Permanent link">&para;</a></h2>
 <p>When you use <code>import rust::crate_name</code>, Incan automatically adds the dependency to your generated <code>Cargo.toml</code>.</p>
 <p>For the bigger picture, see: <a href="../../../tooling/explanation/projects_today/">Projects today</a>.</p>
