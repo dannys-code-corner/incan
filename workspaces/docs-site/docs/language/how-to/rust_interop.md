@@ -18,6 +18,14 @@ from rust::std::collections import HashMap, HashSet
 import rust::serde_json::Value
 ```
 
+### Note on Rust-style imports without `rust::`
+
+Incan also supports Rust-style module paths in regular imports (e.g. `import std::fs`).
+
+- For the Rust standard library, `std::...` is supported as a convenience.
+- For crates from crates.io (e.g. `serde`, `regex`, `reqwest`), prefer `rust::...` so the compiler can manage
+  dependencies in the generated `Cargo.toml`.
+
 ## Automatic Dependency Management
 
 When you use `import rust::crate_name`, Incan automatically adds the dependency to your generated `Cargo.toml`.

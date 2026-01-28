@@ -28,6 +28,7 @@ mod types;
 pub use errors::EmitError;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 use super::FunctionRegistry;
 use super::decl::VariantFields;
@@ -77,6 +78,10 @@ pub struct IrEmitter<'a> {
     const_string_literals: std::collections::HashMap<String, String>,
     /// Collected routes for web emission
     routes: Vec<RouteSpec>,
+    /// Known internal module roots for this compilation unit (e.g. {"db", "store"}).
+    ///
+    /// Used to disambiguate crate-internal module imports vs external crate imports when emitting `use` paths.
+    internal_module_roots: HashSet<String>,
 }
 
 impl<'a> IrEmitter<'a> {
@@ -102,7 +107,32 @@ impl<'a> IrEmitter<'a> {
             in_return_context: RefCell::new(false),
             const_string_literals: std::collections::HashMap::new(),
             routes: Vec::new(),
+            internal_module_roots: HashSet::new(),
         }
+    }
+
+    /// Set the internal module roots (top-level module names) for a multi-file compilation.
+    pub fn set_internal_module_roots(&mut self, roots: HashSet<String>) {
+        self.internal_module_roots = roots;
+    }
+
+    /// Check if a top-level name is a known internal module root.
+    pub(crate) fn is_internal_module_root(&self, name: &str) -> bool {
+        self.internal_module_roots.contains(name)
+    }
+
+    /// Check if a full module path is known internally.
+    pub(crate) fn is_internal_module_path(&self, segments: &[String]) -> bool {
+        if let Some(first) = segments.first() {
+            if self.is_internal_module_root(first) {
+                return true;
+            }
+        }
+        if segments.is_empty() {
+            return false;
+        }
+        let joined = segments.join("_");
+        self.internal_module_roots.contains(&joined)
     }
 
     /// Set external rust functions.
