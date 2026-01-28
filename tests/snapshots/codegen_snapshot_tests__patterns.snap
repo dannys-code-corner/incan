@@ -66,18 +66,18 @@ fn test_pattern_option_some() {
         Some(n) => {
             println!("{}", n);
         }
-        () => {
+        None => {
             println!("{}", "nothing");
         }
     };
 }
 fn test_pattern_option_none() {
-    let maybe = ();
+    let maybe = None::<_>;
     match maybe {
         Some(n) => {
             println!("{}", n);
         }
-        () => {
+        None => {
             println!("{}", "nothing");
         }
     };
@@ -110,10 +110,10 @@ fn test_pattern_nested_option() {
         Some(Some(n)) => {
             println!("{}", n);
         }
-        Some(()) => {
+        Some(None) => {
             println!("{}", "inner none");
         }
-        () => {
+        None => {
             println!("{}", "outer none");
         }
     };
@@ -141,7 +141,7 @@ fn test_pattern_multiple_bindings() {
         Some(x) => {
             println!("{}", "small");
         }
-        () => {
+        None => {
             println!("{}", "none");
         }
     };

@@ -53,6 +53,7 @@ use proc_macro2::{Literal, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 
 use super::super::expr::{IrExprKind, Literal as IrLiteral, TypedExpr, UnaryOp};
+use super::super::types::IrType;
 use super::{EmitError, IrEmitter};
 
 impl<'a> IrEmitter<'a> {
@@ -73,7 +74,13 @@ impl<'a> IrEmitter<'a> {
     pub(super) fn emit_expr(&self, expr: &TypedExpr) -> Result<TokenStream, EmitError> {
         match &expr.kind {
             IrExprKind::Unit => Ok(quote! { () }),
-            IrExprKind::None => Ok(quote! { None }),
+            IrExprKind::None => match &expr.ty {
+                IrType::Option(inner) => {
+                    let inner_ty = self.emit_type(inner);
+                    Ok(quote! { None::<#inner_ty> })
+                }
+                _ => Ok(quote! { None }),
+            },
             IrExprKind::Bool(b) => Ok(if *b {
                 quote! { true }
             } else {

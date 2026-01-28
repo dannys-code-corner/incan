@@ -105,6 +105,8 @@ impl<'a> IrEmitter<'a> {
             Pattern::Literal(lit) => {
                 // Pattern literals must be emitted without .to_string() or other conversions
                 match &lit.kind {
+                    IrExprKind::Unit => quote! { () },
+                    IrExprKind::None => quote! { None },
                     IrExprKind::Bool(b) => {
                         if *b {
                             quote! { true }
