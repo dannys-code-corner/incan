@@ -1496,6 +1496,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#builtin-traits" class="md-nav__link">
+    <span class="md-ellipsis">
+      Builtin traits
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#operators" class="md-nav__link">
     <span class="md-ellipsis">
       Operators
@@ -4104,6 +4113,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#builtin-traits" class="md-nav__link">
+    <span class="md-ellipsis">
+      Builtin traits
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#operators" class="md-nav__link">
     <span class="md-ellipsis">
       Operators
@@ -4374,6 +4392,7 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <li><a href="#builtin-exceptions">Builtin exceptions</a></li>
 <li><a href="#builtin-functions">Builtin functions</a></li>
 <li><a href="#derives">Derives</a></li>
+<li><a href="#builtin-traits">Builtin traits</a></li>
 <li><a href="#operators">Operators</a></li>
 <li><a href="#punctuation">Punctuation</a></li>
 <li><a href="#builtin-types">Builtin types</a></li>
@@ -5183,10 +5202,28 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <td>Stable</td>
 </tr>
 <tr>
+<td>PartialEq</td>
+<td><code>PartialEq</code></td>
+<td></td>
+<td>Derive partial equality comparisons.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
 <td>Ord</td>
 <td><code>Ord</code></td>
 <td></td>
 <td>Derive ordering comparisons.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>PartialOrd</td>
+<td><code>PartialOrd</code></td>
+<td></td>
+<td>Derive partial ordering comparisons.</td>
 <td>RFC 000</td>
 <td>0.1</td>
 <td>Stable</td>
@@ -5250,6 +5287,166 @@ If it looks wrong/outdated, regenerate it from source and commit the result.</p>
 <td><code>Validate</code></td>
 <td></td>
 <td>Enable validated construction via <code>TypeName.new(...)</code> and require a <code>validate(self) -&gt; Result[Self, E]</code> method.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+</tbody>
+</table>
+<h2 id="builtin-traits">Builtin traits<a class="headerlink" href="#builtin-traits" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Id</th>
+<th>Canonical</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>RFC</th>
+<th>Since</th>
+<th>Stability</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Debug</td>
+<td><code>Debug</code></td>
+<td></td>
+<td>Trait for debug formatting output.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Display</td>
+<td><code>Display</code></td>
+<td></td>
+<td>Trait for user-facing string formatting.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Eq</td>
+<td><code>Eq</code></td>
+<td></td>
+<td>Trait for equality comparisons.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>PartialEq</td>
+<td><code>PartialEq</code></td>
+<td></td>
+<td>Trait for partial equality comparisons.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Ord</td>
+<td><code>Ord</code></td>
+<td></td>
+<td>Trait for ordering comparisons.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>PartialOrd</td>
+<td><code>PartialOrd</code></td>
+<td></td>
+<td>Trait for partial ordering comparisons.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Hash</td>
+<td><code>Hash</code></td>
+<td></td>
+<td>Trait for hashing support.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Clone</td>
+<td><code>Clone</code></td>
+<td></td>
+<td>Trait for cloning values.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>Default</code></td>
+<td></td>
+<td>Trait for default value construction.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>From</td>
+<td><code>From</code></td>
+<td></td>
+<td>Trait for conversions.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Into</td>
+<td><code>Into</code></td>
+<td></td>
+<td>Trait for conversions.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>TryFrom</td>
+<td><code>TryFrom</code></td>
+<td></td>
+<td>Trait for fallible conversions.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>TryInto</td>
+<td><code>TryInto</code></td>
+<td></td>
+<td>Trait for fallible conversions.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Iterator</td>
+<td><code>Iterator</code></td>
+<td></td>
+<td>Trait for iterator behavior.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>IntoIterator</td>
+<td><code>IntoIterator</code></td>
+<td></td>
+<td>Trait for conversion into iterators.</td>
+<td>RFC 000</td>
+<td>0.1</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>Error</td>
+<td><code>Error</code></td>
+<td></td>
+<td>Trait for error-like values.</td>
 <td>RFC 000</td>
 <td>0.1</td>
 <td>Stable</td>

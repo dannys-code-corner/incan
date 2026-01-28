@@ -4238,6 +4238,7 @@ So we can change the destination in one place if we move/rename sections.
 </tr>
 </tbody>
 </table>
+<p>Note: you may also request <code>PartialEq</code> and <code>PartialOrd</code> explicitly via <code>@derive(PartialEq)</code> / <code>@derive(PartialOrd)</code>.</p>
 <p>Semantic requirements (not “auto-added”):</p>
 <ul>
 <li>If you derive <code>Hash</code>, you almost always also want <code>Eq</code>. Prefer <code>@derive(Eq, Hash)</code>.</li>
