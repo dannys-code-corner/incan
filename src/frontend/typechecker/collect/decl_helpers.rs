@@ -372,16 +372,18 @@ pub(super) fn collect_fields(
     fields
         .iter()
         .map(|f| {
+            let ty = resolve_declared_type(
+                checker,
+                &f.node.ty,
+                &active_type_params,
+                Some(owner),
+                Some(&owner_self_ty),
+            );
             (
                 f.node.name.clone(),
                 FieldInfo {
-                    ty: resolve_declared_type(
-                        checker,
-                        &f.node.ty,
-                        &active_type_params,
-                        Some(owner),
-                        Some(&owner_self_ty),
-                    ),
+                    surface_type_name: Some(crate::frontend::symbols::field_surface_type_name(&f.node.ty.node, &ty)),
+                    ty,
                     visibility: f.node.visibility,
                     owner: Some(owner.to_string()),
                     has_default: f.node.default.is_some(),

@@ -349,7 +349,12 @@ impl<'a> IrEmitter<'a> {
                 .unwrap_or_else(|| quote! { None });
             let wire_name = alias.as_deref().unwrap_or(field_name);
             // RFC 021: Use Incan-style type name, not Rust type name
-            let type_name = ty.incan_name();
+            let type_name = self
+                .struct_field_surface_type_names
+                .get(&key)
+                .cloned()
+                .flatten()
+                .unwrap_or_else(|| ty.incan_name());
 
             field_infos.push(quote! {
                 incan_stdlib::reflection::FieldInfo {

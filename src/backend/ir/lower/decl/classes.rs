@@ -4,35 +4,127 @@ use super::super::super::decl::{IrStruct, IrStructKind, StructField};
 use super::super::AstLowering;
 use super::super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
+use crate::frontend::rust_type_display;
 use incan_core::lang::derives::{self, DeriveId};
 
 impl AstLowering {
-    /// Lower a class declaration to struct.
+    /// Lower a checked class declaration into its flattened struct layout.
+    ///
+    /// Production compilation consumes the typechecker's parent-first layout so imported compiled parents remain
+    /// semantically identical to source parents. Direct AST-lowering tests temporarily retain the syntax-only fallback
+    /// documented below.
     pub(in crate::backend::ir::lower) fn lower_class(&mut self, c: &ast::ClassDecl) -> Result<IrStruct, LoweringError> {
-        let mut fields: Vec<StructField> = Vec::new();
-
-        // If class extends a parent, include parent fields first
-        if let Some(parent_name) = &c.extends {
-            self.collect_inherited_fields(parent_name, &mut fields)?;
-        }
-
-        // Add this class' own fields
-        for f in &c.fields {
-            let default = f
-                .node
-                .default
-                .as_ref()
-                .map(|d| self.lower_expr_spanned(d))
-                .transpose()?;
-            fields.push(StructField {
-                name: f.node.name.clone(),
-                ty: self.lower_type(&f.node.ty.node),
-                visibility: Self::map_visibility(f.node.visibility),
-                default,
-                alias: f.node.metadata.alias.clone(),
-                description: f.node.metadata.description.clone(),
-            });
-        }
+        let fields = if let Some(type_info) = self.type_info.as_ref() {
+            let Some(layout) = type_info.declarations.class_layouts.get(&c.name).cloned() else {
+                return Err(LoweringError {
+                    message: format!("checked class `{}` has no lowering layout artifact", c.name),
+                    span: Default::default(),
+                });
+            };
+            if !layout.missing_fields.is_empty() {
+                return Err(LoweringError {
+                    message: format!(
+                        "checked class `{}` layout is missing ordered fields: {}",
+                        c.name,
+                        layout.missing_fields.join(", ")
+                    ),
+                    span: Default::default(),
+                });
+            }
+            if !layout.unmaterializable_defaults.is_empty() {
+                return Err(LoweringError {
+                    message: format!(
+                        "checked class `{}` has unmaterializable inherited defaults: {}",
+                        c.name,
+                        layout.unmaterializable_defaults.join(", ")
+                    ),
+                    span: Default::default(),
+                });
+            }
+            let type_params = layout.type_params.clone();
+            layout
+                .fields
+                .into_iter()
+                .map(|field| {
+                    let default = match field.default.as_ref() {
+                        Some(crate::frontend::typechecker::ClassFieldDefaultInfo::Source(default)) => {
+                            Some(self.lower_expr_spanned(default)?)
+                        }
+                        Some(crate::frontend::typechecker::ClassFieldDefaultInfo::PublicDependency {
+                            library,
+                            value,
+                        }) => {
+                            let Some(default) = crate::library_manifest::param_default_from_checked(value) else {
+                                return Err(LoweringError {
+                                    message: format!(
+                                        "checked class `{}` default field `{}` is not materializable",
+                                        c.name, field.name
+                                    ),
+                                    span: Default::default(),
+                                });
+                            };
+                            let Some(lowered) = self.lower_pub_default_expr(library, &default) else {
+                                return Err(LoweringError {
+                                    message: format!(
+                                        "checked class `{}` default field `{}` could not be lowered",
+                                        c.name, field.name
+                                    ),
+                                    span: Default::default(),
+                                });
+                            };
+                            Some(lowered)
+                        }
+                        None => None,
+                    };
+                    Ok(StructField {
+                        name: field.name,
+                        ty: {
+                            let mut emission_ty = field.ty;
+                            rust_type_display::normalize_for_emission(
+                                &mut emission_ty,
+                                field.provider_library.as_deref(),
+                                &type_params,
+                            )
+                            .map_err(|message| LoweringError {
+                                message,
+                                span: Default::default(),
+                            })?;
+                            self.lower_resolved_declaration_type(&emission_ty)
+                        },
+                        surface_type_name: field.surface_type_name,
+                        visibility: Self::map_visibility(field.visibility),
+                        default,
+                        alias: field.alias,
+                        description: field.description,
+                    })
+                })
+                .collect::<Result<Vec<_>, LoweringError>>()?
+        } else {
+            // Direct AST-lowering tests do not always supply checked artifacts yet. Remove this fallback after every
+            // AstLowering test constructs its input through TypeChecker and supplies TypeCheckInfo.
+            let mut fields = Vec::new();
+            if let Some(parent_name) = &c.extends {
+                self.collect_inherited_fields(parent_name, &mut fields)?;
+            }
+            for field in &c.fields {
+                let default = field
+                    .node
+                    .default
+                    .as_ref()
+                    .map(|default| self.lower_expr_spanned(default))
+                    .transpose()?;
+                fields.push(StructField {
+                    name: field.node.name.clone(),
+                    ty: self.lower_type(&field.node.ty.node),
+                    surface_type_name: None,
+                    visibility: Self::map_visibility(field.node.visibility),
+                    default,
+                    alias: field.node.metadata.alias.clone(),
+                    description: field.node.metadata.description.clone(),
+                });
+            }
+            fields
+        };
 
         let (mut derives, derive_rust_modules) = self.extract_derives(&c.decorators);
         self.extend_derives_with_adopted_serde_traits(&mut derives, &c.traits);
@@ -124,6 +216,7 @@ impl AstLowering {
                 fields.push(StructField {
                     name: f.node.name.clone(),
                     ty: self.lower_type(&f.node.ty.node),
+                    surface_type_name: None,
                     visibility: Self::map_visibility(f.node.visibility),
                     default,
                     alias: f.node.metadata.alias.clone(),

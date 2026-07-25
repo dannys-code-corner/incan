@@ -1987,6 +1987,7 @@ fn library_index_with_colliding_pub_type_identities() -> LibraryManifestIndex {
                 ty: TypeRef::Named {
                     name: "Widget".to_string(),
                 },
+                surface_type_name: None,
                 visibility: FieldVisibilityExport::Public,
                 has_default: false,
                 default: None,
@@ -2103,6 +2104,7 @@ fn library_index_with_private_class_field_issue883() -> LibraryManifestIndex {
                 ty: TypeRef::Named {
                     name: "str".to_string(),
                 },
+                surface_type_name: None,
                 visibility: FieldVisibilityExport::Private,
                 has_default: false,
                 default: None,
@@ -2114,6 +2116,7 @@ fn library_index_with_private_class_field_issue883() -> LibraryManifestIndex {
                 ty: TypeRef::Named {
                     name: "str".to_string(),
                 },
+                surface_type_name: None,
                 visibility: FieldVisibilityExport::Public,
                 has_default: true,
                 default: Some(ParamDefaultExport::Call {
@@ -2145,6 +2148,7 @@ fn library_index_with_private_class_field_issue883() -> LibraryManifestIndex {
                 ty: TypeRef::Named {
                     name: "int".to_string(),
                 },
+                surface_type_name: None,
                 visibility: FieldVisibilityExport::Private,
                 has_default: true,
                 default: None,
@@ -13831,6 +13835,7 @@ fn test_imported_parent_field_default_keeps_provider_path_and_signature_issue883
 from pub::sealed_class_lib import Vault
 
 pub class Child extends Vault:
+  computed_secret: int = 0
   pub marker: int = 1
 "#;
     let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
@@ -13859,10 +13864,20 @@ pub class Child extends Vault:
     assert_eq!(
         label.default,
         Some(ParamDefaultExport::Call {
-            path: vec!["defaults".to_string(), "make_label".to_string()],
+            path: vec![
+                "__incan_provider_rust".to_string(),
+                "sealed_class_lib".to_string(),
+                "defaults".to_string(),
+                "make_label".to_string(),
+            ],
             args: vec![ParamDefaultCallArgExport {
                 name: None,
-                value: ParamDefaultExport::ConstRef(vec!["defaults".to_string(), "FALLBACK".to_string()]),
+                value: ParamDefaultExport::ConstRef(vec![
+                    "__incan_provider_rust".to_string(),
+                    "sealed_class_lib".to_string(),
+                    "defaults".to_string(),
+                    "FALLBACK".to_string(),
+                ]),
             }],
             signature: Some(ParamDefaultCallSignatureExport {
                 params: vec![ParamExport {
@@ -13886,12 +13901,105 @@ pub class Child extends Vault:
         .iter()
         .find(|field| field.name == "computed_secret")
         .ok_or("missing inherited computed_secret field")?;
-    assert!(
-        computed_secret.has_default,
-        "compiled parent defaults that are provider-owned but not consumer-materializable must retain bridge optionality"
-    );
-    assert_eq!(computed_secret.default, None);
+    assert!(computed_secret.has_default);
+    assert_eq!(computed_secret.default, Some(ParamDefaultExport::Int(0)));
     Ok(())
+}
+
+#[test]
+fn test_imported_parent_unmaterializable_default_requires_local_override_issue885() -> Result<(), String> {
+    let source = r#"
+from pub::sealed_class_lib import Vault
+
+class Child extends Vault:
+  pub marker: int = 1
+"#;
+    let errors = check_str_with_library_index_err(
+        source,
+        library_index_with_private_class_field_issue883(),
+        "compiled-parent subclass should reject an inherited default the provider artifact cannot materialize",
+    )?;
+    assert!(
+        errors.iter().any(|error| {
+            error.message.contains("cannot inherit compiled default")
+                && error.message.contains("computed_secret")
+                && error.hints.iter().any(|hint| hint.contains("local default"))
+        }),
+        "expected a materialization-boundary diagnostic, got: {errors:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_rust_generic_argument_retains_imported_public_provider_identity_issue885() {
+    let mut checker = TypeChecker::new();
+    checker.public_library_type_identities.insert(
+        "Payload".to_string(),
+        PublicLibraryTypeIdentity::new("compiled_parent", &["classes".to_string(), "Payload".to_string()]),
+    );
+    checker.import_aliases.insert(
+        "Payload".to_string(),
+        vec!["pub".to_string(), "compiled_parent".to_string(), "Payload".to_string()],
+    );
+    checker.symbols.define(Symbol {
+        name: "Payload".to_string(),
+        kind: SymbolKind::Type(TypeInfo::TypeAlias),
+        span: Span::default(),
+        scope: 0,
+    });
+    checker.symbols.define(Symbol {
+        name: "RustEnvelope".to_string(),
+        kind: SymbolKind::RustItem(RustItemInfo {
+            crate_name: "rust_shadow".to_string(),
+            path: "rust_shadow::Envelope".to_string(),
+            binding: RustImportBindingKind::FromImport,
+            metadata: None,
+        }),
+        span: Span::default(),
+        scope: 0,
+    });
+    checker.symbols.define(Symbol {
+        name: "Box".to_string(),
+        kind: SymbolKind::RustItem(RustItemInfo {
+            crate_name: "std".to_string(),
+            path: "std::boxed::Box".to_string(),
+            binding: RustImportBindingKind::FromImport,
+            metadata: None,
+        }),
+        span: Span::default(),
+        scope: 0,
+    });
+    let ty = Type::Generic(
+        "RustEnvelope".to_string(),
+        vec![Spanned::new(Type::Simple("Payload".to_string()), Span::default())],
+    );
+
+    assert_eq!(
+        resolve_type_with_rust_arg_renderer(
+            &ty,
+            &checker.symbols,
+            &|arg| checker.render_provider_aware_rust_arg(arg),
+            &|arg| checker.canonicalize_public_library_nominals(arg),
+        ),
+        ResolvedType::RustPath("rust_shadow::Envelope<compiled_parent::Payload>".to_string())
+    );
+
+    let shared_ty = Type::Generic(
+        "Box".to_string(),
+        vec![Spanned::new(Type::Simple("Payload".to_string()), Span::default())],
+    );
+    assert_eq!(
+        resolve_type_with_rust_arg_renderer(
+            &shared_ty,
+            &checker.symbols,
+            &|arg| checker.render_provider_aware_rust_arg(arg),
+            &|arg| checker.canonicalize_public_library_nominals(arg),
+        ),
+        ResolvedType::Generic(
+            "Box".to_string(),
+            vec![ResolvedType::Named("pub::compiled_parent::Payload".to_string())]
+        )
+    );
 }
 
 #[test]

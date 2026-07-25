@@ -27,6 +27,7 @@ type InheritedMembers = (
     HashMap<String, FieldInfo>,
     HashMap<String, Spanned<Expr>>,
     HashMap<String, crate::frontend::library_exports::CheckedParamDefault>,
+    HashMap<String, String>,
     Vec<String>,
     HashMap<String, PropertyInfo>,
     HashMap<String, MethodInfo>,
@@ -583,6 +584,7 @@ impl TypeChecker {
             mut fields,
             mut field_defaults,
             mut field_default_metadata,
+            mut field_provider_libraries,
             mut field_order,
             mut properties,
             mut methods,
@@ -602,6 +604,7 @@ impl TypeChecker {
                 field_defaults.remove(&field.node.name);
                 field_default_metadata.remove(&field.node.name);
             }
+            field_provider_libraries.remove(&field.node.name);
         }
         properties.extend(collect_properties(
             &class.properties,
@@ -633,7 +636,8 @@ impl TypeChecker {
                 derives,
                 fields,
                 field_defaults: Box::new(field_defaults),
-                field_default_metadata,
+                field_default_metadata: Box::new(field_default_metadata),
+                field_provider_libraries: Box::new(field_provider_libraries),
                 field_order,
                 properties,
                 methods,
@@ -652,6 +656,7 @@ impl TypeChecker {
                 HashMap::new(),
                 HashMap::new(),
                 HashMap::new(),
+                HashMap::new(),
                 Vec::new(),
                 HashMap::new(),
                 HashMap::new(),
@@ -660,6 +665,7 @@ impl TypeChecker {
         };
         let Some(TypeInfo::Class(parent_info)) = self.lookup_type_info(parent_name) else {
             return (
+                HashMap::new(),
                 HashMap::new(),
                 HashMap::new(),
                 HashMap::new(),
@@ -672,7 +678,8 @@ impl TypeChecker {
         (
             parent_info.fields.clone(),
             parent_info.field_defaults.as_ref().clone(),
-            parent_info.field_default_metadata.clone(),
+            parent_info.field_default_metadata.as_ref().clone(),
+            parent_info.field_provider_libraries.as_ref().clone(),
             parent_info.field_order.clone(),
             parent_info.properties.clone(),
             parent_info.methods.clone(),

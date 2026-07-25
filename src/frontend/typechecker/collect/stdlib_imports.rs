@@ -1098,7 +1098,7 @@ impl TypeChecker {
                 continue;
             }
 
-            self.define_pub_import_symbol(&manifest, local_name, export, &imported_type_aliases, span);
+            self.define_pub_import_symbol(library, &manifest, local_name, export, &imported_type_aliases, span);
         }
     }
 
@@ -1359,6 +1359,7 @@ impl TypeChecker {
             }
         };
         self.remap_symbol_kind_with_import_aliases(&mut kind, &remapping);
+        Self::mark_compiled_class_field_provider(&mut kind, library);
         Some(kind)
     }
 
@@ -1381,11 +1382,14 @@ impl TypeChecker {
                 .push(TypeInfo::Model(model_info));
         }
         for class in &manifest.exports.classes {
-            let class_info = self.class_info_from_manifest(class);
-            self.transitive_pub_types
-                .entry(class.name.clone())
-                .or_default()
-                .push(TypeInfo::Class(class_info));
+            let mut kind = SymbolKind::Type(TypeInfo::Class(self.class_info_from_manifest(class)));
+            Self::mark_compiled_class_field_provider(&mut kind, library);
+            if let SymbolKind::Type(info) = kind {
+                self.transitive_pub_types
+                    .entry(class.name.clone())
+                    .or_default()
+                    .push(info);
+            }
         }
         for enum_export in &manifest.exports.enums {
             let enum_info = self.enum_info_from_manifest(enum_export);
@@ -1422,6 +1426,7 @@ impl TypeChecker {
         for (canonical_name, info) in canonical_types {
             let mut kind = SymbolKind::Type(info);
             self.remap_symbol_kind_with_import_aliases(&mut kind, &canonical_remapping);
+            Self::mark_compiled_class_field_provider(&mut kind, library);
             if let SymbolKind::Type(info) = kind {
                 self.transitive_pub_types.entry(canonical_name).or_default().push(info);
             }
@@ -1825,6 +1830,7 @@ impl TypeChecker {
     /// Define one symbol imported from a public library manifest.
     fn define_pub_import_symbol(
         &mut self,
+        library: &str,
         manifest: &LibraryManifest,
         local_name: String,
         export: ManifestExportRef<'_>,
@@ -1883,6 +1889,7 @@ impl TypeChecker {
             }
         };
         self.remap_symbol_kind_with_import_aliases(&mut kind, imported_type_aliases);
+        Self::mark_compiled_class_field_provider(&mut kind, library);
 
         if let SymbolKind::FunctionOverloads(overloads) = &kind {
             self.record_function_overload_binding(&local_name, overloads, true);
@@ -1904,6 +1911,16 @@ impl TypeChecker {
             span,
             scope: 0,
         });
+    }
+
+    /// Attach the importing dependency key to every field reconstructed from one compiled class manifest.
+    fn mark_compiled_class_field_provider(kind: &mut SymbolKind, library: &str) {
+        let SymbolKind::Type(TypeInfo::Class(info)) = kind else {
+            return;
+        };
+        for name in &info.field_order {
+            info.field_provider_libraries.insert(name.clone(), library.to_string());
+        }
     }
 
     /// Rewrite imported semantic type references through type aliases from the source library manifest.
@@ -2384,20 +2401,23 @@ impl TypeChecker {
                     })
                     .collect(),
             ),
-            field_default_metadata: export
-                .fields
-                .iter()
-                .filter_map(|field| {
-                    field.default.as_ref().map_or_else(
-                        || {
-                            field
-                                .has_default
-                                .then(|| (field.name.clone(), CheckedParamDefault::Unsupported))
-                        },
-                        |default| Some((field.name.clone(), self.checked_param_default_from_manifest(default))),
-                    )
-                })
-                .collect(),
+            field_default_metadata: Box::new(
+                export
+                    .fields
+                    .iter()
+                    .filter_map(|field| {
+                        field.default.as_ref().map_or_else(
+                            || {
+                                field
+                                    .has_default
+                                    .then(|| (field.name.clone(), CheckedParamDefault::Unsupported))
+                            },
+                            |default| Some((field.name.clone(), self.checked_param_default_from_manifest(default))),
+                        )
+                    })
+                    .collect(),
+            ),
+            field_provider_libraries: Box::new(HashMap::new()),
             field_order: export.fields.iter().map(|field| field.name.clone()).collect(),
             properties: std::collections::HashMap::new(),
             method_overloads,
@@ -2815,6 +2835,7 @@ impl TypeChecker {
                     field.name.clone(),
                     FieldInfo {
                         ty: resolved_type_from_manifest_type_ref(&field.ty),
+                        surface_type_name: field.surface_type_name.clone(),
                         visibility: match field.visibility {
                             crate::library_manifest::FieldVisibilityExport::Private => {
                                 crate::frontend::ast::Visibility::Private

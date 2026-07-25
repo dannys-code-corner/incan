@@ -2949,17 +2949,16 @@ impl<'a> IrEmitter<'a> {
                 self.struct_field_names
                     .insert(s.name.clone(), s.fields.iter().map(|f| f.name.clone()).collect());
                 for field in &s.fields {
-                    self.struct_field_types
-                        .insert((s.name.clone(), field.name.clone()), field.ty.clone());
-                    self.struct_field_visibilities
-                        .insert((s.name.clone(), field.name.clone()), field.visibility);
-                    self.struct_field_aliases
-                        .insert((s.name.clone(), field.name.clone()), field.alias.clone());
+                    let key = (s.name.clone(), field.name.clone());
+                    self.struct_field_types.insert(key.clone(), field.ty.clone());
+                    self.struct_field_surface_type_names
+                        .insert(key.clone(), field.surface_type_name.clone());
+                    self.struct_field_visibilities.insert(key.clone(), field.visibility);
+                    self.struct_field_aliases.insert(key.clone(), field.alias.clone());
                     self.struct_field_descriptions
-                        .insert((s.name.clone(), field.name.clone()), field.description.clone());
+                        .insert(key.clone(), field.description.clone());
                     if let Some(default) = &field.default {
-                        self.struct_field_defaults
-                            .insert((s.name.clone(), field.name.clone()), default.clone());
+                        self.struct_field_defaults.insert(key, default.clone());
                     }
                 }
             }

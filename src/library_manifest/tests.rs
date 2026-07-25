@@ -78,6 +78,7 @@ fn manifest_io_preserves_private_class_field_visibility_issue883() -> Result<(),
             crate::frontend::library_exports::CheckedField {
                 name: "secret".to_string(),
                 ty: crate::frontend::symbols::ResolvedType::Str,
+                surface_type_name: Some("str".to_string()),
                 visibility: crate::frontend::ast::Visibility::Private,
                 has_default: false,
                 default: None,
@@ -87,6 +88,7 @@ fn manifest_io_preserves_private_class_field_visibility_issue883() -> Result<(),
             crate::frontend::library_exports::CheckedField {
                 name: "label".to_string(),
                 ty: crate::frontend::symbols::ResolvedType::Str,
+                surface_type_name: Some("str".to_string()),
                 visibility: crate::frontend::ast::Visibility::Public,
                 has_default: false,
                 default: None,
@@ -115,6 +117,10 @@ fn manifest_io_preserves_private_class_field_visibility_issue883() -> Result<(),
     assert!(
         content.contains(r#""visibility": "private""#),
         "expected private visibility in manifest:\n{content}"
+    );
+    assert!(
+        content.contains(r#""surface_type_name": "str""#),
+        "expected source-level field type spelling in manifest:\n{content}"
     );
     assert!(
         !content.contains(r#""visibility": "public""#),
@@ -147,6 +153,7 @@ fn legacy_manifest_fields_without_visibility_remain_public_issue883() -> Result<
             ty: TypeRef::Named {
                 name: "str".to_string(),
             },
+            surface_type_name: None,
             visibility: FieldVisibilityExport::Public,
             has_default: false,
             default: None,
@@ -187,6 +194,7 @@ fn manifest_rejects_unsupported_private_model_field_visibility_issue883() -> Res
             ty: TypeRef::Named {
                 name: "str".to_string(),
             },
+            surface_type_name: None,
             visibility: FieldVisibilityExport::Private,
             has_default: false,
             default: None,
@@ -211,6 +219,7 @@ fn private_api_field_issue883() -> FieldExport {
         ty: TypeRef::Named {
             name: "str".to_string(),
         },
+        surface_type_name: None,
         visibility: FieldVisibilityExport::Private,
         has_default: false,
         default: None,

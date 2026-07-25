@@ -3115,6 +3115,10 @@ impl TypeChecker {
             self.symbols.define(Symbol {
                 name: field.node.name.clone(),
                 kind: SymbolKind::Field(FieldInfo {
+                    surface_type_name: Some(crate::frontend::symbols::field_surface_type_name(
+                        &field.node.ty.node,
+                        &ty,
+                    )),
                     ty,
                     visibility: field.node.visibility,
                     owner: Some(model.name.clone()),
@@ -3525,6 +3529,10 @@ impl TypeChecker {
             self.symbols.define(Symbol {
                 name: field.node.name.clone(),
                 kind: SymbolKind::Field(FieldInfo {
+                    surface_type_name: Some(crate::frontend::symbols::field_surface_type_name(
+                        &field.node.ty.node,
+                        &ty,
+                    )),
                     ty,
                     visibility: field.node.visibility,
                     owner: Some(class.name.clone()),

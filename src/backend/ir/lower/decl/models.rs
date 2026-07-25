@@ -23,6 +23,7 @@ impl AstLowering {
             fields.push(StructField {
                 name: f.node.name.clone(),
                 ty: self.lower_type(&f.node.ty.node),
+                surface_type_name: None,
                 visibility: Self::map_visibility(f.node.visibility),
                 default,
                 alias: f.node.metadata.alias.clone(),
