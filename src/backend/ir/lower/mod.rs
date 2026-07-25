@@ -22,7 +22,7 @@
 //! ```rust,ignore
 //! use incan::backend::ir::lower::AstLowering;
 //!
-//! let mut lowering = AstLowering::new();
+//! let mut lowering = AstLowering::new_with_type_info(type_info);
 //! let ir_program = lowering.lower_program(&ast_program)?;
 //! ```
 
@@ -90,7 +90,7 @@ pub(super) struct ImportedAliasTarget {
 /// ```rust,ignore
 /// use incan::backend::ir::lower::AstLowering;
 ///
-/// let mut lowering = AstLowering::new();
+/// let mut lowering = AstLowering::new_with_type_info(type_info);
 /// let ir_program = lowering.lower_program(&ast_program)?;
 /// ```
 pub struct AstLowering {
@@ -282,9 +282,10 @@ impl AstLowering {
         })
     }
 
-    /// Create a new lowering context.
+    /// Create an unchecked lowering context for isolated lowering tests.
     ///
-    /// Initializes an empty scope chain and type registries.
+    /// Production compilation should use [`Self::new_with_type_info`]. Class declarations deliberately fail closed
+    /// without typechecker-owned layout artifacts.
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
@@ -972,7 +973,10 @@ impl AstLowering {
         all
     }
 
-    /// Create a lowering context that uses typechecker output for more accurate lowering.
+    /// Create a checked lowering context from typechecker output.
+    ///
+    /// Production codegen and every program containing class declarations must use this constructor so lowering
+    /// consumes the compiler's checked semantic artifacts.
     pub fn new_with_type_info(type_info: TypeCheckInfo) -> Self {
         let mut s = Self::new();
         s.type_info = Some(type_info);
@@ -3068,6 +3072,29 @@ mod tests {
         });
         let mut lowering = AstLowering::new();
         lowering.lower_program(&ast)
+    }
+
+    #[test]
+    fn class_lowering_without_type_info_fails_closed() -> Result<(), String> {
+        let source = r#"
+class Account:
+    id: int
+"#;
+        let tokens = lexer::lex(source).map_err(|errors| format!("lexer failed: {errors:?}"))?;
+        let ast = parser::parse(&tokens).map_err(|errors| format!("parser failed: {errors:?}"))?;
+        let mut lowering = AstLowering::new();
+        let errors = match lowering.lower_program(&ast) {
+            Ok(_) => return Err("unchecked class lowering unexpectedly succeeded".to_string()),
+            Err(errors) => errors,
+        };
+        let Some(error) = errors.first() else {
+            return Err("unchecked class lowering returned no diagnostic".to_string());
+        };
+        let expected = "class `Account` reached lowering without typechecker-owned layout artifacts";
+        if error.message != expected {
+            return Err(format!("expected `{expected}`, got `{}`", error.message));
+        }
+        Ok(())
     }
 
     #[test]
