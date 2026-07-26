@@ -805,10 +805,20 @@ pub struct FieldInfo {
     /// authority.
     pub surface_type_name: Option<String>,
     pub visibility: crate::frontend::ast::Visibility,
+    /// Whether access is limited to methods declared on the owning nominal type.
+    pub is_type_private: bool,
     pub owner: Option<String>,
     pub has_default: bool,
     pub alias: Option<String>,
     pub description: Option<String>,
+}
+
+/// Return whether a checked field uses the declaring nominal type as its access boundary.
+pub(crate) fn field_is_type_private(
+    field: &crate::frontend::ast::FieldDecl,
+    private_fields_are_type_private: bool,
+) -> bool {
+    private_fields_are_type_private && matches!(field.visibility, crate::frontend::ast::Visibility::Private)
 }
 
 /// Return the user-facing field type name without making presentation metadata a second semantic authority.

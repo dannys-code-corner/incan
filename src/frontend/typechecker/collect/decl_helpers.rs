@@ -366,6 +366,7 @@ pub(super) fn collect_fields(
     checker: &mut TypeChecker,
     owner: &str,
     owner_type_params: &[TypeParam],
+    private_fields_are_type_private: bool,
 ) -> HashMap<String, FieldInfo> {
     let owner_self_ty = owner_resolved_type(owner, owner_type_params);
     let active_type_params = type_param_name_set(owner_type_params, &[]);
@@ -385,6 +386,10 @@ pub(super) fn collect_fields(
                     surface_type_name: Some(crate::frontend::symbols::field_surface_type_name(&f.node.ty.node, &ty)),
                     ty,
                     visibility: f.node.visibility,
+                    is_type_private: crate::frontend::symbols::field_is_type_private(
+                        &f.node,
+                        private_fields_are_type_private,
+                    ),
                     owner: Some(owner.to_string()),
                     has_default: f.node.default.is_some(),
                     alias: f.node.metadata.alias.clone(),

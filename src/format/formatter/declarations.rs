@@ -1126,6 +1126,7 @@ impl Formatter {
 
     // ---- Fields and params ----
 
+    /// Render a field with its authored visibility, emitting `pub` only when the field is explicitly public.
     fn format_field(&mut self, field: &FieldDecl) {
         self.write_visibility(field.visibility);
         self.writer.write(&field.name);

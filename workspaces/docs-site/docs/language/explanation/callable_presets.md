@@ -58,7 +58,7 @@ The important rule is that top-level presets do not run during module initializa
 
 ```incan
 pub model Profile:
-    name: str
+    pub name: str
 
 pub configured = partial configure(
     headers={"accept": "json"},

@@ -537,7 +537,13 @@ impl TypeChecker {
 
     /// Register a model declaration with its fields, methods, and derived traits.
     fn collect_model(&mut self, model: &ModelDecl, span: Span) {
-        let fields = collect_fields(&model.fields, self, &model.name, &model.type_params);
+        let fields = collect_fields(
+            &model.fields,
+            self,
+            &model.name,
+            &model.type_params,
+            matches!(model.visibility, Visibility::Public),
+        );
         let properties = collect_properties(&model.properties, self, Some(&model.name), &model.type_params);
         let mut method_overloads =
             collect_method_overloads(&model.methods, self, Some(&model.name), &model.type_params);
@@ -592,7 +598,13 @@ impl TypeChecker {
         ) = self.inherit_from_parent(&class.extends);
 
         // Add own fields (can override inherited ones)
-        fields.extend(collect_fields(&class.fields, self, &class.name, &class.type_params));
+        fields.extend(collect_fields(
+            &class.fields,
+            self,
+            &class.name,
+            &class.type_params,
+            true,
+        ));
         for field in &class.fields {
             if !field_order.iter().any(|name| name == &field.node.name) {
                 field_order.push(field.node.name.clone());

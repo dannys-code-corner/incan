@@ -976,7 +976,13 @@ fn extract_type_signatures(program: &ast::Program) -> Vec<(String, TypeInfo)> {
                         traits: model.traits.iter().map(|bound| bound.node.name.clone()).collect(),
                         trait_adoptions: trait_adoption_infos_from_bounds(&model.traits, &tp_names, &stdlib_imports),
                         derives: derive_names_from_decorators(&model.decorators),
-                        fields: extract_field_signatures(&model.name, &model.fields, &tp_names, &rust_imports),
+                        fields: extract_field_signatures(
+                            &model.name,
+                            &model.fields,
+                            &tp_names,
+                            &rust_imports,
+                            matches!(model.visibility, ast::Visibility::Public),
+                        ),
                         field_order: model.fields.iter().map(|field| field.node.name.clone()).collect(),
                         properties: std::collections::HashMap::new(),
                         method_overloads,
@@ -1003,7 +1009,7 @@ fn extract_type_signatures(program: &ast::Program) -> Vec<(String, TypeInfo)> {
                         traits: class.traits.iter().map(|bound| bound.node.name.clone()).collect(),
                         trait_adoptions: trait_adoption_infos_from_bounds(&class.traits, &tp_names, &stdlib_imports),
                         derives: derive_names_from_decorators(&class.decorators),
-                        fields: extract_field_signatures(&class.name, &class.fields, &tp_names, &rust_imports),
+                        fields: extract_field_signatures(&class.name, &class.fields, &tp_names, &rust_imports, true),
                         field_defaults: Box::new(
                             class
                                 .fields
@@ -1144,6 +1150,7 @@ fn extract_field_signatures(
     fields: &[ast::Spanned<ast::FieldDecl>],
     type_params: &[String],
     rust_imports: &HashMap<String, String>,
+    private_fields_are_type_private: bool,
 ) -> HashMap<String, FieldInfo> {
     fields
         .iter()
@@ -1158,6 +1165,10 @@ fn extract_field_signatures(
                     )),
                     ty,
                     visibility: field.node.visibility,
+                    is_type_private: crate::frontend::symbols::field_is_type_private(
+                        &field.node,
+                        private_fields_are_type_private,
+                    ),
                     owner: Some(owner.to_string()),
                     has_default: field.node.default.is_some(),
                     alias: field.node.metadata.alias.clone(),
@@ -2192,7 +2203,7 @@ pub enum Token with Convert[int], Convert[float]:
         let source = r#"
 @derive(Clone)
 pub model Record:
-  value: int
+  pub value: int
 
 @derive(Clone)
 pub class Service:

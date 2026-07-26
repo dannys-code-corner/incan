@@ -20,16 +20,9 @@ impl<'a> Parser<'a> {
 
         let docstring = self.optional_leading_block_docstring();
 
-        let (mut fields, method_aliases, method_partials, properties, methods) = self.fields_and_methods()?;
+        let (fields, method_aliases, method_partials, properties, methods) = self.fields_and_methods()?;
 
         self.expect(&TokenKind::Dedent, "Expected dedent after model body")?;
-
-        // If the model is public, promote all field visibilities to public.
-        if matches!(visibility, Visibility::Public) {
-            for f in &mut fields {
-                f.node.visibility = Visibility::Public;
-            }
-        }
 
         Ok(ModelDecl {
             visibility,

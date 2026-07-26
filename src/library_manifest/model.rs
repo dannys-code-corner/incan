@@ -732,12 +732,12 @@ pub struct FieldExport {
 
 /// Source-level visibility of a model or class field published through a library manifest.
 ///
-/// Public models currently emit public fields only. Private visibility is valid for class fields; manifest validation
-/// rejects private model fields until the language defines that source state.
+/// Private visibility is valid for model and class fields. Legacy manifests that omit this value retain public
+/// visibility through the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldVisibilityExport {
-    /// Access is limited to the declaring class's own methods.
+    /// Access is limited to the declaring model or class's own methods.
     Private,
     /// Access is available to source and compiled-library consumers.
     #[default]

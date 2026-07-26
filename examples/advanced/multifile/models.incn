@@ -1,15 +1,15 @@
 """User and Product models for the shop example."""
 
 pub model User:
-    name: str
-    email: str
-    age: int = 0
+    pub name: str
+    pub email: str
+    pub age: int = 0
 
 
 pub model Product:
-    name: str
-    price: float
-    quantity: int = 1
+    pub name: str
+    pub price: float
+    pub quantity: int = 1
 
 
 pub def product_total(product: Product) -> float:

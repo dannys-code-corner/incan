@@ -279,18 +279,18 @@ Each emitted event produces a `LogRecord` internally. `LogRecord` is the Incan s
 
 ```incan
 pub model LogRecord:
-    timestamp [alias="Timestamp", description="Time when the event occurred."]: Timestamp
-    observed_timestamp [alias="ObservedTimestamp", description="Time when telemetry observed the event."]: Option[Timestamp] = None
-    trace_id [alias="TraceId", description="Request trace identifier when the event is span-correlated."]: Option[TraceId] = None
-    span_id [alias="SpanId", description="Span identifier when the event is span-correlated."]: Option[SpanId] = None
-    trace_flags [alias="TraceFlags", description="W3C trace flags for the correlated span."]: Option[TraceFlags] = None
-    severity_text [alias="SeverityText", description="OpenTelemetry severity text, such as INFO or WARN."]: str
-    severity_number [alias="SeverityNumber", description="OpenTelemetry normalized severity number."]: int
-    body [alias="Body", description="Human or structured event body."]: TelemetryValue
-    resource [alias="Resource", description="Entity that produced this telemetry."]: Resource
-    instrumentation_scope [alias="InstrumentationScope", description="Logical scope that emitted this record."]: InstrumentationScope
-    attributes [alias="Attributes", description="Additional structured attributes for this event."]: Attributes
-    event_name [alias="EventName", description="Optional event class or type name."]: Option[str] = None
+    pub timestamp [alias="Timestamp", description="Time when the event occurred."]: Timestamp
+    pub observed_timestamp [alias="ObservedTimestamp", description="Time when telemetry observed the event."]: Option[Timestamp] = None
+    pub trace_id [alias="TraceId", description="Request trace identifier when the event is span-correlated."]: Option[TraceId] = None
+    pub span_id [alias="SpanId", description="Span identifier when the event is span-correlated."]: Option[SpanId] = None
+    pub trace_flags [alias="TraceFlags", description="W3C trace flags for the correlated span."]: Option[TraceFlags] = None
+    pub severity_text [alias="SeverityText", description="OpenTelemetry severity text, such as INFO or WARN."]: str
+    pub severity_number [alias="SeverityNumber", description="OpenTelemetry normalized severity number."]: int
+    pub body [alias="Body", description="Human or structured event body."]: TelemetryValue
+    pub resource [alias="Resource", description="Entity that produced this telemetry."]: Resource
+    pub instrumentation_scope [alias="InstrumentationScope", description="Logical scope that emitted this record."]: InstrumentationScope
+    pub attributes [alias="Attributes", description="Additional structured attributes for this event."]: Attributes
+    pub event_name [alias="EventName", description="Optional event class or type name."]: Option[str] = None
 ```
 
 `timestamp`, `severity_text`, `severity_number`, `body`, `resource`, `instrumentation_scope`, and `attributes` are the required Incan-side fields for records emitted by `std.logging`. Trace context fields remain optional unless a tracing provider supplies an active span context. `observed_timestamp` remains optional unless a collector/exporter boundary records observation time. `event_name` remains optional for ordinary log messages and should be set when the record represents a named event class.

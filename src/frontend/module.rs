@@ -860,7 +860,7 @@ source-root = "library"
         let src = tmp.path().join("src");
         std::fs::create_dir_all(src.join("db"))?;
         let schema = src.join("db").join("schema.incn");
-        std::fs::write(&schema, "pub model Database:\n    id: int\n")?;
+        std::fs::write(&schema, "pub model Database:\n    pub id: int\n")?;
 
         let import = relative_module_import(&["db", "schema", "Database"]);
         let resolved = resolve_source_module_import(&src, Some(&src), &import);
@@ -1198,16 +1198,16 @@ source-root = "library"
     fn test_exported_symbols_same_name_overload_functions() -> Result<(), Vec<String>> {
         let source = r#"
 pub model ColumnExpr:
-    name: str
+    pub name: str
 
 pub model IntColumnExpr:
-    source: str
+    pub source: str
 
 pub model FloatColumnExpr:
-    source: str
+    pub source: str
 
 pub model StringColumnExpr:
-    source: str
+    pub source: str
 
 pub def cast(expr: ColumnExpr, target: Type[int]) -> IntColumnExpr:
     return IntColumnExpr(source=expr.name)

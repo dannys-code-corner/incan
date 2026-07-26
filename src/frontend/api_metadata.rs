@@ -3017,7 +3017,7 @@ pub model Order:
     Fields:
         missing: Stale field documentation.
     """
-    id: int
+    pub id: int
 "#;
         let metadata = metadata_for(source).map_err(|errs| format!("{errs:?}"))?;
         let diagnostics = validate_checked_api_docstrings(&[metadata]);
@@ -3055,8 +3055,8 @@ pub model Order with Labelled:
     """
     Order contract.
     """
-    id [description="Stable id"] as "orderId": int
-    label: str = DEFAULT_LABEL
+    pub id [description="Stable id"] as "orderId": int
+    pub label: str = DEFAULT_LABEL
 
     def label(self) -> str:
         """
@@ -3104,7 +3104,7 @@ pub model Order with Labelled:
     fn checked_api_metadata_preserves_same_type_method_aliases() -> Result<(), String> {
         let source = r#"
 pub model Measurements:
-    value: int
+    pub value: int
 
     def average(self) -> int:
         return self.value

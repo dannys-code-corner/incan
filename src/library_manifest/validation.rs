@@ -33,25 +33,16 @@ pub(super) fn validate_raw_manifest(raw: &RawLibraryManifest) -> Result<(), Libr
     Ok(())
 }
 
-/// Reject field-visibility states that the current source language cannot author or enforce.
+/// Reject field-visibility states that are not valid on their decoded manifest surface.
 fn validate_field_visibilities(raw: &RawLibraryManifest) -> Result<(), LibraryManifestError> {
-    for model in &raw.exports.models {
-        reject_private_fields(&format!("model `{}`", model.name), &model.fields)?;
-    }
     if let Some(api) = &raw.contract_metadata.api {
         for module in &api.modules {
             for declaration in &module.declarations {
-                match declaration {
-                    ApiDeclaration::Model(model) => {
-                        reject_private_fields(&format!("API model `{}`", model.name), &model.fields)?;
-                    }
-                    ApiDeclaration::Trait(trait_decl) => {
-                        reject_private_fields(
-                            &format!("API trait `{}` required", trait_decl.name),
-                            &trait_decl.requires,
-                        )?;
-                    }
-                    _ => {}
+                if let ApiDeclaration::Trait(trait_decl) = declaration {
+                    reject_private_fields(
+                        &format!("API trait `{}` required", trait_decl.name),
+                        &trait_decl.requires,
+                    )?;
                 }
             }
         }
@@ -59,7 +50,7 @@ fn validate_field_visibilities(raw: &RawLibraryManifest) -> Result<(), LibraryMa
     Ok(())
 }
 
-/// Reject private fields on one manifest surface that currently supports public fields only.
+/// Reject private fields on one manifest surface that only represents public requirements.
 fn reject_private_fields(owner: &str, fields: &[super::FieldExport]) -> Result<(), LibraryManifestError> {
     for field in fields {
         if matches!(field.visibility, FieldVisibilityExport::Private) {

@@ -1264,14 +1264,13 @@ impl TypeChecker {
         };
         let type_info = self.lookup_semantic_type_info(type_name)?;
         let (type_params, fields): (&[String], Vec<&FieldInfo>) = match type_info {
-            TypeInfo::Model(model) => (model.type_params.as_slice(), model.fields.values().collect()),
+            TypeInfo::Model(model) => (
+                model.type_params.as_slice(),
+                model.fields.values().filter(|field| !field.is_type_private).collect(),
+            ),
             TypeInfo::Class(class) => (
                 class.type_params.as_slice(),
-                class
-                    .fields
-                    .values()
-                    .filter(|field| matches!(field.visibility, Visibility::Public))
-                    .collect(),
+                class.fields.values().filter(|field| !field.is_type_private).collect(),
             ),
             _ => return None,
         };
@@ -1459,6 +1458,10 @@ impl TypeChecker {
                     return Some(ResolvedType::Unknown);
                 }
                 let (_, info) = self.resolve_field_info(&model.fields, field, true, false)?;
+                if self.private_field_is_inaccessible(type_name, info) {
+                    self.errors.push(errors::private_field(type_name, field, span));
+                    return Some(ResolvedType::Unknown);
+                }
                 if let Some(args) = type_args {
                     let subst = type_param_subst_map(&model.type_params, args);
                     return Some(substitute_resolved_type(&info.ty, &subst));
@@ -1468,9 +1471,7 @@ impl TypeChecker {
             TypeInfo::Class(class) => {
                 // RFC 021: No alias-aware resolution for classes (models only)
                 let (_, info) = self.resolve_field_info(&class.fields, field, false, true)?;
-                let owner = info.owner.as_deref().unwrap_or(type_name);
-                if matches!(info.visibility, Visibility::Private) && self.current_method_owner.as_deref() != Some(owner)
-                {
+                if self.private_field_is_inaccessible(type_name, info) {
                     self.errors.push(errors::private_field(type_name, field, span));
                     return Some(ResolvedType::Unknown);
                 }

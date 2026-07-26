@@ -107,8 +107,8 @@ The first positional argument is a project directory, bundle JSON file, source f
 
 ```incan
 pub model OrderSummary:
-    order_id [alias="orderId", description="Stable order identifier"]: str
-    coupon_code: Option[str]
+    pub order_id [alias="orderId", description="Stable order identifier"]: str
+    pub coupon_code: Option[str]
 ```
 
 `--format json` prints the canonical bundle JSON for the selected model.

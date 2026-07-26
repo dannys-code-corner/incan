@@ -327,7 +327,7 @@ impl<'a> IrEmitter<'a> {
         let field_value_reflection_impl = if Self::struct_emits_field_value_reflection(s) {
             let mut value_arms = Vec::new();
             let mut items = Vec::new();
-            for field in &s.fields {
+            for field in s.fields.iter().filter(|field| !field.is_type_private) {
                 let value = Self::field_reflection_string_expr(field);
                 let mut keys = vec![field.name.clone()];
                 if let Some(alias) = &field.alias
@@ -378,9 +378,11 @@ impl<'a> IrEmitter<'a> {
             && !s
                 .fields
                 .iter()
+                .filter(|field| !field.is_type_private)
                 .any(|field| Self::field_type_mentions_type_param(&field.ty, &s.type_params))
             && s.fields
                 .iter()
+                .filter(|field| !field.is_type_private)
                 .all(|field| Self::field_type_supports_value_reflection(&field.ty))
     }
 

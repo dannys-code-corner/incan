@@ -310,7 +310,7 @@ pub get = partial route(method="GET")
 fn test_public_partial_exports_declaration_safe_preset_values() {
     let source = r#"
 pub model Profile:
-  name: str
+  pub name: str
 
 pub def configure(headers: dict[str, str], codes: list[int], profile: Profile) -> str:
   return profile.name
@@ -692,10 +692,10 @@ fn test_from_import_accepts_public_partial_export() {
     let library = parse_program(
         r#"
 pub model Spec:
-  namespace: str
-  policy: str
-  klass: str
-  lifecycle: str
+  pub namespace: str
+  pub policy: str
+  pub klass: str
+  pub lifecycle: str
 
 pub core_spec = partial Spec(namespace="core", policy="portable")
 "#,
@@ -842,10 +842,10 @@ fn test_dependency_overload_cache_keeps_module_local_symbols_when_spans_collide(
     let left = parse_program(
         r#"
 pub model Alpha:
-  value: str
+  pub value: str
 
 pub model Bravo:
-  value: str
+  pub value: str
 
 pub def choose(value: Type[Alpha]) -> Alpha:
   return Alpha(value="a")
@@ -858,10 +858,10 @@ pub def choose(value: Type[Bravo]) -> Bravo:
     let right = parse_program(
         r#"
 pub model Gamma:
-  value: str
+  pub value: str
 
 pub model Delta:
-  value: str
+  pub value: str
 
 pub def choose(value: Type[Gamma]) -> Gamma:
   return Gamma(value="g")
@@ -1764,6 +1764,110 @@ pub class LazyFrame:
     return self._cursor
 "#;
     assert_check_ok(source);
+}
+
+#[test]
+fn test_pub_model_private_field_access_is_type_private_issue884() {
+    let source = r#"
+pub model Vault:
+  secret: str
+  pub label: str
+
+  def reveal(self) -> str:
+    return self.secret
+
+pub model Inspector:
+  pub name: str
+
+  def leak(self, vault: Vault) -> str:
+    return vault.secret
+
+def leak(vault: Vault) -> str:
+  return vault.secret
+"#;
+    let errors = check_str_err(
+        source,
+        "private model field access should fail outside the declaring type",
+    );
+    let private_errors = errors
+        .iter()
+        .filter(|error| error.message.contains("Field 'secret' on 'Vault' is private"))
+        .count();
+    assert_eq!(
+        private_errors,
+        2,
+        "expected outside function and different model method to fail, got: {:?}",
+        errors.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_private_model_fields_keep_existing_module_private_semantics_issue884() {
+    let source = r#"
+model Internal:
+  value: int
+
+def read(value: Internal) -> int:
+  return value.value
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_pub_model_private_field_is_available_inside_owner_methods_issue884() {
+    let source = r#"
+pub model Vault:
+  secret: str
+  pub label: str
+
+  @staticmethod
+  def create(label: str) -> Vault:
+    return Vault(secret="sealed", label=label)
+
+  def reveal(self) -> str:
+    return self.secret
+
+  def unpack(self) -> str:
+    match self:
+      Vault(secret=value) =>
+        return value
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_pub_model_private_fields_are_rejected_in_external_construction_and_patterns_issue884() {
+    let source = r#"
+pub model Vault:
+  secret [alias="wire_secret"]: str = "sealed"
+  pub label: str
+
+def construct() -> Vault:
+  return Vault(wire_secret="leaked", label="outside")
+
+def unpack(vault: Vault) -> str:
+  match vault:
+    Vault(secret=value) =>
+      return value
+"#;
+    let errors = check_str_err(
+        source,
+        "private model fields should fail in external named construction and constructor patterns",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Field 'wire_secret' on 'Vault' is private")),
+        "expected aliased private constructor field error, got: {:?}",
+        errors.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Field 'secret' on 'Vault' is private")),
+        "expected private pattern field error, got: {:?}",
+        errors.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -9856,8 +9960,8 @@ pub trait Iterator[T]:
     return ZipIterator[T, Self, U, Iterator[U]](left=self, right=other)
 
 pub model ZipIterator[T, Left with Iterator[T], U, Right with Iterator[U]] with Iterator[tuple[T, U]]:
-  left: Left
-  right: Right
+  pub left: Left
+  pub right: Right
 
   def __next__(mut self) -> Option[tuple[T, U]]:
     return None
@@ -9891,8 +9995,8 @@ pub trait Iterator[T]:
     return ZipIterator[T, Self, U, Iterator[U]](left=self, right=other)
 
 pub model ZipIterator[T, Left with Iterator[T], U, Right with Iterator[U]] with Iterator[tuple[T, U]]:
-  left: Left
-  right: Right
+  pub left: Left
+  pub right: Right
 
   def __next__(mut self) -> Option[tuple[T, U]]:
     return None
@@ -12762,7 +12866,7 @@ def accepts_path(value: path::PathBuf) -> path::PathBuf:
     let dependency = parse_program(
         r#"
 pub model Count:
-  value: int
+  pub value: int
 "#,
         "issue902 imported dependency",
     );
@@ -15880,7 +15984,7 @@ pub trait Convert[T]:
   def convert(self) -> T: ...
 
 pub model Reading with Convert[int], Convert[float]:
-  value: int
+  pub value: int
 
   def convert(self) -> int:
     return self.value

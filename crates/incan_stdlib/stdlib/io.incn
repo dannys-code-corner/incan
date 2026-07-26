@@ -86,8 +86,8 @@ pub model ReaderChunks[R with BinaryReader] with FallibleIterator[bytes, IoError
     The reader remains owned by the stream while it advances. Each successful item is non-empty; EOF is ordinary
     exhaustion, and reader errors keep their original typed `IoError` payload.
     """
-    reader: R
-    chunk_size: int
+    pub reader: R
+    pub chunk_size: int
 
     def __next__(mut self) -> Result[Option[bytes], IoError]:
         """

@@ -35,7 +35,7 @@ pub type FormatterId = newtype str
 
 @derive(Descriptor)
 pub model FormatterSpec:
-    media_type: str
+    pub media_type: str
 
 pub static formatters: Registry[FormatterId, FormatterSpec] = Registry.define(
     subjects=[SubjectKind.Method],
@@ -61,7 +61,7 @@ pub type CapabilityId = newtype str
 
 @derive(Descriptor)
 pub model CapabilitySpec:
-    summary: str
+    pub summary: str
 
 pub static capabilities: Registry[CapabilityId, CapabilitySpec] = Registry.define(
     subjects=[SubjectKind.CompilationUnit, SubjectKind.Package],

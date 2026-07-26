@@ -3121,6 +3121,10 @@ impl TypeChecker {
                     )),
                     ty,
                     visibility: field.node.visibility,
+                    is_type_private: crate::frontend::symbols::field_is_type_private(
+                        &field.node,
+                        matches!(model.visibility, Visibility::Public),
+                    ),
                     owner: Some(model.name.clone()),
                     has_default: field.node.default.is_some(),
                     alias: field.node.metadata.alias.clone(),
@@ -3535,6 +3539,7 @@ impl TypeChecker {
                     )),
                     ty,
                     visibility: field.node.visibility,
+                    is_type_private: crate::frontend::symbols::field_is_type_private(&field.node, true),
                     owner: Some(class.name.clone()),
                     has_default: field.node.default.is_some(),
                     alias: field.node.metadata.alias.clone(),

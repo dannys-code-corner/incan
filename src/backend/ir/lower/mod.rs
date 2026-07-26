@@ -3070,7 +3070,9 @@ mod tests {
         let ast = parser::parse(&tokens).unwrap_or_else(|errs| {
             panic!("parser failed: {errs:?}");
         });
-        let mut lowering = AstLowering::new();
+        let mut checker = TypeChecker::new();
+        let _ = checker.check_program(&ast);
+        let mut lowering = AstLowering::new_with_type_info(checker.type_info().clone());
         lowering.lower_program(&ast)
     }
 
@@ -3094,6 +3096,29 @@ class Account:
         if error.message != expected {
             return Err(format!("expected `{expected}`, got `{}`", error.message));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn model_lowering_without_type_info_fails_closed_issue884() -> Result<(), String> {
+        let source = r#"
+model Account:
+    id: int
+"#;
+        let tokens = lexer::lex(source).map_err(|errors| format!("lexer failed: {errors:?}"))?;
+        let ast = parser::parse(&tokens).map_err(|errors| format!("parser failed: {errors:?}"))?;
+        let mut lowering = AstLowering::new();
+        let error = match lowering.lower_program(&ast) {
+            Ok(_) => return Err("model lowering without checked visibility unexpectedly succeeded".to_string()),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .0
+                .iter()
+                .any(|entry| entry.message.contains("typechecker-owned field visibility")),
+            "unexpected lowering errors: {error:?}"
+        );
         Ok(())
     }
 
@@ -3252,6 +3277,30 @@ model User:
         } else {
             panic!("Expected struct declaration");
         }
+    }
+
+    #[test]
+    fn test_lower_pub_model_uses_checked_private_field_visibility_issue884() {
+        let ir = must_ok(lower_source(
+            r#"
+pub model Vault:
+    secret: str = "sealed"
+    pub label: str
+"#,
+        ));
+        let IrDeclKind::Struct(vault) = &ir.declarations[0].kind else {
+            panic!("expected lowered Vault struct");
+        };
+        assert!(matches!(
+            vault.fields[0].visibility,
+            crate::backend::ir::decl::Visibility::Private
+        ));
+        assert!(vault.fields[0].is_type_private);
+        assert!(matches!(
+            vault.fields[1].visibility,
+            crate::backend::ir::decl::Visibility::Public
+        ));
+        assert!(!vault.fields[1].is_type_private);
     }
 
     #[test]

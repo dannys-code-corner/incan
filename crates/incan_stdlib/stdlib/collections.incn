@@ -97,10 +97,10 @@ pub model OrdinalMapError with Error:
     Error returned by `OrdinalMap` construction and byte decoding.
     """
 
-    _kind: OrdinalMapErrorKind = OrdinalMapErrorKind.InvalidKeyRecord
-    _kind_name: str = OrdinalMapErrorKind.InvalidKeyRecord.as_str()
-    _detail: str = ""
-    _index: int = -1
+    pub _kind: OrdinalMapErrorKind = OrdinalMapErrorKind.InvalidKeyRecord
+    pub _kind_name: str = OrdinalMapErrorKind.InvalidKeyRecord.as_str()
+    pub _detail: str = ""
+    pub _index: int = -1
 
     @staticmethod
     def invalid_key_record(detail: str, index: int = -1) -> Self:

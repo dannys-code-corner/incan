@@ -569,8 +569,8 @@ pub model ListIterator[T with Clone] with Iterator[T]:
     Stores the source list and the next index to yield. The iterator owns the
     list snapshot used by the generated adapter chain.
     """
-    items: list[T]
-    index: int
+    pub items: list[T]
+    pub index: int
 
     def __next__(mut self) -> Option[T]:
         """
@@ -596,11 +596,11 @@ pub model MapFallibleIterator[
     Marker fields preserve otherwise field-free item, output, and error parameters in generated metadata. They have no
     runtime control role; polling behavior is owned by `source` and `f`.
     """
-    source: Source
-    f: StoredMapFn
-    input_marker: Option[T] = None
-    output_marker: Option[Output] = None
-    error_marker: Option[E] = None
+    pub source: Source
+    pub f: StoredMapFn
+    pub input_marker: Option[T] = None
+    pub output_marker: Option[Output] = None
+    pub error_marker: Option[E] = None
 
     def __next__(mut self) -> Result[Option[Output], E]:
         """
@@ -625,10 +625,10 @@ pub model FilterFallibleIterator[
 
     Marker fields preserve the item and error types in generated metadata and are never inspected while polling.
     """
-    source: Source
-    f: StoredPredicate
-    item_marker: Option[T] = None
-    error_marker: Option[E] = None
+    pub source: Source
+    pub f: StoredPredicate
+    pub item_marker: Option[T] = None
+    pub error_marker: Option[E] = None
 
     def __next__(mut self) -> Result[Option[T], E]:
         """
@@ -657,12 +657,12 @@ pub model FlatMapFallibleIterator[
     `current` and `index` retain the active expanded list between polls. The marker fields preserve otherwise field-free
     input and error parameters in generated metadata and have no runtime control role.
     """
-    source: Source
-    f: StoredExpand
-    current: list[Output]
-    index: int
-    input_marker: Option[T] = None
-    error_marker: Option[E] = None
+    pub source: Source
+    pub f: StoredExpand
+    pub current: list[Output]
+    pub index: int
+    pub input_marker: Option[T] = None
+    pub error_marker: Option[E] = None
 
     def __next__(mut self) -> Result[Option[Output], E]:
         """
@@ -689,10 +689,10 @@ pub model TakeFallibleIterator[T, E, Source with FallibleIterator[T, E]] with Fa
     `remaining` counts successful items still allowed. The marker fields preserve otherwise field-free generic types in
     generated metadata and are not part of the polling decision.
     """
-    source: Source
-    remaining: int
-    item_marker: Option[T] = None
-    error_marker: Option[E] = None
+    pub source: Source
+    pub remaining: int
+    pub item_marker: Option[T] = None
+    pub error_marker: Option[E] = None
 
     def __next__(mut self) -> Result[Option[T], E]:
         """
@@ -719,10 +719,10 @@ pub model InspectFallibleIterator[
 
     Marker fields preserve the item and error types in generated metadata and are never inspected while polling.
     """
-    source: Source
-    f: StoredObserver
-    item_marker: Option[T] = None
-    error_marker: Option[E] = None
+    pub source: Source
+    pub f: StoredObserver
+    pub item_marker: Option[T] = None
+    pub error_marker: Option[E] = None
 
     def __next__(mut self) -> Result[Option[T], E]:
         """
@@ -753,11 +753,11 @@ pub model MapErrFallibleIterator[
     Marker fields preserve item, source-error, and mapped-error types in generated metadata and are never inspected
     while polling.
     """
-    source: Source
-    f: StoredErrorMap
-    item_marker: Option[T] = None
-    source_error_marker: Option[E] = None
-    mapped_error_marker: Option[MappedError] = None
+    pub source: Source
+    pub f: StoredErrorMap
+    pub item_marker: Option[T] = None
+    pub source_error_marker: Option[E] = None
+    pub mapped_error_marker: Option[MappedError] = None
 
     def __next__(mut self) -> Result[Option[T], MappedError]:
         """
@@ -782,10 +782,10 @@ pub model InspectErrFallibleIterator[
     Marker fields preserve the successful item and error types in generated metadata and are never inspected while
     polling.
     """
-    source: Source
-    f: StoredErrorObserver
-    item_marker: Option[T] = None
-    error_marker: Option[E] = None
+    pub source: Source
+    pub f: StoredErrorObserver
+    pub item_marker: Option[T] = None
+    pub error_marker: Option[E] = None
 
     def __next__(mut self) -> Result[Option[T], E]:
         """
@@ -805,8 +805,8 @@ pub model MapIterator[T, Source with Iterator[T], U] with Iterator[U]:
     Stores the source iterator and callback until the consumer requests the next
     mapped item.
     """
-    source: Source
-    f: (T) -> U
+    pub source: Source
+    pub f: (T) -> U
 
     def __next__(mut self) -> Option[U]:
         """
@@ -826,8 +826,8 @@ pub model FilterIterator[T, Source with Iterator[T]] with Iterator[T]:
     Source items are requested until one satisfies the predicate or the source is
     exhausted.
     """
-    source: Source
-    f: (T) -> bool
+    pub source: Source
+    pub f: (T) -> bool
 
     def __next__(mut self) -> Option[T]:
         """
@@ -849,10 +849,10 @@ pub model FlatMapIterator[T, Source with Iterator[T], U] with Iterator[U]:
     Maintains the currently active nested iterator so nested values are yielded
     before another source item is expanded.
     """
-    source: Source
-    f: (T) -> list[U]
-    current: list[U]
-    index: int
+    pub source: Source
+    pub f: (T) -> list[U]
+    pub current: list[U]
+    pub index: int
 
     def __next__(mut self) -> Option[U]:
         """
@@ -875,9 +875,9 @@ pub model TakeIterator[T, Source with Iterator[T]] with Iterator[T]:
     """
     Lazy state for `Iterator.take()`.
     """
-    source: Source
-    remaining: int
-    marker: Option[T] = None
+    pub source: Source
+    pub remaining: int
+    pub marker: Option[T] = None
 
     def __next__(mut self) -> Option[T]:
         """
@@ -896,9 +896,9 @@ pub model SkipIterator[T, Source with Iterator[T]] with Iterator[T]:
     """
     Lazy state for `Iterator.skip()`.
     """
-    source: Source
-    remaining: int
-    marker: Option[T] = None
+    pub source: Source
+    pub remaining: int
+    pub marker: Option[T] = None
 
     def __next__(mut self) -> Option[T]:
         """
@@ -916,10 +916,10 @@ pub model ChainIterator[T, First with Iterator[T], Second with Iterator[T]] with
     """
     Lazy state for `Iterator.chain()`.
     """
-    first: First
-    second: Second
-    in_second: bool
-    marker: Option[T] = None
+    pub first: First
+    pub second: Second
+    pub in_second: bool
+    pub marker: Option[T] = None
 
     def __next__(mut self) -> Option[T]:
         """
@@ -937,9 +937,9 @@ pub model EnumerateIterator[T, Source with Iterator[T]] with Iterator[tuple[int,
     """
     Lazy state for `Iterator.enumerate()`.
     """
-    source: Source
-    index: int
-    marker: Option[T] = None
+    pub source: Source
+    pub index: int
+    pub marker: Option[T] = None
 
     def __next__(mut self) -> Option[tuple[int, T]]:
         """
@@ -957,10 +957,10 @@ pub model ZipIterator[T, Left with Iterator[T], U, Right with Iterator[U]] with 
     """
     Lazy state for `Iterator.zip()`.
     """
-    left: Left
-    right: Right
-    left_marker: Option[T] = None
-    right_marker: Option[U] = None
+    pub left: Left
+    pub right: Right
+    pub left_marker: Option[T] = None
+    pub right_marker: Option[U] = None
 
     def __next__(mut self) -> Option[tuple[T, U]]:
         """
@@ -978,9 +978,9 @@ pub model TakeWhileIterator[T with Clone, Source with Iterator[T]] with Iterator
     """
     Lazy state for `Iterator.take_while()`.
     """
-    source: Source
-    f: (T) -> bool
-    done: bool
+    pub source: Source
+    pub f: (T) -> bool
+    pub done: bool
 
     def __next__(mut self) -> Option[T]:
         """
@@ -1004,9 +1004,9 @@ pub model SkipWhileIterator[T with Clone, Source with Iterator[T]] with Iterator
     """
     Lazy state for `Iterator.skip_while()`.
     """
-    source: Source
-    f: (T) -> bool
-    skipping: bool
+    pub source: Source
+    pub f: (T) -> bool
+    pub skipping: bool
 
     def __next__(mut self) -> Option[T]:
         """
@@ -1030,9 +1030,9 @@ pub model BatchIterator[T, Source with Iterator[T]] with Iterator[list[T]]:
     Each yielded item is a list with at most `size` elements. The final short
     list is yielded when it is non-empty.
     """
-    source: Source
-    size: int
-    marker: Option[T] = None
+    pub source: Source
+    pub size: int
+    pub marker: Option[T] = None
 
     def __next__(mut self) -> Option[list[T]]:
         """

@@ -79,12 +79,12 @@ An Incan library author starts with ordinary library exports:
 
 ```incan
 pub model OrderInput:
-    subtotal: int
-    customer_tier: str
+    pub subtotal: int
+    pub customer_tier: str
 
 pub model Quote:
-    total: int
-    discount_applied: bool
+    pub total: int
+    pub discount_applied: bool
 
 pub def quote_order(input: OrderInput) -> Result[Quote, str]:
     if input.subtotal < 0:

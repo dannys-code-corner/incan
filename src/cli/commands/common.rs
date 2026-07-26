@@ -5018,7 +5018,7 @@ version = "0.1.0"
         std::fs::write(
             src_dir.join("substrait_model.incn"),
             r#"pub model SubstraitPlan:
-    rels: list[str]
+    pub rels: list[str]
 "#,
         )?;
         std::fs::write(
@@ -5095,14 +5095,14 @@ version = "0.1.0"
             src_dir.join("substrait_model.incn"),
             r#"@derive(Clone)
 pub model SubstraitRelNode:
-    rel_id: str
+    pub rel_id: str
 
 @derive(Clone)
 pub model SubstraitPlan:
-    plan_id: str
-    root_rel_id: str
-    rels: list[SubstraitRelNode]
-    profile_tags: list[str]
+    pub plan_id: str
+    pub root_rel_id: str
+    pub rels: list[SubstraitRelNode]
+    pub profile_tags: list[str]
 
 pub def empty_substrait_plan() -> SubstraitPlan:
     return SubstraitPlan(plan_id=str("p"), root_rel_id=str(""), rels=[], profile_tags=[])

@@ -214,7 +214,7 @@ impl CanonicalModelBundle {
         source.push_str(&self.logical_type_name);
         source.push_str(":\n");
         for field in &self.fields {
-            source.push_str("    ");
+            source.push_str("    pub ");
             source.push_str(&field.name);
             let metadata = field_metadata_source(field);
             if !metadata.is_empty() {

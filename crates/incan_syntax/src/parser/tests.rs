@@ -549,6 +549,39 @@ pub class LazyFrame:
     }
 
     #[test]
+    fn test_parse_pub_model_uses_ordinary_field_visibility_issue884() -> Result<(), Vec<CompileError>> {
+        let source = r#"
+pub model SealedEnvelope:
+  body: str
+  pub envelope_id: str
+"#;
+        let program = parse_str(source)?;
+        let model = require_model_decl(&program.declarations[0])?;
+        assert!(matches!(model.visibility, Visibility::Public));
+        assert!(matches!(model.fields[0].node.visibility, Visibility::Private));
+        assert!(matches!(model.fields[1].node.visibility, Visibility::Public));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_pub_model_keeps_private_available_as_an_ordinary_field_name_issue884() -> Result<(), Vec<CompileError>>
+    {
+        let source = r#"
+pub model Vocabulary:
+  pub private [alias="private_value"]: str
+"#;
+        let program = parse_str(source)?;
+        let model = require_model_decl(&program.declarations[0])?;
+        assert_eq!(model.fields[0].node.name, "private");
+        assert_eq!(
+            model.fields[0].node.metadata.alias.as_deref(),
+            Some("private_value")
+        );
+        assert!(matches!(model.fields[0].node.visibility, Visibility::Public));
+        Ok(())
+    }
+
+    #[test]
     fn test_parse_method_multiline_receiver_allows_trailing_comma() -> Result<(), Vec<CompileError>> {
         let source = r#"
 class Box:

@@ -97,6 +97,7 @@ impl AstLowering {
                     },
                     surface_type_name: field.surface_type_name,
                     visibility: Self::map_visibility(field.visibility),
+                    is_type_private: matches!(field.visibility, crate::frontend::ast::Visibility::Private),
                     default,
                     alias: field.alias,
                     description: field.description,
