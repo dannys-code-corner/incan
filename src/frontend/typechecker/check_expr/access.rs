@@ -7,12 +7,12 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::resolved_type_subst::{substitute_resolved_type, type_param_subst_map};
 use crate::frontend::symbols::*;
-use crate::frontend::typechecker::IdentKind;
 use crate::frontend::typechecker::helpers::{
     collection_name, collection_type_id, generator_ty, is_frozen_bytes, is_frozen_str, is_intlike_for_index, list_ty,
     option_ty, string_method_return,
 };
 use crate::frontend::typechecker::type_info::{RustMethodTraitImportUse, RustTraitImportInfo};
+use crate::frontend::typechecker::{IdentKind, canonical_public_library_type_name};
 use incan_core::interop::{
     RustCollectionFamily, RustFieldInfo, RustFunctionSig, RustItemKind, metadata_free_method_signature,
 };
@@ -32,6 +32,8 @@ use incan_core::lang::{conventions, stdlib};
 use incan_core::lang::{enum_helpers, surface::option_methods};
 use quote::ToTokens;
 use syn::{GenericArgument, PathArguments, ReturnType, Type as SynType, TypeParamBound};
+
+use super::calls::PublicModuleConstructorContext;
 
 use super::TypeChecker;
 
@@ -3021,10 +3023,58 @@ impl TypeChecker {
             if let Some(info) = self.resolve_imported_module_constant_member(&module_path, field) {
                 return info.ty;
             }
-            if let Some(kind) = self.resolve_imported_module_function_member(&module_path, field) {
+            let is_public_library_module =
+                module_path.len() >= 2 && module_path.first().is_some_and(|segment| segment == "pub");
+            let resolved = if is_public_library_module {
+                match self.resolve_pub_library_module_symbol_member(&module_path[1], &module_path[2..], field) {
+                    Ok(resolved) => resolved.map(|resolved| {
+                        (
+                            resolved.kind,
+                            resolved.source_module_path,
+                            resolved.source_name,
+                            Some(module_path[1].clone()),
+                        )
+                    }),
+                    Err(source_modules) => {
+                        self.errors.push(errors::pub_library_module_member_ambiguous(
+                            &module_path[1],
+                            &module_path[2..],
+                            field,
+                            &source_modules,
+                            span,
+                        ));
+                        return ResolvedType::Unknown;
+                    }
+                }
+            } else {
+                self.resolve_imported_module_function_member_with_source(&module_path, field)
+                    .map(|(kind, source_module_path)| (kind, source_module_path, field.to_string(), None))
+            };
+            if let Some((kind, source_module_path, source_name, public_library)) = resolved {
                 let callable = format!("{module_name}.{field}");
-                match kind {
-                    SymbolKind::Function(info) => {
+                match (kind, public_library) {
+                    (
+                        SymbolKind::Type(
+                            type_info @ (TypeInfo::Model(_)
+                            | TypeInfo::Class(_)
+                            | TypeInfo::Enum(_)
+                            | TypeInfo::Newtype(_)),
+                        ),
+                        Some(library),
+                    ) => {
+                        let mut source_type_path = source_module_path.iter().skip(2).cloned().collect::<Vec<_>>();
+                        source_type_path.push(source_name.clone());
+                        let canonical_name = canonical_public_library_type_name(&library, &source_type_path.join("::"));
+                        self.type_info
+                            .expressions
+                            .ident_kinds
+                            .insert((span.start, span.end), IdentKind::TypeName);
+                        let source_kind = Self::source_target_kind_for_type_info(&type_info).unwrap_or("type");
+                        self.record_source_target(span, source_module_path, source_name, source_kind);
+                        return ResolvedType::Named(canonical_name);
+                    }
+                    (SymbolKind::Function(info), _) => {
+                        self.record_source_target(span, source_module_path, source_name, "function");
                         if !info.type_params.is_empty() {
                             self.errors
                                 .push(errors::generic_function_reference(callable.as_str(), span));
@@ -3032,7 +3082,8 @@ impl TypeChecker {
                         }
                         return Self::function_info_to_resolved_function_type(&info);
                     }
-                    SymbolKind::FunctionOverloads(_) => {
+                    (SymbolKind::FunctionOverloads(_), _) => {
+                        self.record_source_target(span, source_module_path, source_name, "function");
                         self.errors.push(CompileError::type_error(
                             format!(
                                 "Cannot use overloaded function '{callable}' as a value; call it directly so an overload can be selected"
@@ -3449,25 +3500,89 @@ impl TypeChecker {
         }
 
         if let Some((module_name, module_path)) = self.imported_module_for_expr(base) {
-            if let Some(kind) = self.resolve_imported_module_function_member(&module_path, method) {
+            let is_public_library_module =
+                module_path.len() >= 2 && module_path.first().is_some_and(|segment| segment == "pub");
+            let resolved = if is_public_library_module {
+                match self.resolve_pub_library_module_symbol_member(&module_path[1], &module_path[2..], method) {
+                    Ok(resolved) => resolved.map(|resolved| {
+                        (
+                            resolved.kind,
+                            resolved.source_module_path,
+                            resolved.source_name,
+                            Some(module_path[1].clone()),
+                        )
+                    }),
+                    Err(source_modules) => {
+                        self.errors.push(errors::pub_library_module_member_ambiguous(
+                            &module_path[1],
+                            &module_path[2..],
+                            method,
+                            &source_modules,
+                            span,
+                        ));
+                        return ResolvedType::Unknown;
+                    }
+                }
+            } else {
+                self.resolve_imported_module_function_member_with_source(&module_path, method)
+                    .map(|(kind, source_module_path)| (kind, source_module_path, method.to_string(), None))
+            };
+            if let Some((kind, source_module_path, source_name, public_library)) = resolved {
                 let callable = format!("{module_name}.{method}");
-                return match kind {
-                    SymbolKind::Function(info) => self.validate_stdlib_module_function_call(
-                        callable.as_str(),
-                        &info,
-                        type_args,
-                        args,
-                        span,
-                        expected_return_ty,
-                    ),
-                    SymbolKind::FunctionOverloads(overloads) => self.validate_function_overload_call(
-                        callable.as_str(),
-                        &overloads,
-                        type_args,
-                        args,
-                        span,
-                        expected_return_ty,
-                    ),
+                if is_public_library_module
+                    && let Some(projection) = self.lookup_pub_library_module_partial_projection(
+                        &module_path[1],
+                        &module_path[2..],
+                        method,
+                        &callable,
+                    )
+                {
+                    self.type_info.record_partial_projection(projection);
+                }
+                return match (kind, public_library) {
+                    (SymbolKind::Function(info), _) => {
+                        self.record_source_target(span, source_module_path, source_name, "function");
+                        self.validate_stdlib_module_function_call(
+                            callable.as_str(),
+                            &info,
+                            type_args,
+                            args,
+                            span,
+                            expected_return_ty,
+                        )
+                    }
+                    (SymbolKind::FunctionOverloads(overloads), _) => {
+                        self.record_source_target(span, source_module_path, source_name, "function");
+                        self.validate_function_overload_call(
+                            callable.as_str(),
+                            &overloads,
+                            type_args,
+                            args,
+                            span,
+                            expected_return_ty,
+                        )
+                    }
+                    (
+                        SymbolKind::Type(type_info @ (TypeInfo::Model(_) | TypeInfo::Class(_) | TypeInfo::Newtype(_))),
+                        Some(library),
+                    ) => {
+                        let mut source_type_path = source_module_path.iter().skip(2).cloned().collect::<Vec<_>>();
+                        source_type_path.push(source_name.clone());
+                        let canonical_name = canonical_public_library_type_name(&library, &source_type_path.join("::"));
+                        let source_kind = Self::source_target_kind_for_type_info(&type_info).unwrap_or("type");
+                        self.record_source_target(span, source_module_path, source_name, source_kind);
+                        self.check_public_module_type_constructor_call(
+                            PublicModuleConstructorContext {
+                                display_name: &callable,
+                                canonical_name: &canonical_name,
+                                type_info: &type_info,
+                            },
+                            type_args,
+                            args,
+                            span,
+                            span,
+                        )
+                    }
                     _ => ResolvedType::Unknown,
                 };
             }

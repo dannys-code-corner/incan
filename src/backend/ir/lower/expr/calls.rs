@@ -14,9 +14,11 @@ use super::super::super::{FunctionSignature, IrStmt, Mutability, TypedExpr};
 use super::super::AstLowering;
 use super::super::errors::LoweringError;
 use crate::frontend::api_metadata::{
-    ApiDeclaration, function_export_from_api, function_export_from_api_projected, method_export_from_api,
+    ApiDeclaration, checked_api_public_namespace, function_export_from_api, function_export_from_api_projected,
+    method_export_from_api,
 };
 use crate::frontend::ast::{self, TypeConstraintKey};
+use crate::frontend::library_exports::CheckedPresetValue;
 use crate::frontend::library_manifest_index::LibraryManifestIndexEntry;
 use crate::frontend::partial_projection::{PartialPresetRef, merge_named_partial_args};
 use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint, ResolvedType};
@@ -154,14 +156,21 @@ impl AstLowering {
             return None;
         }
         let library = path.get(1)?;
-        let function_name = path.last()?;
-        let function = self.pub_function_export(library, function_name)?;
+        let public_path = path.get(2..)?;
+        let function = self.pub_function_export_for_path(library, public_path)?;
         Some(self.callable_signature_from_pub_function_export(library, &function))
     }
 
     /// Resolve the canonical imported callee path for identifier and module-qualified calls.
-    fn imported_callee_path_for_expr(&self, expr: &ast::Expr) -> Option<Vec<String>> {
-        match expr {
+    fn imported_callee_path_for_expr(&self, expr: &ast::Spanned<ast::Expr>) -> Option<Vec<String>> {
+        if let Some(target) = self.type_info.as_ref().and_then(|info| info.source_target(expr.span))
+            && target.module_path.first().map(String::as_str) == Some("pub")
+        {
+            let mut path = target.module_path.clone();
+            path.push(target.name.clone());
+            return Some(path);
+        }
+        match &expr.node {
             ast::Expr::Ident(name) => self
                 .active_trait_default_function_path(name)
                 .or_else(|| self.import_aliases.get(name).cloned()),
@@ -198,7 +207,9 @@ impl AstLowering {
             Some(stdlib::STDLIB_ROOT) if self.is_provider_or_legacy_stdlib_module(&path) => {}
             Some("pub") => {
                 let library = path.get(1)?;
-                self.pub_function_export(library, method_name)?;
+                let mut public_path = path.get(2..)?.to_vec();
+                public_path.push(method_name.to_string());
+                self.pub_function_export_for_path(library, &public_path)?;
             }
             _ => return None,
         }
@@ -254,6 +265,30 @@ impl AstLowering {
             .and_then(|alias| alias.projected_function.clone())
     }
 
+    /// Resolve a public dependency callable by exact checked source path when a module namespace selected it.
+    fn pub_function_export_for_path(&self, library: &str, public_path: &[String]) -> Option<FunctionExport> {
+        let function_name = public_path.last()?;
+        if public_path.len() == 1 {
+            return self.pub_function_export(library, function_name);
+        }
+        let index = self.provider_plan.as_deref()?.library_manifest_index();
+        let LibraryManifestIndexEntry::Loaded { manifest, .. } = index.get(library)? else {
+            return None;
+        };
+        let api = manifest.contract_metadata.api.as_ref()?;
+        if let Some(function) = Self::api_function_export_for_target_path(api, public_path) {
+            return Some(function);
+        }
+        let (member, namespace_path) = public_path.split_last()?;
+        let namespace = checked_api_public_namespace(api, namespace_path)?;
+        let mut matches = namespace.members.iter().filter(|candidate| candidate.name == *member);
+        let source_path = matches.next()?.source_path.clone();
+        if matches.next().is_some() {
+            return None;
+        }
+        Self::api_function_export_for_target_path(api, &source_path)
+    }
+
     /// Resolve public callable aliases through the manifest identity graph before falling back to public-name scans.
     fn api_function_export_for_public_name(
         manifest: &crate::library_manifest::LibraryManifest,
@@ -284,10 +319,18 @@ impl AstLowering {
         };
         let module_path = path.get(..path.len().saturating_sub(1))?;
         let module = api.modules.iter().find(|module| module.module_path == module_path)?;
-        module
-            .declarations
-            .iter()
-            .find_map(|declaration| Self::api_function_export_for_declaration(declaration, function_name))
+        let declaration = module.declarations.iter().find(|declaration| match declaration {
+            ApiDeclaration::Function(function) => function.name == *function_name,
+            ApiDeclaration::Alias(alias) => alias.name == *function_name,
+            ApiDeclaration::Partial(partial) => partial.name == *function_name,
+            _ => false,
+        })?;
+        if let ApiDeclaration::Alias(alias) = declaration
+            && alias.projected_function.is_none()
+        {
+            return Self::api_function_export_for_target_path(api, &alias.target_path);
+        }
+        Self::api_function_export_for_declaration(declaration, function_name)
     }
 
     /// Convert one checked API declaration into the function export requested by backend call planning.
@@ -303,6 +346,17 @@ impl AstLowering {
                 .projected_function
                 .as_ref()
                 .map(function_export_from_api_projected),
+            ApiDeclaration::Partial(partial) if partial.name == function_name => {
+                let partial = crate::frontend::api_metadata::partial_export_from_api(partial);
+                Some(FunctionExport {
+                    name: partial.name,
+                    emitted_name: None,
+                    type_params: partial.type_params,
+                    params: partial.params,
+                    return_type: partial.return_type,
+                    is_async: partial.is_async,
+                })
+            }
             _ => None,
         }
     }
@@ -759,42 +813,58 @@ impl AstLowering {
         let LibraryManifestIndexEntry::Loaded { manifest, .. } = manifest_index.get(library)? else {
             return None;
         };
-        let method = manifest
-            .exports
-            .models
-            .iter()
-            .find(|model| model.name == type_name)
-            .and_then(|model| model.methods.iter().find(|method| method.name == method_name))
-            .cloned()
-            .or_else(|| {
-                manifest
-                    .exports
-                    .classes
-                    .iter()
-                    .find(|class| class.name == type_name)
-                    .and_then(|class| class.methods.iter().find(|method| method.name == method_name))
-                    .cloned()
-            })
-            .or_else(|| {
-                manifest
-                    .exports
-                    .newtypes
-                    .iter()
-                    .find(|newtype| newtype.name == type_name)
-                    .and_then(|newtype| newtype.methods.iter().find(|method| method.name == method_name))
-                    .cloned()
-            })
-            .or_else(|| {
-                manifest
-                    .exports
-                    .enums
-                    .iter()
-                    .find(|enum_| enum_.name == type_name)
-                    .and_then(|enum_| enum_.methods.iter().find(|method| method.name == method_name))
-                    .cloned()
-            })
-            .or_else(|| Self::api_method_export_for_pub_type(manifest, type_name, method_name))?;
+        let exact_method = Self::public_dependency_type_path(receiver_ty, library).and_then(|target_path| {
+            let api = manifest.contract_metadata.api.as_ref()?;
+            Self::api_method_export_for_target_path(api, &target_path, method_name)
+        });
+        let method = exact_method.or_else(|| {
+            manifest
+                .exports
+                .models
+                .iter()
+                .find(|model| model.name == type_name)
+                .and_then(|model| model.methods.iter().find(|method| method.name == method_name))
+                .cloned()
+                .or_else(|| {
+                    manifest
+                        .exports
+                        .classes
+                        .iter()
+                        .find(|class| class.name == type_name)
+                        .and_then(|class| class.methods.iter().find(|method| method.name == method_name))
+                        .cloned()
+                })
+                .or_else(|| {
+                    manifest
+                        .exports
+                        .newtypes
+                        .iter()
+                        .find(|newtype| newtype.name == type_name)
+                        .and_then(|newtype| newtype.methods.iter().find(|method| method.name == method_name))
+                        .cloned()
+                })
+                .or_else(|| {
+                    manifest
+                        .exports
+                        .enums
+                        .iter()
+                        .find(|enum_| enum_.name == type_name)
+                        .and_then(|enum_| enum_.methods.iter().find(|method| method.name == method_name))
+                        .cloned()
+                })
+                .or_else(|| Self::api_method_export_for_pub_type(manifest, type_name, method_name))
+        })?;
         Some(self.callable_signature_from_pub_method_export(library, &method))
+    }
+
+    /// Decode the exact provider-local source path carried by a canonical public dependency type.
+    fn public_dependency_type_path(receiver_ty: &IrType, library: &str) -> Option<Vec<String>> {
+        let name = match receiver_ty {
+            IrType::Struct(name) | IrType::Enum(name) | IrType::NamedGeneric(name, _) => name,
+            _ => return None,
+        };
+        let (dependency, public_name) = crate::frontend::typechecker::split_canonical_public_library_type_name(name)?;
+        (dependency == library).then(|| public_name.split("::").map(str::to_string).collect())
     }
 
     /// Resolve methods for public types that are exposed only through facade aliases.
@@ -2529,6 +2599,7 @@ impl AstLowering {
         args: &[ast::CallArg],
         call_span: ast::Span,
     ) -> Result<(IrExprKind, IrType), LoweringError> {
+        let source_args = args;
         if let Some(name) = Self::explicit_builtin_member_name(f)
             && let Some(builtin) = BuiltinFn::from_name(name)
         {
@@ -2636,7 +2707,7 @@ impl AstLowering {
             .as_ref()
             .and_then(|info| info.selected_function_emitted_name(call_span))
             .map(str::to_string);
-        let mut imported_callee_path = self.imported_callee_path_for_expr(&f.node);
+        let mut imported_callee_path = self.imported_callee_path_for_expr(f);
         if let (Some(path), Some(emitted_name)) = (&mut imported_callee_path, &selected_emitted_name)
             && let Some(last) = path.last_mut()
         {
@@ -2700,6 +2771,7 @@ impl AstLowering {
 
         // Regular function call (user-defined or unknown)
         let mut args_ir = self.lower_call_args(args)?;
+        self.materialize_external_partial_presets(f, source_args, &mut args_ir);
         if args_ir.is_empty()
             && imported_callee_path
                 .as_ref()
@@ -2878,11 +2950,9 @@ impl AstLowering {
         args: &[ast::CallArg],
         call_span: ast::Span,
     ) -> Option<Vec<ast::CallArg>> {
-        let ast::Expr::Ident(callee_name) = &callee.node else {
-            return None;
-        };
+        let callee_name = Self::partial_projection_binding_name(&callee.node)?;
         let info = self.type_info.as_ref()?;
-        let projection = info.partial_projection(callee_name)?;
+        let projection = info.partial_projection(&callee_name)?;
         let merged = merge_named_partial_args(
             projection.presets.iter().map(|preset| PartialPresetRef {
                 name: preset.name.as_str(),
@@ -2896,7 +2966,10 @@ impl AstLowering {
             .or_else(|| match info.expr_type(callee.span)? {
                 ResolvedType::Function(params, _) => Some(params.as_slice()),
                 _ => None,
-            })?;
+            });
+        let Some(params) = params else {
+            return Some(merged);
+        };
         let mut by_name = merged
             .into_iter()
             .filter_map(|arg| match arg {
@@ -2919,6 +2992,119 @@ impl AstLowering {
                 .map(|(name, value)| ast::CallArg::Named(name, value)),
         );
         Some(ordered)
+    }
+
+    /// Replace provider-owned partial presets with IR that retains the external library and declaration identity.
+    fn materialize_external_partial_presets(
+        &mut self,
+        callee: &ast::Spanned<ast::Expr>,
+        source_args: &[ast::CallArg],
+        lowered_args: &mut [IrCallArg],
+    ) {
+        let Some(binding_name) = Self::partial_projection_binding_name(&callee.node) else {
+            return;
+        };
+        let Some(projection) = self
+            .type_info
+            .as_ref()
+            .and_then(|info| info.partial_projection(&binding_name))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(library) = projection.external_library.as_deref() else {
+            return;
+        };
+        for preset in projection.presets {
+            if source_args
+                .iter()
+                .any(|arg| matches!(arg, ast::CallArg::Named(name, _) if name == &preset.name))
+            {
+                continue;
+            }
+            let Some(value) = preset.external_value.as_ref() else {
+                continue;
+            };
+            let Some(lowered) = self.lower_external_partial_preset(library, value) else {
+                continue;
+            };
+            if let Some(argument) = lowered_args
+                .iter_mut()
+                .find(|argument| argument.name.as_deref() == Some(preset.name.as_str()))
+            {
+                argument.expr = lowered;
+            }
+        }
+    }
+
+    /// Lower one checked provider preset without reinterpreting its canonical references as consumer-local fields.
+    fn lower_external_partial_preset(&mut self, library: &str, value: &CheckedPresetValue) -> Option<TypedExpr> {
+        match value {
+            CheckedPresetValue::Int(value) => Some(TypedExpr::new(IrExprKind::Int(*value), IrType::Int)),
+            CheckedPresetValue::Float(value) => Some(TypedExpr::new(IrExprKind::Float(*value), IrType::Float)),
+            CheckedPresetValue::Bool(value) => Some(TypedExpr::new(IrExprKind::Bool(*value), IrType::Bool)),
+            CheckedPresetValue::String(value) => Some(TypedExpr::new(
+                IrExprKind::Literal(IrLiteral::StaticStr(value.clone())),
+                IrType::StaticStr,
+            )),
+            CheckedPresetValue::Bytes(value) => Some(TypedExpr::new(IrExprKind::Bytes(value.clone()), IrType::Bytes)),
+            CheckedPresetValue::None => Some(TypedExpr::new(IrExprKind::None, IrType::Unit)),
+            CheckedPresetValue::List(values) => {
+                let entries = values
+                    .iter()
+                    .map(|value| {
+                        self.lower_external_partial_preset(library, value)
+                            .map(IrListEntry::Element)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(TypedExpr::new(
+                    IrExprKind::List(entries),
+                    IrType::List(Box::new(IrType::Unknown)),
+                ))
+            }
+            CheckedPresetValue::Dict(entries) => {
+                let entries = entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Some(IrDictEntry::Pair(
+                            self.lower_external_partial_preset(library, key)?,
+                            Box::new(self.lower_external_partial_preset(library, value)?),
+                        ))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(TypedExpr::new(
+                    IrExprKind::Dict(entries),
+                    IrType::Dict(Box::new(IrType::Unknown), Box::new(IrType::Unknown)),
+                ))
+            }
+            CheckedPresetValue::ConstRef(path) => self.lower_pub_default_const_ref(library, path),
+            CheckedPresetValue::ModelLiteral { name, fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|(field, value)| Some((field.clone(), self.lower_external_partial_preset(library, value)?)))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(TypedExpr::new(
+                    IrExprKind::Struct {
+                        name: name.clone(),
+                        fields,
+                    },
+                    IrType::Struct(name.clone()),
+                ))
+            }
+            CheckedPresetValue::Unsupported => None,
+        }
+    }
+
+    /// Return the binding spelling used to store partial metadata for identifiers and qualified module members.
+    fn partial_projection_binding_name(expr: &ast::Expr) -> Option<String> {
+        match expr {
+            ast::Expr::Ident(name) => Some(name.clone()),
+            ast::Expr::Field(base, member) => Some(format!(
+                "{}.{member}",
+                Self::partial_projection_binding_name(&base.node)?
+            )),
+            _ => None,
+        }
     }
 
     /// Lower a struct/model/class/newtype constructor call.
@@ -3288,16 +3474,20 @@ mod tests {
     use crate::backend::ir::types::IrType;
     use crate::frontend::api_metadata::{
         ApiDeclaration, ApiFunction, ApiModel, CHECKED_API_METADATA_SCHEMA_VERSION, CheckedApiMetadata,
-        CheckedApiMetadataPackage, SourceAnchor, SourceSpan,
+        CheckedApiMetadataPackage, SourceAnchor, SourceSpan, materialize_checked_api_public_namespaces,
     };
     use crate::frontend::ast::{
         CallArg, Expr, InteropAdapterKind, InteropDirection, InteropEdgeDecl, Literal, Span, Spanned, Type,
     };
+    use crate::frontend::library_exports::CheckedPresetValue;
     use crate::frontend::library_manifest_index::{
         LibraryArtifactMetadata, LibraryManifestIndex, LibraryManifestIndexEntry,
     };
     use crate::frontend::symbols::ResolvedType;
-    use crate::frontend::typechecker::{RustArgCoercionInfo, RustArgCoercionKind, TypeCheckInfo};
+    use crate::frontend::typechecker::{
+        PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind, RustArgCoercionInfo,
+        RustArgCoercionKind, TypeCheckInfo,
+    };
     use crate::library_manifest::{
         AliasExport, CompiledProviderMetadata, ExportIdentity, ExportIdentityKind, ExportIdentityProjection,
         FunctionExport, LIBRARY_IDENTITY_GRAPH_SCHEMA_VERSION, LibraryExports, LibraryIdentityGraph, LibraryManifest,
@@ -3340,6 +3530,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn qualified_partial_expands_presets_without_a_callable_snapshot_issue948() -> Result<(), String> {
+        let span = Span::new(1, 24);
+        let preset = Spanned::new(Expr::Literal(Literal::String("preset".to_string())), Span::new(25, 33));
+        let mut type_info = TypeCheckInfo::default();
+        type_info.record_partial_projection(PartialProjectionInfo {
+            name: "hyperquant.default_index".to_string(),
+            target_path: vec!["hyperquant".to_string(), "index".to_string(), "build_index".to_string()],
+            target_kind: PartialProjectionTargetKind::Function,
+            presets: vec![PartialProjectionPreset {
+                name: "size".to_string(),
+                value: preset,
+                external_value: Some(CheckedPresetValue::ConstRef(vec![
+                    "hyperquant".to_string(),
+                    "index".to_string(),
+                    "DEFAULT_SIZE".to_string(),
+                ])),
+            }],
+            external_library: Some("modulelib".to_string()),
+        });
+        let mut lowering = AstLowering::new_with_type_info(type_info);
+        let callee = Spanned::new(
+            Expr::Field(
+                Box::new(Spanned::new(Expr::Ident("hyperquant".to_string()), Span::new(1, 11))),
+                "default_index".to_string(),
+            ),
+            span,
+        );
+
+        let args = lowering
+            .partial_projection_call_args(&callee, &[], span)
+            .ok_or_else(|| "expected a qualified partial to expand its preset without call metadata".to_string())?;
+        let [CallArg::Named(name, value)] = args.as_slice() else {
+            return Err(format!("expected one named preset, got {args:?}"));
+        };
+        assert_eq!(name, "size");
+        assert!(matches!(value.node, Expr::Literal(Literal::String(ref value)) if value == "preset"));
+
+        let mut lowered = lowering
+            .lower_call_args(&args)
+            .map_err(|error| format!("failed to lower expanded preset: {error:?}"))?;
+        lowering.materialize_external_partial_presets(&callee, &[], &mut lowered);
+        let Some(argument) = lowered.first() else {
+            return Err("expected one lowered preset".to_string());
+        };
+        let IrExprKind::Field {
+            object: index,
+            field: constant,
+        } = &argument.expr.kind
+        else {
+            return Err(format!(
+                "expected external constant field, got {:?}",
+                argument.expr.kind
+            ));
+        };
+        let IrExprKind::Field {
+            object: namespace,
+            field: index_module,
+        } = &index.kind
+        else {
+            return Err(format!("expected external index module, got {:?}", index.kind));
+        };
+        let IrExprKind::Field {
+            object: library,
+            field: namespace_module,
+        } = &namespace.kind
+        else {
+            return Err(format!("expected external namespace module, got {:?}", namespace.kind));
+        };
+        assert_eq!(constant, "DEFAULT_SIZE");
+        assert_eq!(index_module, "index");
+        assert_eq!(namespace_module, "hyperquant");
+        assert!(matches!(
+            &library.kind,
+            IrExprKind::Var {
+                name,
+                ref_kind: VarRefKind::ExternalName,
+                ..
+            } if name == "modulelib"
+        ));
+        Ok(())
+    }
+
     /// Method-dispatch arguments retain the defining SDK module even after their import expression has disappeared.
     #[test]
     fn method_type_arg_uses_unique_sdk_provider_nominal_path() {
@@ -3374,6 +3647,7 @@ mod tests {
                     methods: Vec::new(),
                 })],
             }],
+            public_namespaces: Vec::new(),
         });
         let mut lowering = AstLowering::new();
         lowering.set_provider_plan(Some(Arc::new(ProviderPlan::for_in_memory_sdk_manifest(
@@ -3423,6 +3697,7 @@ mod tests {
                     is_async: false,
                 })],
             }],
+            public_namespaces: Vec::new(),
         });
         manifest.contract_metadata.identity_graph = LibraryIdentityGraph {
             schema_version: LIBRARY_IDENTITY_GRAPH_SCHEMA_VERSION,
@@ -3461,6 +3736,66 @@ mod tests {
 
         assert_eq!(signature.params[0].ty, IrType::String);
         assert_eq!(signature.return_type, IrType::String);
+        Ok(())
+    }
+
+    #[test]
+    fn imported_pub_parent_namespace_routes_to_nested_checked_callable_issue948() -> Result<(), String> {
+        let mut api = CheckedApiMetadataPackage {
+            schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+            package: None,
+            modules: vec![CheckedApiMetadata {
+                schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+                module_path: vec!["hyperquant".to_string(), "index".to_string()],
+                declarations: vec![ApiDeclaration::Function(ApiFunction {
+                    name: "default_index".to_string(),
+                    anchor: SourceAnchor {
+                        id: "hyperquant.index.default_index".to_string(),
+                        span: SourceSpan { start: 0, end: 0 },
+                    },
+                    docstring: None,
+                    docstring_sections: None,
+                    decorators: Vec::new(),
+                    type_params: Vec::new(),
+                    params: Vec::new(),
+                    return_type: TypeRef::Named {
+                        name: "int".to_string(),
+                    },
+                    is_async: false,
+                })],
+            }],
+            public_namespaces: Vec::new(),
+        };
+        materialize_checked_api_public_namespaces(&mut api).map_err(|error| error.to_string())?;
+        let mut manifest = LibraryManifest::new("modulelib", "0.1.0");
+        manifest.contract_metadata.api = Some(api);
+        let index = LibraryManifestIndex::from_entries(HashMap::from([(
+            "modulelib".to_string(),
+            LibraryManifestIndexEntry::Loaded {
+                manifest: Box::new(manifest),
+                metadata: LibraryArtifactMetadata::from_crate_root(
+                    "modulelib",
+                    "modulelib",
+                    std::env::temp_dir().join("incan_issue948_nested_callable"),
+                ),
+            },
+        )]));
+        let mut lowering = AstLowering::new();
+        lowering.set_provider_plan(Some(Arc::new(ProviderPlan::for_library_index(index))));
+        lowering.import_aliases.insert(
+            "hyperquant".to_string(),
+            vec!["pub".to_string(), "modulelib".to_string(), "hyperquant".to_string()],
+        );
+
+        assert_eq!(
+            lowering.imported_module_function_callee_path(&Expr::Ident("hyperquant".to_string()), "default_index"),
+            Some(vec![
+                "pub".to_string(),
+                "modulelib".to_string(),
+                "hyperquant".to_string(),
+                "default_index".to_string(),
+            ])
+        );
         Ok(())
     }
 
@@ -3518,6 +3853,7 @@ mod tests {
                     is_async: false,
                 })],
             }],
+            public_namespaces: Vec::new(),
         });
         let mut lowering = AstLowering::new();
         lowering.set_provider_plan(Some(Arc::new(ProviderPlan::for_in_memory_sdk_manifest(

@@ -316,6 +316,8 @@ pub struct ProjectGenerator {
     pub(super) sdk_path_dependencies: Vec<DependencySpec>,
     /// Complete compiled-artifact closure that must be copied so projected child paths propagate to every ancestor.
     pub(super) sdk_artifact_projections: Vec<SdkArtifactProjection>,
+    /// Checked public namespace facades keyed by their source-module path.
+    pub(super) public_namespace_facades: Option<BTreeMap<Vec<String>, BTreeSet<String>>>,
 }
 
 /// Cargo profile used for `incan run`.
@@ -358,7 +360,23 @@ impl ProjectGenerator {
             sdk_dependency_rebindings: Vec::new(),
             sdk_path_dependencies: Vec::new(),
             sdk_artifact_projections: Vec::new(),
+            public_namespace_facades: None,
         }
+    }
+
+    /// Select the producer-validated namespace graph that owns generated library facade re-exports.
+    pub fn set_public_namespace_facades(&mut self, api: &crate::frontend::api_metadata::CheckedApiMetadataPackage) {
+        self.public_namespace_facades = Some(
+            api.public_namespaces
+                .iter()
+                .map(|namespace| {
+                    (
+                        namespace.path.clone(),
+                        namespace.child_modules.iter().cloned().collect(),
+                    )
+                })
+                .collect(),
+        );
     }
 
     /// Set the stdlib feature flags required by this generated project.
@@ -1587,6 +1605,25 @@ impl ProjectGenerator {
                 mod_rs_content.push('\n');
             }
 
+            // Published Incan directory modules are namespace facades: public declarations from their immediate source
+            // files remain reachable through the directory name without requiring hand-authored `pub from` plumbing.
+            // Rust visibility still enforces the checked declaration boundary, so private implementation items do not
+            // become public merely because their source file participates in the namespace.
+            if !self.is_binary
+                && let Some(public_submodules) = self
+                    .public_namespace_facades
+                    .as_ref()
+                    .and_then(|facades| facades.get(dir_path))
+            {
+                for submodule in submodules
+                    .iter()
+                    .filter(|submodule| public_submodules.contains(*submodule))
+                {
+                    let escaped = rust_keywords::escape_keyword(submodule);
+                    mod_rs_content.push_str(&format!("pub use {escaped}::*;\n"));
+                }
+            }
+
             // If this module itself has code, append it
             if let Some(module_code) = transformed_modules.get(dir_path) {
                 if !mod_rs_content.is_empty() {
@@ -2624,7 +2661,11 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("incan_test_nested_keyword_modules");
         let _ = fs::remove_dir_all(&temp_dir);
 
-        let generator = ProjectGenerator::new(&temp_dir, "test_nested_keyword_modules", false);
+        let mut generator = ProjectGenerator::new(&temp_dir, "test_nested_keyword_modules", false);
+        generator.public_namespace_facades = Some(BTreeMap::from([
+            (vec!["api".to_string()], BTreeSet::from(["async".to_string()])),
+            (vec!["type".to_string()], BTreeSet::from(["helpers".to_string()])),
+        ]));
 
         let mut modules = HashMap::new();
         modules.insert(
@@ -2650,6 +2691,7 @@ mod tests {
 
         let mod_rs_content = fs::read_to_string(temp_dir.join("src/api/mod.rs"))?;
         assert!(mod_rs_content.contains("#[path = \"async.rs\"]\npub mod r#async;"));
+        assert!(mod_rs_content.contains("pub use r#async::*;"));
 
         let async_content = fs::read_to_string(temp_dir.join("src/api/async.rs"))?;
         assert!(async_content.contains("pub fn launch"));
@@ -2771,7 +2813,11 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("incan_test_nested_cleanup");
         let _ = fs::remove_dir_all(&temp_dir);
 
-        let generator = ProjectGenerator::new(&temp_dir, "test_cleanup", false);
+        let mut generator = ProjectGenerator::new(&temp_dir, "test_cleanup", false);
+        generator.public_namespace_facades = Some(BTreeMap::from([(
+            vec!["dataset".to_string()],
+            BTreeSet::from(["ops".to_string()]),
+        )]));
 
         let mut flat_modules = HashMap::new();
         flat_modules.insert("dataset".to_string(), "pub trait DataSet<T> {}".to_string());
@@ -2800,6 +2846,11 @@ mod tests {
         assert!(
             temp_dir.join("src/dataset/ops.rs").exists(),
             "nested leaf module should exist"
+        );
+        let dataset_facade = fs::read_to_string(temp_dir.join("src/dataset/mod.rs"))?;
+        assert!(
+            dataset_facade.contains("pub use ops::*;"),
+            "published directory modules should expose public declarations from immediate source-file children"
         );
 
         let _ = fs::remove_dir_all(&temp_dir);

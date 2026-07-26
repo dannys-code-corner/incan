@@ -458,6 +458,7 @@ mod tests {
                         visibility: Visibility::Private,
                         kind: ImportKind::PubLibrary {
                             library: "missing".to_string(),
+                            path: Vec::new(),
                         },
                         alias: None,
                     }),

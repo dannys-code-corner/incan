@@ -415,8 +415,8 @@ pub struct IrEmitter<'a> {
     source_dependency_constructor_metadata: HashMap<(Vec<String>, String), StructConstructorMetadata>,
     /// Public source-import projections waiting to inherit their exact provider constructor metadata.
     source_dependency_constructor_reexports: Vec<SourceConstructorReexport>,
-    /// Constructor metadata keyed by the exact public dependency and public export spelling.
-    pub_dependency_constructor_metadata: HashMap<(String, String), StructConstructorMetadata>,
+    /// Constructor metadata keyed by the exact public dependency and namespace-relative declaration path.
+    pub_dependency_constructor_metadata: HashMap<(String, Vec<String>), StructConstructorMetadata>,
     /// Transparent local type aliases keyed by alias name.
     type_aliases: HashMap<String, IrType>,
     /// Incan `rusttype` aliases that should use compiler-owned call conversion rules at the surface boundary.
@@ -1339,10 +1339,37 @@ impl<'a> IrEmitter<'a> {
             for public_name in public_names {
                 if let Some(fields) = Self::manifest_constructor_fields_for_public_name(manifest, &public_name) {
                     self.pub_dependency_constructor_metadata.insert(
-                        (library.clone(), public_name.clone()),
+                        (library.clone(), vec![public_name.clone()]),
                         StructConstructorMetadata::from_manifest_fields(&library, &fields),
                     );
                     *counts.entry(public_name).or_default() += 1;
+                }
+            }
+            if let Some(api) = manifest.contract_metadata.api.as_ref() {
+                for module in &api.modules {
+                    for declaration in module.declarations.iter().filter(|declaration| {
+                        crate::frontend::api_metadata::checked_api_declaration_is_public_namespace_member(declaration)
+                    }) {
+                        let Some(name) = Self::api_nominal_declaration_name(declaration) else {
+                            continue;
+                        };
+                        let Some(fields) = Self::manifest_constructor_fields_for_api_declaration(api, declaration)
+                        else {
+                            continue;
+                        };
+                        let mut public_paths = vec![module.module_path.clone()];
+                        if module.module_path.len() > 1 {
+                            public_paths.push(module.module_path[..module.module_path.len() - 1].to_vec());
+                        }
+                        for mut public_path in public_paths {
+                            public_path.push(name.to_string());
+                            self.pub_dependency_constructor_metadata.insert(
+                                (library.clone(), public_path),
+                                StructConstructorMetadata::from_manifest_fields(&library, &fields),
+                            );
+                        }
+                        *counts.entry(name.to_string()).or_default() += 1;
+                    }
                 }
             }
         }
@@ -1368,6 +1395,30 @@ impl<'a> IrEmitter<'a> {
                     self.register_manifest_constructor_metadata(&library, &public_name, &fields);
                 }
             }
+        }
+    }
+
+    /// Return the public nominal name represented by one checked API declaration.
+    fn api_nominal_declaration_name(declaration: &ApiDeclaration) -> Option<&str> {
+        match declaration {
+            ApiDeclaration::Model(model) => Some(&model.name),
+            ApiDeclaration::Class(class) => Some(&class.name),
+            ApiDeclaration::Alias(alias) => Some(&alias.name),
+            _ => None,
+        }
+    }
+
+    /// Resolve constructor fields for a checked API declaration, following public aliases by exact source path.
+    fn manifest_constructor_fields_for_api_declaration(
+        api: &crate::frontend::api_metadata::CheckedApiMetadataPackage,
+        declaration: &ApiDeclaration,
+    ) -> Option<Vec<FieldExport>> {
+        match declaration {
+            ApiDeclaration::Model(model) => Some(model_export_from_api(model).fields),
+            ApiDeclaration::Class(class) => Some(class_export_from_api(class).fields),
+            ApiDeclaration::Alias(alias) => Self::api_declaration_for_target_path(api, &alias.target_path)
+                .and_then(|target| Self::manifest_constructor_fields_for_api_declaration(api, target)),
+            _ => None,
         }
     }
 
@@ -1601,6 +1652,7 @@ impl<'a> IrEmitter<'a> {
             .filter_map(|decl| {
                 let IrDeclKind::Import {
                     origin: IrImportOrigin::PubLibrary { dependency_key },
+                    path,
                     items,
                     ..
                 } = &decl.kind
@@ -1608,8 +1660,10 @@ impl<'a> IrEmitter<'a> {
                     return None;
                 };
                 Some(items.iter().filter_map(|item| {
+                    let mut public_path = path.iter().skip(1).cloned().collect::<Vec<_>>();
+                    public_path.push(item.name.clone());
                     self.pub_dependency_constructor_metadata
-                        .get(&(dependency_key.clone(), item.name.clone()))
+                        .get(&(dependency_key.clone(), public_path))
                         .cloned()
                         .map(|metadata| (item.alias.clone().unwrap_or_else(|| item.name.clone()), metadata))
                 }))
@@ -2273,10 +2327,10 @@ impl<'a> IrEmitter<'a> {
             return None;
         }
         let dependency = path.get(1)?;
-        let public_name = path.last()?;
+        let public_path = path.get(2..)?.to_vec();
         let metadata = self
             .pub_dependency_constructor_metadata
-            .get(&(dependency.clone(), public_name.clone()))?;
+            .get(&(dependency.clone(), public_path))?;
         let provided = fields
             .iter()
             .filter_map(|(field, _)| (!field.is_empty()).then_some(field.as_str()))

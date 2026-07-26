@@ -3,7 +3,7 @@
 //! Call-site explicit generics (`callee[T](...)`, `recv.m[U](...)`) get type-oriented completions and hover
 //! (see `call_site_type_args.rs`, RFC 054).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -34,7 +34,8 @@ use crate::cli::prelude::ParsedModule;
 use crate::dependency_resolver::{ResolvedDependencies, resolve_dependencies};
 use crate::frontend::api_metadata::{
     ApiClass, ApiConst, ApiDeclaration, ApiEnum, ApiFunction, ApiMethod, ApiModel, ApiNewtype, ApiPartial, ApiStatic,
-    ApiTrait, ApiTypeAlias, CheckedApiMetadata, SourceAnchor, collect_checked_api_metadata,
+    ApiTrait, ApiTypeAlias, CheckedApiMetadata, SourceAnchor, checked_api_declaration_is_public_namespace_member,
+    checked_api_modules_for_public_namespace, checked_api_public_module_paths, collect_checked_api_metadata,
     validate_checked_api_docstrings,
 };
 use crate::frontend::ast::{
@@ -45,7 +46,7 @@ use crate::frontend::contract_metadata::{
     CanonicalModelBundle, materialize_contract_models, read_model_bundles_from_json, read_project_model_bundles,
 };
 use crate::frontend::diagnostics::{CompileError, DiagnosticPhase, phase_for_typecheck_span};
-use crate::frontend::library_manifest_index::LibraryManifestIndex;
+use crate::frontend::library_manifest_index::{LibraryManifestIndex, LibraryManifestIndexEntry};
 use crate::frontend::module::{SourceModuleImportResolution, resolve_program_source_imports};
 use crate::frontend::symbols::{FunctionInfo, ResolvedType, SymbolKind as FrontendSymbolKind, TypeInfo};
 use crate::frontend::typechecker::stdlib_loader::{StdlibAstCache, StdlibFunctionLspMetadata};
@@ -98,6 +99,8 @@ pub struct DocumentState {
     registry_previews: Vec<RegistryPreview>,
     /// Imported DSL surfaces from loaded `pub::` library manifests, used for scoped symbol LSP affordances.
     library_imported_dsl_surfaces: parser::ImportedLibraryDslSurfaces,
+    /// Checked package artifacts used for public-library module and member completion.
+    library_manifest_index: LibraryManifestIndex,
     /// Project-aware provider state used to explain enabled, disabled, and unavailable SDK modules.
     provider_plan: Option<Arc<ProviderPlan>>,
     /// Active root-package features used to keep completion aligned with the compiler's declaration projection.
@@ -474,6 +477,7 @@ impl IncanLanguageServer {
                     api_metadata_previews,
                     registry_previews,
                     library_imported_dsl_surfaces: library_manifest_index.library_imported_dsl_surfaces(),
+                    library_manifest_index: library_manifest_index.clone(),
                     provider_plan: document_provider_plan,
                     active_features: compilation_session
                         .as_ref()
@@ -4603,7 +4607,7 @@ fn find_pub_library_import_span(ast: &Program, dependency_key: &str, before_offs
             return None;
         };
         match &import.kind {
-            crate::frontend::ast::ImportKind::PubLibrary { library }
+            crate::frontend::ast::ImportKind::PubLibrary { library, .. }
             | crate::frontend::ast::ImportKind::PubFrom { library, .. }
                 if library == dependency_key =>
             {
@@ -4669,7 +4673,7 @@ fn active_imported_dsl_surfaces<'a>(
             continue;
         };
         let library = match &import.kind {
-            crate::frontend::ast::ImportKind::PubLibrary { library }
+            crate::frontend::ast::ImportKind::PubLibrary { library, .. }
             | crate::frontend::ast::ImportKind::PubFrom { library, .. } => library.as_str(),
             _ => continue,
         };
@@ -6183,6 +6187,14 @@ impl LanguageServer for IncanLanguageServer {
         // Extract the current line text before the cursor for context-aware completions.
         let line_prefix = line_text_before_cursor(&doc.source, position);
 
+        // ---- Context: checked public-package module/item completions (`from pub::package...`) ----
+        if let Some(public_items) = pub_library_import_item_completions(&line_prefix, &doc.library_manifest_index) {
+            return Ok(Some(CompletionResponse::Array(public_items)));
+        }
+        if let Some(public_modules) = pub_library_module_completions(&line_prefix, &doc.library_manifest_index) {
+            return Ok(Some(CompletionResponse::Array(public_modules)));
+        }
+
         // ---- Context: stdlib from-import item completions (`from std.collections import ...`) ----
         if let Some(stdlib_items) = stdlib_import_item_completions(&line_prefix, doc.provider_plan.as_deref()) {
             return Ok(Some(CompletionResponse::Array(stdlib_items)));
@@ -6603,6 +6615,235 @@ fn line_text_before_cursor(source: &str, position: Position) -> String {
     line[..col].to_string()
 }
 
+/// Complete checked public-package items in `from pub::package[.module] import ...`.
+fn pub_library_import_item_completions(
+    line_prefix: &str,
+    library_manifest_index: &LibraryManifestIndex,
+) -> Option<Vec<CompletionItem>> {
+    let after_from = line_prefix.trim_start().strip_prefix("from pub::")?;
+    let (module_text, _after_import) = after_from.split_once(" import ")?;
+    let segments = module_text
+        .split(['.', ':'])
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let (library, module_path) = segments.split_first()?;
+    let LibraryManifestIndexEntry::Loaded { manifest, .. } = library_manifest_index.get(library)? else {
+        return None;
+    };
+
+    let mut completions = BTreeMap::new();
+    if module_path.is_empty() {
+        for module in checked_api_public_module_paths(manifest.contract_metadata.api.as_ref()?)
+            .into_iter()
+            .filter(|path| path.len() == 1)
+        {
+            completions.insert(
+                module[0].clone(),
+                public_package_completion(module[0].clone(), CompletionItemKind::MODULE, "public package module"),
+            );
+        }
+        insert_flat_manifest_export_completions(&mut completions, manifest);
+    } else {
+        let api = manifest.contract_metadata.api.as_ref()?;
+        let source_modules = checked_api_modules_for_public_namespace(api, module_path);
+        let mut declarations: BTreeMap<String, Vec<(Vec<String>, CompletionItemKind)>> = BTreeMap::new();
+        for module in source_modules {
+            for declaration in &module.declarations {
+                if !checked_api_declaration_is_public_namespace_member(declaration) {
+                    continue;
+                }
+                let Some((name, kind)) = api_declaration_completion(declaration) else {
+                    continue;
+                };
+                declarations
+                    .entry(name.to_string())
+                    .or_default()
+                    .push((module.module_path.clone(), kind));
+            }
+        }
+        for (name, mut candidates) in declarations {
+            candidates.sort_by(|left, right| left.0.cmp(&right.0));
+            candidates.dedup_by(|left, right| left.0 == right.0);
+            let (kind, detail) = if candidates.len() == 1 {
+                (
+                    candidates[0].1,
+                    format!("public declaration from pub::{library}.{}", candidates[0].0.join(".")),
+                )
+            } else {
+                (
+                    CompletionItemKind::REFERENCE,
+                    format!(
+                        "ambiguous public name; qualify one of: {}",
+                        candidates
+                            .iter()
+                            .map(|(path, _)| path.join("."))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            };
+            completions.insert(name.clone(), public_package_completion(name, kind, &detail));
+        }
+
+        let child_depth = module_path.len();
+        for child in checked_api_public_module_paths(api)
+            .into_iter()
+            .filter(|candidate| candidate.starts_with(module_path) && candidate.len() == child_depth + 1)
+        {
+            let name = child[child_depth].clone();
+            completions.entry(name.clone()).or_insert_with(|| {
+                public_package_completion(
+                    name,
+                    CompletionItemKind::MODULE,
+                    &format!("public package module pub::{library}.{}", child.join(".")),
+                )
+            });
+        }
+    }
+
+    (!completions.is_empty()).then(|| completions.into_values().collect())
+}
+
+/// Complete dependency keys and checked module paths in `from pub::...` and `import pub::...` declarations.
+fn pub_library_module_completions(
+    line_prefix: &str,
+    library_manifest_index: &LibraryManifestIndex,
+) -> Option<Vec<CompletionItem>> {
+    let trimmed = line_prefix.trim_start();
+    let remainder = trimmed
+        .strip_prefix("from pub::")
+        .or_else(|| trimmed.strip_prefix("import pub::"))?;
+    if remainder.contains(" import ") {
+        return None;
+    }
+    let normalized = remainder.replace("::", ".");
+    let parts = normalized.split('.').collect::<Vec<_>>();
+    let completed = if normalized.ends_with('.') {
+        parts
+            .iter()
+            .copied()
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>()
+    } else {
+        parts[..parts.len().saturating_sub(1)]
+            .iter()
+            .copied()
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>()
+    };
+
+    if completed.is_empty() {
+        let items = library_manifest_index
+            .known_libraries()
+            .into_iter()
+            .map(|library| public_package_completion(library, CompletionItemKind::MODULE, "compiled public package"))
+            .collect::<Vec<_>>();
+        return (!items.is_empty()).then_some(items);
+    }
+
+    let library = completed[0];
+    let module_path = completed[1..]
+        .iter()
+        .map(|segment| (*segment).to_string())
+        .collect::<Vec<_>>();
+    let LibraryManifestIndexEntry::Loaded { manifest, .. } = library_manifest_index.get(library)? else {
+        return None;
+    };
+    let api = manifest.contract_metadata.api.as_ref()?;
+    let depth = module_path.len();
+    let mut names = BTreeSet::new();
+    for candidate in checked_api_public_module_paths(api) {
+        if candidate.starts_with(&module_path) && candidate.len() > depth {
+            names.insert(candidate[depth].clone());
+        }
+    }
+    let items = names
+        .into_iter()
+        .map(|name| public_package_completion(name, CompletionItemKind::MODULE, "public package module"))
+        .collect::<Vec<_>>();
+    (!items.is_empty()).then_some(items)
+}
+
+/// Add the existing flat package facade to root `pub::` import completions.
+fn insert_flat_manifest_export_completions(
+    completions: &mut BTreeMap<String, CompletionItem>,
+    manifest: &crate::library_manifest::LibraryManifest,
+) {
+    let mut insert = |name: &str, kind: CompletionItemKind| {
+        completions
+            .entry(name.to_string())
+            .or_insert_with(|| public_package_completion(name.to_string(), kind, "public package export"));
+    };
+    for item in &manifest.exports.models {
+        insert(&item.name, CompletionItemKind::CLASS);
+    }
+    for item in &manifest.exports.classes {
+        insert(&item.name, CompletionItemKind::CLASS);
+    }
+    for item in &manifest.exports.functions {
+        insert(&item.name, CompletionItemKind::FUNCTION);
+    }
+    for item in &manifest.exports.partials {
+        insert(&item.name, CompletionItemKind::FUNCTION);
+    }
+    for item in &manifest.exports.traits {
+        insert(&item.name, CompletionItemKind::INTERFACE);
+    }
+    for item in &manifest.exports.enums {
+        insert(&item.name, CompletionItemKind::ENUM);
+    }
+    for item in &manifest.exports.newtypes {
+        insert(&item.name, CompletionItemKind::CLASS);
+    }
+    for item in &manifest.exports.type_aliases {
+        insert(&item.name, CompletionItemKind::TYPE_PARAMETER);
+    }
+    for item in &manifest.exports.consts {
+        insert(&item.name, CompletionItemKind::CONSTANT);
+    }
+    for item in &manifest.exports.statics {
+        insert(&item.name, CompletionItemKind::CONSTANT);
+    }
+    for item in &manifest.exports.aliases {
+        insert(&item.name, CompletionItemKind::REFERENCE);
+    }
+}
+
+/// Return the completion label and kind for one checked public API declaration.
+fn api_declaration_completion(declaration: &ApiDeclaration) -> Option<(&str, CompletionItemKind)> {
+    match declaration {
+        ApiDeclaration::Function(item) => Some((&item.name, CompletionItemKind::FUNCTION)),
+        ApiDeclaration::Model(item) => Some((&item.name, CompletionItemKind::CLASS)),
+        ApiDeclaration::Class(item) => Some((&item.name, CompletionItemKind::CLASS)),
+        ApiDeclaration::Trait(item) => Some((&item.name, CompletionItemKind::INTERFACE)),
+        ApiDeclaration::Enum(item) => Some((&item.name, CompletionItemKind::ENUM)),
+        ApiDeclaration::Newtype(item) => Some((&item.name, CompletionItemKind::CLASS)),
+        ApiDeclaration::TypeAlias(item) => Some((&item.name, CompletionItemKind::TYPE_PARAMETER)),
+        ApiDeclaration::Const(item) => Some((&item.name, CompletionItemKind::CONSTANT)),
+        ApiDeclaration::Static(item) => Some((&item.name, CompletionItemKind::CONSTANT)),
+        ApiDeclaration::Alias(item) => Some((
+            &item.name,
+            if item.projected_function.is_some() {
+                CompletionItemKind::FUNCTION
+            } else {
+                CompletionItemKind::REFERENCE
+            },
+        )),
+        ApiDeclaration::Partial(item) => Some((&item.name, CompletionItemKind::FUNCTION)),
+    }
+}
+
+/// Build one compact completion item for a checked public package surface.
+fn public_package_completion(label: String, kind: CompletionItemKind, detail: &str) -> CompletionItem {
+    CompletionItem {
+        label,
+        kind: Some(kind),
+        detail: Some(detail.to_string()),
+        ..Default::default()
+    }
+}
+
 /// If the cursor is selecting items in a `from std.<module> import ...` statement,
 /// return completions for known public items in that stdlib module.
 fn stdlib_import_item_completions(
@@ -6824,19 +7065,23 @@ fn decorator_completions(line_prefix: &str) -> Option<Vec<CompletionItem>> {
 
 #[cfg(test)]
 mod completion_tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashMap};
     use std::fs;
     use std::sync::Arc;
 
     use super::{
         ValueTypeFact, ValueTypeKind, builtin_list_member_completions, builtin_list_repeat_hover,
-        declaration_active_for_lsp, inactive_declaration_note_at_offset, stdlib_import_item_completions,
-        stdlib_import_item_hover, stdlib_location_for_path, stdlib_module_completions, unchecked_lookup_hover,
-        value_type_kind,
+        declaration_active_for_lsp, inactive_declaration_note_at_offset, pub_library_import_item_completions,
+        pub_library_module_completions, stdlib_import_item_completions, stdlib_import_item_hover,
+        stdlib_location_for_path, stdlib_module_completions, unchecked_lookup_hover, value_type_kind,
     };
-    use crate::frontend::api_metadata::{CHECKED_API_METADATA_SCHEMA_VERSION, CheckedApiMetadataPackage};
+    use crate::frontend::api_metadata::{
+        CHECKED_API_METADATA_SCHEMA_VERSION, CheckedApiMetadataPackage, collect_checked_api_metadata,
+    };
     use crate::frontend::ast::Span;
-    use crate::frontend::library_manifest_index::{LibraryArtifactKind, LibraryArtifactMetadata, LibraryManifestIndex};
+    use crate::frontend::library_manifest_index::{
+        LibraryArtifactKind, LibraryArtifactMetadata, LibraryManifestIndex, LibraryManifestIndexEntry,
+    };
     use crate::frontend::symbols::SymbolKind as FrontendSymbolKind;
     use crate::frontend::{lexer, parser};
     use crate::library_manifest::LibraryManifest;
@@ -6871,6 +7116,81 @@ mod completion_tests {
             }
         }
         Ok(facts)
+    }
+
+    fn public_module_completion_index() -> Result<LibraryManifestIndex, String> {
+        let mut modules = Vec::new();
+        for (source, module_path) in [
+            (
+                "pub const DEFAULT_SIZE: int = 4\n\
+                 pub def build_index(size: int = DEFAULT_SIZE) -> int:\n  return size\n\
+                 def pack_bits(size: int) -> int:\n  return size\n",
+                vec!["hyperquant".to_string(), "index".to_string()],
+            ),
+            (
+                "pub def search(index: int) -> int:\n  return index\n",
+                vec!["hyperquant".to_string(), "search".to_string()],
+            ),
+        ] {
+            let ast = parse_source(source)?;
+            let mut checker = crate::frontend::typechecker::TypeChecker::new();
+            checker.set_current_module_path(Some(module_path.clone()));
+            checker
+                .check_program(&ast)
+                .map_err(|errors| format!("public completion fixture typecheck failed: {errors:?}"))?;
+            modules.push(collect_checked_api_metadata(&ast, &checker, module_path));
+        }
+        let mut manifest = LibraryManifest::new("modulelib", "0.1.0");
+        manifest.contract_metadata.api = Some(CheckedApiMetadataPackage {
+            schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+            package: None,
+            modules,
+            public_namespaces: Vec::new(),
+        });
+        Ok(LibraryManifestIndex::from_entries(HashMap::from([(
+            "modulelib".to_string(),
+            LibraryManifestIndexEntry::Loaded {
+                manifest: Box::new(manifest),
+                metadata: LibraryArtifactMetadata::from_crate_root(
+                    "modulelib",
+                    "modulelib",
+                    std::path::PathBuf::from("/tmp/modulelib"),
+                ),
+            },
+        )])))
+    }
+
+    #[test]
+    fn public_package_completions_follow_checked_module_metadata_issue948() -> Result<(), String> {
+        let index = public_module_completion_index()?;
+        let packages = pub_library_module_completions("from pub::", &index)
+            .ok_or_else(|| "expected compiled package completions".to_string())?;
+        assert!(packages.iter().any(|item| item.label == "modulelib"));
+
+        let modules = pub_library_module_completions("from pub::modulelib.", &index)
+            .ok_or_else(|| "expected public module completions".to_string())?;
+        assert!(modules.iter().any(|item| item.label == "hyperquant"));
+
+        let root_items = pub_library_import_item_completions("from pub::modulelib import ", &index)
+            .ok_or_else(|| "expected public package root item completions".to_string())?;
+        assert!(
+            root_items
+                .iter()
+                .any(|item| { item.label == "hyperquant" && item.kind == Some(CompletionItemKind::MODULE) })
+        );
+
+        let nested_items = pub_library_import_item_completions("from pub::modulelib.hyperquant import ", &index)
+            .ok_or_else(|| "expected public module item completions".to_string())?;
+        assert!(nested_items.iter().any(|item| item.label == "build_index"));
+        assert!(nested_items.iter().any(|item| item.label == "DEFAULT_SIZE"));
+        assert!(nested_items.iter().any(|item| item.label == "search"));
+        assert!(
+            nested_items
+                .iter()
+                .any(|item| { item.label == "index" && item.kind == Some(CompletionItemKind::MODULE) })
+        );
+        assert!(!nested_items.iter().any(|item| item.label == "pack_bits"));
+        Ok(())
     }
 
     #[test]
@@ -7017,6 +7337,7 @@ mod completion_tests {
                 &checker,
                 vec!["future".to_string()],
             )],
+            public_namespaces: Vec::new(),
         });
         let plan = ProviderPlan::for_in_memory_sdk_manifest(LibraryManifestIndex::default(), manifest);
 

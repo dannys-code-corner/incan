@@ -6,13 +6,16 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::frontend::api_metadata::{
-    ApiDeclaration, class_export_from_api, enum_export_from_api, function_export_from_api,
-    function_export_from_api_projected, model_export_from_api, newtype_export_from_api, partial_export_from_api,
-    trait_export_from_api,
+    ApiDeclaration, checked_api_declaration_is_public_namespace_member, checked_api_modules_for_public_namespace,
+    checked_api_public_module_paths, checked_api_public_namespace, class_export_from_api, enum_export_from_api,
+    function_export_from_api, function_export_from_api_projected, model_export_from_api, newtype_export_from_api,
+    partial_export_from_api, trait_export_from_api,
 };
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
-use crate::frontend::library_exports::{CheckedParamDefault, CheckedParamDefaultArg, CheckedParamDefaultCallSignature};
+use crate::frontend::library_exports::{
+    CheckedParamDefault, CheckedParamDefaultArg, CheckedParamDefaultCallSignature, CheckedPresetValue,
+};
 use crate::frontend::library_manifest_index::{LibraryManifestFailureKind, LibraryManifestIndexEntry};
 use crate::frontend::module::{ExportedSymbol, canonicalize_source_module_segments};
 use crate::frontend::symbols::*;
@@ -54,6 +57,30 @@ enum ManifestExportRef<'a> {
     Newtype(&'a NewtypeExport),
     Const(&'a ConstExport),
     Static(&'a StaticExport),
+}
+
+struct PublicModuleMember {
+    kind: SymbolKind,
+    source_module_path: Vec<String>,
+    source_name: String,
+    type_alias: Option<(Vec<TypeParamExport>, ResolvedType)>,
+    partial_projection: Option<PartialProjectionInfo>,
+}
+
+/// Shared package context while following a public alias chain to partial projection metadata.
+struct PartialProjectionAliasContext<'a> {
+    library: &'a str,
+    manifest: &'a LibraryManifest,
+    local_name: &'a str,
+    imported_type_aliases: &'a HashMap<String, String>,
+    span: Span,
+}
+
+/// Exact checked identity returned when resolving a declaration through a public package namespace.
+pub(in crate::frontend::typechecker) struct ResolvedPublicModuleSymbol {
+    pub kind: SymbolKind,
+    pub source_module_path: Vec<String>,
+    pub source_name: String,
 }
 
 /// Return the project dependency or SDK component name that owns a provider diagnostic remedy.
@@ -191,11 +218,11 @@ impl TypeChecker {
             ImportKind::From { module, items } => {
                 self.collect_from_imports(module, items, span);
             }
-            ImportKind::PubLibrary { library } => {
-                self.collect_pub_library_import(library, import.alias.as_ref(), span);
+            ImportKind::PubLibrary { library, path } => {
+                self.collect_pub_library_import(library, path, import.alias.as_ref(), span);
             }
-            ImportKind::PubFrom { library, items } => {
-                self.collect_pub_imports(library, items, span);
+            ImportKind::PubFrom { library, path, items } => {
+                self.collect_pub_imports(library, path, items, span);
             }
             ImportKind::Python(pkg) => {
                 let name = import.alias.clone().unwrap_or_else(|| pkg.clone());
@@ -400,9 +427,7 @@ impl TypeChecker {
                         aliases.push((module_key.clone(), alias.name.clone(), alias.target_path.clone()));
                         continue;
                     }
-                    let Some(name) = Self::api_declaration_name(&declaration).map(ToString::to_string) else {
-                        continue;
-                    };
+                    let name = Self::api_declaration_name(&declaration).to_string();
                     let Some(mut kind) = self.symbol_kind_from_api_declaration(&declaration) else {
                         continue;
                     };
@@ -495,19 +520,19 @@ impl TypeChecker {
     }
 
     /// Return the public source spelling for one checked API declaration.
-    fn api_declaration_name(declaration: &ApiDeclaration) -> Option<&str> {
+    fn api_declaration_name(declaration: &ApiDeclaration) -> &str {
         match declaration {
-            ApiDeclaration::Function(item) => Some(&item.name),
-            ApiDeclaration::Model(item) => Some(&item.name),
-            ApiDeclaration::Class(item) => Some(&item.name),
-            ApiDeclaration::Trait(item) => Some(&item.name),
-            ApiDeclaration::Enum(item) => Some(&item.name),
-            ApiDeclaration::Newtype(item) => Some(&item.name),
-            ApiDeclaration::TypeAlias(item) => Some(&item.name),
-            ApiDeclaration::Const(item) => Some(&item.name),
-            ApiDeclaration::Static(item) => Some(&item.name),
-            ApiDeclaration::Alias(item) => Some(&item.name),
-            ApiDeclaration::Partial(item) => Some(&item.name),
+            ApiDeclaration::Function(item) => &item.name,
+            ApiDeclaration::Model(item) => &item.name,
+            ApiDeclaration::Class(item) => &item.name,
+            ApiDeclaration::Trait(item) => &item.name,
+            ApiDeclaration::Enum(item) => &item.name,
+            ApiDeclaration::Newtype(item) => &item.name,
+            ApiDeclaration::TypeAlias(item) => &item.name,
+            ApiDeclaration::Const(item) => &item.name,
+            ApiDeclaration::Static(item) => &item.name,
+            ApiDeclaration::Alias(item) => &item.name,
+            ApiDeclaration::Partial(item) => &item.name,
         }
     }
 
@@ -551,11 +576,39 @@ impl TypeChecker {
     }
 
     /// Define `import pub::library` as a module placeholder after validating the manifest entry.
-    fn collect_pub_library_import(&mut self, library: &str, alias: Option<&Ident>, span: Span) {
-        let name = alias.cloned().unwrap_or_else(|| library.to_string());
+    fn collect_pub_library_import(&mut self, library: &str, path: &[Ident], alias: Option<&Ident>, span: Span) {
+        let name = alias
+            .cloned()
+            .or_else(|| path.last().cloned())
+            .unwrap_or_else(|| library.to_string());
         self.validate_root_namespace(&name, span);
-        self.validate_pub_library_entry(library, span);
-        self.define_import_symbol(name, vec!["pub".to_string(), library.to_string()], false, span);
+        let library_manifests = self.provider_plan.library_manifest_index();
+        let known_libraries = library_manifests.known_libraries();
+        let Some(entry) = library_manifests.get(library).cloned() else {
+            self.errors
+                .push(errors::unknown_pub_library(library, &known_libraries, span));
+            return;
+        };
+        let manifest = match entry {
+            LibraryManifestIndexEntry::Loaded { manifest, .. } => manifest,
+            LibraryManifestIndexEntry::Failed(failure) => {
+                self.push_pub_library_failure(library, &failure, span);
+                return;
+            }
+        };
+        if !path.is_empty() && !Self::manifest_public_module_exists(&manifest, path) {
+            let available = Self::manifest_public_module_paths(&manifest)
+                .into_iter()
+                .map(|module_path| module_path.join("."))
+                .collect::<Vec<_>>();
+            self.errors
+                .push(errors::pub_library_module_not_found(library, path, &available, span));
+            return;
+        }
+        self.cache_transitive_pub_export_semantics(library, &manifest);
+        let mut canonical_path = vec!["pub".to_string(), library.to_string()];
+        canonical_path.extend(path.iter().cloned());
+        self.define_import_symbol(name, canonical_path, false, span);
     }
 
     /// Collect a Rust crate or crate-path import and attach metadata when available.
@@ -1006,22 +1059,248 @@ impl TypeChecker {
         })
     }
 
-    /// Validate one imported `pub::<library>` root before selected or wildcard item collection begins.
-    fn validate_pub_library_entry(&mut self, library: &str, span: Span) {
-        let library_manifests = self.provider_plan.library_manifest_index();
-        let known_libraries = library_manifests.known_libraries();
-        let Some(entry) = library_manifests.get(library).cloned() else {
-            self.errors
-                .push(errors::unknown_pub_library(library, &known_libraries, span));
-            return;
+    /// Return all derived public module namespace paths carried by the checked API artifact.
+    fn manifest_public_module_paths(manifest: &LibraryManifest) -> Vec<Vec<String>> {
+        let Some(api) = manifest.contract_metadata.api.as_ref() else {
+            return Vec::new();
         };
-        if let LibraryManifestIndexEntry::Failed(failure) = entry {
-            self.push_pub_library_failure(library, &failure, span);
+        checked_api_public_module_paths(api)
+    }
+
+    /// Return whether the checked API artifact contains this public module namespace.
+    fn manifest_public_module_exists(manifest: &LibraryManifest, module_path: &[String]) -> bool {
+        !module_path.is_empty()
+            && Self::manifest_public_module_paths(manifest)
+                .iter()
+                .any(|candidate| candidate == module_path)
+    }
+
+    /// Return source API modules whose public declarations participate directly in one derived namespace.
+    ///
+    /// A directory namespace exposes declarations from its own entrypoint and its immediate source-file children.
+    /// Deeper directories remain nested namespaces rather than leaking all descendants into every ancestor.
+    fn api_modules_for_public_namespace<'a>(
+        manifest: &'a LibraryManifest,
+        module_path: &[String],
+    ) -> Vec<&'a crate::frontend::api_metadata::CheckedApiMetadata> {
+        let Some(api) = manifest.contract_metadata.api.as_ref() else {
+            return Vec::new();
+        };
+        checked_api_modules_for_public_namespace(api, module_path)
+    }
+
+    /// Return the public names available directly from one derived module namespace.
+    fn public_module_member_names(manifest: &LibraryManifest, module_path: &[String]) -> Vec<String> {
+        let Some(api) = manifest.contract_metadata.api.as_ref() else {
+            return Vec::new();
+        };
+        let Some(namespace) = checked_api_public_namespace(api, module_path) else {
+            return Vec::new();
+        };
+        let mut names = namespace
+            .members
+            .into_iter()
+            .map(|member| member.name)
+            .chain(namespace.child_modules)
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// Resolve one declaration from a derived public module, preserving its authored source-module identity.
+    fn public_module_member(
+        &mut self,
+        library: &str,
+        manifest: &LibraryManifest,
+        module_path: &[String],
+        member: &str,
+    ) -> Result<Option<PublicModuleMember>, Vec<String>> {
+        let matches = Self::api_modules_for_public_namespace(manifest, module_path)
+            .into_iter()
+            .filter_map(|module| {
+                let declarations = module
+                    .declarations
+                    .iter()
+                    .filter(|declaration| {
+                        checked_api_declaration_is_public_namespace_member(declaration)
+                            && Self::api_declaration_name(declaration) == member
+                    })
+                    .collect::<Vec<_>>();
+                (!declarations.is_empty()).then_some((module.module_path.clone(), declarations))
+            })
+            .collect::<Vec<_>>();
+        if matches.is_empty() {
+            return Ok(None);
         }
+
+        let source_modules = matches
+            .iter()
+            .map(|(source_module, _)| source_module.join("."))
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(source_modules);
+        }
+
+        let (source_module_path, declarations) = &matches[0];
+        let mut kinds = declarations
+            .iter()
+            .filter_map(|declaration| match declaration {
+                ApiDeclaration::Alias(alias) => self.symbol_kind_from_api_target_path(manifest, &alias.target_path),
+                _ => self.symbol_kind_from_api_declaration(declaration),
+            })
+            .collect::<Vec<_>>();
+        let mut type_alias = declarations.iter().find_map(|declaration| {
+            let declaration = match declaration {
+                ApiDeclaration::Alias(alias) => Self::api_declaration_for_target_path(manifest, &alias.target_path)?,
+                declaration => declaration,
+            };
+            match declaration {
+                ApiDeclaration::TypeAlias(item) => Some((
+                    item.type_alias.type_params.clone(),
+                    resolved_type_from_manifest_type_ref(&item.type_alias.target),
+                )),
+                _ => None,
+            }
+        });
+        let (resolved_source_module_path, resolved_source_name) = declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                ApiDeclaration::Alias(alias) => Self::normalized_api_declaration_target(&alias.target_path),
+                _ => None,
+            })
+            .unwrap_or_else(|| (source_module_path.clone(), member.to_string()));
+        let mut kind = match kinds.as_mut_slice() {
+            [kind] => kind.clone(),
+            kinds if kinds.iter().all(|kind| matches!(kind, SymbolKind::Function(_))) => SymbolKind::FunctionOverloads(
+                kinds
+                    .iter()
+                    .filter_map(|kind| match kind {
+                        SymbolKind::Function(info) => Some(FunctionOverloadInfo {
+                            info: info.clone(),
+                            span: Span::default(),
+                        }),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            _ => return Err(source_modules),
+        };
+        let remapping = self.public_module_type_remapping(library, manifest, &resolved_source_module_path);
+        self.remap_symbol_kind_with_import_aliases(&mut kind, &remapping);
+        if let Some((_, target)) = &mut type_alias {
+            Self::remap_resolved_type_with_import_aliases(target, &remapping);
+        }
+        let partial_projection = declarations.iter().find_map(|declaration| {
+            let partial = match declaration {
+                ApiDeclaration::Partial(partial) => Some(partial),
+                ApiDeclaration::Alias(alias) => {
+                    match Self::api_declaration_for_target_path(manifest, &alias.target_path) {
+                        Some(ApiDeclaration::Partial(partial)) => Some(partial),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }?;
+            let export = partial_export_from_api(partial);
+            Self::partial_projection_from_manifest_partial(&export, member, &remapping, Span::default(), library)
+        });
+        Self::mark_compiled_class_field_provider(&mut kind, library);
+        Ok(Some(PublicModuleMember {
+            kind,
+            source_module_path: resolved_source_module_path,
+            source_name: resolved_source_name,
+            type_alias,
+            partial_projection,
+        }))
+    }
+
+    /// Build canonical and local type spellings for API declarations consumed through public module namespaces.
+    fn public_module_type_remapping(
+        &mut self,
+        library: &str,
+        manifest: &LibraryManifest,
+        owner_module_path: &[String],
+    ) -> HashMap<String, String> {
+        let mut remapping = self.public_library_canonical_type_remapping(library, manifest);
+        let Some(api) = manifest.contract_metadata.api.as_ref() else {
+            return remapping;
+        };
+
+        let api_declarations = api
+            .modules
+            .iter()
+            .flat_map(|module| {
+                module
+                    .declarations
+                    .iter()
+                    .cloned()
+                    .map(|declaration| (module.module_path.clone(), declaration))
+            })
+            .collect::<Vec<_>>();
+        let mut candidates: BTreeMap<String, Vec<(Vec<String>, String)>> = BTreeMap::new();
+        for (module_path, declaration) in &api_declarations {
+            let type_name = match declaration {
+                ApiDeclaration::Model(item) => Some(&item.name),
+                ApiDeclaration::Class(item) => Some(&item.name),
+                ApiDeclaration::Enum(item) => Some(&item.name),
+                ApiDeclaration::Newtype(item) => Some(&item.name),
+                ApiDeclaration::TypeAlias(item) => Some(&item.name),
+                _ => None,
+            };
+            let Some(type_name) = type_name else {
+                continue;
+            };
+            let mut source_path = module_path.clone();
+            source_path.push(type_name.clone());
+            let canonical = canonical_public_library_type_name(library, &source_path.join("::"));
+            self.public_library_type_identities
+                .insert(canonical.clone(), PublicLibraryTypeIdentity::new(library, &source_path));
+            candidates
+                .entry(type_name.clone())
+                .or_default()
+                .push((module_path.clone(), canonical));
+        }
+
+        for (name, candidates) in candidates {
+            if let Some((_, canonical)) = candidates
+                .iter()
+                .find(|(module_path, _)| module_path == owner_module_path)
+                .or_else(|| (candidates.len() == 1).then(|| &candidates[0]))
+            {
+                remapping.insert(name, canonical.clone());
+            }
+        }
+
+        for (module_path, declaration) in api_declarations {
+            let name = Self::api_declaration_name(&declaration);
+            let mut source_path = module_path;
+            source_path.push(name.to_string());
+            let canonical = canonical_public_library_type_name(library, &source_path.join("::"));
+            if self.transitive_pub_types.contains_key(&canonical) || self.transitive_pub_traits.contains_key(&canonical)
+            {
+                continue;
+            }
+            let Some(mut kind) = self.symbol_kind_from_api_declaration(&declaration) else {
+                continue;
+            };
+            self.remap_symbol_kind_with_import_aliases(&mut kind, &remapping);
+            Self::mark_compiled_class_field_provider(&mut kind, library);
+            match kind {
+                SymbolKind::Type(info) if !matches!(info, TypeInfo::TypeAlias | TypeInfo::Builtin) => {
+                    self.transitive_pub_types.entry(canonical).or_default().push(info);
+                }
+                SymbolKind::Trait(info) => {
+                    self.transitive_pub_traits.entry(canonical).or_default().push(info);
+                }
+                _ => {}
+            }
+        }
+        remapping
     }
 
     /// Collect selected public imports from one loaded library manifest.
-    fn collect_pub_imports(&mut self, library: &str, items: &[ImportItem], span: Span) {
+    fn collect_pub_imports(&mut self, library: &str, path: &[Ident], items: &[ImportItem], span: Span) {
         let library_manifests = self.provider_plan.library_manifest_index();
         let known_libraries = library_manifests.known_libraries();
         let Some(entry) = library_manifests.get(library).cloned() else {
@@ -1038,23 +1317,104 @@ impl TypeChecker {
             }
         };
 
-        self.cache_transitive_pub_export_semantics(library, &manifest);
+        if !path.is_empty() && !Self::manifest_public_module_exists(&manifest, path) {
+            let available = Self::manifest_public_module_paths(&manifest)
+                .into_iter()
+                .map(|module_path| module_path.join("."))
+                .collect::<Vec<_>>();
+            self.errors
+                .push(errors::pub_library_module_not_found(library, path, &available, span));
+            return;
+        }
 
-        let available_exports = Self::manifest_export_names(&manifest);
+        self.cache_transitive_pub_export_semantics(library, &manifest);
+        let available_exports = if path.is_empty() {
+            let mut names = Self::manifest_export_names(&manifest);
+            names.extend(
+                Self::manifest_public_module_paths(&manifest)
+                    .into_iter()
+                    .filter_map(|module_path| module_path.first().cloned()),
+            );
+            names.sort();
+            names.dedup();
+            names
+        } else {
+            Self::public_module_member_names(&manifest, path)
+        };
         let imported_type_aliases = self.public_library_type_import_remapping(library, &manifest);
 
         for item in items {
             let local_name = item.alias.clone().unwrap_or_else(|| item.name.clone());
-            if let Some(mut kind) = self.pub_library_function_symbol(&manifest, &item.name) {
-                self.validate_root_namespace(&local_name, span);
-                if let Some(existing_kind) = self.existing_local_symbol_kind(&local_name) {
-                    self.errors.push(errors::pub_library_import_name_collision(
-                        &local_name,
-                        existing_kind,
-                        span,
-                    ));
+            self.validate_root_namespace(&local_name, span);
+            if let Some(existing_kind) = self.existing_local_symbol_kind(&local_name) {
+                self.errors.push(errors::pub_library_import_name_collision(
+                    &local_name,
+                    existing_kind,
+                    span,
+                ));
+                continue;
+            }
+
+            let mut child_module_path = path.to_vec();
+            child_module_path.push(item.name.clone());
+            let imports_namespace = Self::manifest_public_module_exists(&manifest, &child_module_path);
+
+            if !path.is_empty() {
+                let resolved = match self.public_module_member(library, &manifest, path, &item.name) {
+                    Ok(resolved) => resolved,
+                    Err(source_modules) => {
+                        self.errors.push(errors::pub_library_module_member_ambiguous(
+                            library,
+                            path,
+                            &item.name,
+                            &source_modules,
+                            span,
+                        ));
+                        continue;
+                    }
+                };
+                if let Some(member) = resolved {
+                    self.define_pub_module_import_symbol(library, local_name, member, span);
                     continue;
                 }
+                if imports_namespace {
+                    let mut canonical_path = vec!["pub".to_string(), library.to_string()];
+                    canonical_path.extend(child_module_path);
+                    self.define_import_symbol(local_name, canonical_path, false, span);
+                    continue;
+                }
+                self.errors.push(errors::pub_library_symbol_not_exported(
+                    &item.name,
+                    &format!("{library}.{}", path.join(".")),
+                    &available_exports,
+                    span,
+                ));
+                continue;
+            }
+
+            let flat_function = self.pub_library_function_symbol(&manifest, &item.name);
+            let flat_export = Self::find_manifest_export(&manifest, &item.name);
+            if imports_namespace && (flat_function.is_some() || flat_export.is_some()) {
+                self.errors.push(errors::pub_library_module_member_ambiguous(
+                    library,
+                    &[],
+                    &item.name,
+                    &[
+                        format!("package-root export `{}`", item.name),
+                        format!("module `{}`", child_module_path.join(".")),
+                    ],
+                    span,
+                ));
+                continue;
+            }
+            if imports_namespace {
+                let mut canonical_path = vec!["pub".to_string(), library.to_string()];
+                canonical_path.extend(child_module_path);
+                self.define_import_symbol(local_name, canonical_path, false, span);
+                continue;
+            }
+
+            if let Some(mut kind) = flat_function {
                 self.remap_symbol_kind_with_import_aliases(&mut kind, &imported_type_aliases);
                 if let SymbolKind::FunctionOverloads(overloads) = &kind {
                     self.record_function_overload_binding(&local_name, overloads, true);
@@ -1068,7 +1428,7 @@ impl TypeChecker {
                 continue;
             }
 
-            let Some(export) = Self::find_manifest_export(&manifest, &item.name) else {
+            let Some(export) = flat_export else {
                 if let Some(feature_sets) = Self::inactive_pub_export_features(&manifest, &item.name) {
                     self.errors.push(errors::pub_library_symbol_requires_features(
                         &item.name,
@@ -1087,19 +1447,73 @@ impl TypeChecker {
                 continue;
             };
 
-            let local_name = item.alias.clone().unwrap_or_else(|| item.name.clone());
-            self.validate_root_namespace(&local_name, span);
-            if let Some(existing_kind) = self.existing_local_symbol_kind(&local_name) {
-                self.errors.push(errors::pub_library_import_name_collision(
-                    &local_name,
-                    existing_kind,
-                    span,
-                ));
-                continue;
-            }
-
             self.define_pub_import_symbol(library, &manifest, local_name, export, &imported_type_aliases, span);
         }
+    }
+
+    /// Define one declaration imported through a derived public module namespace.
+    fn define_pub_module_import_symbol(
+        &mut self,
+        library: &str,
+        local_name: String,
+        member: PublicModuleMember,
+        span: Span,
+    ) {
+        if let Some((type_params, target)) = member.type_alias {
+            self.record_dependency_import_type_alias_before_change(&local_name);
+            self.type_aliases.insert(
+                local_name.clone(),
+                crate::frontend::typechecker::TypeAliasTarget {
+                    type_params: type_params.iter().map(|param| param.name.clone()).collect(),
+                    target,
+                },
+            );
+        }
+
+        let mut kind = member.kind;
+        if let SymbolKind::FunctionOverloads(overloads) = &kind {
+            self.record_function_overload_binding(&local_name, overloads, true);
+        }
+        if let Some(mut projection) = member.partial_projection {
+            projection.name.clone_from(&local_name);
+            self.type_info.record_partial_projection(projection);
+        }
+        if let Some(target_kind) = Self::source_target_kind(&kind) {
+            let mut target_path = vec!["pub".to_string(), library.to_string()];
+            target_path.extend(member.source_module_path.clone());
+            self.source_import_targets.insert(
+                local_name.clone(),
+                crate::frontend::typechecker::SourceTargetInfo {
+                    module_path: target_path,
+                    name: member.source_name.clone(),
+                    kind: target_kind.to_string(),
+                },
+            );
+        }
+        if matches!(kind, SymbolKind::Static(_)) {
+            self.type_info.declarations.static_bindings.insert(
+                local_name.clone(),
+                crate::frontend::typechecker::StaticBindingInfo { is_imported: true },
+            );
+        }
+        if matches!(
+            kind,
+            SymbolKind::Type(TypeInfo::Model(_) | TypeInfo::Class(_) | TypeInfo::Enum(_) | TypeInfo::Newtype(_))
+        ) {
+            let mut source_path = member.source_module_path;
+            source_path.push(member.source_name);
+            self.public_library_type_identities.insert(
+                local_name.clone(),
+                PublicLibraryTypeIdentity::new(library, &source_path),
+            );
+        }
+        Self::mark_compiled_class_field_provider(&mut kind, library);
+        self.symbols.define(Symbol {
+            name: local_name,
+            kind,
+            span,
+            scope: 0,
+        });
     }
 
     /// Build the provider-aware type remapping shared by every import statement for one compiled library.
@@ -1284,23 +1698,6 @@ impl TypeChecker {
         }
     }
 
-    /// Resolve one exported const/static value type from a loaded `pub::` library manifest.
-    pub(in crate::frontend::typechecker) fn lookup_pub_library_constant_member(
-        &mut self,
-        library: &str,
-        member: &str,
-    ) -> Option<VariableInfo> {
-        match self.lookup_pub_library_symbol_member(library, member)? {
-            SymbolKind::Variable(info) => Some(info),
-            SymbolKind::Static(info) => Some(VariableInfo {
-                ty: info.ty,
-                is_mutable: true,
-                is_used: info.is_used,
-            }),
-            _ => None,
-        }
-    }
-
     /// Resolve one exported member from an imported `pub::` library as a symbol kind.
     ///
     /// This is used by qualified alias collection, where the import remains a module binding (`lib.member`) instead of
@@ -1361,6 +1758,74 @@ impl TypeChecker {
         self.remap_symbol_kind_with_import_aliases(&mut kind, &remapping);
         Self::mark_compiled_class_field_provider(&mut kind, library);
         Some(kind)
+    }
+
+    /// Resolve a member through a checked public module namespace and return its authored source module path.
+    pub(in crate::frontend::typechecker) fn lookup_pub_library_module_symbol_member(
+        &mut self,
+        library: &str,
+        module_path: &[String],
+        member: &str,
+    ) -> Option<(SymbolKind, Vec<String>)> {
+        self.resolve_pub_library_module_symbol_member(library, module_path, member)
+            .ok()
+            .flatten()
+            .map(|resolved| (resolved.kind, resolved.source_module_path))
+    }
+
+    /// Resolve a checked public module member while preserving sibling ambiguity for caller-owned diagnostics.
+    pub(in crate::frontend::typechecker) fn resolve_pub_library_module_symbol_member(
+        &mut self,
+        library: &str,
+        module_path: &[String],
+        member: &str,
+    ) -> Result<Option<ResolvedPublicModuleSymbol>, Vec<String>> {
+        if module_path.is_empty() {
+            return Ok(self
+                .lookup_pub_library_symbol_member(library, member)
+                .map(|kind| ResolvedPublicModuleSymbol {
+                    kind,
+                    source_module_path: vec!["pub".to_string(), library.to_string()],
+                    source_name: member.to_string(),
+                }));
+        }
+        let Some(entry) = self.provider_plan.library_manifest_index().get(library).cloned() else {
+            return Ok(None);
+        };
+        let LibraryManifestIndexEntry::Loaded { manifest, .. } = entry else {
+            return Ok(None);
+        };
+        let Some(resolved) = self.public_module_member(library, &manifest, module_path, member)? else {
+            return Ok(None);
+        };
+        let mut source_module_path = vec!["pub".to_string(), library.to_string()];
+        source_module_path.extend(resolved.source_module_path);
+        Ok(Some(ResolvedPublicModuleSymbol {
+            kind: resolved.kind,
+            source_module_path,
+            source_name: resolved.source_name,
+        }))
+    }
+
+    /// Resolve partial-call projection metadata for a member reached through a checked public module namespace.
+    pub(in crate::frontend::typechecker) fn lookup_pub_library_module_partial_projection(
+        &mut self,
+        library: &str,
+        module_path: &[String],
+        member: &str,
+        binding_name: &str,
+    ) -> Option<PartialProjectionInfo> {
+        let entry = self.provider_plan.library_manifest_index().get(library)?.clone();
+        let LibraryManifestIndexEntry::Loaded { manifest, .. } = entry else {
+            return None;
+        };
+        let mut projection = self
+            .public_module_member(library, &manifest, module_path, member)
+            .ok()
+            .flatten()?
+            .partial_projection?;
+        projection.name = binding_name.to_string();
+        Some(projection)
     }
 
     /// Seed internal semantic caches for one `pub::` library's exported types and traits.
@@ -1743,14 +2208,48 @@ impl TypeChecker {
         })
     }
 
+    /// Normalize one API declaration target into its authored module path and declaration name.
+    fn normalized_api_declaration_target(target_path: &[String]) -> Option<(Vec<String>, String)> {
+        let path = if target_path.first().is_some_and(|segment| segment == "crate") {
+            &target_path[1..]
+        } else {
+            target_path
+        };
+        let (name, module_path) = path.split_last()?;
+        Some((module_path.to_vec(), name.clone()))
+    }
+
     /// Resolve an alias target path against the checked API metadata embedded in the manifest.
     fn symbol_kind_from_api_target_path(
         &self,
         manifest: &LibraryManifest,
         target_path: &[String],
     ) -> Option<SymbolKind> {
+        self.symbol_kind_from_api_target_path_inner(manifest, target_path, &mut HashSet::new())
+    }
+
+    /// Follow checked API alias targets while refusing cycles.
+    fn symbol_kind_from_api_target_path_inner(
+        &self,
+        manifest: &LibraryManifest,
+        target_path: &[String],
+        visited: &mut HashSet<Vec<String>>,
+    ) -> Option<SymbolKind> {
+        if !visited.insert(target_path.to_vec()) {
+            return None;
+        }
         let declaration = Self::api_declaration_for_target_path(manifest, target_path)?;
-        self.symbol_kind_from_api_declaration(declaration)
+        match declaration {
+            ApiDeclaration::Alias(alias) => {
+                if let Some(function) = &alias.projected_function {
+                    return Some(SymbolKind::Function(
+                        self.function_info_from_manifest(&function_export_from_api_projected(function)),
+                    ));
+                }
+                self.symbol_kind_from_api_target_path_inner(manifest, &alias.target_path, visited)
+            }
+            _ => self.symbol_kind_from_api_declaration(declaration),
+        }
     }
 
     /// Convert one checked API declaration into the same semantic symbols used for manifest exports.
@@ -1837,8 +2336,14 @@ impl TypeChecker {
         imported_type_aliases: &HashMap<String, String>,
         span: Span,
     ) {
-        let partial_projection =
-            self.partial_projection_from_manifest_export(manifest, &local_name, &export, imported_type_aliases, span);
+        let partial_projection = self.partial_projection_from_manifest_export(
+            library,
+            manifest,
+            &local_name,
+            &export,
+            imported_type_aliases,
+            span,
+        );
         let mut kind = match export {
             ManifestExportRef::Model(export) => {
                 SymbolKind::Type(TypeInfo::Model(self.model_info_from_manifest(export)))
@@ -2185,6 +2690,7 @@ impl TypeChecker {
     /// Convert one public-manifest export into partial projection metadata when it denotes a partial callable.
     fn partial_projection_from_manifest_export(
         &self,
+        library: &str,
         manifest: &LibraryManifest,
         local_name: &str,
         export: &ManifestExportRef<'_>,
@@ -2193,16 +2699,18 @@ impl TypeChecker {
     ) -> Option<PartialProjectionInfo> {
         match export {
             ManifestExportRef::Partial(export) => {
-                Self::partial_projection_from_manifest_partial(export, local_name, imported_type_aliases, span)
+                Self::partial_projection_from_manifest_partial(export, local_name, imported_type_aliases, span, library)
             }
-            ManifestExportRef::Alias(export) => self.partial_projection_from_manifest_alias(
-                manifest,
-                local_name,
-                export,
-                imported_type_aliases,
-                span,
-                &mut HashSet::new(),
-            ),
+            ManifestExportRef::Alias(export) => {
+                let context = PartialProjectionAliasContext {
+                    library,
+                    manifest,
+                    local_name,
+                    imported_type_aliases,
+                    span,
+                };
+                self.partial_projection_from_manifest_alias(&context, export, &mut HashSet::new())
+            }
             _ => None,
         }
     }
@@ -2210,35 +2718,39 @@ impl TypeChecker {
     /// Follow manifest aliases so a public alias to a partial keeps the same projection under the alias name.
     fn partial_projection_from_manifest_alias(
         &self,
-        manifest: &LibraryManifest,
-        local_name: &str,
+        context: &PartialProjectionAliasContext<'_>,
         alias: &AliasExport,
-        imported_type_aliases: &HashMap<String, String>,
-        span: Span,
         visited: &mut HashSet<String>,
     ) -> Option<PartialProjectionInfo> {
-        let identity_target = Self::manifest_identity_target_path(manifest, &alias.name);
+        let identity_target = Self::manifest_identity_target_path(context.manifest, &alias.name);
         let target_path = identity_target.unwrap_or(alias.target_path.as_slice());
         let target_name = target_path.last()?;
         if !visited.insert(target_name.clone()) {
             return None;
         }
-        if let Some(ApiDeclaration::Partial(item)) = Self::api_declaration_for_target_path(manifest, target_path) {
+        if let Some(ApiDeclaration::Partial(item)) =
+            Self::api_declaration_for_target_path(context.manifest, target_path)
+        {
             let export = partial_export_from_api(item);
-            return Self::partial_projection_from_manifest_partial(&export, local_name, imported_type_aliases, span);
+            return Self::partial_projection_from_manifest_partial(
+                &export,
+                context.local_name,
+                context.imported_type_aliases,
+                context.span,
+                context.library,
+            );
         }
-        match Self::find_manifest_export(manifest, target_name)? {
-            ManifestExportRef::Partial(export) => {
-                Self::partial_projection_from_manifest_partial(export, local_name, imported_type_aliases, span)
-            }
-            ManifestExportRef::Alias(next_alias) => self.partial_projection_from_manifest_alias(
-                manifest,
-                local_name,
-                next_alias,
-                imported_type_aliases,
-                span,
-                visited,
+        match Self::find_manifest_export(context.manifest, target_name)? {
+            ManifestExportRef::Partial(export) => Self::partial_projection_from_manifest_partial(
+                export,
+                context.local_name,
+                context.imported_type_aliases,
+                context.span,
+                context.library,
             ),
+            ManifestExportRef::Alias(next_alias) => {
+                self.partial_projection_from_manifest_alias(context, next_alias, visited)
+            }
             _ => None,
         }
     }
@@ -2249,6 +2761,7 @@ impl TypeChecker {
         local_name: &str,
         imported_type_aliases: &HashMap<String, String>,
         span: Span,
+        library: &str,
     ) -> Option<PartialProjectionInfo> {
         let mut target_path = export.target_path.clone();
         if let Some(target_name) = target_path.last_mut()
@@ -2267,9 +2780,57 @@ impl TypeChecker {
                     Some(PartialProjectionPreset {
                         name: preset.name.clone(),
                         value: Self::manifest_preset_value_expr(&preset.value, imported_type_aliases, span)?,
+                        external_value: Self::checked_preset_value_from_manifest(&preset.value, imported_type_aliases),
                     })
                 })
                 .collect::<Option<Vec<_>>>()?,
+            external_library: Some(library.to_string()),
+        })
+    }
+
+    /// Rebuild one provider-owned preset value without losing canonical external reference identity.
+    fn checked_preset_value_from_manifest(
+        value: &PresetValueExport,
+        imported_type_aliases: &HashMap<String, String>,
+    ) -> Option<CheckedPresetValue> {
+        Some(match value {
+            PresetValueExport::Int(value) => CheckedPresetValue::Int(*value),
+            PresetValueExport::Float(value) => CheckedPresetValue::Float(value.parse().ok()?),
+            PresetValueExport::Bool(value) => CheckedPresetValue::Bool(*value),
+            PresetValueExport::String(value) => CheckedPresetValue::String(value.clone()),
+            PresetValueExport::Bytes(value) => CheckedPresetValue::Bytes(value.clone()),
+            PresetValueExport::None => CheckedPresetValue::None,
+            PresetValueExport::List(values) => CheckedPresetValue::List(
+                values
+                    .iter()
+                    .map(|item| Self::checked_preset_value_from_manifest(item, imported_type_aliases))
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            PresetValueExport::Dict(entries) => CheckedPresetValue::Dict(
+                entries
+                    .iter()
+                    .map(|entry| {
+                        Some((
+                            Self::checked_preset_value_from_manifest(&entry.key, imported_type_aliases)?,
+                            Self::checked_preset_value_from_manifest(&entry.value, imported_type_aliases)?,
+                        ))
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            PresetValueExport::ConstRef(path) => CheckedPresetValue::ConstRef(path.clone()),
+            PresetValueExport::ModelLiteral { name, fields } => CheckedPresetValue::ModelLiteral {
+                name: imported_type_aliases.get(name).cloned().unwrap_or_else(|| name.clone()),
+                fields: fields
+                    .iter()
+                    .map(|field| {
+                        Some((
+                            field.name.clone(),
+                            Self::checked_preset_value_from_manifest(&field.value, imported_type_aliases)?,
+                        ))
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            },
+            PresetValueExport::Unsupported => CheckedPresetValue::Unsupported,
         })
     }
 

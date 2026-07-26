@@ -170,8 +170,8 @@ fn dedupe_import_declarations(ast: &mut Program) {
                     });
                     !items.is_empty()
                 }
-                ImportKind::PubFrom { library, items } => {
-                    let prefix = format!("pub-from:{:?}:{library}", import.visibility);
+                ImportKind::PubFrom { library, path, items } => {
+                    let prefix = format!("pub-from:{:?}:{library}:{path:?}", import.visibility);
                     items.retain(|item| {
                         let key = import_item_key(&prefix, item);
                         if seen_imports.contains(&key) {
@@ -306,8 +306,9 @@ fn collect_top_level_decl_names(program: &Program) -> TopLevelNames {
                         add_import_binding(item.alias.as_deref().unwrap_or(&item.name), names);
                     }
                 }
-                ImportKind::PubLibrary { library } => {
-                    add_import_binding(decl.alias.as_deref().unwrap_or(library), names);
+                ImportKind::PubLibrary { library, path } => {
+                    let default_name = path.last().unwrap_or(library);
+                    add_import_binding(decl.alias.as_deref().unwrap_or(default_name), names);
                 }
                 ImportKind::Python(pkg) => {
                     add_import_binding(decl.alias.as_deref().unwrap_or(pkg), names);
@@ -4564,6 +4565,37 @@ test test_runner_76001490ba86f677::__incan_file_tests::incan_harness_1_b ... FAI
         let groups = partition_collision_free_file_groups(&sources, None, None);
 
         assert_eq!(groups.len(), 1);
+    }
+
+    #[test]
+    fn nested_pub_import_dedupe_preserves_exact_child_identity_issue948() -> Result<(), String> {
+        let source = "from pub::modulelib.hyperquant.index import build\n\
+                      from pub::modulelib.hyperquant.search import build\n";
+        let tokens = crate::frontend::lexer::lex(source).map_err(|errors| format!("{errors:?}"))?;
+        let mut program = crate::frontend::parser::parse(&tokens).map_err(|errors| format!("{errors:?}"))?;
+
+        dedupe_import_declarations(&mut program);
+
+        let imports = program
+            .declarations
+            .iter()
+            .filter(|declaration| matches!(declaration.node, Declaration::Import(_)))
+            .count();
+        assert_eq!(imports, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn unaliased_nested_pub_module_binds_the_final_path_segment_issue948() -> Result<(), String> {
+        let source = "import pub::modulelib.hyperquant\n";
+        let tokens = crate::frontend::lexer::lex(source).map_err(|errors| format!("{errors:?}"))?;
+        let program = crate::frontend::parser::parse(&tokens).map_err(|errors| format!("{errors:?}"))?;
+
+        let names = collect_top_level_decl_names(&program);
+
+        assert!(names.imported_values.contains("hyperquant"));
+        assert!(!names.imported_values.contains("modulelib"));
+        Ok(())
     }
 
     #[test]

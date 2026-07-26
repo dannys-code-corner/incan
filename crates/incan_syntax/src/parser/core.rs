@@ -333,7 +333,7 @@ impl<'a> Parser<'a> {
                         self.active_soft_keywords.insert(kw);
                     }
                 }
-                ImportKind::PubLibrary { library } => {
+                ImportKind::PubLibrary { library, .. } => {
                     self.activate_imported_keywords_for_library(library);
                 }
                 ImportKind::PubFrom { library, .. } => {

@@ -16,7 +16,9 @@ use super::{
     EnumValueTypeExport, FieldVisibilityExport, LIBRARY_MANIFEST_FORMAT, LibraryManifestError, ParamExport,
     ParamKindExport, PartialExport, ProviderCargoDependencySource, RUST_ABI_SCHEMA_VERSION, VocabProviderManifest,
 };
-use crate::frontend::api_metadata::{ApiDeclaration, CHECKED_API_METADATA_SCHEMA_VERSION};
+use crate::frontend::api_metadata::{
+    ApiDeclaration, CHECKED_API_METADATA_SCHEMA_VERSION, validate_checked_api_public_namespaces,
+};
 use crate::frontend::contract_metadata::CONTRACT_METADATA_SCHEMA_VERSION;
 use crate::frontend::registry_metadata::CHECKED_REGISTRY_METADATA_SCHEMA_VERSION;
 
@@ -46,6 +48,8 @@ fn validate_field_visibilities(raw: &RawLibraryManifest) -> Result<(), LibraryMa
                 }
             }
         }
+        validate_checked_api_public_namespaces(api)
+            .map_err(|error| LibraryManifestError::Invalid(error.to_string()))?;
     }
     Ok(())
 }

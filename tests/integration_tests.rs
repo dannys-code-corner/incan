@@ -14536,6 +14536,171 @@ pub def aggregate_default(expr: ColumnExpr, output_name: str = DEFAULT_LABEL) ->
         Ok(())
     }
 
+    #[test]
+    fn build_lib_publishes_checked_source_modules_as_namespaces_issue948() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let producer_root = tmp.path().join("modulelib");
+        std::fs::create_dir_all(producer_root.join("src/hyperquant"))?;
+        std::fs::write(
+            producer_root.join("incan.toml"),
+            "[project]\nname = \"modulelib\"\nversion = \"0.1.0\"\n",
+        )?;
+        std::fs::write(
+            producer_root.join("src/lib.incn"),
+            "\"\"\"A module-oriented library.\"\"\"\n",
+        )?;
+        std::fs::write(
+            producer_root.join("src/hyperquant/mod.incn"),
+            "pub def namespace_version() -> int:\n  return 1\n",
+        )?;
+        std::fs::write(
+            producer_root.join("src/hyperquant/index.incn"),
+            r#"pub model HyperquantIndex:
+  pub size: int
+
+  def doubled(self) -> int:
+    return self.size * 2
+
+pub class IndexBuilder:
+  pub size: int = 3
+
+  def build(self) -> HyperquantIndex:
+    return HyperquantIndex(size=self.size)
+
+pub enum IndexMode:
+  Dense
+  Sparse
+
+pub type IndexSize = newtype int
+pub type IndexList = list[HyperquantIndex]
+
+pub const DEFAULT_SIZE: int = 4
+
+pub def build_index(size: int = DEFAULT_SIZE) -> HyperquantIndex:
+  return HyperquantIndex(size=size)
+
+pub default_index = partial build_index(size=DEFAULT_SIZE)
+
+def pack_bits(size: int) -> int:
+  return size
+"#,
+        )?;
+        std::fs::write(
+            producer_root.join("src/hyperquant/search.incn"),
+            r#"from hyperquant.index import HyperquantIndex
+
+pub def search(index: HyperquantIndex) -> int:
+  return index.size * 2
+"#,
+        )?;
+        std::fs::write(
+            producer_root.join("src/hyperquant/facade.incn"),
+            "pub from hyperquant.index import HyperquantIndex as PublicIndex, build_index as make_index\n",
+        )?;
+
+        let producer_build = run_build_lib(&producer_root)?;
+        assert!(
+            producer_build.status.success(),
+            "expected an unplumbed source directory to publish as a checked namespace.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&producer_build.stdout),
+            String::from_utf8_lossy(&producer_build.stderr)
+        );
+        let generated_namespace = std::fs::read_to_string(producer_root.join("target/lib/src/hyperquant/mod.rs"))?;
+        assert!(
+            generated_namespace.contains("pub use facade::*;")
+                && generated_namespace.contains("pub use index::*;")
+                && generated_namespace.contains("pub use search::*;"),
+            "expected the generated package namespace to re-export its immediate checked source modules.\n\
+             generated hyperquant/mod.rs:\n{generated_namespace}"
+        );
+
+        let consumer_root = tmp.path().join("consumer");
+        std::fs::create_dir_all(consumer_root.join("src"))?;
+        std::fs::write(
+            consumer_root.join("incan.toml"),
+            "[project]\nname = \"consumer\"\n\n[dependencies]\nmodulelib = { path = \"../modulelib\" }\n",
+        )?;
+        let main_path = consumer_root.join("src/main.incn");
+        std::fs::write(
+            &main_path,
+            r#"from pub::modulelib import hyperquant
+from pub::modulelib.hyperquant.facade import PublicIndex as FacadeIndex, make_index
+from pub::modulelib.hyperquant import HyperquantIndex as PublicIndex, IndexBuilder, IndexList, IndexMode, IndexSize, search as nested_search
+
+def main() -> None:
+  index: PublicIndex = PublicIndex(size=hyperquant.DEFAULT_SIZE)
+  facade_index: FacadeIndex = make_index()
+  default_index: PublicIndex = hyperquant.default_index()
+  builder = IndexBuilder()
+  built: PublicIndex = builder.build()
+  indexes: IndexList = [index, facade_index, default_index, built]
+  size = IndexSize(index.doubled())
+  mode = IndexMode.Dense
+  println(nested_search(indexes[0]) + size.0 + hyperquant.namespace_version())
+  println(nested_search(facade_index))
+  println(nested_search(default_index))
+  match mode:
+    IndexMode.Dense => println("dense")
+    IndexMode.Sparse => println("sparse")
+"#,
+        )?;
+
+        let consumer_check = run_check(&main_path)?;
+        assert!(
+            consumer_check.status.success(),
+            "expected both namespace and nested imports to typecheck.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_check.stdout),
+            String::from_utf8_lossy(&consumer_check.stderr)
+        );
+        let out_dir = consumer_root.join("out");
+        let consumer_build = run_build(&main_path, &out_dir)?;
+        assert!(
+            consumer_build.status.success(),
+            "expected generated Rust for public module imports to compile.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_build.stdout),
+            String::from_utf8_lossy(&consumer_build.stderr)
+        );
+        std::fs::create_dir_all(consumer_root.join("tests"))?;
+        std::fs::write(
+            consumer_root.join("tests/test_public_module.incn"),
+            r#"import pub::modulelib.hyperquant as h
+
+def test_public_module_namespace() -> None:
+  index = h.HyperquantIndex(size=h.DEFAULT_SIZE)
+  builder = h.IndexBuilder()
+  mode = h.IndexMode.Dense
+  size = h.IndexSize(index.doubled())
+  assert h.search(index) == 8
+  assert builder.build().size == 3
+  assert size.0 == 8
+  assert mode == h.IndexMode.Dense
+"#,
+        )?;
+        let consumer_tests = run_test(&consumer_root.join("tests"))?;
+        assert!(
+            consumer_tests.status.success(),
+            "expected direct public-module imports to compile and run in a package test batch.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_tests.stdout),
+            String::from_utf8_lossy(&consumer_tests.stderr)
+        );
+
+        std::fs::write(
+            producer_root.join("src/hyperquant.incn"),
+            "pub def conflicting_module_file() -> int:\n  return 2\n",
+        )?;
+        let collision_build = run_build_lib(&producer_root)?;
+        assert!(
+            !collision_build.status.success(),
+            "a module file and directory entrypoint with the same logical identity must not publish nondeterministically"
+        );
+        let collision_error = String::from_utf8_lossy(&collision_build.stderr);
+        assert!(
+            collision_error.contains("both resolve to library module `hyperquant`"),
+            "expected the producer collision diagnostic, got:\n{collision_error}"
+        );
+        Ok(())
+    }
+
     /// Regression for #892: split aliases keep their provider identity in real library consumers and test batches.
     #[test]
     fn build_lib_consumer_preserves_split_pub_import_alias_identity_issue892() -> Result<(), Box<dyn std::error::Error>>

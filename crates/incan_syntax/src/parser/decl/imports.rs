@@ -1,5 +1,14 @@
 /// Import parsing (`import ...`, `from ... import ...`, `rust::`, `python ...`).
 impl<'a> Parser<'a> {
+    /// Parse the optional public-module path after a `pub::<library>` dependency key.
+    fn pub_library_module_path(&mut self) -> Result<Vec<String>, CompileError> {
+        let mut path = Vec::new();
+        while self.match_punct(PunctuationId::Dot) || self.match_punct(PunctuationId::ColonColon) {
+            path.push(self.identifier()?);
+        }
+        Ok(path)
+    }
+
     fn expect_pub_namespace_separator(&mut self, form: errors::PubImportForm) -> Result<(), CompileError> {
         if self.match_punct(PunctuationId::ColonColon) {
             return Ok(());
@@ -10,6 +19,7 @@ impl<'a> Parser<'a> {
         Err(errors::pub_import_expected_namespace_separator(self.current_span(), form))
     }
 
+    /// Parse one source, package, Python, or Rust import declaration after its optional visibility marker.
     fn import_decl(&mut self, visibility: Visibility) -> Result<ImportDecl, CompileError> {
         // Check for "from ... import ..." syntax
         if self.match_keyword(KeywordId::From) {
@@ -46,16 +56,14 @@ impl<'a> Parser<'a> {
             if self.match_keyword(KeywordId::Pub) {
                 self.expect_pub_namespace_separator(errors::PubImportForm::From)?;
                 let library = self.identifier()?;
-                if self.check_punct(PunctuationId::ColonColon) || self.check_punct(PunctuationId::Dot) {
-                    return Err(errors::pub_import_submodule_not_supported(self.current_span()));
-                }
+                let path = self.pub_library_module_path()?;
                 self.expect_keyword(KeywordId::Import, "Expected 'import' after pub library path")?;
 
                 let items = self.parse_import_items(false)?;
 
                 return Ok(ImportDecl {
                     visibility,
-                    kind: ImportKind::PubFrom { library, items },
+                    kind: ImportKind::PubFrom { library, path, items },
                     alias: None,
                 });
             }
@@ -102,10 +110,8 @@ impl<'a> Parser<'a> {
         } else if self.match_keyword(KeywordId::Pub) {
             self.expect_pub_namespace_separator(errors::PubImportForm::Import)?;
             let library = self.identifier()?;
-            if self.check_punct(PunctuationId::ColonColon) || self.check_punct(PunctuationId::Dot) {
-                return Err(errors::pub_import_submodule_not_supported(self.current_span()));
-            }
-            ImportKind::PubLibrary { library }
+            let path = self.pub_library_module_path()?;
+            ImportKind::PubLibrary { library, path }
         } else {
             // Module import: import foo::bar::baz or import super::foo or import crate::foo
             let path = self.import_path()?;

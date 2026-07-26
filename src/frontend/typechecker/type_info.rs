@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::frontend::ast::{Expr, ParamKind, Span, Spanned, Visibility};
-use crate::frontend::library_exports::CheckedParamDefault;
+use crate::frontend::library_exports::{CheckedParamDefault, CheckedPresetValue};
 use crate::frontend::symbols::{
     CallableParam, FunctionOverloadInfo, NewtypePrimitiveConstraint, ResolvedType, TypeBoundInfo,
 };
@@ -417,6 +417,8 @@ pub struct PartialProjectionInfo {
     pub target_kind: PartialProjectionTargetKind,
     /// Preset keyword expressions supplied by the partial declaration.
     pub presets: Vec<PartialProjectionPreset>,
+    /// Public dependency that owns serialized preset values, when this projection crossed a compiled-library boundary.
+    pub external_library: Option<String>,
 }
 
 /// One preset keyword/value pair from a partial declaration.
@@ -424,6 +426,8 @@ pub struct PartialProjectionInfo {
 pub struct PartialProjectionPreset {
     pub name: String,
     pub value: Spanned<Expr>,
+    /// Checked provider-owned value used to lower external constant and model references without source heuristics.
+    pub external_value: Option<CheckedPresetValue>,
 }
 
 /// Target kinds that matter to downstream partial projection consumers.

@@ -176,6 +176,7 @@ impl Formatter {
 
     // ---- Imports ----
 
+    /// Format one import declaration while preserving its package, source, Python, or Rust namespace.
     fn format_import(&mut self, import: &ImportDecl) {
         // Only `pub from ... import ...` can be public; `pub` on other import forms is parser-invalid.
         self.write_visibility(import.visibility);
@@ -195,18 +196,26 @@ impl Formatter {
                 self.writer.write(" import ");
                 self.format_import_items(items);
             }
-            ImportKind::PubLibrary { library } => {
+            ImportKind::PubLibrary { library, path } => {
                 self.writer.write("import pub::");
                 self.writer.write(library);
+                for segment in path {
+                    self.writer.write(".");
+                    self.writer.write(segment);
+                }
                 if let Some(alias) = &import.alias {
                     self.writer.write(" as ");
                     self.writer.write(alias);
                 }
                 self.writer.newline();
             }
-            ImportKind::PubFrom { library, items } => {
+            ImportKind::PubFrom { library, path, items } => {
                 self.writer.write("from pub::");
                 self.writer.write(library);
+                for segment in path {
+                    self.writer.write(".");
+                    self.writer.write(segment);
+                }
                 self.writer.write(" import ");
                 self.format_import_items(items);
             }

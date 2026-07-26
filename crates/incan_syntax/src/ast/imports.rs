@@ -41,15 +41,19 @@ pub enum ImportKind {
     Module(ImportPath),
     /// `from module import item1, item2` or `from ..utils import x` - Python-style multi-import
     From { module: ImportPath, items: Vec<ImportItem> },
-    /// `import pub::mylib` - Incan library namespace import
+    /// `import pub::mylib` or `import pub::mylib.widgets` - Incan library namespace import
     PubLibrary {
         /// Library dependency key from `incan.toml [dependencies]`
         library: Ident,
+        /// Public module namespace below the dependency root.
+        path: Vec<Ident>,
     },
-    /// `from pub::mylib import Widget, helper` - Incan library symbols from manifest exports
+    /// `from pub::mylib import Widget` or `from pub::mylib.widgets import Widget`
     PubFrom {
         /// Library dependency key from `incan.toml [dependencies]`
         library: Ident,
+        /// Public module namespace below the dependency root.
+        path: Vec<Ident>,
         items: Vec<ImportItem>,
     },
     /// `import python "module"` - Python interop  FIXME: this doesn't actually work yet

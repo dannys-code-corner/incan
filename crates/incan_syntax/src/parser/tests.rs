@@ -2361,8 +2361,9 @@ def identity(
         let program = parse_str(source)?;
         match &program.declarations[0].node {
             Declaration::Import(i) => match &i.kind {
-                ImportKind::PubLibrary { library } => {
+                ImportKind::PubLibrary { library, path } => {
                     assert_eq!(library, "mylib");
+                    assert!(path.is_empty());
                     assert_eq!(i.alias.as_deref(), Some("lib"));
                 }
                 _ => panic!("Expected pub library import"),
@@ -2378,8 +2379,9 @@ def identity(
         let program = parse_str(source)?;
         match &program.declarations[0].node {
             Declaration::Import(i) => match &i.kind {
-                ImportKind::PubFrom { library, items } => {
+                ImportKind::PubFrom { library, path, items } => {
                     assert_eq!(library, "mylib");
+                    assert!(path.is_empty());
                     assert_eq!(items.len(), 2);
                     assert_eq!(items[0].name, "Widget");
                     assert_eq!(items[0].alias, None);
@@ -2407,16 +2409,47 @@ def identity(
     }
 
     #[test]
-    fn test_parse_pub_import_nested_path_is_error() {
-        let source = "from pub::mylib::widgets import Widget\n";
-        let Err(err) = parse_str(source) else {
-            panic!("Expected parser to reject nested `pub::` path");
+    fn test_parse_pub_library_module_namespace() -> Result<(), Vec<CompileError>> {
+        let source = "from pub::mylib.widgets.codec import Widget\n";
+        let program = parse_str(source)?;
+        let Declaration::Import(import) = &program.declarations[0].node else {
+            return Err(vec![CompileError::new(
+                "expected public module import declaration".to_string(),
+                program.declarations[0].span,
+            )]);
         };
-        assert!(
-            err[0].message.contains("single library name"),
-            "Unexpected error: {}",
-            err[0].message
-        );
+        let ImportKind::PubFrom { library, path, items } = &import.kind else {
+            return Err(vec![CompileError::new(
+                "expected public module from-import".to_string(),
+                program.declarations[0].span,
+            )]);
+        };
+        assert_eq!(library, "mylib");
+        assert_eq!(path, &["widgets".to_string(), "codec".to_string()]);
+        assert_eq!(items[0].name, "Widget");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_pub_import_nested_namespace_with_colon_separator() -> Result<(), Vec<CompileError>> {
+        let source = "from pub::mylib::widgets import Widget\n";
+        let program = parse_str(source)?;
+        let Declaration::Import(import) = &program.declarations[0].node else {
+            return Err(vec![CompileError::new(
+                "expected public module import declaration".to_string(),
+                program.declarations[0].span,
+            )]);
+        };
+        let ImportKind::PubFrom { library, path, items } = &import.kind else {
+            return Err(vec![CompileError::new(
+                "expected public module from-import".to_string(),
+                program.declarations[0].span,
+            )]);
+        };
+        assert_eq!(library, "mylib");
+        assert_eq!(path, &["widgets".to_string()]);
+        assert_eq!(items[0].name, "Widget");
+        Ok(())
     }
 
     /// RFC 005: `from rust.crate import Item` emits a warning and parses successfully.
