@@ -370,10 +370,34 @@ impl ProjectGenerator {
             api.public_namespaces
                 .iter()
                 .map(|namespace| {
-                    (
-                        namespace.path.clone(),
-                        namespace.child_modules.iter().cloned().collect(),
-                    )
+                    let parent_names = api
+                        .modules
+                        .iter()
+                        .filter(|module| module.module_path == namespace.path)
+                        .flat_map(|module| &module.declarations)
+                        .filter_map(crate::frontend::api_metadata::api_declaration_public_name)
+                        .collect::<BTreeSet<_>>();
+                    let children = namespace
+                        .child_modules
+                        .iter()
+                        .filter(|child| {
+                            let mut child_path = namespace.path.clone();
+                            child_path.push((*child).clone());
+                            api.modules
+                                .iter()
+                                .filter(|module| module.module_path == child_path)
+                                .flat_map(|module| &module.declarations)
+                                .filter(|declaration| {
+                                    crate::frontend::api_metadata::checked_api_declaration_is_public_namespace_member(
+                                        declaration,
+                                    )
+                                })
+                                .filter_map(crate::frontend::api_metadata::api_declaration_public_name)
+                                .any(|name| !parent_names.contains(name))
+                        })
+                        .cloned()
+                        .collect();
+                    (namespace.path.clone(), children)
                 })
                 .collect(),
         );
@@ -2701,6 +2725,67 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
         Ok(())
+    }
+
+    #[test]
+    fn checked_namespace_facades_skip_children_fully_bound_by_the_parent_issue948() {
+        use crate::frontend::api_metadata::{
+            ApiAlias, ApiDeclaration, CHECKED_API_METADATA_SCHEMA_VERSION, CheckedApiMetadata,
+            CheckedApiMetadataPackage, CheckedApiPublicNamespace, SourceAnchor, SourceSpan,
+        };
+
+        let alias = |name: &str, target: &[&str], is_public| {
+            ApiDeclaration::Alias(ApiAlias {
+                name: name.to_string(),
+                anchor: SourceAnchor {
+                    id: format!("traits::{name}"),
+                    span: SourceSpan { start: 0, end: 0 },
+                },
+                target_path: target.iter().map(|segment| (*segment).to_string()).collect(),
+                is_public,
+                projected_function: None,
+            })
+        };
+        let api = CheckedApiMetadataPackage {
+            schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+            package: None,
+            modules: vec![
+                CheckedApiMetadata {
+                    schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+                    module_path: vec!["traits".to_string()],
+                    declarations: vec![alias("SharedItem", &["traits", "covered", "SharedItem"], false)],
+                },
+                CheckedApiMetadata {
+                    schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+                    module_path: vec!["traits".to_string(), "covered".to_string()],
+                    declarations: vec![alias("SharedItem", &["traits", "covered", "SharedItem"], true)],
+                },
+                CheckedApiMetadata {
+                    schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+                    module_path: vec!["traits".to_string(), "partial".to_string()],
+                    declarations: vec![
+                        alias("SharedItem", &["traits", "partial", "SharedItem"], true),
+                        alias("Extra", &["traits", "partial", "Extra"], true),
+                    ],
+                },
+            ],
+            public_namespaces: vec![CheckedApiPublicNamespace {
+                path: vec!["traits".to_string()],
+                members: Vec::new(),
+                child_modules: vec!["covered".to_string(), "partial".to_string()],
+            }],
+        };
+        let mut generator = ProjectGenerator::new("target/test-checked-namespace-facades", "provider", false);
+
+        generator.set_public_namespace_facades(&api);
+
+        assert_eq!(
+            generator.public_namespace_facades,
+            Some(BTreeMap::from([(
+                vec!["traits".to_string()],
+                BTreeSet::from(["partial".to_string()])
+            )]))
+        );
     }
 
     #[test]

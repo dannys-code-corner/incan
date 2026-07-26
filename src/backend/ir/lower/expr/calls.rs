@@ -2968,7 +2968,10 @@ impl AstLowering {
                 _ => None,
             });
         let Some(params) = params else {
-            return Some(merged);
+            // Provider projections must materialize checked preset values because the consumer has no source-owned
+            // function default to emit. Source projections deliberately defer when callable metadata is unavailable:
+            // the canonical signature still owns those defaults and emission qualifies their dependency references.
+            return projection.external_library.as_ref().map(|_| merged);
         };
         let mut by_name = merged
             .into_iter()
@@ -3611,6 +3614,30 @@ mod tests {
             } if name == "modulelib"
         ));
         Ok(())
+    }
+
+    #[test]
+    fn source_partial_without_callable_snapshot_defers_to_canonical_defaults_issue701() {
+        let span = Span::new(1, 24);
+        let mut type_info = TypeCheckInfo::default();
+        type_info.record_partial_projection(PartialProjectionInfo {
+            name: "spec".to_string(),
+            target_path: vec!["registry".to_string(), "Spec".to_string()],
+            target_kind: PartialProjectionTargetKind::ModelConstructor,
+            presets: vec![PartialProjectionPreset {
+                name: "namespace".to_string(),
+                value: Spanned::new(Expr::Ident("DEFAULT_NAMESPACE".to_string()), Span::new(25, 42)),
+                external_value: None,
+            }],
+            external_library: None,
+        });
+        let lowering = AstLowering::new_with_type_info(type_info);
+        let callee = Spanned::new(Expr::Ident("spec".to_string()), span);
+
+        assert!(
+            lowering.partial_projection_call_args(&callee, &[], span).is_none(),
+            "source partials must leave declaration defaults on their canonical callable signature"
+        );
     }
 
     /// Method-dispatch arguments retain the defining SDK module even after their import expression has disappeared.
