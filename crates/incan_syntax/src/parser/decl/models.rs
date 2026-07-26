@@ -24,10 +24,13 @@ impl<'a> Parser<'a> {
 
         self.expect(&TokenKind::Dedent, "Expected dedent after model body")?;
 
-        // If the model is public, promote all field visibilities to public.
+        // Public models retain the established public-by-default field contract. An explicit contextual `private`
+        // modifier is preserved instead of being overwritten by that default.
         if matches!(visibility, Visibility::Public) {
             for f in &mut fields {
-                f.node.visibility = Visibility::Public;
+                if f.node.explicit_visibility.is_none() {
+                    f.node.visibility = Visibility::Public;
+                }
             }
         }
 
@@ -370,11 +373,32 @@ impl<'a> Parser<'a> {
     /// Parse a field declaration.
     fn field_decl(&mut self) -> Result<Spanned<FieldDecl>, CompileError> {
         let start = self.current_span().start;
-        let visibility = if self.match_token(&TokenKind::Keyword(KeywordId::Pub)) {
-            Visibility::Public
+        let explicit_visibility = if self.match_token(&TokenKind::Keyword(KeywordId::Pub)) {
+            if self.peek_ident_text("private")
+                && matches!(
+                    self.peek_next().kind,
+                    TokenKind::Ident(_) | TokenKind::Keyword(KeywordId::Pub)
+                )
+            {
+                return Err(errors::conflicting_field_visibility_modifiers(self.current_span()));
+            }
+            Some(Visibility::Public)
+        } else if self.peek_ident_text("private")
+            && matches!(
+                self.peek_next().kind,
+                TokenKind::Ident(_) | TokenKind::Keyword(KeywordId::Pub)
+            )
+        {
+            let private_span = self.current_span();
+            self.advance();
+            if self.match_token(&TokenKind::Keyword(KeywordId::Pub)) {
+                return Err(errors::conflicting_field_visibility_modifiers(private_span));
+            }
+            Some(Visibility::Private)
         } else {
-            Visibility::Private
+            None
         };
+        let visibility = explicit_visibility.unwrap_or(Visibility::Private);
         let name = self.identifier()?;
         let mut metadata = FieldMetadata::default();
         if self.match_token(&TokenKind::Punctuation(PunctuationId::LBracket)) {
@@ -405,6 +429,7 @@ impl<'a> Parser<'a> {
         Ok(Spanned::new(
             FieldDecl {
                 visibility,
+                explicit_visibility,
                 name,
                 metadata,
                 ty,

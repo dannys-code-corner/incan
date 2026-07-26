@@ -2489,6 +2489,39 @@ impl TypeChecker {
         self.type_info.declarations.class_layouts = layouts;
     }
 
+    /// Snapshot checked model field visibility for backend lowering.
+    ///
+    /// The parser preserves authored modifiers and applies the compatible public-model default, while the symbol table
+    /// is the frontend's effective semantic view. Keeping only that checked view downstream prevents lowering from
+    /// independently reconstructing privacy from syntax.
+    fn record_model_field_visibilities_for_lowering(&mut self, program: &Program) {
+        let mut model_field_visibilities = HashMap::new();
+        let mut model_type_private_fields = HashSet::new();
+        for declaration in &program.declarations {
+            let Declaration::Model(model) = &declaration.node else {
+                continue;
+            };
+            let Some(TypeInfo::Model(info)) = self.lookup_type_info(&model.name) else {
+                continue;
+            };
+            model_field_visibilities.insert(
+                model.name.clone(),
+                info.fields
+                    .iter()
+                    .map(|(name, field)| (name.clone(), field.visibility))
+                    .collect(),
+            );
+            model_type_private_fields.extend(
+                info.fields
+                    .iter()
+                    .filter(|(_, field)| field.is_type_private)
+                    .map(|(name, _)| (model.name.clone(), name.clone())),
+            );
+        }
+        self.type_info.declarations.model_field_visibilities = model_field_visibilities;
+        self.type_info.declarations.model_type_private_fields = model_type_private_fields;
+    }
+
     /// Validate local static dependencies before declaration checking.
     ///
     /// `static` initializers may only reference earlier local statics, and dependency cycles are rejected.
@@ -4521,6 +4554,7 @@ impl TypeChecker {
         }
 
         self.record_trait_metadata_for_lowering();
+        self.record_model_field_visibilities_for_lowering(program);
         self.record_class_layouts_for_lowering(program);
 
         // ---- RFC 023: validate rust.module() and @rust.extern rules ----

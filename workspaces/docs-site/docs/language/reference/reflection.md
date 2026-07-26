@@ -19,7 +19,7 @@ def main() -> None:
 
 ## `__fields__() -> FrozenList[FieldInfo]`
 
-Returns field metadata for the type.
+Returns metadata for the type's runtime-visible fields. Fields explicitly marked `private` on a public model, and private class fields, are intentionally absent.
 
 ```incan
 model User:
@@ -119,6 +119,7 @@ Notes:
 
 - Field metadata like `[alias="..."]` and `[description="..."]` is **model-only**.
 - For a `class`, `FieldInfo.alias` and `FieldInfo.description` are always `None` and `FieldInfo.wire_name == FieldInfo.name`.
+- Fields explicitly marked `private` on a public model, and private class fields, are excluded from runtime `__fields__()`, `__field_value__()`, and `__field_items__()` results. Compiler-owned checked API and library manifests retain their declarations and private visibility.
 - Inherited fields retain the declaring package's Incan `type_name` spelling across compiled-library boundaries, even when generated Rust uses a fully qualified provider-owned type path.
 - You do not need to import `FieldInfo` just to call `obj.__fields__()` and inspect the returned records. Import `FieldInfo` only when you want to spell the type explicitly in an annotation.
 
@@ -142,7 +143,7 @@ Models and classes also expose compiler-generated read-only field value views. T
 
 | API | Returns | Description |
 | --- | --- | --- |
-| `obj.__field_value__(name: str)` | `Option[T]` | Returns `Some(value)` for a known field and `None` for an unknown field name. `T` is the common field type when all exposed fields share one type, otherwise a union of the exposed field types. |
-| `obj.__field_items__()` | `list[tuple[str, T]]` | Returns `(field_name, value)` pairs in the same field order used by `__fields__()`. `T` follows the same common-type-or-union rule as `__field_value__`. |
+| `obj.__field_value__(name: str)` | `Option[T]` | Returns `Some(value)` for a known public field and `None` for a private or unknown field name. `T` is the common field type when all exposed fields share one type, otherwise a union of the exposed field types. |
+| `obj.__field_items__()` | `list[tuple[str, T]]` | Returns public `(field_name, value)` pairs in the same field order used by `__fields__()`. `T` follows the same common-type-or-union rule as `__field_value__`. |
 
 For `class` values, inherited fields are included before fields declared on the child class, matching `__fields__()` ordering. The returned views are read-only snapshots of field names and values; mutating a returned list does not add, remove, rename, or update object fields.

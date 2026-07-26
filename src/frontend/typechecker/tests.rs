@@ -1767,6 +1767,110 @@ pub class LazyFrame:
 }
 
 #[test]
+fn test_pub_model_private_field_access_is_type_private_issue884() {
+    let source = r#"
+pub model Vault:
+  private secret: str
+  label: str
+
+  def reveal(self) -> str:
+    return self.secret
+
+pub model Inspector:
+  name: str
+
+  def leak(self, vault: Vault) -> str:
+    return vault.secret
+
+def leak(vault: Vault) -> str:
+  return vault.secret
+"#;
+    let errors = check_str_err(
+        source,
+        "private model field access should fail outside the declaring type",
+    );
+    let private_errors = errors
+        .iter()
+        .filter(|error| error.message.contains("Field 'secret' on 'Vault' is private"))
+        .count();
+    assert_eq!(
+        private_errors,
+        2,
+        "expected outside function and different model method to fail, got: {:?}",
+        errors.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_private_model_fields_keep_existing_module_private_semantics_issue884() {
+    let source = r#"
+model Internal:
+  value: int
+
+def read(value: Internal) -> int:
+  return value.value
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_pub_model_private_field_is_available_inside_owner_methods_issue884() {
+    let source = r#"
+pub model Vault:
+  private secret: str
+  label: str
+
+  @staticmethod
+  def create(label: str) -> Vault:
+    return Vault(secret="sealed", label=label)
+
+  def reveal(self) -> str:
+    return self.secret
+
+  def unpack(self) -> str:
+    match self:
+      Vault(secret=value) =>
+        return value
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_pub_model_private_fields_are_rejected_in_external_construction_and_patterns_issue884() {
+    let source = r#"
+pub model Vault:
+  private secret [alias="wire_secret"]: str = "sealed"
+  label: str
+
+def construct() -> Vault:
+  return Vault(wire_secret="leaked", label="outside")
+
+def unpack(vault: Vault) -> str:
+  match vault:
+    Vault(secret=value) =>
+      return value
+"#;
+    let errors = check_str_err(
+        source,
+        "private model fields should fail in external named construction and constructor patterns",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Field 'wire_secret' on 'Vault' is private")),
+        "expected aliased private constructor field error, got: {:?}",
+        errors.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Field 'secret' on 'Vault' is private")),
+        "expected private pattern field error, got: {:?}",
+        errors.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_class_private_parent_field_access_rejected_in_child_method() {
     let source = r#"
 class Parent:

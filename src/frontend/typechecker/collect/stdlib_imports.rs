@@ -2844,6 +2844,10 @@ impl TypeChecker {
                                 crate::frontend::ast::Visibility::Public
                             }
                         },
+                        is_type_private: matches!(
+                            field.visibility,
+                            crate::library_manifest::FieldVisibilityExport::Private
+                        ),
                         owner: Some(owner.to_string()),
                         has_default: if uses_provider_constructor_bridge {
                             field.has_default

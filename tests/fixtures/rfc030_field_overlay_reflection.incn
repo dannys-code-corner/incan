@@ -43,19 +43,9 @@ def describe_mixed_option(value: Option[str | int | bool]) -> str:
             return "missing"
 
 
-def describe_class_value(value: str | int) -> str:
+def describe_class_option(value: Option[str]) -> str:
     match value:
-        int(number) =>
-            return f"int:{number}"
-        str(text) =>
-            return f"str:{text}"
-
-
-def describe_class_option(value: Option[str | int]) -> str:
-    match value:
-        int(number) =>
-            return f"int:{number}"
-        str(text) =>
+        Some(text) =>
             return f"str:{text}"
         None =>
             return "missing"
@@ -94,23 +84,23 @@ def assert_mixed_model(settings: MixedSettings) -> None:
 
 
 def assert_class_overlay(settings: RuntimeSettingsChild) -> None:
-    region: Option[str | int] = settings.__field_value__("region")
-    retries: Option[str | int] = settings.__field_value__("retries")
-    label: Option[str | int] = settings.__field_value__("label")
-    missing: Option[str | int] = settings.__field_value__("missing")
-    items: list[tuple[str, str | int]] = settings.__field_items__()
+    region: Option[str] = settings.__field_value__("region")
+    retries: Option[str] = settings.__field_value__("retries")
+    label: Option[str] = settings.__field_value__("label")
+    missing: Option[str] = settings.__field_value__("missing")
+    items: list[tuple[str, str]] = settings.__field_items__()
 
     assert describe_class_option(region) == "str:eu-west-1"
-    assert describe_class_option(retries) == "int:3"
+    assert describe_class_option(retries) == "missing"
     assert describe_class_option(label) == "str:prod"
     assert describe_class_option(missing) == "missing"
     mut names: list[str] = []
     mut values: list[str] = []
     for name, value in items:
         names.append(name)
-        values.append(describe_class_value(value))
-    assert names == ["region", "retries", "label"]
-    assert values == ["str:eu-west-1", "int:3", "str:prod"]
+        values.append(value)
+    assert names == ["region", "label"]
+    assert values == ["eu-west-1", "prod"]
 
 
 def main() -> None:

@@ -7960,7 +7960,7 @@ def main() -> None:
     let lines = stdout.lines().collect::<Vec<_>>();
     assert_eq!(
         lines,
-        vec!["Row", "1", "Row", "1", "Bare", "1", "Bare", "1", "Bare", "1"],
+        vec!["Row", "1", "Row", "1", "Bare", "0", "Bare", "0", "Bare", "0"],
         "unexpected generic reflection output:\n{stdout}"
     );
     Ok(())
@@ -8032,7 +8032,7 @@ def main() -> None:
             "id|id|int|false",
             "status|state|str|true",
             "BareSchema",
-            "1",
+            "0",
         ],
         "unexpected type-parameter reflection output:\n{stdout}"
     );

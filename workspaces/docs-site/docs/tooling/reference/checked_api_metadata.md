@@ -168,7 +168,7 @@ The metadata is derived from parsed and typechecked semantics. Public declaratio
 
 Types use the same structural `TypeRef` encoding as library manifest exports. For example, a non-generic type is encoded as `{"Named": {"name": "str"}}`, while a generic application is encoded as `{"Applied": {"name": "List", "args": [...]}}`.
 
-Private class-field entries include `"visibility": "private"`. An omitted field visibility means public, preserving compatibility with schema-v1 metadata and manifests that predate explicit visibility. Public model fields and public class fields therefore retain the compact representation without a `visibility` key.
+Private model- and class-field entries include `"visibility": "private"`. An omitted field visibility means public, preserving compatibility with schema-v1 metadata and manifests that predate explicit visibility. Public model and class fields therefore retain the compact representation without a `visibility` key.
 
 Function metadata keeps the source declaration's public callable surface. For a decorated callable, each decorator entry also carries `decorated_callable`, which contains the decorated declaration's checked public identity, source anchor, type parameters, parameter names and types, return type, receiver when applicable, and async marker. Registry and catalog tooling should read that field instead of asking authors to repeat the decorated function name or signature in decorator arguments.
 
@@ -232,7 +232,7 @@ Docstring validation is strict for mechanically checkable drift. If an `Args:` o
 
 ## Editor Previews
 
-The language server uses the same checked metadata extractor for hover previews after a document type-checks successfully. Hovering a public declaration, a checked public method, a field on a public model or class, or a public enum variant can show the checked signature, raw docstring text, field visibility and alias/description metadata, value-enum backing and raw-value metadata, derives, trait adoption, and safe const values. Private class fields are labeled private in their field preview; the preview does not make them accessible outside the declaring class. Public partial hover shows the projected callable signature plus target and preset provenance. If a decorated function's checked binding is callable-valued, its hover uses the same callable signature exposed by checked API metadata.
+The language server uses the same checked metadata extractor for hover previews after a document type-checks successfully. Hovering a public declaration, a checked public method, a field on a public model or class, or a public enum variant can show the checked signature, raw docstring text, field visibility and alias/description metadata, value-enum backing and raw-value metadata, derives, trait adoption, and safe const values. Private model and class fields are labeled private in their field preview; the preview does not make them accessible outside the declaring type. Public partial hover shows the projected callable signature plus target and preset provenance. If a decorated function's checked binding is callable-valued, its hover uses the same callable signature exposed by checked API metadata.
 
 The LSP exposes these facts through `textDocument/hover`. Use `incan tools metadata api` when an integration needs the full JSON package.
 

@@ -92,42 +92,18 @@ impl incan_stdlib::reflection::HasTypeFieldMetadata for Rectangle {
     fn __fields__() -> incan_stdlib::frozen::FrozenList<
         incan_stdlib::reflection::FieldInfo,
     > {
-        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 2] = [
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("width"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("width"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("float"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("height"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("height"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("float"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-        ];
+        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 0] = [];
         incan_stdlib::frozen::FrozenList::new(&__INCAN_FIELDS)
     }
 }
 impl incan_stdlib::reflection::HasFieldValueReflection for Rectangle {
     fn __field_value__(&self, name: &str) -> Option<String> {
         match name {
-            "width" => Some(format!("{}", self.width)),
-            "height" => Some(format!("{}", self.height)),
             _ => None,
         }
     }
     fn __field_items__(&self) -> Vec<(String, String)> {
-        vec![
-            ("width".to_string(), format!("{}", self.width)), ("height".to_string(),
-            format!("{}", self.height))
-        ]
+        vec![]
     }
 }
 impl Rectangle {
@@ -171,29 +147,18 @@ impl incan_stdlib::reflection::HasTypeFieldMetadata for Circle {
     fn __fields__() -> incan_stdlib::frozen::FrozenList<
         incan_stdlib::reflection::FieldInfo,
     > {
-        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 1] = [
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("radius"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("radius"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("float"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-        ];
+        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 0] = [];
         incan_stdlib::frozen::FrozenList::new(&__INCAN_FIELDS)
     }
 }
 impl incan_stdlib::reflection::HasFieldValueReflection for Circle {
     fn __field_value__(&self, name: &str) -> Option<String> {
         match name {
-            "radius" => Some(format!("{}", self.radius)),
             _ => None,
         }
     }
     fn __field_items__(&self) -> Vec<(String, String)> {
-        vec![("radius".to_string(), format!("{}", self.radius))]
+        vec![]
     }
 }
 impl Circle {
@@ -239,29 +204,18 @@ impl incan_stdlib::reflection::HasTypeFieldMetadata for Square {
     fn __fields__() -> incan_stdlib::frozen::FrozenList<
         incan_stdlib::reflection::FieldInfo,
     > {
-        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 1] = [
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("side"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("side"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("float"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-        ];
+        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 0] = [];
         incan_stdlib::frozen::FrozenList::new(&__INCAN_FIELDS)
     }
 }
 impl incan_stdlib::reflection::HasFieldValueReflection for Square {
     fn __field_value__(&self, name: &str) -> Option<String> {
         match name {
-            "side" => Some(format!("{}", self.side)),
             _ => None,
         }
     }
     fn __field_items__(&self) -> Vec<(String, String)> {
-        vec![("side".to_string(), format!("{}", self.side))]
+        vec![]
     }
 }
 impl Square {
@@ -323,52 +277,18 @@ impl incan_stdlib::reflection::HasTypeFieldMetadata for Carton {
     fn __fields__() -> incan_stdlib::frozen::FrozenList<
         incan_stdlib::reflection::FieldInfo,
     > {
-        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 3] = [
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("width"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("width"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("float"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("height"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("height"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("float"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("depth"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("depth"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("float"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-        ];
+        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 0] = [];
         incan_stdlib::frozen::FrozenList::new(&__INCAN_FIELDS)
     }
 }
 impl incan_stdlib::reflection::HasFieldValueReflection for Carton {
     fn __field_value__(&self, name: &str) -> Option<String> {
         match name {
-            "width" => Some(format!("{}", self.width)),
-            "height" => Some(format!("{}", self.height)),
-            "depth" => Some(format!("{}", self.depth)),
             _ => None,
         }
     }
     fn __field_items__(&self) -> Vec<(String, String)> {
-        vec![
-            ("width".to_string(), format!("{}", self.width)), ("height".to_string(),
-            format!("{}", self.height)), ("depth".to_string(), format!("{}", self.depth))
-        ]
+        vec![]
     }
 }
 impl Carton {
@@ -420,42 +340,18 @@ impl incan_stdlib::reflection::HasTypeFieldMetadata for Document {
     fn __fields__() -> incan_stdlib::frozen::FrozenList<
         incan_stdlib::reflection::FieldInfo,
     > {
-        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 2] = [
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("title"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("title"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("str"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("content"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("content"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("str"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-        ];
+        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 0] = [];
         incan_stdlib::frozen::FrozenList::new(&__INCAN_FIELDS)
     }
 }
 impl incan_stdlib::reflection::HasFieldValueReflection for Document {
     fn __field_value__(&self, name: &str) -> Option<String> {
         match name {
-            "title" => Some(format!("{}", self.title)),
-            "content" => Some(format!("{}", self.content)),
             _ => None,
         }
     }
     fn __field_items__(&self) -> Vec<(String, String)> {
-        vec![
-            ("title".to_string(), format!("{}", self.title)), ("content".to_string(),
-            format!("{}", self.content))
-        ]
+        vec![]
     }
 }
 impl Document {

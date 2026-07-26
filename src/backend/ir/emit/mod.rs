@@ -253,16 +253,15 @@ impl StructConstructorMetadata {
 
     /// Build exact constructor metadata for a checked ordinary source dependency.
     ///
-    /// A public source class with private fields exposes a provider-local constructor function because Rust consumers
-    /// cannot initialize those fields with a struct literal. The canonical module identity prevents a same-named class
-    /// from another source module from supplying the bridge ABI by short-name or field-shape coincidence.
+    /// A public source model or class with private fields exposes a provider-local constructor function because Rust
+    /// consumers cannot initialize those fields with a struct literal. The canonical module identity prevents a
+    /// same-named type from another source module from supplying the bridge ABI by short-name or field-shape
+    /// coincidence.
     fn from_source_dependency(module_path: &[String], s: &IrStruct) -> Self {
         let mut metadata = Self::from_struct(s);
         metadata.provider_identity = Some(ConstructorProviderIdentity::SourceModule(module_path.to_vec()));
-        metadata.requires_constructor_function = matches!(s.kind, IrStructKind::Class)
-            && s.fields
-                .iter()
-                .any(|field| matches!(field.visibility, Visibility::Private));
+        metadata.requires_constructor_function = matches!(s.kind, IrStructKind::Model | IrStructKind::Class)
+            && s.fields.iter().any(|field| field.is_type_private);
         metadata
     }
 
@@ -400,8 +399,8 @@ pub struct IrEmitter<'a> {
     struct_field_types: std::collections::HashMap<(String, String), IrType>,
     /// Source-level field type spelling used solely for generated reflection metadata.
     struct_field_surface_type_names: std::collections::HashMap<(String, String), Option<String>>,
-    /// Struct field visibility lookup: (StructName, FieldName) -> Visibility
-    struct_field_visibilities: std::collections::HashMap<(String, String), Visibility>,
+    /// Struct fields whose ordinary source and runtime-reflection boundary is the declaring nominal type.
+    struct_type_private_fields: std::collections::HashSet<(String, String)>,
     /// Struct field name order (as declared): StructName -> [FieldName...]
     struct_field_names: std::collections::HashMap<String, Vec<String>>,
     /// Struct field alias lookup: (StructName, FieldName) -> alias
@@ -555,7 +554,7 @@ impl<'a> IrEmitter<'a> {
             enum_variant_aliases: std::collections::HashMap::new(),
             struct_field_types: std::collections::HashMap::new(),
             struct_field_surface_type_names: std::collections::HashMap::new(),
-            struct_field_visibilities: std::collections::HashMap::new(),
+            struct_type_private_fields: std::collections::HashSet::new(),
             struct_field_names: std::collections::HashMap::new(),
             struct_field_aliases: std::collections::HashMap::new(),
             struct_field_descriptions: std::collections::HashMap::new(),
@@ -1202,10 +1201,8 @@ impl<'a> IrEmitter<'a> {
     /// True when the generated free constructor function for a struct should be retained.
     pub(super) fn should_emit_struct_constructor(&self, s: &IrStruct) -> bool {
         let analysis = self.generated_use_analysis.borrow();
-        let has_private_fields = matches!(s.kind, IrStructKind::Class)
-            && s.fields
-                .iter()
-                .any(|field| matches!(field.visibility, Visibility::Private));
+        let has_private_fields = matches!(s.kind, IrStructKind::Model | IrStructKind::Class)
+            && s.fields.iter().any(|field| field.is_type_private);
         analysis.used_constructors.contains(&s.name)
             || (has_private_fields && matches!(s.visibility, Visibility::Public))
     }
@@ -2580,7 +2577,7 @@ impl<'a> IrEmitter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConstructorProviderIdentity, IrEmitter};
+    use super::{ConstructorProviderIdentity, IrEmitter, StructConstructorMetadata};
     use crate::backend::ir::decl::{
         IrDecl, IrDeclKind, IrImportItem, IrImportOrigin, IrImportQualifier, IrStruct, IrStructKind, StructField,
         Visibility,
@@ -2605,6 +2602,7 @@ mod tests {
                     ty: private_ty,
                     surface_type_name: None,
                     visibility: Visibility::Private,
+                    is_type_private: true,
                     default: Some(private_default),
                     alias: None,
                     description: None,
@@ -2614,6 +2612,7 @@ mod tests {
                     ty: public_ty,
                     surface_type_name: None,
                     visibility: Visibility::Public,
+                    is_type_private: false,
                     default: None,
                     alias: None,
                     description: None,
@@ -2623,6 +2622,7 @@ mod tests {
                     ty: trailing_ty,
                     surface_type_name: None,
                     visibility: Visibility::Private,
+                    is_type_private: true,
                     default: Some(trailing_default),
                     alias: None,
                     description: None,
@@ -2634,6 +2634,18 @@ mod tests {
             derive_rust_modules: Default::default(),
             lint_allows: Vec::new(),
         }
+    }
+
+    fn checked_source_model() -> IrStruct {
+        let mut model = checked_source_class(
+            IrType::String,
+            TypedExpr::new(IrExprKind::String("sealed".to_string()), IrType::String),
+            IrType::String,
+            IrType::Int,
+            TypedExpr::new(IrExprKind::Int(1), IrType::Int),
+        );
+        model.kind = IrStructKind::Model;
+        model
     }
 
     fn source_import(path: &[&str], item_name: &str, alias: Option<&str>, visibility: Visibility) -> IrDecl {
@@ -2665,6 +2677,38 @@ mod tests {
         let ident = IrEmitter::rust_static_ident("_active_sessions");
         let rendered = quote::quote! { #ident }.to_string();
         assert_eq!(rendered, "_ACTIVE_SESSIONS");
+    }
+
+    #[test]
+    fn public_source_models_with_private_fields_require_exact_provider_constructor_bridges_issue884() {
+        let model = checked_source_model();
+        let metadata =
+            StructConstructorMetadata::from_source_dependency(&["pkg".to_string(), "vaults".to_string()], &model);
+        assert!(metadata.requires_constructor_function);
+        assert_eq!(
+            metadata.provider_identity,
+            Some(ConstructorProviderIdentity::SourceModule(vec![
+                "pkg".to_string(),
+                "vaults".to_string()
+            ]))
+        );
+    }
+
+    #[test]
+    fn runtime_reflection_omits_type_private_fields_issue884() {
+        let registry = FunctionRegistry::new();
+        let mut emitter = IrEmitter::new(&registry);
+        emitter
+            .struct_field_names
+            .insert("Vault".to_string(), vec!["secret".to_string(), "label".to_string()]);
+        emitter
+            .struct_type_private_fields
+            .insert(("Vault".to_string(), "secret".to_string()));
+
+        assert_eq!(
+            emitter.public_reflection_field_names("Vault"),
+            Some(vec!["label".to_string()])
+        );
     }
 
     #[test]

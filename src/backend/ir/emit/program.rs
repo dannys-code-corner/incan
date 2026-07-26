@@ -2147,7 +2147,12 @@ impl<'a> IrEmitter<'a> {
     /// before generated impls are emitted. Generic field shapes are skipped because anonymous union definitions are
     /// currently monomorphic.
     fn field_overlay_value_type_from_struct(strukt: &super::super::decl::IrStruct) -> Option<IrType> {
-        let mut value_types: Vec<IrType> = strukt.fields.iter().map(|field| field.ty.clone()).collect();
+        let mut value_types: Vec<IrType> = strukt
+            .fields
+            .iter()
+            .filter(|field| !field.is_type_private)
+            .map(|field| field.ty.clone())
+            .collect();
         if value_types.iter().any(IrType::contains_generic_parameter) {
             return None;
         }
@@ -2953,7 +2958,9 @@ impl<'a> IrEmitter<'a> {
                     self.struct_field_types.insert(key.clone(), field.ty.clone());
                     self.struct_field_surface_type_names
                         .insert(key.clone(), field.surface_type_name.clone());
-                    self.struct_field_visibilities.insert(key.clone(), field.visibility);
+                    if field.is_type_private {
+                        self.struct_type_private_fields.insert(key.clone());
+                    }
                     self.struct_field_aliases.insert(key.clone(), field.alias.clone());
                     self.struct_field_descriptions
                         .insert(key.clone(), field.description.clone());

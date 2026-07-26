@@ -711,6 +711,22 @@ def high_value_orders(orders: DataFrame) -> DataFrame:
     }
 
     #[test]
+    fn test_format_source_preserves_explicit_private_pub_model_field_issue884() -> Result<(), FormatError> {
+        let source = r#"pub model SealedEnvelope:
+  private body: str
+  envelope_id: str
+"#;
+        let formatted = format_source(source)?;
+        let expected = r#"pub model SealedEnvelope:
+    private body: str
+    pub envelope_id: str
+"#;
+        assert_eq!(formatted, expected);
+        assert_eq!(format_source(&formatted)?, formatted);
+        Ok(())
+    }
+
+    #[test]
     fn test_format_source_trait_with_supertraits() -> Result<(), FormatError> {
         let source = r#"trait OrderedCollection[T] with Collection[T], Serializable:
   def sorted(self) -> OrderedCollection[T]: ...

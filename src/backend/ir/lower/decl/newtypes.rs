@@ -20,6 +20,7 @@ impl AstLowering {
             ty: underlying_ty.clone(),
             surface_type_name: None,
             visibility: Visibility::Public,
+            is_type_private: false,
             default: None,
             alias: None,
             description: None,

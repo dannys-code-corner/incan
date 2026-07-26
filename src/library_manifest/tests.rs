@@ -181,7 +181,7 @@ fn legacy_manifest_fields_without_visibility_remain_public_issue883() -> Result<
 }
 
 #[test]
-fn manifest_rejects_unsupported_private_model_field_visibility_issue883() -> Result<(), Box<dyn std::error::Error>> {
+fn manifest_round_trips_private_model_field_visibility_issue884() -> Result<(), Box<dyn std::error::Error>> {
     let mut manifest = LibraryManifest::new("private_model_lib", "0.1.0");
     manifest.exports.models.push(ModelExport {
         name: "Record".to_string(),
@@ -205,10 +205,12 @@ fn manifest_rejects_unsupported_private_model_field_visibility_issue883() -> Res
     });
 
     let tmp = tempfile::tempdir()?;
-    let error = manifest.write_to_path(&tmp.path().join("private_model_lib.incnlib"));
-    assert!(
-        matches!(error, Err(LibraryManifestError::Invalid(ref message)) if message.contains("model `Record` field `secret` cannot be private")),
-        "expected unsupported private model field visibility to fail validation, got: {error:?}"
+    let path = tmp.path().join("private_model_lib.incnlib");
+    manifest.write_to_path(&path)?;
+    let loaded = LibraryManifest::read_from_path(&path)?;
+    assert_eq!(
+        loaded.exports.models[0].fields[0].visibility,
+        FieldVisibilityExport::Private
     );
     Ok(())
 }
@@ -250,7 +252,8 @@ fn manifest_with_api_declaration_issue883(declaration: ApiDeclaration) -> Librar
 }
 
 #[test]
-fn manifest_rejects_private_model_field_in_embedded_api_metadata_issue883() -> Result<(), Box<dyn std::error::Error>> {
+fn manifest_round_trips_private_model_field_in_embedded_api_metadata_issue884() -> Result<(), Box<dyn std::error::Error>>
+{
     let manifest = manifest_with_api_declaration_issue883(ApiDeclaration::Model(ApiModel {
         name: "Record".to_string(),
         anchor: api_anchor_issue883("Record"),
@@ -266,10 +269,19 @@ fn manifest_rejects_private_model_field_in_embedded_api_metadata_issue883() -> R
     }));
 
     let tmp = tempfile::tempdir()?;
-    let error = manifest.write_to_path(&tmp.path().join("private_api_model.incnlib"));
+    let path = tmp.path().join("private_api_model.incnlib");
+    manifest.write_to_path(&path)?;
+    let loaded = LibraryManifest::read_from_path(&path)?;
+    let api = loaded
+        .contract_metadata
+        .api
+        .ok_or("expected embedded checked API metadata")?;
+    let ApiDeclaration::Model(model) = &api.modules[0].declarations[0] else {
+        return Err("expected embedded API model".into());
+    };
     assert!(
-        matches!(error, Err(LibraryManifestError::Invalid(ref message)) if message.contains("API model `Record` field `secret` cannot be private")),
-        "expected embedded private API model field to fail validation, got: {error:?}"
+        matches!(model.fields[0].visibility, FieldVisibilityExport::Private),
+        "expected embedded private API model field to round-trip"
     );
     Ok(())
 }

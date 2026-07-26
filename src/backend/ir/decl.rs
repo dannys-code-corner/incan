@@ -325,6 +325,8 @@ pub struct StructField {
     /// This is deliberately separate from [`Self::ty`], which remains the semantic and Rust-emission authority.
     pub surface_type_name: Option<String>,
     pub visibility: Visibility,
+    /// Whether runtime reflection and source access must hide this field outside the declaring nominal type.
+    pub is_type_private: bool,
     /// Optional default initializer expression for this field (used for construction when omitted).
     pub default: Option<super::IrExpr>,
     pub alias: Option<String>,

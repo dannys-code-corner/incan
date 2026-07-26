@@ -28,7 +28,7 @@ def main() -> None:
 
 **The key ideas**:
 
-- **A `model` is field-defined**: the fields are the API surface.
+- **A `model` is field-defined**: fields are the data shape, and public-model fields are public unless explicitly marked `private`.
 - **Construction is keyword-only**: model constructors use named arguments.
 - **Defaults are part of the type**: a default makes a field optional at construction sites.
 - **Schema mapping is model-only**: models support field aliases/metadata for wire formats.
@@ -75,6 +75,27 @@ Rules:
     - A field **without** a default is required at construction time.
     - A field **with** a default may be omitted (the default is used).
 - **Type checking**: default expressions must be compatible with the field type.
+
+### Private fields on a public model
+
+Fields on a `pub model` remain public by default for compatibility with DTO-style models. Use the contextual `private` modifier when a public value should expose methods or projections without exposing selected storage fields:
+
+```incan
+pub model SealedEnvelope:
+    private body: str = ""
+    envelope_id: str
+
+    @staticmethod
+    def create(body: str, envelope_id: str) -> SealedEnvelope:
+        return SealedEnvelope(body=body, envelope_id=envelope_id)
+
+    def size(self) -> int:
+        return len(self.body)
+```
+
+Privacy is type-private. Methods declared on `SealedEnvelope` may read, construct, or pattern-match its private fields. Top-level functions, sibling modules, other model/class methods, re-export consumers, and compiled-library consumers may not.
+
+`private` is contextual rather than a globally reserved word. `private body: str` declares a private field named `body`, while `private: str` still declares an ordinary field named `private`.
 
 ## Field metadata and schema-safe aliases
 
@@ -171,6 +192,9 @@ Rules:
 - **Unknown fields are errors**: `Point(z=1)` is a type error.
 - **Duplicates are errors**: `Point(x=1, x=2)` is a type error.
 - **Missing required fields are errors**: if a field has no default, you must pass it.
+- **Private keys are owner-only**: code outside the declaring model cannot provide a private field by its canonical name or alias.
+
+A private field therefore needs a default when callers should use the ordinary public constructor. If it has no default, expose a static factory method on the declaring model so construction remains inside the model's trusted boundary.
 
 ## Field access
 
@@ -182,6 +206,8 @@ def area(p: Point) -> int:
 ```
 
 If a field has an alias, you may use either the canonical name or the alias for member access (when the alias is identifier/keyword-shaped). The canonical name always works.
+
+Aliases do not weaken privacy. Neither `value.secret` nor `value.wire_secret` is permitted outside the declaring model when `secret [alias="wire_secret"]` is private.
 
 If you need behavior, you can still define methods on a model (often pure helpers):
 
@@ -230,6 +256,8 @@ With `@derive(json)`, a model serializes/deserializes as a JSON object.
 
 If a field has an alias, that alias is used as the JSON key (wire name). This lets you keep schema-safe canonical field names in code while still matching external payloads.
 
+`private` controls Incan source access; it is not a secrecy, redaction, or wire-omission marker. Serialization and other explicitly adopted derives still operate over the model's complete data shape. Use a redacting value such as `SecretStr`, or a dedicated public wire model, when a field must not be disclosed.
+
 See: [Derives: Serialization (Reference)](../../reference/derives/serialization.md).
 
 ## Validation (`@derive(Validate)`)
@@ -258,6 +286,8 @@ def describe(a: Account) -> str:
 
 You can use canonical field names or aliases in destructuring keys (when aliases are identifier/keyword-shaped).
 
+Private fields may only appear in a destructuring pattern inside methods declared on the owning model. External patterns cannot use either the canonical name or an alias to expose them.
+
 ## Reflection helpers
 
 Models (and classes) provide:
@@ -267,6 +297,8 @@ Models (and classes) provide:
 
 For models, `FieldInfo` includes schema-relevant information like `alias`, `description`, and `wire_name`.
 
+Runtime reflection returns public fields only. Private declarations remain available to compiler-owned checked API and compiled-library metadata so typechecking, code generation, documentation, and external package consumers preserve the same access boundary.
+
 See: [Reflection (Reference)](../../reference/reflection.md)
 
 ## Common pitfalls
@@ -274,3 +306,4 @@ See: [Reflection (Reference)](../../reference/reflection.md)
 - **Expecting positional construction**: model constructors are keyword-only.
 - **Using `class` for schema mapping**: field metadata/aliases are model-only.
 - **Expecting aliases to rename fields everywhere**: aliases are for specific key positions and wire mapping; the canonical name remains the stable identifier in code.
+- **Treating `private` as redaction**: private fields still participate in explicitly adopted serialization and derive behavior.

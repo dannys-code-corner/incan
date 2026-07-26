@@ -55,7 +55,7 @@ def main() -> None:
     for info in user.__fields__():
         println(f"user_field:{info.name}|type:{info.type_name}")
 
-    # Inherited class fields appear in __fields__()
+    # Public inherited class fields appear; private child fields stay hidden.
     child = Child(base_id=1, name="Kid")
     for info in child.__fields__():
         println(f"child_field:{info.name}|type:{info.type_name}")

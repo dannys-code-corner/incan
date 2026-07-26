@@ -55,6 +55,14 @@ impl TypeChecker {
                 continue;
             }
             provided.insert(canonical_name.clone(), expr.span);
+
+            let is_model = matches!(self.lookup_type_info(type_name), Some(TypeInfo::Model(_)));
+            if is_model && self.private_field_is_inaccessible(type_name, field_info) {
+                self.errors
+                    .push(errors::private_field(type_name, field_name, expr.span));
+                continue;
+            }
+
             self.infer_type_param_bindings(&field_info.ty, &value_ty, &mut type_bindings);
 
             if !self.types_compatible(&value_ty, &field_info.ty)

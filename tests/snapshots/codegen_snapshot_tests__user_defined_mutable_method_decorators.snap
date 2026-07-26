@@ -55,29 +55,18 @@ impl incan_stdlib::reflection::HasTypeFieldMetadata for Counter {
     fn __fields__() -> incan_stdlib::frozen::FrozenList<
         incan_stdlib::reflection::FieldInfo,
     > {
-        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 1] = [
-            incan_stdlib::reflection::FieldInfo {
-                name: incan_stdlib::frozen::FrozenStr::new("value"),
-                alias: None,
-                description: None,
-                wire_name: incan_stdlib::frozen::FrozenStr::new("value"),
-                type_name: incan_stdlib::frozen::FrozenStr::new("int"),
-                has_default: false,
-                extra: incan_stdlib::frozen::FrozenDict::new(&[]),
-            },
-        ];
+        static __INCAN_FIELDS: [incan_stdlib::reflection::FieldInfo; 0] = [];
         incan_stdlib::frozen::FrozenList::new(&__INCAN_FIELDS)
     }
 }
 impl incan_stdlib::reflection::HasFieldValueReflection for Counter {
     fn __field_value__(&self, name: &str) -> Option<String> {
         match name {
-            "value" => Some(format!("{}", self.value)),
             _ => None,
         }
     }
     fn __field_items__(&self) -> Vec<(String, String)> {
-        vec![("value".to_string(), format!("{}", self.value))]
+        vec![]
     }
 }
 static __INCAN_DECORATED_COUNTER_BUMP: std::sync::LazyLock<

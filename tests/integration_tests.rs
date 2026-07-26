@@ -7350,15 +7350,15 @@ async def main() -> None:
             stdout
         );
 
-        // Inherited class fields should appear in __fields__()
+        // Public inherited class fields should appear in __fields__().
         assert!(
             stdout.contains("child_field:base_id|type:int"),
             "expected inherited base field in __fields__; got:\n{}",
             stdout
         );
         assert!(
-            stdout.contains("child_field:name|type:str"),
-            "expected child field in __fields__; got:\n{}",
+            !stdout.contains("child_field:name|type:str"),
+            "private child fields must not appear in __fields__; got:\n{}",
             stdout
         );
     }
@@ -14856,6 +14856,195 @@ def main() -> None:
         assert!(
             stderr.contains("Field 'secret' on 'ConsumerVault' is private"),
             "expected source-level private field diagnostic, got:\n{stderr}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn private_pub_model_survives_facade_library_and_test_batch_boundaries_issue884()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let producer_root = tmp.path().join("sealed_model_lib");
+        std::fs::create_dir_all(producer_root.join("src"))?;
+        std::fs::write(
+            producer_root.join("incan.toml"),
+            "[project]\nname = \"sealed_model_lib\"\nversion = \"0.1.0\"\n",
+        )?;
+        std::fs::write(
+            producer_root.join("src/vaults.incn"),
+            r#"from std.serde.json import Serialize
+
+pub model Vault with Serialize:
+  private secret [alias="wire_secret"]: str = "sealed"
+  label: str
+
+  def reveal(self) -> str:
+    return self.secret
+
+  def reflected_field_count(self) -> int:
+    return len(self.__field_items__())
+"#,
+        )?;
+        std::fs::write(
+            producer_root.join("src/public_api.incn"),
+            "pub from crate.vaults import Vault as PublicVault\n",
+        )?;
+        std::fs::write(
+            producer_root.join("src/source_consumer.incn"),
+            r#"from crate.vaults import Vault
+
+pub def make_vault(label: str) -> Vault:
+  return Vault(label=label)
+"#,
+        )?;
+        std::fs::write(
+            producer_root.join("src/lib.incn"),
+            concat!(
+                "pub from crate.public_api import PublicVault as ExportedVault\n",
+                "pub from crate.source_consumer import make_vault\n",
+            ),
+        )?;
+        let sibling_leak = producer_root.join("src/sibling_leak.incn");
+        std::fs::write(
+            &sibling_leak,
+            r#"from crate.vaults import Vault
+
+def leak(value: Vault) -> str:
+  return value.secret
+"#,
+        )?;
+        let sibling_check = run_check(&sibling_leak)?;
+        assert!(
+            !sibling_check.status.success(),
+            "expected a sibling source module to be outside the private model boundary"
+        );
+        let sibling_stderr = strip_ansi_escapes(&String::from_utf8_lossy(&sibling_check.stderr));
+        assert!(
+            sibling_stderr.contains("Field 'secret' on 'Vault' is private"),
+            "expected sibling private-field diagnostic, got:\n{sibling_stderr}"
+        );
+
+        let producer_build = run_build_lib(&producer_root)?;
+        assert!(
+            producer_build.status.success(),
+            "expected private-model provider library build to succeed.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&producer_build.stdout),
+            String::from_utf8_lossy(&producer_build.stderr)
+        );
+        let provider_manifest =
+            LibraryManifest::read_from_path(&producer_root.join("target/lib/sealed_model_lib.incnlib"))?;
+        let vault = provider_manifest
+            .contract_metadata
+            .api
+            .as_ref()
+            .and_then(|api| api.modules.iter().find(|module| module.module_path == ["vaults"]))
+            .and_then(|module| {
+                module.declarations.iter().find_map(|declaration| match declaration {
+                    incan::frontend::api_metadata::ApiDeclaration::Model(model) if model.name == "Vault" => Some(model),
+                    _ => None,
+                })
+            })
+            .ok_or("expected facade-backed Vault in checked API metadata")?;
+        let secret = vault
+            .fields
+            .iter()
+            .find(|field| field.name == "secret")
+            .ok_or("expected private secret field in provider manifest")?;
+        let label = vault
+            .fields
+            .iter()
+            .find(|field| field.name == "label")
+            .ok_or("expected public label field in provider manifest")?;
+        assert_eq!(secret.visibility, FieldVisibilityExport::Private);
+        assert_eq!(label.visibility, FieldVisibilityExport::Public);
+
+        let consumer_root = tmp.path().join("consumer");
+        let consumer_main = write_project_files(
+            &consumer_root,
+            "[project]\nname = \"sealed_model_consumer\"\nversion = \"0.1.0\"\n\n[dependencies]\nsealed_model_lib = { path = \"../sealed_model_lib\" }\n",
+            r#"from pub::sealed_model_lib import ExportedVault as ConsumerVault, make_vault
+
+def main() -> None:
+  value = ConsumerVault(label="visible")
+  make_vault("sibling")
+  println(value.label)
+  println(value.reveal())
+  fields = value.__fields__()
+  println(len(fields))
+  println(fields[0].name)
+  println(value.reflected_field_count())
+"#,
+        )?;
+        let consumer_run = incan_command()
+            .current_dir(&consumer_root)
+            .args(["run", consumer_main.to_string_lossy().as_ref()])
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+        assert!(
+            consumer_run.status.success(),
+            "expected compiled private-model consumer to run.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_run.stdout),
+            String::from_utf8_lossy(&consumer_run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&consumer_run.stdout).trim(),
+            "visible\nsealed\n1\nlabel\n1"
+        );
+
+        std::fs::write(
+            &consumer_main,
+            r#"from pub::sealed_model_lib import ExportedVault as ConsumerVault
+
+def leak(value: ConsumerVault) -> str:
+  return value.secret
+
+def construct() -> ConsumerVault:
+  return ConsumerVault(wire_secret="leaked", label="outside")
+
+def unpack(value: ConsumerVault) -> str:
+  match value:
+    ConsumerVault(secret=secret) =>
+      return secret
+"#,
+        )?;
+        let private_check = run_check(&consumer_main)?;
+        assert!(
+            !private_check.status.success(),
+            "expected compiled consumer access and construction through private model fields to fail"
+        );
+        let private_stderr = strip_ansi_escapes(&String::from_utf8_lossy(&private_check.stderr));
+        assert!(
+            private_stderr.contains("Field 'secret' on 'ConsumerVault' is private")
+                && private_stderr.contains("Field 'wire_secret' on 'ConsumerVault' is private"),
+            "expected canonical and aliased private-field diagnostics, got:\n{private_stderr}"
+        );
+
+        let tests_dir = consumer_root.join("tests");
+        std::fs::create_dir_all(&tests_dir)?;
+        std::fs::write(
+            tests_dir.join("test_private_model.incn"),
+            r#"from pub::sealed_model_lib import ExportedVault as TestVault
+
+def test_private_model_provider_bridge_and_reflection() -> None:
+  value = TestVault(label="test-batch")
+  assert value.label == "test-batch"
+  assert value.reveal() == "sealed"
+  assert len(value.__fields__()) == 1
+  assert value.reflected_field_count() == 1
+"#,
+        )?;
+        let test_output = run_test(&tests_dir)?;
+        assert!(
+            test_output.status.success(),
+            "expected compiled private-model test batch to pass.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&test_output.stdout),
+            String::from_utf8_lossy(&test_output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&test_output.stdout).contains("test_private_model_provider_bridge_and_reflection"),
+            "expected private-model regression test to execute:\n{}",
+            String::from_utf8_lossy(&test_output.stdout)
         );
 
         Ok(())

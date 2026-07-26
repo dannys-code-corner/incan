@@ -322,12 +322,12 @@ impl<'a> IrEmitter<'a> {
         &self,
         struct_name: &str,
     ) -> Result<Option<(Literal, Vec<TokenStream>)>, EmitError> {
-        let Some(field_names) = self.struct_field_names.get(struct_name) else {
+        let Some(field_names) = self.public_reflection_field_names(struct_name) else {
             return Ok(None);
         };
         let mut field_infos = Vec::new();
 
-        for field_name in field_names {
+        for field_name in &field_names {
             let key = (struct_name.to_string(), field_name.clone());
             let ty = self.struct_field_types.get(&key).ok_or_else(|| {
                 EmitError::Unsupported(format!(
@@ -373,6 +373,25 @@ impl<'a> IrEmitter<'a> {
         Ok(Some((field_count, field_infos)))
     }
 
+    /// Return canonical field names that are safe to expose through the public runtime-reflection surface.
+    ///
+    /// Checked API and library manifests retain type-private field declarations for compiler consumers. Runtime
+    /// reflection is an ordinary value surface, so it omits those fields.
+    pub(in crate::backend::ir::emit) fn public_reflection_field_names(&self, struct_name: &str) -> Option<Vec<String>> {
+        let field_names = self.struct_field_names.get(struct_name)?;
+        Some(
+            field_names
+                .iter()
+                .filter(|field_name| {
+                    !self
+                        .struct_type_private_fields
+                        .contains(&(struct_name.to_string(), (*field_name).clone()))
+                })
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Emit the generated `__fields__` reflection method for a struct when field metadata is available.
     fn emit_fields_method(&self, struct_name: &str) -> Result<Option<TokenStream>, EmitError> {
         let Some((field_count, field_infos)) = self.reflection_field_info_entries(struct_name)? else {
@@ -393,11 +412,11 @@ impl<'a> IrEmitter<'a> {
     /// fields use their common type directly; heterogeneous concrete fields use an anonymous union. Generic field
     /// shapes are skipped because anonymous union definitions are monomorphic today.
     fn field_overlay_value_type_for_struct(&self, struct_name: &str) -> Result<Option<IrType>, EmitError> {
-        let Some(field_names) = self.struct_field_names.get(struct_name) else {
+        let Some(field_names) = self.public_reflection_field_names(struct_name) else {
             return Ok(None);
         };
         let mut value_types = Vec::new();
-        for field_name in field_names {
+        for field_name in &field_names {
             let key = (struct_name.to_string(), field_name.clone());
             let ty = self.struct_field_types.get(&key).ok_or_else(|| {
                 EmitError::Unsupported(format!(
@@ -443,7 +462,7 @@ impl<'a> IrEmitter<'a> {
     /// The method accepts canonical field names and model aliases, returning `None` for unknown names. It is omitted
     /// when field metadata is missing or when the field value shape cannot be represented as a concrete Rust type.
     fn emit_field_value_method(&self, struct_name: &str) -> Result<Option<TokenStream>, EmitError> {
-        let Some(field_names) = self.struct_field_names.get(struct_name) else {
+        let Some(field_names) = self.public_reflection_field_names(struct_name) else {
             return Ok(None);
         };
         let Some(value_ty) = self.field_overlay_value_type_for_struct(struct_name)? else {
@@ -451,7 +470,7 @@ impl<'a> IrEmitter<'a> {
         };
         let value_ty_tokens = self.emit_type(&value_ty);
         let mut arms = Vec::new();
-        for field_name in field_names {
+        for field_name in &field_names {
             let key = (struct_name.to_string(), field_name.clone());
             let field_ty = self.struct_field_types.get(&key).ok_or_else(|| {
                 EmitError::Unsupported(format!(
@@ -487,7 +506,7 @@ impl<'a> IrEmitter<'a> {
     /// The returned vector preserves lowered field order, including inherited class fields that lowering already
     /// prepended before child fields.
     fn emit_field_items_method(&self, struct_name: &str) -> Result<Option<TokenStream>, EmitError> {
-        let Some(field_names) = self.struct_field_names.get(struct_name) else {
+        let Some(field_names) = self.public_reflection_field_names(struct_name) else {
             return Ok(None);
         };
         let Some(value_ty) = self.field_overlay_value_type_for_struct(struct_name)? else {
@@ -495,7 +514,7 @@ impl<'a> IrEmitter<'a> {
         };
         let value_ty_tokens = self.emit_type(&value_ty);
         let mut items = Vec::new();
-        for field_name in field_names {
+        for field_name in &field_names {
             let key = (struct_name.to_string(), field_name.clone());
             let field_ty = self.struct_field_types.get(&key).ok_or_else(|| {
                 EmitError::Unsupported(format!(

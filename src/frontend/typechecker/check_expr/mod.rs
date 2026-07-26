@@ -99,6 +99,12 @@ impl TypeChecker {
             .map(|(name, info)| (name.clone(), info))
     }
 
+    /// Return whether one checked field is private outside its declaring nominal type.
+    fn private_field_is_inaccessible(&self, type_name: &str, field: &FieldInfo) -> bool {
+        let owner = field.owner.as_deref().unwrap_or(type_name);
+        field.is_type_private && self.current_method_owner.as_deref() != Some(owner)
+    }
+
     /// Resolve an expression receiver like `math` to an imported module binding path.
     ///
     /// This is intentionally module-kind driven (`SymbolKind::Module`) instead of name-driven so member access does not

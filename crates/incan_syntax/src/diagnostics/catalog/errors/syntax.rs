@@ -307,6 +307,12 @@ pub fn field_alias_as_conflict(span: Span) -> CompileError {
     CompileError::syntax("Cannot combine 'alias=\"...\"' with 'as \"...\"'".to_string(), span)
 }
 
+/// Report contradictory visibility modifiers on one model or class field.
+pub fn conflicting_field_visibility_modifiers(span: Span) -> CompileError {
+    CompileError::syntax("A field cannot be both 'pub' and 'private'".to_string(), span)
+        .with_hint("Keep exactly one field visibility modifier")
+}
+
 // -- String / literal lexer errors -------------------------------------------
 
 pub fn unterminated_string(span: Span) -> CompileError {

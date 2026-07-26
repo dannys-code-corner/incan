@@ -38,7 +38,13 @@ pub struct FieldMetadata {
 /// A field declaration within a model or class.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldDecl {
+    /// Effective semantic visibility after applying the containing declaration's defaults.
     pub visibility: Visibility,
+    /// Visibility modifier written on this field, when one was present in source.
+    ///
+    /// Public models default unmodified fields to public, so retaining this distinction lets an explicit contextual
+    /// `private` modifier survive that default and round-trip through the formatter.
+    pub explicit_visibility: Option<Visibility>,
     pub name: Ident,
     pub metadata: FieldMetadata,
     pub ty: Spanned<Type>,

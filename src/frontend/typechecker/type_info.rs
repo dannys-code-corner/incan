@@ -217,6 +217,13 @@ pub struct RustInteropArtifacts {
 /// Declaration-level binding rewrites and visibility facts consumed by lowering.
 #[derive(Debug, Default, Clone)]
 pub struct DeclarationArtifacts {
+    /// Checked field visibility for local models, keyed first by model name and then canonical field name.
+    ///
+    /// Public-model defaults and explicit private modifiers are resolved by the frontend. Lowering consumes this
+    /// snapshot instead of reinterpreting source modifiers or containing-model visibility.
+    pub(crate) model_field_visibilities: HashMap<String, HashMap<String, Visibility>>,
+    /// Local model fields whose checked privacy boundary is the declaring type rather than only the source module.
+    pub(crate) model_type_private_fields: HashSet<(String, String)>,
     /// Checked, parent-first field layouts for local classes.
     ///
     /// Local subclasses can inherit from classes reconstructed from compiled dependency manifests. Those parents do

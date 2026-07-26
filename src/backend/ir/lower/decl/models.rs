@@ -12,8 +12,31 @@ impl AstLowering {
         // RFC 021: Register field aliases for alias-aware resolution in expressions.
         self.register_field_aliases(&m.name, &m.fields);
 
+        let checked_visibilities = self
+            .type_info
+            .as_ref()
+            .and_then(|info| info.declarations.model_field_visibilities.get(&m.name))
+            .cloned()
+            .ok_or_else(|| LoweringError {
+                message: format!(
+                    "model `{}` reached lowering without typechecker-owned field visibility",
+                    m.name
+                ),
+                span: Default::default(),
+            })?;
+
         let mut fields: Vec<StructField> = Vec::new();
         for f in &m.fields {
+            let visibility = checked_visibilities
+                .get(&f.node.name)
+                .copied()
+                .ok_or_else(|| LoweringError {
+                    message: format!(
+                        "checked model `{}` has no field visibility for `{}`",
+                        m.name, f.node.name
+                    ),
+                    span: f.span.into(),
+                })?;
             let default = f
                 .node
                 .default
@@ -24,7 +47,12 @@ impl AstLowering {
                 name: f.node.name.clone(),
                 ty: self.lower_type(&f.node.ty.node),
                 surface_type_name: None,
-                visibility: Self::map_visibility(f.node.visibility),
+                visibility: Self::map_visibility(visibility),
+                is_type_private: self.type_info.as_ref().is_some_and(|info| {
+                    info.declarations
+                        .model_type_private_fields
+                        .contains(&(m.name.clone(), f.node.name.clone()))
+                }),
                 default,
                 alias: f.node.metadata.alias.clone(),
                 description: f.node.metadata.description.clone(),

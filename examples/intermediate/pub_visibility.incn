@@ -3,12 +3,16 @@ Demonstrates public visibility on models and functions.
 
 ## Notes
 - `pub model` implies public fields by default.
+- The contextual `private` modifier keeps selected fields type-private.
 """
 
 pub model Point:
     x: int
     y: int
-    secret: int = 0
+    private secret: int = 0
+
+    def secret_value(self) -> int:
+        return self.secret
 
 pub def origin() -> Point:
     return Point(x=0, y=0)
@@ -18,4 +22,4 @@ def length_squared(p: Point) -> int:
 
 pub def demo() -> int:
     p = origin()
-    return length_squared(p)
+    return length_squared(p) + p.secret_value()
