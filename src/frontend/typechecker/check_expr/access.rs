@@ -2633,10 +2633,6 @@ impl TypeChecker {
 
     /// Score how directly `actual` matches `expected` for overload ranking.
     fn type_match_score(&self, actual: &ResolvedType, expected: &ResolvedType) -> usize {
-        if actual == expected {
-            return 16;
-        }
-
         match (actual, expected) {
             (ResolvedType::Unknown, _)
             | (_, ResolvedType::Unknown)
@@ -2672,6 +2668,7 @@ impl TypeChecker {
                 4 + self.type_match_score(actual_key, expected_key)
                     + self.type_match_score(actual_value, expected_value)
             }
+            _ if actual == expected => 16,
             _ if self.rust_type_identities_compatible(actual, expected) == Some(true) => 12,
             _ => 0,
         }

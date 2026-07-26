@@ -892,6 +892,162 @@ fn compiled_sdk_provider_artifact_root(
     })
 }
 
+#[test]
+fn binary_read_result_context_crosses_boundaries_issue955() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let project_name = unique_test_project_name("typed_binary_read_result");
+    let src_dir = tmp.path().join("src");
+    let tests_dir = tmp.path().join("tests");
+    fs::create_dir_all(&src_dir)?;
+    fs::create_dir_all(&tests_dir)?;
+    fs::write(
+        tmp.path().join("incan.toml"),
+        format!("[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n"),
+    )?;
+    fs::write(
+        src_dir.join("io_facade.incn"),
+        "pub from std.io import BytesIO, Endian, IoError\n",
+    )?;
+    let main_path = src_dir.join("main.incn");
+    fs::write(
+        &main_path,
+        r#"from io_facade import BytesIO, Endian, IoError
+
+def read_u8() -> Result[u8, IoError]:
+  result: Result[u8, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_i8() -> Result[i8, IoError]:
+  result: Result[i8, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_u16() -> Result[u16, IoError]:
+  result: Result[u16, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_i16() -> Result[i16, IoError]:
+  result: Result[i16, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_u32() -> Result[u32, IoError]:
+  result: Result[u32, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_i32() -> Result[i32, IoError]:
+  result: Result[i32, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_u64() -> Result[u64, IoError]:
+  result: Result[u64, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_i64() -> Result[i64, IoError]:
+  result: Result[i64, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_u128() -> Result[u128, IoError]:
+  result: Result[u128, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_i128() -> Result[i128, IoError]:
+  result: Result[i128, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_f32() -> Result[f32, IoError]:
+  result: Result[f32, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def read_f64() -> Result[f64, IoError]:
+  result: Result[f64, IoError] = BytesIO(b"").read(Endian.Big)
+  return result
+
+def main() -> None:
+  read_u8()
+  read_i8()
+  read_u16()
+  read_i16()
+  read_u32()
+  read_i32()
+  read_u64()
+  read_i64()
+  read_u128()
+  read_i128()
+  read_f32()
+  read_f64()
+"#,
+    )?;
+    fs::write(
+        tests_dir.join("test_binary_read.incn"),
+        r#"from io_facade import BytesIO, Endian, IoError
+from std.testing import assert_eq, fail
+
+def test_typed_binary_read_results() -> None:
+  u16_result: Result[u16, IoError] = BytesIO(b"\x00\x01").read(Endian.Big)
+  match u16_result:
+    Ok(value) => assert_eq(value, 1)
+    Err(error) => fail(error.message())
+
+  u32_result: Result[u32, IoError] = BytesIO(b"\x00\x00\x00\x02").read(Endian.Big)
+  match u32_result:
+    Ok(value) => assert_eq(value, 2)
+    Err(error) => fail(error.message())
+
+  f64_result: Result[f64, IoError] = BytesIO(b"\x00\x00\x00\x00\x00\x00\x00\x00").read(Endian.Big)
+  match f64_result:
+    Ok(value) => assert_eq(value, 0.0)
+    Err(error) => fail(error.message())
+"#,
+    )?;
+
+    let out_dir = tmp.path().join("out");
+    let build_output = incan_command()
+        .args([
+            "build",
+            main_path.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+        ])
+        .current_dir(tmp.path())
+        .output()?;
+    assert!(
+        build_output.status.success(),
+        "expected every BinaryRead width to compile from its typed Result context.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    let generated_main = fs::read_to_string(out_dir.join("src/main.rs"))?;
+    let normalized = generated_main
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    for rust_type in [
+        "u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "u128", "i128", "f32", "f64",
+    ] {
+        assert!(
+            normalized.contains(&format!("BinaryRead::<{rust_type},>::read")),
+            "expected exact BinaryRead::<{rust_type}> dispatch in generated Rust:\n{generated_main}"
+        );
+    }
+
+    let test_output = incan_command()
+        .args(["test", tests_dir.to_string_lossy().as_ref()])
+        .current_dir(tmp.path())
+        .env(
+            "INCAN_TEST_SHARED_TARGET_DIR",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join("incan_e2e_shared_target"),
+        )
+        .output()?;
+    assert!(
+        test_output.status.success(),
+        "expected package test batch to preserve typed BinaryRead dispatch.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&test_output.stdout),
+        String::from_utf8_lossy(&test_output.stderr)
+    );
+    Ok(())
+}
+
 fn run_incan_command_with_timeout(
     mut command: Command,
     timeout: std::time::Duration,

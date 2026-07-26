@@ -14829,6 +14829,120 @@ def main() -> None:
 }
 
 #[test]
+fn test_nested_result_return_hint_disambiguates_trait_instantiation_issue955() -> Result<(), Vec<CompileError>> {
+    let source = r#"
+trait Read[T]:
+  def read(self) -> Result[T, str]: ...
+
+model Source with Read[u8], Read[u16]:
+  value: int
+
+  def read(self) -> Result[u8, str]:
+    value: u8 = 1
+    return Ok(value)
+
+  def read(self) -> Result[u16, str]:
+    value: u16 = 2
+    return Ok(value)
+
+def main() -> None:
+  source = Source(value=1)
+  precise: Result[u16, str] = source.read()
+"#;
+
+    check_str(source)
+}
+
+#[test]
+fn test_nested_result_trait_method_without_hint_remains_ambiguous_issue955() -> Result<(), String> {
+    let source = r#"
+trait Read[T]:
+  def read(self) -> Result[T, str]: ...
+
+model Source with Read[u8], Read[u16]:
+  value: int
+
+  def read(self) -> Result[u8, str]:
+    value: u8 = 1
+    return Ok(value)
+
+  def read(self) -> Result[u16, str]:
+    value: u16 = 2
+    return Ok(value)
+
+def main() -> None:
+  source = Source(value=1)
+  precise = source.read()
+"#;
+
+    let errors = match check_str(source) {
+        Err(errors) => errors,
+        Ok(()) => {
+            return Err("expected nested Result trait method call to remain ambiguous without a result hint".into());
+        }
+    };
+    if errors
+        .iter()
+        .any(|error| error.message.contains("Ambiguous trait method call 'read'"))
+    {
+        Ok(())
+    } else {
+        Err(format!("expected ambiguity diagnostic, got {errors:?}"))
+    }
+}
+
+#[test]
+fn test_std_binary_read_uses_nested_result_hint_issue955() -> Result<(), Vec<CompileError>> {
+    let source = r#"
+from std.io import Endian, IoError, _BytesIO
+
+def read_u32(reader: _BytesIO) -> Result[u32, IoError]:
+  result: Result[u32, IoError] = reader.read(Endian.Big)
+  return result
+
+def read_u16(reader: _BytesIO) -> Result[u16, IoError]:
+  result: Result[u16, IoError] = reader.read(Endian.Big)
+  return result
+
+def read_f64(reader: _BytesIO) -> Result[f64, IoError]:
+  result: Result[f64, IoError] = reader.read(Endian.Big)
+  return result
+"#;
+
+    let tokens = lexer::lex(source)?;
+    let ast = parser::parse(&tokens)?;
+    let mut checker = TypeChecker::new();
+    checker.check_program(&ast)?;
+
+    let read_dispatches = checker
+        .type_info()
+        .calls
+        .resolved_method_calls
+        .values()
+        .filter_map(|call| match &call.dispatch {
+            ResolvedMethodDispatch::Trait {
+                trait_name, type_args, ..
+            } if call.method == "read" && trait_name == "BinaryRead" => Some(type_args),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(read_dispatches.len(), 3, "expected three exact BinaryRead dispatches");
+    for expected in [
+        ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::U32),
+        ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::U16),
+        ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::F64),
+    ] {
+        assert!(
+            read_dispatches
+                .iter()
+                .any(|type_args| type_args.as_slice() == [expected.clone()]),
+            "expected BinaryRead[{expected}] dispatch, got {read_dispatches:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn test_multi_instantiation_trait_method_without_hint_is_ambiguous() {
     let source = r#"
 trait Into[T]:
