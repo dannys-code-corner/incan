@@ -15089,6 +15089,7 @@ def leak(value: Vault) -> str:
             sibling_stderr.contains("Field 'secret' on 'Vault' is private"),
             "expected sibling private-field diagnostic, got:\n{sibling_stderr}"
         );
+        std::fs::remove_file(&sibling_leak)?;
 
         let producer_build = run_build_lib(&producer_root)?;
         assert!(
