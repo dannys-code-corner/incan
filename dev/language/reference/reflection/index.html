@@ -6763,6 +6763,7 @@
 <ul>
 <li>Field metadata like <code>[alias="..."]</code> and <code>[description="..."]</code> is <strong>model-only</strong>.</li>
 <li>For a <code>class</code>, <code>FieldInfo.alias</code> and <code>FieldInfo.description</code> are always <code>None</code> and <code>FieldInfo.wire_name == FieldInfo.name</code>.</li>
+<li>Inherited fields retain the declaring package's Incan <code>type_name</code> spelling across compiled-library boundaries, even when generated Rust uses a fully qualified provider-owned type path.</li>
 <li>You do not need to import <code>FieldInfo</code> just to call <code>obj.__fields__()</code> and inspect the returned records. Import <code>FieldInfo</code> only when you want to spell the type explicitly in an annotation.</li>
 </ul>
 <h3 id="common-patterns">Common patterns<a class="headerlink" href="#common-patterns" title="Permanent link">&para;</a></h3>
