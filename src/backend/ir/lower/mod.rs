@@ -3108,9 +3108,10 @@ model Account:
         let tokens = lexer::lex(source).map_err(|errors| format!("lexer failed: {errors:?}"))?;
         let ast = parser::parse(&tokens).map_err(|errors| format!("parser failed: {errors:?}"))?;
         let mut lowering = AstLowering::new();
-        let error = lowering
-            .lower_program(&ast)
-            .expect_err("model lowering without checked visibility must fail");
+        let error = match lowering.lower_program(&ast) {
+            Ok(_) => return Err("model lowering without checked visibility unexpectedly succeeded".to_string()),
+            Err(error) => error,
+        };
         assert!(
             error
                 .0
