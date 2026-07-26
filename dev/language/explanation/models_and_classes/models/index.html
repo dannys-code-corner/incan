@@ -4239,6 +4239,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Defining fields and defaults">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#field-visibility-on-a-public-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Field visibility on a public model
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6607,6 +6622,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Defining fields and defaults">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#field-visibility-on-a-public-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Field visibility on a public model
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6757,7 +6787,7 @@
 </ol>
 <p><strong>The key ideas</strong>:</p>
 <ul>
-<li><strong>A <code>model</code> is field-defined</strong>: the fields are the API surface.</li>
+<li><strong>A <code>model</code> is field-defined</strong>: fields are the data shape, and each field is public only when explicitly marked <code>pub</code>.</li>
 <li><strong>Construction is keyword-only</strong>: model constructors use named arguments.</li>
 <li><strong>Defaults are part of the type</strong>: a default makes a field optional at construction sites.</li>
 <li><strong>Schema mapping is model-only</strong>: models support field aliases/metadata for wire formats.</li>
@@ -6814,6 +6844,21 @@
 </li>
 <li><strong>Type checking</strong>: default expressions must be compatible with the field type.</li>
 </ul>
+<h3 id="field-visibility-on-a-public-model">Field visibility on a public model<a class="headerlink" href="#field-visibility-on-a-public-model" title="Permanent link">&para;</a></h3>
+<p><code>pub model</code> exports the model type; it does not implicitly export every field. Fields use the same visibility rule as other declarations: add <code>pub</code> to expose a field, and omit it to keep the field private to the declaring model:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="k">model</span> <span class="nc">SealedEnvelope</span><span class="p">:</span>
+    <span class="n">body</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+    <span class="k">pub</span> <span class="n">envelope_id</span><span class="p">:</span> <span class="nb">str</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">create</span><span class="p">(</span><span class="n">body</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">envelope_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">SealedEnvelope</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nc">SealedEnvelope</span><span class="p">(</span><span class="n">body</span><span class="o">=</span><span class="n">body</span><span class="p">,</span> <span class="n">envelope_id</span><span class="o">=</span><span class="n">envelope_id</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">size</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">body</span><span class="p">)</span>
+</code></pre></div>
+<p>Privacy is type-private. Methods declared on <code>SealedEnvelope</code> may read, construct, or pattern-match its private fields. Top-level functions, sibling modules, other model/class methods, re-export consumers, and compiled-library consumers may not.</p>
+<p>Incan 0.4 promoted every field of a <code>pub model</code> to public. When migrating a DTO-style public model to 0.5, add <code>pub</code> to each field that forms part of its public constructor, member-access, pattern, or reflection surface. Leaving a field unmodified now intentionally seals it behind methods on the owning model.</p>
 <h2 id="field-metadata-and-schema-safe-aliases">Field metadata and schema-safe aliases<a class="headerlink" href="#field-metadata-and-schema-safe-aliases" title="Permanent link">&para;</a></h2>
 <p>Models support per-field metadata for schema/wire formats:</p>
 <ul>
@@ -6896,13 +6941,16 @@
 <li><strong>Unknown fields are errors</strong>: <code>Point(z=1)</code> is a type error.</li>
 <li><strong>Duplicates are errors</strong>: <code>Point(x=1, x=2)</code> is a type error.</li>
 <li><strong>Missing required fields are errors</strong>: if a field has no default, you must pass it.</li>
+<li><strong>Private keys are owner-only</strong>: code outside the declaring model cannot provide a private field by its canonical name or alias.</li>
 </ul>
+<p>A private field therefore needs a default when callers should use the ordinary public constructor. If it has no default, expose a static factory method on the declaring model so construction remains inside the model's trusted boundary.</p>
 <h2 id="field-access">Field access<a class="headerlink" href="#field-access" title="Permanent link">&para;</a></h2>
 <p>Access a field with dot syntax:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">area</span><span class="p">(</span><span class="n">p</span><span class="p">:</span> <span class="nc">Point</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">p</span><span class="o">.</span><span class="n">x</span> <span class="o">*</span> <span class="n">p</span><span class="o">.</span><span class="n">y</span>
 </code></pre></div>
 <p>If a field has an alias, you may use either the canonical name or the alias for member access (when the alias is identifier/keyword-shaped). The canonical name always works.</p>
+<p>Aliases do not weaken privacy. Neither <code>value.secret</code> nor <code>value.wire_secret</code> is permitted outside the declaring model when <code>secret [alias="wire_secret"]</code> is private.</p>
 <p>If you need behavior, you can still define methods on a model (often pure helpers):</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">model</span> <span class="nc">Point</span><span class="p">:</span>
     <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
@@ -6936,6 +6984,7 @@
 <h2 id="serialization">Serialization<a class="headerlink" href="#serialization" title="Permanent link">&para;</a></h2>
 <p>With <code>@derive(json)</code>, a model serializes/deserializes as a JSON object.</p>
 <p>If a field has an alias, that alias is used as the JSON key (wire name). This lets you keep schema-safe canonical field names in code while still matching external payloads.</p>
+<p><code>private</code> controls Incan source access; it is not a secrecy, redaction, or wire-omission marker. Serialization and other explicitly adopted derives still operate over the model's complete data shape. Use a redacting value such as <code>SecretStr</code>, or a dedicated public wire model, when a field must not be disclosed.</p>
 <p>See: <a href="../../../reference/derives/serialization/">Derives: Serialization (Reference)</a>.</p>
 <h2 id="validation-derivevalidate">Validation (<code>@derive(Validate)</code>)<a class="headerlink" href="#validation-derivevalidate" title="Permanent link">&para;</a></h2>
 <p>If you derive <code>Validate</code> on a model, you opt into validated construction:</p>
@@ -6955,6 +7004,7 @@
         <span class="n">_</span> <span class="o">=&gt;</span> <span class="k">return</span> <span class="s2">&quot;Other&quot;</span>
 </code></pre></div>
 <p>You can use canonical field names or aliases in destructuring keys (when aliases are identifier/keyword-shaped).</p>
+<p>Private fields may only appear in a destructuring pattern inside methods declared on the owning model. External patterns cannot use either the canonical name or an alias to expose them.</p>
 <h2 id="reflection-helpers">Reflection helpers<a class="headerlink" href="#reflection-helpers" title="Permanent link">&para;</a></h2>
 <p>Models (and classes) provide:</p>
 <ul>
@@ -6962,12 +7012,14 @@
 <li><code>__fields__() -&gt; FrozenList[FieldInfo]</code></li>
 </ul>
 <p>For models, <code>FieldInfo</code> includes schema-relevant information like <code>alias</code>, <code>description</code>, and <code>wire_name</code>.</p>
+<p>Runtime reflection returns public fields only. Private declarations remain available to compiler-owned checked API and compiled-library metadata so typechecking, code generation, documentation, and external package consumers preserve the same access boundary.</p>
 <p>See: <a href="../../../reference/reflection/">Reflection (Reference)</a></p>
 <h2 id="common-pitfalls">Common pitfalls<a class="headerlink" href="#common-pitfalls" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Expecting positional construction</strong>: model constructors are keyword-only.</li>
 <li><strong>Using <code>class</code> for schema mapping</strong>: field metadata/aliases are model-only.</li>
 <li><strong>Expecting aliases to rename fields everywhere</strong>: aliases are for specific key positions and wire mapping; the canonical name remains the stable identifier in code.</li>
+<li><strong>Treating <code>private</code> as redaction</strong>: private fields still participate in explicitly adopted serialization and derive behavior.</li>
 </ul>
 
 

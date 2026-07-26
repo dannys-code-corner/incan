@@ -6725,8 +6725,8 @@ incan<span class="w"> </span>tools<span class="w"> </span>metadata<span class="w
 <p>The first positional argument is a project directory, bundle JSON file, source file inside a project, or <code>.incnlib</code> artifact. The second positional argument is either <code>logical_type_name</code> or <code>stable_model_id</code>.</p>
 <p><code>--format incan</code> prints formatted model source:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="k">model</span> <span class="nc">OrderSummary</span><span class="p">:</span>
-    <span class="n">order_id</span> <span class="p">[</span><span class="n">alias</span><span class="o">=</span><span class="s2">&quot;orderId&quot;</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Stable order identifier&quot;</span><span class="p">]:</span> <span class="nb">str</span>
-    <span class="n">coupon_code</span><span class="p">:</span> <span class="kt">Option</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+    <span class="k">pub</span> <span class="n">order_id</span> <span class="p">[</span><span class="n">alias</span><span class="o">=</span><span class="s2">&quot;orderId&quot;</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Stable order identifier&quot;</span><span class="p">]:</span> <span class="nb">str</span>
+    <span class="k">pub</span> <span class="n">coupon_code</span><span class="p">:</span> <span class="kt">Option</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 </code></pre></div>
 <p><code>--format json</code> prints the canonical bundle JSON for the selected model.</p>
 <p>Projection is intentionally lossy. It preserves logical type name, field order, type spelling, nullability, alias, and description. It does not reconstruct comments, imports, author-only formatting, producer implementation details, or metadata fields that do not have an Incan model syntax.</p>

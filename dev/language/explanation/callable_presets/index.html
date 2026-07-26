@@ -6611,7 +6611,7 @@
 </code></pre></div>
 <p>The important rule is that top-level presets do not run during module initialization. Their preset values must be declaration-safe, such as literals, safe collections, and safe model literals:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="k">model</span> <span class="nc">Profile</span><span class="p">:</span>
-    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="k">pub</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 
 <span class="k">pub</span> <span class="n">configured</span> <span class="o">=</span> <span class="n">partial</span> <span class="n">configure</span><span class="p">(</span>
     <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;accept&quot;</span><span class="p">:</span> <span class="s2">&quot;json&quot;</span><span class="p">},</span>

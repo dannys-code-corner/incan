@@ -6660,7 +6660,7 @@
 
 <span class="nd">@derive</span><span class="p">(</span><span class="kt">Descriptor</span><span class="p">)</span>
 <span class="k">pub</span> <span class="k">model</span> <span class="nc">FormatterSpec</span><span class="p">:</span>
-    <span class="n">media_type</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="k">pub</span> <span class="n">media_type</span><span class="p">:</span> <span class="nb">str</span>
 
 <span class="k">pub</span> <span class="n">static</span> <span class="n">formatters</span><span class="p">:</span> <span class="nc">Registry</span><span class="p">[</span><span class="nc">FormatterId</span><span class="p">,</span> <span class="nc">FormatterSpec</span><span class="p">]</span> <span class="o">=</span> <span class="nc">Registry</span><span class="o">.</span><span class="n">define</span><span class="p">(</span>
     <span class="n">subjects</span><span class="o">=</span><span class="p">[</span><span class="nc">SubjectKind</span><span class="o">.</span><span class="nc">Method</span><span class="p">],</span>
@@ -6681,7 +6681,7 @@
 
 <span class="nd">@derive</span><span class="p">(</span><span class="kt">Descriptor</span><span class="p">)</span>
 <span class="k">pub</span> <span class="k">model</span> <span class="nc">CapabilitySpec</span><span class="p">:</span>
-    <span class="n">summary</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="k">pub</span> <span class="n">summary</span><span class="p">:</span> <span class="nb">str</span>
 
 <span class="k">pub</span> <span class="n">static</span> <span class="n">capabilities</span><span class="p">:</span> <span class="nc">Registry</span><span class="p">[</span><span class="nc">CapabilityId</span><span class="p">,</span> <span class="nc">CapabilitySpec</span><span class="p">]</span> <span class="o">=</span> <span class="nc">Registry</span><span class="o">.</span><span class="n">define</span><span class="p">(</span>
     <span class="n">subjects</span><span class="o">=</span><span class="p">[</span><span class="nc">SubjectKind</span><span class="o">.</span><span class="nc">CompilationUnit</span><span class="p">,</span> <span class="nc">SubjectKind</span><span class="o">.</span><span class="nc">Package</span><span class="p">],</span>
