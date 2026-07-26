@@ -806,10 +806,6 @@ pub struct FieldInfo {
     pub surface_type_name: Option<String>,
     pub visibility: crate::frontend::ast::Visibility,
     /// Whether access is limited to methods declared on the owning nominal type.
-    ///
-    /// Existing unmodified fields on a private model retain their module-local behavior even though their generated
-    /// Rust visibility is private. An explicit private field on a public model and every private class field are
-    /// type-private.
     pub is_type_private: bool,
     pub owner: Option<String>,
     pub has_default: bool,
@@ -818,19 +814,11 @@ pub struct FieldInfo {
 }
 
 /// Return whether a checked field uses the declaring nominal type as its access boundary.
-///
-/// Models preserve their established module-private default and only opt into type privacy explicitly. Classes keep
-/// their existing private-by-default field contract.
 pub(crate) fn field_is_type_private(
     field: &crate::frontend::ast::FieldDecl,
-    private_fields_are_type_private_by_default: bool,
+    private_fields_are_type_private: bool,
 ) -> bool {
-    matches!(field.visibility, crate::frontend::ast::Visibility::Private)
-        && (private_fields_are_type_private_by_default
-            || matches!(
-                field.explicit_visibility,
-                Some(crate::frontend::ast::Visibility::Private)
-            ))
+    private_fields_are_type_private && matches!(field.visibility, crate::frontend::ast::Visibility::Private)
 }
 
 /// Return the user-facing field type name without making presentation metadata a second semantic authority.

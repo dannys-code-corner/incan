@@ -3176,7 +3176,7 @@ import std.async
 from std.async.task import JoinHandle, TaskJoinError
 
 pub model TaskBox[T] with Awaitable[Result[T, TaskJoinError]]:
-  handle: JoinHandle[T]
+  pub handle: JoinHandle[T]
 
 pub async def wait_for(box: TaskBox[int]) -> Result[int, TaskJoinError]:
   return await box

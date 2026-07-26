@@ -2,7 +2,7 @@ trait Named:
   property label -> str
 
 pub model Money with Named:
-  cents: int
+  pub cents: int
 
   pub property dollars -> int:
     return self.cents + 1

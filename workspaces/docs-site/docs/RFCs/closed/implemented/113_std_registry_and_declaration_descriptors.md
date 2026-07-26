@@ -95,9 +95,9 @@ from std.registry import Registry, SubjectKind, describe
 
 @derive(Descriptor)
 pub model FunctionSpec:
-    canonical_name: str
-    lifecycle: Lifecycle
-    policy: FunctionPolicy
+    pub canonical_name: str
+    pub lifecycle: Lifecycle
+    pub policy: FunctionPolicy
 
 
 pub static functions: Registry[FunctionId, FunctionSpec] = Registry.define(

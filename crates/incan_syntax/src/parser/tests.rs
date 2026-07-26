@@ -549,11 +549,11 @@ pub class LazyFrame:
     }
 
     #[test]
-    fn test_parse_pub_model_preserves_explicit_private_field_issue884() -> Result<(), Vec<CompileError>> {
+    fn test_parse_pub_model_uses_ordinary_field_visibility_issue884() -> Result<(), Vec<CompileError>> {
         let source = r#"
 pub model SealedEnvelope:
-  private body: str
-  envelope_id: str
+  body: str
+  pub envelope_id: str
 "#;
         let program = parse_str(source)?;
         let model = require_model_decl(&program.declarations[0])?;
@@ -564,10 +564,11 @@ pub model SealedEnvelope:
     }
 
     #[test]
-    fn test_parse_pub_model_keeps_private_available_as_a_field_name_issue884() -> Result<(), Vec<CompileError>> {
+    fn test_parse_pub_model_keeps_private_available_as_an_ordinary_field_name_issue884() -> Result<(), Vec<CompileError>>
+    {
         let source = r#"
 pub model Vocabulary:
-  private [alias="private_value"]: str
+  pub private [alias="private_value"]: str
 "#;
         let program = parse_str(source)?;
         let model = require_model_decl(&program.declarations[0])?;
@@ -578,22 +579,6 @@ pub model Vocabulary:
         );
         assert!(matches!(model.fields[0].node.visibility, Visibility::Public));
         Ok(())
-    }
-
-    #[test]
-    fn test_parse_rejects_conflicting_field_visibility_modifiers_issue884() {
-        for source in [
-            "pub model Record:\n  pub private secret: str\n",
-            "pub model Record:\n  private pub secret: str\n",
-        ] {
-            let errors = parse_str_err(source, "conflicting field visibility modifiers should fail");
-            assert!(
-                errors
-                    .iter()
-                    .any(|error| error.message.contains("cannot be both 'pub' and 'private'")),
-                "expected conflicting visibility diagnostic, got: {errors:?}"
-            );
-        }
     }
 
     #[test]

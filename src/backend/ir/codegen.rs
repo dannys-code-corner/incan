@@ -2021,8 +2021,8 @@ pub def use() -> str:
         let code = generate(
             r#"
 pub model Reader:
-  layer: str
-  format: str
+  pub layer: str
+  pub format: str
 
 pub BronzeReader = partial Reader(layer="bronze", format="delta")
 
@@ -3626,7 +3626,7 @@ pub def make() -> A:
         let db_module = parse_program(
             r#"
 pub model Account:
-  type_ [alias="type"]: str
+  pub type_ [alias="type"]: str
 
   def get_type(self) -> str:
     return self.type

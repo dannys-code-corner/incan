@@ -102,8 +102,8 @@ pub enum JsonErrorKind(str):
 pub model JsonError:
     """Error returned by `std.json` parsing, strict extraction, indexing, and mutation helpers."""
 
-    kind_value: JsonErrorKind
-    detail_value: str
+    pub kind_value: JsonErrorKind
+    pub detail_value: str
 
     def kind(self) -> JsonErrorKind:
         """Return the stable error category."""

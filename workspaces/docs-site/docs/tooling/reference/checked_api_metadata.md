@@ -168,7 +168,7 @@ The metadata is derived from parsed and typechecked semantics. Public declaratio
 
 Types use the same structural `TypeRef` encoding as library manifest exports. For example, a non-generic type is encoded as `{"Named": {"name": "str"}}`, while a generic application is encoded as `{"Applied": {"name": "List", "args": [...]}}`.
 
-Private model- and class-field entries include `"visibility": "private"`. An omitted field visibility means public, preserving compatibility with schema-v1 metadata and manifests that predate explicit visibility. Public model and class fields therefore retain the compact representation without a `visibility` key.
+Private model- and class-field entries include `"visibility": "private"`. In source, a field is private when it omits `pub`. In serialized metadata, an omitted visibility still means public so schema-v1 manifests created under the earlier public-model default remain compatible. Public model and class fields therefore retain the compact representation without a `visibility` key.
 
 Function metadata keeps the source declaration's public callable surface. For a decorated callable, each decorator entry also carries `decorated_callable`, which contains the decorated declaration's checked public identity, source anchor, type parameters, parameter names and types, return type, receiver when applicable, and async marker. Registry and catalog tooling should read that field instead of asking authors to repeat the decorated function name or signature in decorator arguments.
 

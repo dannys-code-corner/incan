@@ -30,7 +30,7 @@ pub type EdgeId = newtype int:
 pub model GraphError with Error:
     """Error returned by graph operations when ids are unknown, cycles are rejected, or removal cannot be completed."""
 
-    detail: str
+    pub detail: str
 
     def message(self) -> str:
         return self.detail

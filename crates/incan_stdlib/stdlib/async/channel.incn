@@ -61,7 +61,7 @@ pub model SendError[T] with Error:
             Ok(_) => println("sent")
             Err(err) => println(f"channel closed, retry later: {err.value}")
     """
-    value: T
+    pub value: T
 
     def message(self) -> str:
         return "channel send failed"

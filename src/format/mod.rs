@@ -711,14 +711,14 @@ def high_value_orders(orders: DataFrame) -> DataFrame:
     }
 
     #[test]
-    fn test_format_source_preserves_explicit_private_pub_model_field_issue884() -> Result<(), FormatError> {
+    fn test_format_source_preserves_ordinary_pub_model_field_visibility_issue884() -> Result<(), FormatError> {
         let source = r#"pub model SealedEnvelope:
-  private body: str
-  envelope_id: str
+  body: str
+  pub envelope_id: str
 "#;
         let formatted = format_source(source)?;
         let expected = r#"pub model SealedEnvelope:
-    private body: str
+    body: str
     pub envelope_id: str
 "#;
         assert_eq!(formatted, expected);

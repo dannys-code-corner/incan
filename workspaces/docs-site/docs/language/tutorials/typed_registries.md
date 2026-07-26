@@ -22,8 +22,8 @@ pub type FunctionId = newtype str
 
 @derive(Descriptor)
 pub model FunctionSpec:
-    summary: str
-    stable: bool
+    pub summary: str
+    pub stable: bool
 
 pub static functions: Registry[FunctionId, FunctionSpec] = Registry.define(
     subjects=[SubjectKind.Function],

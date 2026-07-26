@@ -142,9 +142,9 @@ Descriptor models opt into immutable structural snapshots with `@derive(Descript
 ```incan
 @derive(Descriptor)
 pub model FunctionSpec:
-    summary: str
-    stable: bool
-    input_type: type
+    pub summary: str
+    pub stable: bool
+    pub input_type: type
 ```
 
 | Accepted structural value | Notes |

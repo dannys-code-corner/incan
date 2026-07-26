@@ -13,8 +13,8 @@ pub model _ReplacementPiece:
     One expanded replacement segment plus the next unread template offset.
     """
 
-    text: str
-    next_index: int
+    pub text: str
+    pub next_index: int
 
 
 pub def _expand_replacement(repl: str, caps: Captures) -> str:

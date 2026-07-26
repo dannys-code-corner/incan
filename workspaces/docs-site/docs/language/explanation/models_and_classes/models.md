@@ -28,7 +28,7 @@ def main() -> None:
 
 **The key ideas**:
 
-- **A `model` is field-defined**: fields are the data shape, and public-model fields are public unless explicitly marked `private`.
+- **A `model` is field-defined**: fields are the data shape, and each field is public only when explicitly marked `pub`.
 - **Construction is keyword-only**: model constructors use named arguments.
 - **Defaults are part of the type**: a default makes a field optional at construction sites.
 - **Schema mapping is model-only**: models support field aliases/metadata for wire formats.
@@ -76,14 +76,14 @@ Rules:
     - A field **with** a default may be omitted (the default is used).
 - **Type checking**: default expressions must be compatible with the field type.
 
-### Private fields on a public model
+### Field visibility on a public model
 
-Fields on a `pub model` remain public by default for compatibility with DTO-style models. Use the contextual `private` modifier when a public value should expose methods or projections without exposing selected storage fields:
+`pub model` exports the model type; it does not implicitly export every field. Fields use the same visibility rule as other declarations: add `pub` to expose a field, and omit it to keep the field private to the declaring model:
 
 ```incan
 pub model SealedEnvelope:
-    private body: str = ""
-    envelope_id: str
+    body: str = ""
+    pub envelope_id: str
 
     @staticmethod
     def create(body: str, envelope_id: str) -> SealedEnvelope:
@@ -95,7 +95,7 @@ pub model SealedEnvelope:
 
 Privacy is type-private. Methods declared on `SealedEnvelope` may read, construct, or pattern-match its private fields. Top-level functions, sibling modules, other model/class methods, re-export consumers, and compiled-library consumers may not.
 
-`private` is contextual rather than a globally reserved word. `private body: str` declares a private field named `body`, while `private: str` still declares an ordinary field named `private`.
+Incan 0.4 promoted every field of a `pub model` to public. When migrating a DTO-style public model to 0.5, add `pub` to each field that forms part of its public constructor, member-access, pattern, or reflection surface. Leaving a field unmodified now intentionally seals it behind methods on the owning model.
 
 ## Field metadata and schema-safe aliases
 

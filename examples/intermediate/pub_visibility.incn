@@ -2,14 +2,14 @@
 Demonstrates public visibility on models and functions.
 
 ## Notes
-- `pub model` implies public fields by default.
-- The contextual `private` modifier keeps selected fields type-private.
+- `pub model` exports the type, while each field still follows the ordinary visibility rule.
+- A field is public only when it has `pub`; an unmodified field is type-private.
 """
 
 pub model Point:
-    x: int
-    y: int
-    private secret: int = 0
+    pub x: int
+    pub y: int
+    secret: int = 0
 
     def secret_value(self) -> int:
         return self.secret

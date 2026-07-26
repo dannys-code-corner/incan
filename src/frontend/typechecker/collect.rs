@@ -537,7 +537,13 @@ impl TypeChecker {
 
     /// Register a model declaration with its fields, methods, and derived traits.
     fn collect_model(&mut self, model: &ModelDecl, span: Span) {
-        let fields = collect_fields(&model.fields, self, &model.name, &model.type_params, false);
+        let fields = collect_fields(
+            &model.fields,
+            self,
+            &model.name,
+            &model.type_params,
+            matches!(model.visibility, Visibility::Public),
+        );
         let properties = collect_properties(&model.properties, self, Some(&model.name), &model.type_params);
         let mut method_overloads =
             collect_method_overloads(&model.methods, self, Some(&model.name), &model.type_params);

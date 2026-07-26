@@ -3284,8 +3284,8 @@ model User:
         let ir = must_ok(lower_source(
             r#"
 pub model Vault:
-    private secret: str = "sealed"
-    label: str
+    secret: str = "sealed"
+    pub label: str
 "#,
         ));
         let IrDeclKind::Struct(vault) = &ir.declarations[0].kind else {

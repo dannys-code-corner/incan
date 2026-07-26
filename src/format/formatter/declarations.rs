@@ -1126,12 +1126,9 @@ impl Formatter {
 
     // ---- Fields and params ----
 
-    /// Render one field while preserving an explicitly authored contextual visibility modifier.
+    /// Render a field with its authored visibility, emitting `pub` only when the field is explicitly public.
     fn format_field(&mut self, field: &FieldDecl) {
-        match field.explicit_visibility {
-            Some(Visibility::Private) => self.writer.write("private "),
-            Some(Visibility::Public) | None => self.write_visibility(field.visibility),
-        }
+        self.write_visibility(field.visibility);
         self.writer.write(&field.name);
         let alias = field.metadata.alias.as_deref();
         let description = field.metadata.description.as_deref();

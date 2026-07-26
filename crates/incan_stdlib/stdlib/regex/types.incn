@@ -19,9 +19,9 @@ pub model Match:
     returned, and cloned without carrying engine-borrowed lifetimes.
     """
 
-    text: str
-    start_offset: int
-    end_offset: int
+    pub text: str
+    pub start_offset: int
+    pub end_offset: int
 
     def as_str(self) -> str:
         """
@@ -69,8 +69,8 @@ pub model Captures:
     empty strings, matching Python-style group access without losing the distinction between absence and an empty match.
     """
 
-    indexed: list[Option[Match]]
-    named: Dict[str, Option[Match]]
+    pub indexed: list[Option[Match]]
+    pub named: Dict[str, Option[Match]]
 
     def full_match(self) -> Option[Match]:
         """
@@ -174,8 +174,8 @@ pub model MatchIterator with Iterator[Match]:
     Incan data rather than borrowed engine state.
     """
 
-    items: list[Match]
-    index: int
+    pub items: list[Match]
+    pub index: int
 
     def __iter__(self) -> MatchIterator:
         """
@@ -207,8 +207,8 @@ pub model CapturesIterator with Iterator[Captures]:
     `Regex.captures_iter()` snapshots each engine capture set into ordinary `Captures` values before iteration begins.
     """
 
-    items: list[Captures]
-    index: int
+    pub items: list[Captures]
+    pub index: int
 
     def __iter__(self) -> CapturesIterator:
         """
@@ -241,12 +241,12 @@ pub model SplitIterator with Iterator[str]:
     when a match appears at a boundary or two matches are adjacent.
     """
 
-    matches: MatchIterator
-    text: str
-    limit: int
-    produced: int
-    last_end: int
-    done: bool
+    pub matches: MatchIterator
+    pub text: str
+    pub limit: int
+    pub produced: int
+    pub last_end: int
+    pub done: bool
 
     def __iter__(self) -> SplitIterator:
         """

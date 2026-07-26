@@ -219,8 +219,8 @@ pub struct RustInteropArtifacts {
 pub struct DeclarationArtifacts {
     /// Checked field visibility for local models, keyed first by model name and then canonical field name.
     ///
-    /// Public-model defaults and explicit private modifiers are resolved by the frontend. Lowering consumes this
-    /// snapshot instead of reinterpreting source modifiers or containing-model visibility.
+    /// Field modifiers and the containing model's visibility are resolved by the frontend. Lowering consumes this
+    /// snapshot instead of reinterpreting the source visibility contract.
     pub(crate) model_field_visibilities: HashMap<String, HashMap<String, Visibility>>,
     /// Local model fields whose checked privacy boundary is the declaring type rather than only the source module.
     pub(crate) model_type_private_fields: HashSet<(String, String)>,

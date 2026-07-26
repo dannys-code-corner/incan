@@ -945,7 +945,7 @@ version = "0.1.0"
         r#"from session import collect_with_active_session
 
 pub model DataSet[T]:
-  value: T
+  pub value: T
 
 pub def collect_with_dataset[T](dataset: DataSet[T]) -> T:
   return collect_with_active_session[T](dataset)
@@ -12332,11 +12332,11 @@ def test_direct_import() -> None:
             producer_root.join("src/exprs.incn"),
             r#"@derive(Clone)
 pub model ColumnRefExpr:
-  name: str
+  pub name: str
 
 @derive(Clone)
 pub model SortExpr:
-  direction: str
+  pub direction: str
 
 pub type ColumnExpr = Union[ColumnRefExpr, SortExpr]
 
@@ -12423,9 +12423,9 @@ def main() -> None:
         std::fs::write(
             producer_root.join("src/registry.incn"),
             r#"pub model FunctionSpec:
-  namespace: str
-  name: str
-  deterministic: bool
+  pub namespace: str
+  pub name: str
+  pub deterministic: bool
 
 pub static registered_names: list[str] = []
 pub static registered_specs: list[FunctionSpec] = []
@@ -12708,7 +12708,7 @@ def test_external_vocab_assert_keyword() -> None:
         std::fs::write(
             producer_root.join("src/lib.incn"),
             r#"pub model Marker:
-    value: int
+    pub value: int
 "#,
         )?;
 
@@ -12763,7 +12763,7 @@ def main() -> None:
         std::fs::write(
             project_root.join("src/lib.incn"),
             r#"pub model Marker:
-    value: int
+    pub value: int
 
 pub def marker(value: int) -> Marker:
     return Marker(value=value)
@@ -12898,16 +12898,16 @@ serializer = { path = "../serializer", optional = true, default-features = false
         std::fs::write(
             project_root.join("src/projection_builders.incn"),
             r#"pub model ColumnRefExpr:
-    column_name: str
+    pub column_name: str
 
 pub model StringLiteralExpr:
-    value: str
+    pub value: str
 
 pub model FloatLiteralExpr:
-    value: float
+    pub value: float
 
 pub model EqExpr:
-    arguments: list[ColumnExpr]
+    pub arguments: list[ColumnExpr]
 
 pub type ColumnExpr = Union[ColumnRefExpr, StringLiteralExpr, FloatLiteralExpr, EqExpr]
 
@@ -13167,7 +13167,7 @@ def main() -> None:
         std::fs::write(
             producer_root.join("src/dataset.incn"),
             r#"pub model SessionError:
-  kind: str
+  pub kind: str
 
 pub trait DataSet[T]:
   def to_substrait_plan(self) -> int: ...
@@ -14097,17 +14097,17 @@ pub def display[T](data: DataSet[T]) -> None:
         std::fs::write(
             producer_root.join("src/helpers.incn"),
             r#"pub model IntLiteralExpr:
-  value: int
+  pub value: int
 
 pub model StringLiteralExpr:
-  value: str
+  pub value: str
 
 pub type LiteralValue = Union[int, str]
 pub type ColumnExpr = Union[IntLiteralExpr, StringLiteralExpr]
 
 pub model AggregateMeasure:
-  expr: ColumnExpr
-  label: str
+  pub expr: ColumnExpr
+  pub label: str
 
 pub const DEFAULT_LABEL: str = "orders"
 pub const COUNT_SENTINEL: str = "__querykit_count_no_argument__"
@@ -14490,7 +14490,7 @@ pub def aggregate_default(expr: ColumnExpr, output_name: str = DEFAULT_LABEL) ->
         )?;
         std::fs::write(
             producer_root.join("src/widgets.incn"),
-            "pub model Widget:\n  name: str\n\npub def make_widget(name: str) -> Widget:\n  return Widget(name=name)\n",
+            "pub model Widget:\n  pub name: str\n\npub def make_widget(name: str) -> Widget:\n  return Widget(name=name)\n",
         )?;
         std::fs::write(
             producer_root.join("src/boxmod.incn"),
@@ -14876,8 +14876,8 @@ def main() -> None:
             r#"from std.serde.json import Serialize
 
 pub model Vault with Serialize:
-  private secret [alias="wire_secret"]: str = "sealed"
-  label: str
+  secret [alias="wire_secret"]: str = "sealed"
+  pub label: str
 
   def reveal(self) -> str:
     return self.secret
@@ -15919,7 +15919,7 @@ pub trait StableKey with Key:
 
 @derive(Clone, Eq)
 pub model SmallKey with StableKey:
-    value: int
+    pub value: int
 
     @staticmethod
     def ordinal_encoding() -> str:
@@ -16046,7 +16046,7 @@ pub def small_key_map_bytes() -> bytes:
             r#"from std.traits.convert import TryFrom
 
 pub model EnvToken with TryFrom[str]:
-  value: str
+  pub value: str
 
   @classmethod
   def try_from(cls, value: str) -> Result[Self, str]:
@@ -16055,7 +16055,7 @@ pub model EnvToken with TryFrom[str]:
     return Ok(EnvToken(value=value))
 
 pub model MultiToken with TryFrom[str], TryFrom[int]:
-  value: str
+  pub value: str
 
   @classmethod
   def try_from(cls, value: str) for TryFrom[str] -> Result[Self, str]:
@@ -16071,7 +16071,7 @@ pub trait EnvReadable[T] with TryFrom[T]:
   def source_name(self) -> str: ...
 
 pub model TraitToken with EnvReadable[str]:
-  value: str
+  pub value: str
 
   @classmethod
   def try_from(cls, value: str) -> Result[Self, str]:

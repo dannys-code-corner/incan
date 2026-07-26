@@ -19,7 +19,7 @@ def main() -> None:
 
 ## `__fields__() -> FrozenList[FieldInfo]`
 
-Returns metadata for the type's runtime-visible fields. Fields explicitly marked `private` on a public model, and private class fields, are intentionally absent.
+Returns metadata for the type's runtime-visible fields. Fields without `pub` on a public model, and private class fields, are intentionally absent.
 
 ```incan
 model User:
@@ -119,7 +119,7 @@ Notes:
 
 - Field metadata like `[alias="..."]` and `[description="..."]` is **model-only**.
 - For a `class`, `FieldInfo.alias` and `FieldInfo.description` are always `None` and `FieldInfo.wire_name == FieldInfo.name`.
-- Fields explicitly marked `private` on a public model, and private class fields, are excluded from runtime `__fields__()`, `__field_value__()`, and `__field_items__()` results. Compiler-owned checked API and library manifests retain their declarations and private visibility.
+- Fields without `pub` on a public model, and private class fields, are excluded from runtime `__fields__()`, `__field_value__()`, and `__field_items__()` results. Compiler-owned checked API and library manifests retain their declarations and private visibility.
 - Inherited fields retain the declaring package's Incan `type_name` spelling across compiled-library boundaries, even when generated Rust uses a fully qualified provider-owned type path.
 - You do not need to import `FieldInfo` just to call `obj.__fields__()` and inspect the returned records. Import `FieldInfo` only when you want to spell the type explicitly in an annotation.
 

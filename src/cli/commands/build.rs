@@ -3942,9 +3942,9 @@ when feature("alternate"):
     from leaf import Leaf
 
 pub model Nested:
-    value: int
+    pub value: int
 "#;
-        let leaf_source = "pub model Leaf:\n    value: int\n";
+        let leaf_source = "pub model Leaf:\n    pub value: int\n";
         fs::write(&entry_path, entry_source)?;
         fs::write(&nested_path, nested_source)?;
         fs::write(&leaf_path, leaf_source)?;
@@ -4018,7 +4018,7 @@ pub model Nested:
         fs::write(&entry_path, "when feature(\"outer\"):\n    from nested import Nested\n")?;
         fs::write(
             source_root.join("nested.incn"),
-            "when feature(\"missing\"):\n    pub model Nested:\n        value: int\n",
+            "when feature(\"missing\"):\n    pub model Nested:\n        pub value: int\n",
         )?;
 
         let session = super::super::common::CompilationSession::discover_with_feature_selection(

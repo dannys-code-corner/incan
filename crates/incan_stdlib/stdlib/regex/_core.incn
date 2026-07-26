@@ -20,8 +20,8 @@ pub model RegexError:
     stable `kind()` value is suitable for branching; `message()` preserves the engine's diagnostic detail for humans.
     """
 
-    kind_value: str
-    detail: str
+    pub kind_value: str
+    pub detail: str
 
     def kind(self) -> str:
         """
@@ -62,7 +62,7 @@ pub model Regex:
     ```
     """
 
-    raw: _RawRegex
+    pub raw: _RawRegex
 
     @staticmethod
     def __incan_new(pattern: str, ignore_case: bool = False, multiline: bool = False, dotall: bool = False, verbose: bool = False) -> Result[Regex, RegexError]:

@@ -960,8 +960,8 @@ pub enum StreamError:
 
 
 pub model NumberStream with FallibleIterator[int, str]:
-    values: list[int]
-    index: int
+    pub values: list[int]
+    pub index: int
 
     def __next__(mut self) -> Result[Option[int], str]:
         if self.index >= len(self.values):
@@ -3174,7 +3174,7 @@ main = "src/main.incn"
         src_dir.join("helpers.incn"),
         r#"pub model Widget:
     """A documented value that should appear in reports and graph facts."""
-    value: int
+    pub value: int
 
 pub def make_widget(value: int) -> Widget:
     """Create a value for semantic inspection smoke tests."""
@@ -3865,7 +3865,7 @@ version = "0.1.0"
         src_dir.join("lib.incn"),
         r#"pub model Widget:
     """Widget docs survive into generated Rust."""
-    value: int
+    pub value: int
 
 pub def answer() -> int:
     """Answer docs survive into generated Rust."""
@@ -3936,7 +3936,7 @@ version = "0.1.0"
     fs::write(
         src_dir.join("helpers.incn"),
         r#"pub model Widget:
-    value: int
+    pub value: int
 
 pub def make_widget(value: int) -> Widget:
     return Widget(value=value)
@@ -5425,15 +5425,15 @@ version = "0.1.0"
         &main_path,
         r#"
 pub model A:
-    value: str
+    pub value: str
 
 
 pub model B:
-    value: str
+    pub value: str
 
 
 pub model Holder:
-    value: Extended
+    pub value: Extended
 
 
 pub type Base = Union[A, B]
@@ -5555,11 +5555,11 @@ version = "0.1.0"
         imported_src.join("types.incn"),
         r#"
 pub model A:
-    value: str
+    pub value: str
 
 
 pub model B:
-    value: str
+    pub value: str
 
 
 pub type Base = Union[A, B]
@@ -5622,11 +5622,11 @@ version = "0.1.0"
         producer_src.join("defs.incn"),
         r#"
 pub model A:
-    value: str
+    pub value: str
 
 
 pub model B:
-    value: str
+    pub value: str
 
 
 pub type Base = Union[A, B]
@@ -5710,11 +5710,11 @@ version = "0.1.0"
         producer_src.join("defs.incn"),
         r#"
 pub model IntExpr:
-    value: int
+    pub value: int
 
 
 pub model TextExpr:
-    value: str
+    pub value: str
 
 
 pub type Value = Union[IntExpr, TextExpr]
@@ -5811,15 +5811,15 @@ version = "0.1.0"
         producer_src.join("surface.incn"),
         r#"
 pub model ColumnRefExpr:
-    name: str
+    pub name: str
 
 
 pub model NumberColumnExpr:
-    expr: ColumnRefExpr
+    pub expr: ColumnRefExpr
 
 
 pub model SortExpr:
-    expr: ColumnRefExpr
+    pub expr: ColumnRefExpr
 
 
 pub type ColumnExpr = Union[ColumnRefExpr, NumberColumnExpr, SortExpr]
@@ -5827,7 +5827,7 @@ pub type NumberValueOrColumn = Union[ColumnRefExpr, NumberColumnExpr, int]
 
 
 pub model Frame:
-    source: str
+    pub source: str
 
     def filter(self, predicate: ColumnExpr) -> Self:
         return self
@@ -5930,15 +5930,15 @@ fn build_narrowed_union_fallback_helper_calls_issue743() -> Result<(), Box<dyn s
         &main_path,
         r#"
 pub model A:
-    value: str
+    pub value: str
 
 
 pub model B:
-    value: str
+    pub value: str
 
 
 pub model C:
-    value: str
+    pub value: str
 
 
 pub type Expr = Union[A, B, C]
@@ -7565,7 +7565,7 @@ pub model Widget:
     Aliases:
         PublicWidget: Re-exported package surface.
     """
-    name: str
+    pub name: str
 "#,
     )?;
     fs::write(
@@ -8361,19 +8361,19 @@ fn run_primitive_type_token_overload_cast_issue750() -> Result<(), Box<dyn std::
     fs::write(
         &main_path,
         r#"pub model ColumnExpr:
-    name: str
+    pub name: str
 
 
 pub model IntColumnExpr:
-    source: str
+    pub source: str
 
 
 pub model FloatColumnExpr:
-    source: str
+    pub source: str
 
 
 pub model StringColumnExpr:
-    source: str
+    pub source: str
 
 
 pub type NumberColumnExpr = Union[IntColumnExpr, FloatColumnExpr]
@@ -8450,19 +8450,19 @@ version = "0.1.0"
     fs::write(
         producer_src.join("casts.incn"),
         r#"pub model ColumnExpr:
-    name: str
+    pub name: str
 
 
 pub model IntColumnExpr:
-    source: str
+    pub source: str
 
 
 pub model FloatColumnExpr:
-    source: str
+    pub source: str
 
 
 pub model StringColumnExpr:
-    source: str
+    pub source: str
 
 
 pub type NumberColumnExpr = Union[IntColumnExpr, FloatColumnExpr]
@@ -8778,7 +8778,7 @@ from rust::std::primitive import i32 as RustI32
 
 
 pub model PrismCursor:
-    offset: int
+    pub offset: int
 
 
 def fail_to_lower() -> RustI32:

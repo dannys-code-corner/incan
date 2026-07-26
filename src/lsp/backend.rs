@@ -1517,8 +1517,8 @@ pub model Order:
     """
     Order contract.
     """
-    id [description="Stable id"] as "orderId": int
-    label: str = DEFAULT_LABEL
+    pub id [description="Stable id"] as "orderId": int
+    pub label: str = DEFAULT_LABEL
 
     def label(self) -> str:
         """
@@ -1607,7 +1607,7 @@ model Secret:
     value: int
 
 pub model Public:
-    value: int
+    pub value: int
 "#;
         let (ast, metadata) = checked_metadata_for(source)?;
         let previews = api_metadata_previews(&ast, &metadata);
