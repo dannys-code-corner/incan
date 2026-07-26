@@ -111,8 +111,8 @@
     {
       "path": "src/backend/ir/emit/expressions/calls.rs",
       "category": "testing helper and public-module emission compatibility",
-      "expected_count": 4,
-      "expected_fingerprint": "0x2505362ad25e41c1"
+      "expected_count": 5,
+      "expected_fingerprint": "0xd50ac3da0a56714a"
     },
     {
       "path": "src/backend/ir/emit/expressions/comprehensions.rs",
@@ -189,14 +189,14 @@
     {
       "path": "src/backend/ir/lower/expr/calls.rs",
       "category": "public dependency call/default lowering and assert-raises policy",
-      "expected_count": 4,
-      "expected_fingerprint": "0xa034f1c6f0c7e658"
+      "expected_count": 5,
+      "expected_fingerprint": "0x4302ea99a4296bec"
     },
     {
       "path": "src/backend/ir/lower/expr/mod.rs",
       "category": "method, public dependency, and stdlib lowering compatibility",
-      "expected_count": 12,
-      "expected_fingerprint": "0x96f377a44b0b8aa2"
+      "expected_count": 14,
+      "expected_fingerprint": "0xdd6a1b2144dc239e"
     },
     {
       "path": "src/backend/ir/lower/mod.rs",
@@ -236,9 +236,9 @@
     },
     {
       "path": "src/cli/commands/common.rs",
-      "category": "project materialization, provider hashing, dependency, and rust-inspect prewarm compatibility",
-      "expected_count": 9,
-      "expected_fingerprint": "0xdc9b6bcee9771d73"
+      "category": "project materialization, package entrypoint, provider hashing, dependency, and rust-inspect compatibility",
+      "expected_count": 11,
+      "expected_fingerprint": "0x7a73ac065ea2d3e1"
     },
     {
       "path": "src/dependency_resolver.rs",
@@ -260,9 +260,9 @@
     },
     {
       "path": "src/frontend/typechecker/check_expr/access.rs",
-      "category": "method/type access and checked registry boundary classification",
-      "expected_count": 44,
-      "expected_fingerprint": "0x4ded05fcef1fc13b"
+      "category": "method/type access, public modules, and checked registry boundary classification",
+      "expected_count": 46,
+      "expected_fingerprint": "0x7e04e682eba2dc55"
     },
     {
       "path": "src/frontend/typechecker/check_expr/basics.rs",
@@ -272,9 +272,9 @@
     },
     {
       "path": "src/frontend/typechecker/check_expr/calls.rs",
-      "category": "enum constructor member compatibility",
-      "expected_count": 2,
-      "expected_fingerprint": "0x0582b4a26a7a5b97"
+      "category": "enum constructor and public-module member compatibility",
+      "expected_count": 4,
+      "expected_fingerprint": "0x8e71d5fa053c11e1"
     },
     {
       "path": "src/frontend/typechecker/check_expr/calls/constructors.rs",
@@ -298,7 +298,7 @@
       "path": "src/frontend/typechecker/check_expr/mod.rs",
       "category": "expression-level pub/rust namespace compatibility",
       "expected_count": 3,
-      "expected_fingerprint": "0x4241a4c501ebe60c"
+      "expected_fingerprint": "0x2cba3072b14a1ec2"
     },
     {
       "path": "src/frontend/typechecker/check_stmt.rs",
@@ -310,7 +310,7 @@
       "path": "src/frontend/typechecker/collect.rs",
       "category": "derive and public-module collection compatibility",
       "expected_count": 2,
-      "expected_fingerprint": "0x50547807f8d5d3bb"
+      "expected_fingerprint": "0x7f4b804370839554"
     },
     {
       "path": "src/frontend/typechecker/collect/decorators.rs",
@@ -321,8 +321,8 @@
     {
       "path": "src/frontend/typechecker/collect/stdlib_imports.rs",
       "category": "stdlib import, checked API target paths, provider-bound roots, and extension-trait compatibility",
-      "expected_count": 11,
-      "expected_fingerprint": "0xe1b6f3637cf605f3"
+      "expected_count": 12,
+      "expected_fingerprint": "0x7a2ea5c298d2be51"
     },
     {
       "path": "src/frontend/typechecker/const_eval.rs",

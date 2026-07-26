@@ -7,7 +7,7 @@ use crate::frontend::ast::{CallArg, Expr, ParamKind, Span, Spanned, Type};
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::resolved_type_subst::substitute_resolved_type;
 use crate::frontend::symbols::{FieldInfo, FunctionInfo, FunctionOverloadInfo, ResolvedType, SymbolKind, TypeInfo};
-use crate::frontend::typechecker::IdentKind;
+use crate::frontend::typechecker::{IdentKind, canonical_public_library_type_name};
 use incan_core::interop::{
     RustFieldInfo, RustFunctionSig, RustItemKind, RustTypeInfo, compiler_owned_function_signature,
     metadata_free_function_signature,
@@ -25,6 +25,13 @@ mod builtins;
 mod constructors;
 mod generic_bounds;
 mod rust_boundary;
+
+/// Source-facing and canonical identity for one constructor reached through a public package namespace.
+pub(super) struct PublicModuleConstructorContext<'a> {
+    pub display_name: &'a str,
+    pub canonical_name: &'a str,
+    pub type_info: &'a TypeInfo,
+}
 
 /// Return whether the last Rust path segment looks like a type name.
 fn rust_path_last_segment_looks_like_type(path: &str) -> bool {
@@ -68,6 +75,22 @@ impl TypeChecker {
         span: Span,
         expected_return_ty: Option<&ResolvedType>,
     ) -> ResolvedType {
+        if let Expr::Field(base, member) = &callee.node
+            && let Some((_, module_path)) = self.imported_module_for_expr(base)
+            && module_path.len() >= 2
+            && module_path.first().is_some_and(|segment| segment == "pub")
+            && let Err(source_modules) =
+                self.resolve_pub_library_module_symbol_member(&module_path[1], &module_path[2..], member)
+        {
+            self.errors.push(errors::pub_library_module_member_ambiguous(
+                &module_path[1],
+                &module_path[2..],
+                member,
+                &source_modules,
+                span,
+            ));
+            return ResolvedType::Unknown;
+        }
         if let Some(name) = Self::explicit_builtin_member_name(callee) {
             let result = self.check_explicit_builtin_call(name, args, span);
             if !type_args.is_empty() {
@@ -122,12 +145,58 @@ impl TypeChecker {
         {
             // Ensure lowering marks the receiver identifier as a module-path binding.
             let _ = self.check_ident(module_name.as_str(), base.span);
-            if let Some(kind) = self.resolve_imported_module_function_member(&module_path, method.as_str()) {
+            let is_public_library_module =
+                module_path.len() >= 2 && module_path.first().is_some_and(|segment| segment == "pub");
+            let resolved = if is_public_library_module {
+                match self.resolve_pub_library_module_symbol_member(&module_path[1], &module_path[2..], method) {
+                    Ok(resolved) => resolved.map(|resolved| {
+                        (
+                            resolved.kind,
+                            resolved.source_module_path,
+                            resolved.source_name,
+                            Some(module_path[1].clone()),
+                        )
+                    }),
+                    Err(source_modules) => {
+                        self.errors.push(errors::pub_library_module_member_ambiguous(
+                            &module_path[1],
+                            &module_path[2..],
+                            method,
+                            &source_modules,
+                            span,
+                        ));
+                        return ResolvedType::Unknown;
+                    }
+                }
+            } else {
+                self.resolve_imported_module_function_member_with_source(&module_path, method.as_str())
+                    .map(|(kind, source_module_path)| (kind, source_module_path, method.clone(), None))
+            };
+            if let Some((kind, source_module_path, source_name, public_library)) = resolved {
                 let callable = format!("{module_name}.{method}");
-                self.record_source_target(span, module_path.clone(), method.clone(), "function");
-                self.record_source_target(callee.span, module_path, method.clone(), "function");
-                return match kind {
-                    SymbolKind::Function(info) => self.validate_stdlib_module_function_call(
+                if is_public_library_module
+                    && let Some(projection) = self.lookup_pub_library_module_partial_projection(
+                        &module_path[1],
+                        &module_path[2..],
+                        method,
+                        &callable,
+                    )
+                {
+                    self.type_info.record_partial_projection(projection);
+                }
+                let source_kind = match &kind {
+                    SymbolKind::Type(type_info) => Self::source_target_kind_for_type_info(type_info).unwrap_or("type"),
+                    _ => "function",
+                };
+                self.record_source_target(span, source_module_path.clone(), source_name.clone(), source_kind);
+                self.record_source_target(
+                    callee.span,
+                    source_module_path.clone(),
+                    source_name.clone(),
+                    source_kind,
+                );
+                return match (kind, public_library) {
+                    (SymbolKind::Function(info), _) => self.validate_stdlib_module_function_call(
                         callable.as_str(),
                         &info,
                         type_args,
@@ -135,7 +204,7 @@ impl TypeChecker {
                         span,
                         expected_return_ty,
                     ),
-                    SymbolKind::FunctionOverloads(overloads) => self.validate_function_overload_call(
+                    (SymbolKind::FunctionOverloads(overloads), _) => self.validate_function_overload_call(
                         callable.as_str(),
                         &overloads,
                         type_args,
@@ -143,6 +212,25 @@ impl TypeChecker {
                         span,
                         expected_return_ty,
                     ),
+                    (
+                        SymbolKind::Type(type_info @ (TypeInfo::Model(_) | TypeInfo::Class(_) | TypeInfo::Newtype(_))),
+                        Some(library),
+                    ) => {
+                        let mut source_type_path = source_module_path.iter().skip(2).cloned().collect::<Vec<_>>();
+                        source_type_path.push(source_name);
+                        let canonical_name = canonical_public_library_type_name(&library, &source_type_path.join("::"));
+                        self.check_public_module_type_constructor_call(
+                            PublicModuleConstructorContext {
+                                display_name: &callable,
+                                canonical_name: &canonical_name,
+                                type_info: &type_info,
+                            },
+                            type_args,
+                            args,
+                            span,
+                            callee.span,
+                        )
+                    }
                     _ => ResolvedType::Unknown,
                 };
             }
@@ -168,7 +256,7 @@ impl TypeChecker {
                         .expressions
                         .ident_kinds
                         .insert((callee.span.start, callee.span.end), IdentKind::TypeName);
-                    self.check_model_or_class_constructor_call(&owner_name, &fields, args, span);
+                    self.check_model_or_class_constructor_call(&owner_name, &owner_name, &fields, args, span);
                     return self_ty;
                 }
             }
@@ -278,7 +366,8 @@ impl TypeChecker {
                                 field.ty = substitute_resolved_type(&field.ty, type_bindings);
                             }
                         }
-                        let constructor_ty = self.check_model_or_class_constructor_call(name, &fields, args, span);
+                        let constructor_ty =
+                            self.check_model_or_class_constructor_call(name, name, &fields, args, span);
                         self.record_expr_type(callee.span, ResolvedType::Named(name.clone()));
                         self.type_info
                             .expressions
@@ -463,7 +552,7 @@ impl TypeChecker {
                     _ => None,
                 });
             if let Some(fields) = ctor_fields {
-                let constructor_ty = self.check_model_or_class_constructor_call(name, &fields, args, span);
+                let constructor_ty = self.check_model_or_class_constructor_call(name, name, &fields, args, span);
                 self.record_expr_type(callee.span, ResolvedType::Named(name.clone()));
                 self.type_info
                     .expressions
@@ -553,6 +642,90 @@ impl TypeChecker {
                 ResolvedType::Unknown
             }
         }
+    }
+
+    /// Validate a constructor reached through a checked public module namespace while retaining its provider-owned
+    /// nominal identity.
+    pub(in crate::frontend::typechecker::check_expr) fn check_public_module_type_constructor_call(
+        &mut self,
+        context: PublicModuleConstructorContext<'_>,
+        type_args: &[Spanned<Type>],
+        args: &[CallArg],
+        span: Span,
+        callee_span: Span,
+    ) -> ResolvedType {
+        let PublicModuleConstructorContext {
+            display_name,
+            canonical_name: type_name,
+            type_info,
+        } = context;
+        if let Some(ret) = self.check_type_constructor_hook_call(type_name, type_info, type_args, args, span) {
+            self.record_expr_type(callee_span, ret.clone());
+            self.type_info
+                .expressions
+                .ident_kinds
+                .insert((callee_span.start, callee_span.end), IdentKind::TypeName);
+            return ret;
+        }
+
+        let explicit_context = self.explicit_constructor_type_context(type_name, type_info, type_args, span);
+        let explicit_ty = explicit_context.as_ref().map(|(ty, _)| ty.clone());
+        if let TypeInfo::Model(model) = type_info
+            && model
+                .derives
+                .iter()
+                .any(|derive| derives::from_str(derive.as_str()) == Some(DeriveId::Validate))
+        {
+            self.check_call_args(args);
+            self.errors
+                .push(errors::validate_derive_disallows_raw_construction(display_name, span));
+            return ResolvedType::Unknown;
+        }
+
+        let constructor_ty = match type_info {
+            TypeInfo::Newtype(newtype) => {
+                let [CallArg::Positional(value)] = args else {
+                    self.check_call_args(args);
+                    self.errors.push(errors::newtype_constructor_shape(display_name, span));
+                    return explicit_ty.unwrap_or_else(|| self.constructor_result_type(type_name));
+                };
+                let value_ty = self.check_expr_with_expected(value, Some(&newtype.underlying));
+                if !self.types_compatible(&value_ty, &newtype.underlying) {
+                    self.errors.push(errors::type_mismatch(
+                        &newtype.underlying.to_string(),
+                        &value_ty.to_string(),
+                        value.span,
+                    ));
+                }
+                self.constructor_result_type(type_name)
+            }
+            TypeInfo::Model(model) => {
+                let mut fields = model.fields.clone();
+                if let Some((_, type_bindings)) = &explicit_context {
+                    for field in fields.values_mut() {
+                        field.ty = substitute_resolved_type(&field.ty, type_bindings);
+                    }
+                }
+                self.check_model_or_class_constructor_call(type_name, display_name, &fields, args, span)
+            }
+            TypeInfo::Class(class) => {
+                let mut fields = class.fields.clone();
+                if let Some((_, type_bindings)) = &explicit_context {
+                    for field in fields.values_mut() {
+                        field.ty = substitute_resolved_type(&field.ty, type_bindings);
+                    }
+                }
+                self.check_model_or_class_constructor_call(type_name, display_name, &fields, args, span)
+            }
+            _ => ResolvedType::Unknown,
+        };
+        let result = explicit_ty.unwrap_or(constructor_ty);
+        self.record_expr_type(callee_span, result.clone());
+        self.type_info
+            .expressions
+            .ident_kinds
+            .insert((callee_span.start, callee_span.end), IdentKind::TypeName);
+        result
     }
 
     /// Resolve a direct call to a top-level same-name overload set.

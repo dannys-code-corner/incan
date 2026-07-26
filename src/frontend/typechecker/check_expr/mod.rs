@@ -126,16 +126,29 @@ impl TypeChecker {
 
     /// Resolve a function member from a stdlib or public-package module binding.
     fn resolve_imported_module_function_member(&mut self, module_path: &[String], member: &str) -> Option<SymbolKind> {
+        self.resolve_imported_module_function_member_with_source(module_path, member)
+            .map(|(kind, _)| kind)
+    }
+
+    /// Resolve an imported callable together with the authored module path used by lowering and codegraph facts.
+    fn resolve_imported_module_function_member_with_source(
+        &mut self,
+        module_path: &[String],
+        member: &str,
+    ) -> Option<(SymbolKind, Vec<String>)> {
         if let Some(kind) = self.stdlib_cache.lookup_function_symbol(module_path, member) {
-            return Some(kind);
+            return Some((kind, module_path.to_vec()));
         }
-        if module_path.len() == 2 && module_path.first().is_some_and(|seg| seg == "pub") {
-            let kind = self.lookup_pub_library_symbol_member(&module_path[1], member)?;
-            return matches!(kind, SymbolKind::Function(_) | SymbolKind::FunctionOverloads(_)).then_some(kind);
+        if module_path.len() >= 2 && module_path.first().is_some_and(|seg| seg == "pub") {
+            let (kind, source_module_path) =
+                self.lookup_pub_library_module_symbol_member(&module_path[1], &module_path[2..], member)?;
+            return matches!(kind, SymbolKind::Function(_) | SymbolKind::FunctionOverloads(_))
+                .then_some((kind, source_module_path));
         }
         None
     }
 
+    /// Resolve a constant reached through an imported standard-library or checked public-package module.
     fn resolve_imported_module_constant_member(
         &mut self,
         module_path: &[String],
@@ -144,8 +157,17 @@ impl TypeChecker {
         if let Some(info) = self.stdlib_cache.lookup_constant(module_path, member) {
             return Some(info);
         }
-        if module_path.len() == 2 && module_path.first().is_some_and(|seg| seg == "pub") {
-            return self.lookup_pub_library_constant_member(&module_path[1], member);
+        if module_path.len() >= 2 && module_path.first().is_some_and(|seg| seg == "pub") {
+            let (kind, _) = self.lookup_pub_library_module_symbol_member(&module_path[1], &module_path[2..], member)?;
+            return match kind {
+                SymbolKind::Variable(info) => Some(info),
+                SymbolKind::Static(info) => Some(VariableInfo {
+                    ty: info.ty,
+                    is_mutable: false,
+                    is_used: info.is_used,
+                }),
+                _ => None,
+            };
         }
         None
     }

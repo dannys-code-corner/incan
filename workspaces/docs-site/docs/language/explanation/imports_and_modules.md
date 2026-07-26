@@ -16,6 +16,7 @@ For details and tasks, use the split pages:
 - The **standard library** lives under the `std` namespace (e.g. `from std.web import route`). The compiler activates features automatically based on which `std.*` modules you import.
 - Some language keywords are **import-activated** (soft keywords), for example `async` / `await` after importing `std.async` (details in the reference page).
 - Modules may also export **shared runtime state** via `pub static`, which importing modules access as the same live storage cell rather than as a copied value.
+- Published libraries preserve this same filesystem hierarchy below `pub::package`. Source directories become package namespaces automatically, while declaration visibility still comes from `pub`.
 
 <!-- TODO: Add a link to the standard library sections once we create them -->
 
@@ -39,6 +40,14 @@ In Rust, you typically need explicit module declarations before importing. In In
 ### Coming from Python
 
 In Python, packages are driven by directory structure and `__init__.py`. In Incan, directories are recognized as modules without `__init__.py`; use `mod.incn` when you need a directory entrypoint.
+
+## Source hierarchy and package facades
+
+A library has two complementary public shapes. Its checked source hierarchy gives consumers stable, scalable namespaces such as `pub::hees_ai.hyperquant`. Its `src/lib.incn` can additionally re-export selected declarations as a small flat facade. Preserving both avoids forcing large packages into one enormous root namespace without breaking existing facade imports.
+
+Directory namespaces expose public declarations from their immediate source units. Deeper directories remain nested. When siblings use the same natural declaration name, the parent spelling is intentionally ambiguous and consumers select the child module. The source tree therefore reduces naming pressure without inventing a separate module registry.
+
+The checked `.incnlib` API graph is the authority for declarations and visibility at the package boundary. Compiler resolution and editor discovery project that graph instead of independently rediscovering the producer's source, while codegraph import records retain the canonical nested package path written by the consumer. Generated Rust uses the checked namespace projection and compiled module set to reproduce the physical module and facade layout.
 
 ## Where to go next
 

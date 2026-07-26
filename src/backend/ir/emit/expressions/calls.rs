@@ -739,7 +739,9 @@ impl<'a> IrEmitter<'a> {
                 ref_kind: VarRefKind::TypeName,
                 ..
             }
-        );
+        ) || (canonical_path
+            .is_some_and(|path| path.first().map(String::as_str) == Some("pub"))
+            && func.ty.nominal_type_name().is_some());
         if args.iter().all(|arg| arg.name.is_some())
             && (function_sig.is_none() || is_nominal_type_call)
             && let Some(target_name) = result_target_ty
@@ -758,8 +760,7 @@ impl<'a> IrEmitter<'a> {
                 .and_then(|path| self.public_dependency_constructor_metadata_for_path(path, &fields))
                 .or_else(|| self.struct_constructor_metadata_for_fields(target_name, &fields))
                 .filter(|metadata| {
-                    metadata.requires_constructor_function
-                        || (is_nominal_type_call && function_sig.is_none() && !args.is_empty())
+                    metadata.requires_constructor_function || (is_nominal_type_call && function_sig.is_none())
                 })
             {
                 let mut provided: std::collections::HashMap<&str, &TypedExpr> = std::collections::HashMap::new();
@@ -1543,11 +1544,11 @@ mod tests {
         let registry = FunctionRegistry::new();
         let mut emitter = IrEmitter::new(&registry);
         emitter.pub_dependency_constructor_metadata.insert(
-            ("sealed".to_string(), "Vault".to_string()),
+            ("sealed".to_string(), vec!["Vault".to_string()]),
             StructConstructorMetadata::from_manifest_fields("sealed", &sealed_fields),
         );
         emitter.pub_dependency_constructor_metadata.insert(
-            ("decoy".to_string(), "Vault".to_string()),
+            ("decoy".to_string(), vec!["Vault".to_string()]),
             StructConstructorMetadata::from_manifest_fields("decoy", &decoy_fields),
         );
         let func = TypedExpr::new(
@@ -1576,6 +1577,120 @@ mod tests {
             },
         )?;
         assert_eq!(render(tokens), "sealed::Vault(42,None)");
+        Ok(())
+    }
+
+    #[test]
+    fn qualified_public_module_model_call_emits_struct_and_constant_paths_issue948()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::backend::ir::emit::StructConstructorMetadata;
+        use crate::library_manifest::{FieldExport, FieldVisibilityExport, ParamDefaultExport, TypeRef};
+
+        let fields = vec![FieldExport {
+            name: "size".to_string(),
+            ty: TypeRef::Named {
+                name: "int".to_string(),
+            },
+            surface_type_name: None,
+            visibility: FieldVisibilityExport::Public,
+            has_default: false,
+            default: None,
+            alias: None,
+            description: None,
+        }];
+        let registry = FunctionRegistry::new();
+        let mut emitter = IrEmitter::new(&registry);
+        emitter.pub_dependency_constructor_metadata.insert(
+            (
+                "modulelib".to_string(),
+                vec![
+                    "hyperquant".to_string(),
+                    "index".to_string(),
+                    "HyperquantIndex".to_string(),
+                ],
+            ),
+            StructConstructorMetadata::from_manifest_fields("modulelib", &fields),
+        );
+        let defaulted_class_fields = vec![FieldExport {
+            name: "size".to_string(),
+            ty: TypeRef::Named {
+                name: "int".to_string(),
+            },
+            surface_type_name: None,
+            visibility: FieldVisibilityExport::Public,
+            has_default: true,
+            default: Some(ParamDefaultExport::Int(3)),
+            alias: None,
+            description: None,
+        }];
+        emitter.pub_dependency_constructor_metadata.insert(
+            (
+                "modulelib".to_string(),
+                vec![
+                    "hyperquant".to_string(),
+                    "index".to_string(),
+                    "IndexBuilder".to_string(),
+                ],
+            ),
+            StructConstructorMetadata::from_manifest_fields("modulelib", &defaulted_class_fields),
+        );
+        let module = || {
+            TypedExpr::new(
+                IrExprKind::Var {
+                    name: "h".to_string(),
+                    access: VarAccess::Read,
+                    ref_kind: VarRefKind::ExternalName,
+                },
+                IrType::Struct("h".to_string()),
+            )
+        };
+        let func = TypedExpr::new(
+            IrExprKind::Field {
+                object: Box::new(module()),
+                field: "HyperquantIndex".to_string(),
+            },
+            IrType::Struct("pub::modulelib::hyperquant::index::HyperquantIndex".to_string()),
+        );
+        let args = vec![IrCallArg {
+            name: Some("size".to_string()),
+            kind: IrCallArgKind::Named,
+            expr: TypedExpr::new(
+                IrExprKind::Field {
+                    object: Box::new(module()),
+                    field: "DEFAULT_SIZE".to_string(),
+                },
+                IrType::Int,
+            ),
+        }];
+        let path = vec![
+            "pub".to_string(),
+            "modulelib".to_string(),
+            "hyperquant".to_string(),
+            "index".to_string(),
+            "HyperquantIndex".to_string(),
+        ];
+
+        let tokens = emitter.emit_call_expr(&func, &[], &args, None, Some(&path))?;
+
+        assert_eq!(render(tokens), "h::HyperquantIndex{size:h::DEFAULT_SIZE}");
+
+        let class_func = TypedExpr::new(
+            IrExprKind::Field {
+                object: Box::new(module()),
+                field: "IndexBuilder".to_string(),
+            },
+            IrType::Struct("pub::modulelib::hyperquant::index::IndexBuilder".to_string()),
+        );
+        let class_path = vec![
+            "pub".to_string(),
+            "modulelib".to_string(),
+            "hyperquant".to_string(),
+            "index".to_string(),
+            "IndexBuilder".to_string(),
+        ];
+        let class_tokens = emitter.emit_call_expr(&class_func, &[], &[], None, Some(&class_path))?;
+
+        assert_eq!(render(class_tokens), "h::IndexBuilder{size:3}");
         Ok(())
     }
 

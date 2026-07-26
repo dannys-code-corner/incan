@@ -245,6 +245,55 @@ pub fn pub_library_symbol_not_exported(
         .with_hint(format!("Available exports from `pub::{library}`: {exports}"))
 }
 
+/// A nested public module namespace does not exist in the checked package artifact.
+pub fn pub_library_module_not_found(
+    library: &str,
+    module_path: &[String],
+    available_modules: &[String],
+    span: Span,
+) -> CompileError {
+    let requested = module_path.join(".");
+    let available = if available_modules.is_empty() {
+        "<none>".to_string()
+    } else {
+        available_modules.join(", ")
+    };
+    CompileError::new(
+        format!("Public module `pub::{library}.{requested}` does not exist"),
+        span,
+    )
+    .with_hint(format!("Available public modules from `pub::{library}`: {available}"))
+}
+
+/// More than one source declaration maps to the same derived public-module member.
+pub fn pub_library_module_member_ambiguous(
+    library: &str,
+    module_path: &[String],
+    member: &str,
+    source_modules: &[String],
+    span: Span,
+) -> CompileError {
+    let namespace = if module_path.is_empty() {
+        format!("pub::{library}")
+    } else {
+        format!("pub::{library}.{}", module_path.join("."))
+    };
+    let exact_imports = source_modules
+        .iter()
+        .filter(|source_module| !source_module.contains(' ') && !source_module.contains('`'))
+        .map(|source_module| format!("`from pub::{library}.{source_module} import {member}`"))
+        .collect::<Vec<_>>();
+    let mut error = CompileError::new(format!("`{member}` is ambiguous in public module `{namespace}`"), span)
+        .with_hint(format!(
+            "Conflicting public declarations come from: {}",
+            source_modules.join(", ")
+        ));
+    if !exact_imports.is_empty() {
+        error = error.with_hint(format!("Import the exact child module: {}", exact_imports.join(" or ")));
+    }
+    error.with_hint("Rename one declaration or add an explicit public facade export")
+}
+
 /// A known `pub::` export exists only behind package features that are not active for this dependency projection.
 pub fn pub_library_symbol_requires_features(
     symbol: &str,

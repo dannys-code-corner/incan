@@ -18,7 +18,7 @@ use crate::dependency_resolver::{ResolvedDependencies, resolve_reachable_depende
 use crate::frontend::api_metadata::{
     CHECKED_API_METADATA_SCHEMA_VERSION, CheckedApiMetadataPackage, CheckedApiPackageIdentity,
     collect_checked_api_alias_metadata, collect_checked_api_metadata, materialize_api_alias_projections,
-    validate_checked_api_docstrings,
+    materialize_checked_api_public_namespaces, validate_checked_api_docstrings,
 };
 use crate::frontend::ast::{Declaration, Decorator, Expr, ImportKind, Literal, Span, Spanned, Statement, Visibility};
 use crate::frontend::contract_metadata::{ContractMetadataPackage, read_project_model_bundles};
@@ -1300,7 +1300,7 @@ fn prepare_library_project(
         package_features,
         sdk_profile_override,
     )?;
-    let modules = super::common::collect_modules_detailed_with_session(lib_entry.clone(), &compilation_session)
+    let modules = super::common::collect_library_modules_detailed_with_session(lib_entry.clone(), &compilation_session)
         .map_err(|failure| CliError::failure(failure.render_human()))?;
     let provider_metadata_modules = collect_unprojected_provider_modules(&lib_entry, &compilation_session)?;
 
@@ -1635,14 +1635,18 @@ fn prepare_library_project(
             .filter(|bundle| bundle.publishable)
             .collect(),
     );
-    library_manifest.contract_metadata.api = Some(CheckedApiMetadataPackage {
+    let mut checked_api = CheckedApiMetadataPackage {
         schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
         package: Some(CheckedApiPackageIdentity {
             name: project_name.clone(),
             version: Some(project_version.clone()),
         }),
         modules: api_metadata_modules,
-    });
+        public_namespaces: Vec::new(),
+    };
+    materialize_checked_api_public_namespaces(&mut checked_api)
+        .map_err(|error| CliError::failure(format!("failed to publish checked module namespaces: {error}")))?;
+    library_manifest.contract_metadata.api = Some(checked_api);
     library_manifest.contract_metadata.provider = compiled_provider_metadata(
         &manifest,
         &package_feature_plan,
@@ -1743,6 +1747,10 @@ fn prepare_library_project(
         codegen.add_module_with_path_segments(&module.name, &module.ast, module.path_segments.clone());
     }
     let mut generator = ProjectGenerator::new(&out_dir, project_name.as_str(), false);
+    let checked_api = library_manifest.contract_metadata.api.as_ref().ok_or_else(|| {
+        CliError::failure("checked API metadata is unavailable while generating public namespace facades")
+    })?;
+    generator.set_public_namespace_facades(checked_api);
     // Canonical workspace locking uses a synthetic package name so every member resolves one shared Cargo graph.
     // A published library artifact instead has an identity contract across Cargo.toml, `[lib]`, and `.incnlib`, so
     // its generated Cargo package must retain the selected producer project's name.
@@ -2152,11 +2160,7 @@ fn collect_unprojected_provider_modules(
     library_entrypoint: &Path,
     session: &super::common::CompilationSession,
 ) -> CliResult<Vec<ParsedModule>> {
-    let mut pending = vec![(
-        library_entrypoint.to_path_buf(),
-        "main".to_string(),
-        vec!["main".to_string()],
-    )];
+    let mut pending = super::common::library_source_seeds(library_entrypoint, session)?;
     let mut processed = HashSet::new();
     let mut modules = Vec::new();
 
@@ -2287,11 +2291,11 @@ fn module_is_owned_by_dependency_provider(provider_plan: &ProviderPlan, emission
     provider_plan.active_sdk_provider_for_module(&canonical).is_some()
 }
 
-/// Derive the positive feature predicates under which every local provider module is reachable from the entrypoint.
+/// Derive positive feature predicates for entrypoint-reachable modules and disconnected automatic namespace roots.
 ///
 /// Multiple incomparable predicates represent alternative additive paths. A broader predicate subsumes narrower paths,
-/// so an unconditional import collapses every conditional route to the same module. Conditions accumulate across
-/// nested imports instead of being inferred only from the library entrypoint.
+/// so an unconditional import collapses every conditional route to the same module. Conditions accumulate across nested
+/// imports, while modules outside the entrypoint graph remain unconditional roots of the published source hierarchy.
 fn provider_module_reachability_requirements(
     modules: &[ParsedModule],
     entrypoint: &ParsedModule,
@@ -2311,7 +2315,28 @@ fn provider_module_reachability_requirements(
     let mut requirements = BTreeMap::new();
     insert_provider_feature_predicate(&mut requirements, entrypoint.path_segments.clone(), BTreeSet::new());
     let mut pending = vec![(entrypoint_path, BTreeSet::new())];
+    propagate_provider_feature_predicates(&modules_by_path, source_root, &mut requirements, &mut pending)?;
 
+    let disconnected_modules = modules
+        .iter()
+        .filter(|module| !requirements.contains_key(&module.path_segments))
+        .collect::<Vec<_>>();
+    for module in disconnected_modules {
+        insert_provider_feature_predicate(&mut requirements, module.path_segments.clone(), BTreeSet::new());
+        pending.push((canonical_provider_source_path(&module.file_path), BTreeSet::new()));
+    }
+    propagate_provider_feature_predicates(&modules_by_path, source_root, &mut requirements, &mut pending)?;
+
+    Ok(requirements)
+}
+
+/// Propagate inherited feature predicates through one bounded set of local provider imports.
+fn propagate_provider_feature_predicates(
+    modules_by_path: &BTreeMap<PathBuf, &ParsedModule>,
+    source_root: &Path,
+    requirements: &mut BTreeMap<Vec<String>, Vec<BTreeSet<String>>>,
+    pending: &mut Vec<(PathBuf, BTreeSet<String>)>,
+) -> CliResult<()> {
     while let Some((module_path, inherited_features)) = pending.pop() {
         let Some(module) = modules_by_path.get(&module_path) else {
             return Err(CliError::failure(format!(
@@ -2340,7 +2365,7 @@ fn provider_module_reachability_requirements(
             let mut required_features = inherited_features.clone();
             required_features.extend(declaration.required_features.iter().cloned());
             if insert_provider_feature_predicate(
-                &mut requirements,
+                requirements,
                 target_module.path_segments.clone(),
                 required_features.clone(),
             ) {
@@ -2349,7 +2374,7 @@ fn provider_module_reachability_requirements(
         }
     }
 
-    Ok(requirements)
+    Ok(())
 }
 
 /// Canonicalize source identity when possible while retaining useful fixture paths when it is not.
@@ -2494,8 +2519,12 @@ fn provider_import_identity(import: &ImportKind) -> String {
     match import {
         ImportKind::Module(path) => format!("import:{}", path.segments.join(".")),
         ImportKind::From { module, .. } => format!("from:{}", module.segments.join(".")),
-        ImportKind::PubLibrary { library } => format!("import:pub::{library}"),
-        ImportKind::PubFrom { library, .. } => format!("from:pub::{library}"),
+        ImportKind::PubLibrary { library, path } => {
+            format!("import:pub::{library}{}", format_pub_module_suffix(path))
+        }
+        ImportKind::PubFrom { library, path, .. } => {
+            format!("from:pub::{library}{}", format_pub_module_suffix(path))
+        }
         ImportKind::Python(module) => format!("import:python:{module}"),
         ImportKind::RustCrate { crate_name, path, .. } => {
             format!("import:rust::{crate_name}::{}", path.join("::"))
@@ -2504,6 +2533,11 @@ fn provider_import_identity(import: &ImportKind) -> String {
             format!("from:rust::{crate_name}::{}", path.join("::"))
         }
     }
+}
+
+/// Render a nested public-package module path for stable provider import identity.
+fn format_pub_module_suffix(path: &[String]) -> String {
+    path.iter().map(|segment| format!(".{segment}")).collect()
 }
 
 /// Return one declaration's stable local name.

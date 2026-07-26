@@ -247,8 +247,10 @@ impl TypeChecker {
                 if let Some(info) = self.stdlib_cache.lookup_trait(&module_path, member) {
                     return Some(SymbolKind::Trait(info));
                 }
-                if module_path.len() == 2 && module_path.first().is_some_and(|seg| seg == "pub") {
-                    return self.lookup_pub_library_symbol_member(&module_path[1], member);
+                if module_path.len() >= 2 && module_path.first().is_some_and(|seg| seg == "pub") {
+                    return self
+                        .lookup_pub_library_module_symbol_member(&module_path[1], &module_path[2..], member)
+                        .map(|(kind, _)| kind);
                 }
                 None
             }
@@ -320,8 +322,10 @@ impl TypeChecker {
                 .map(|arg| PartialProjectionPreset {
                     name: arg.name.clone(),
                     value: arg.value.clone(),
+                    external_value: None,
                 })
                 .collect(),
+            external_library: None,
         });
         self.type_info
             .declarations

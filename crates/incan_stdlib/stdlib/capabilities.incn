@@ -115,11 +115,18 @@ static rust_interop_boundary: RegistryEntry[CapabilityId, CapabilityDescriptor] 
         references=rust_interop_boundary_references,
     ),
 )
-const incan_libraries_forms: FrozenList[str] = ["from pub::mylib import my_function", "pub from session import Session"]
+const incan_libraries_forms: FrozenList[str] = [
+    "from pub::mylib import my_module",
+    "from pub::mylib.my_module import my_function",
+    "pub from session import Session",
+]
 const incan_libraries_references: FrozenList[CapabilityReference] = [CapabilityReference(
     label="Imports and modules",
     path="imports_and_modules.md",
-), CapabilityReference(label="Release 0.2", path="../../release_notes/0_2.md")]
+), CapabilityReference(label="Release 0.2", path="../../release_notes/0_2.md"), CapabilityReference(
+    label="Release 0.5",
+    path="../../release_notes/0_5.md",
+)]
 static incan_libraries: RegistryEntry[CapabilityId, CapabilityDescriptor] = capabilities.entry(
     key=CapabilityId("IncanLibraries"),
     subject=RegistrySubject.current_unit(),
@@ -131,7 +138,7 @@ static incan_libraries: RegistryEntry[CapabilityId, CapabilityDescriptor] = capa
         rfc="RFC 031",
         stability=CapabilityStability.Stable,
         activation="Build libraries with `incan build --lib`; consume dependencies through `pub::` imports.",
-        summary="Projects can publish public API manifests and downstream projects can import those public symbols.",
+        summary="Projects publish checked APIs through explicit root facades and source-derived module namespaces.",
         canonical_forms=incan_libraries_forms,
         prefer_over="Copying source files between projects or relying on private module paths.",
         references=incan_libraries_references,

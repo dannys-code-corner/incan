@@ -1056,7 +1056,15 @@ impl AstLowering {
 
             // ---- Method calls ----
             ast::Expr::MethodCall(o, m, type_args, args) => {
-                if self.imported_module_function_callee_path(&o.node, m).is_some() {
+                let is_public_module_constructor = self
+                    .type_info
+                    .as_ref()
+                    .and_then(|info| info.source_target(expr_span))
+                    .is_some_and(|target| {
+                        target.module_path.first().map(String::as_str) == Some("pub")
+                            && matches!(target.kind.as_str(), "model" | "class" | "newtype" | "rusttype")
+                    });
+                if self.imported_module_function_callee_path(&o.node, m).is_some() || is_public_module_constructor {
                     let callee = ast::Spanned::new(ast::Expr::Field(o.clone(), m.clone()), expr_span);
                     return self
                         .lower_call_expr(&callee, type_args, args, expr_span)

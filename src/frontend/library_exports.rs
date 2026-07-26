@@ -561,8 +561,9 @@ fn checked_import_exports(import: &ImportDecl, checker: &TypeChecker) -> Vec<Che
             base_path.extend(path.iter().cloned());
             checked_import_item_exports(items, base_path, checker)
         }
-        ImportKind::PubFrom { library, items } => {
-            let base_path = vec!["pub".to_string(), library.clone()];
+        ImportKind::PubFrom { library, path, items } => {
+            let mut base_path = vec!["pub".to_string(), library.clone()];
+            base_path.extend(path.iter().cloned());
             checked_import_item_exports(items, base_path, checker)
         }
         _ => Vec::new(),

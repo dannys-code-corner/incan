@@ -2211,10 +2211,14 @@ fn import_shape(import: &ImportDecl) -> (String, String, Vec<String>) {
             import_path_display(module),
             items.iter().map(import_item_display).collect(),
         ),
-        ImportKind::PubLibrary { library } => ("pub_library".to_string(), format!("pub::{library}"), Vec::new()),
-        ImportKind::PubFrom { library, items } => (
+        ImportKind::PubLibrary { library, path } => (
+            "pub_library".to_string(),
+            pub_import_path_display(library, path),
+            Vec::new(),
+        ),
+        ImportKind::PubFrom { library, path, items } => (
             "pub_from".to_string(),
-            format!("pub::{library}"),
+            pub_import_path_display(library, path),
             items.iter().map(import_item_display).collect(),
         ),
         ImportKind::Python(module) => ("python".to_string(), module.clone(), Vec::new()),
@@ -2257,7 +2261,13 @@ fn import_export_names(import: &ImportDecl) -> Vec<String> {
                 .map(|item| item.alias.clone().unwrap_or_else(|| item.name.clone()))
                 .collect()
         }
-        ImportKind::PubLibrary { library } => vec![import.alias.clone().unwrap_or_else(|| library.clone())],
+        ImportKind::PubLibrary { library, path } => vec![
+            import
+                .alias
+                .clone()
+                .or_else(|| path.last().cloned())
+                .unwrap_or_else(|| library.clone()),
+        ],
         ImportKind::Python(module) => vec![import.alias.clone().unwrap_or_else(|| module.clone())],
         ImportKind::RustCrate { crate_name, path, .. } => vec![
             import
@@ -2266,6 +2276,16 @@ fn import_export_names(import: &ImportDecl) -> Vec<String> {
                 .unwrap_or_else(|| path.last().cloned().unwrap_or_else(|| crate_name.clone())),
         ],
     }
+}
+
+/// Format one public-package import path using the canonical codegraph spelling.
+fn pub_import_path_display(library: &str, path: &[String]) -> String {
+    let mut display = format!("pub::{library}");
+    for segment in path {
+        display.push('.');
+        display.push_str(segment);
+    }
+    display
 }
 
 /// Format one imported item, preserving local alias spelling when present.
@@ -2450,4 +2470,52 @@ fn line_column_for_offset(source: &str, offset: usize) -> (usize, usize) {
 /// Format a filesystem path using the process-native display spelling.
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_public_imports_preserve_canonical_codegraph_paths_and_bindings_issue948() {
+        let module_import = ImportDecl {
+            visibility: Visibility::Private,
+            kind: ImportKind::PubLibrary {
+                library: "modulelib".to_string(),
+                path: vec!["hyperquant".to_string(), "index".to_string()],
+            },
+            alias: None,
+        };
+        assert_eq!(
+            import_shape(&module_import),
+            (
+                "pub_library".to_string(),
+                "pub::modulelib.hyperquant.index".to_string(),
+                Vec::new()
+            )
+        );
+        assert_eq!(import_export_names(&module_import), vec!["index".to_string()]);
+
+        let from_import = ImportDecl {
+            visibility: Visibility::Private,
+            kind: ImportKind::PubFrom {
+                library: "modulelib".to_string(),
+                path: vec!["hyperquant".to_string(), "index".to_string()],
+                items: vec![ImportItem {
+                    name: "HyperquantIndex".to_string(),
+                    alias: Some("Index".to_string()),
+                }],
+            },
+            alias: None,
+        };
+        assert_eq!(
+            import_shape(&from_import),
+            (
+                "pub_from".to_string(),
+                "pub::modulelib.hyperquant.index".to_string(),
+                vec!["HyperquantIndex as Index".to_string()]
+            )
+        );
+        assert_eq!(import_export_names(&from_import), vec!["Index".to_string()]);
+    }
 }

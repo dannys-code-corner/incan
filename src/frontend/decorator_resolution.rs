@@ -81,14 +81,23 @@ pub fn collect_import_aliases(program: &Program) -> HashMap<String, Vec<String>>
                         aliases.insert(name, resolved);
                     }
                 }
-                ImportKind::PubLibrary { library } => {
-                    let name = import.alias.clone().unwrap_or_else(|| library.clone());
-                    aliases.insert(name, vec!["pub".to_string(), library.clone()]);
+                ImportKind::PubLibrary { library, path } => {
+                    let name = import
+                        .alias
+                        .clone()
+                        .or_else(|| path.last().cloned())
+                        .unwrap_or_else(|| library.clone());
+                    let mut resolved = vec!["pub".to_string(), library.clone()];
+                    resolved.extend(path.iter().cloned());
+                    aliases.insert(name, resolved);
                 }
-                ImportKind::PubFrom { library, items } => {
+                ImportKind::PubFrom { library, path, items } => {
                     for item in items {
                         let name = item.alias.as_ref().cloned().unwrap_or_else(|| item.name.clone());
-                        aliases.insert(name, vec!["pub".to_string(), library.clone(), item.name.clone()]);
+                        let mut resolved = vec!["pub".to_string(), library.clone()];
+                        resolved.extend(path.iter().cloned());
+                        resolved.push(item.name.clone());
+                        aliases.insert(name, resolved);
                     }
                 }
                 _ => {}

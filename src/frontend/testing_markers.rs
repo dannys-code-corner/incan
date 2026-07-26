@@ -757,6 +757,7 @@ mod tests {
                 &checker,
                 vec!["testing".to_string()],
             )],
+            public_namespaces: Vec::new(),
         });
 
         let source_semantics = extract_testing_marker_semantics(&program)?;

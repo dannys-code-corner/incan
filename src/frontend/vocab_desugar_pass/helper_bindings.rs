@@ -40,6 +40,7 @@ impl HelperImportAccumulator {
                     visibility: ast::Visibility::Private,
                     kind: ast::ImportKind::PubFrom {
                         library: spec.dependency_key.clone(),
+                        path: Vec::new(),
                         items: vec![ast::ImportItem {
                             name: spec.exported_name.clone(),
                             alias: Some(spec.alias.clone()),

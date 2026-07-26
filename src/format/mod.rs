@@ -2462,6 +2462,18 @@ def load_user(id: UserId) -> User:
     }
 
     #[test]
+    fn test_format_nested_pub_import_paths_canonicalize_to_dots_issue948() -> Result<(), FormatError> {
+        let source = "import pub::mylib::hyperquant::index as h\nfrom pub::mylib::hyperquant::search import find\n";
+        let formatted = format_source(source)?;
+        assert_eq!(
+            formatted,
+            "import pub::mylib.hyperquant.index as h\nfrom pub::mylib.hyperquant.search import find\n"
+        );
+        assert_eq!(format_source(&formatted)?, formatted);
+        Ok(())
+    }
+
+    #[test]
     fn test_format_top_level_spacing_imports_consts_and_function() -> Result<(), FormatError> {
         let source = r#"from rust::std::f64::consts import PI, E
 from rust::std::f64 import INFINITY, NAN

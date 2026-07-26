@@ -13,8 +13,16 @@ impl AstLowering {
             ast::ImportKind::From { module, items } => {
                 (canonicalize_source_module_segments(&module.segments), items.clone())
             }
-            ast::ImportKind::PubLibrary { library } => (vec![library.clone()], vec![]),
-            ast::ImportKind::PubFrom { library, items } => (vec![library.clone()], items.clone()),
+            ast::ImportKind::PubLibrary { library, path } => {
+                let mut segments = vec![library.clone()];
+                segments.extend(path.iter().cloned());
+                (segments, vec![])
+            }
+            ast::ImportKind::PubFrom { library, path, items } => {
+                let mut segments = vec![library.clone()];
+                segments.extend(path.iter().cloned());
+                (segments, items.clone())
+            }
             ast::ImportKind::RustCrate { crate_name, path, .. } => {
                 let mut segs = vec![crate_name.clone()];
                 segs.extend(path.clone());
@@ -33,7 +41,7 @@ impl AstLowering {
             ast::ImportKind::Python(s) => (vec![s.clone()], vec![]),
         };
         let origin = match &i.kind {
-            ast::ImportKind::PubLibrary { library } | ast::ImportKind::PubFrom { library, .. } => {
+            ast::ImportKind::PubLibrary { library, .. } | ast::ImportKind::PubFrom { library, .. } => {
                 super::super::super::decl::IrImportOrigin::PubLibrary {
                     dependency_key: library.clone(),
                 }

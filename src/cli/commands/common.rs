@@ -29,8 +29,8 @@ use crate::frontend::library_manifest_index::{
     LibraryArtifactMetadata, LibraryManifestFailureKind, LibraryManifestIndex, LibraryManifestIndexEntry,
 };
 use crate::frontend::module::{
-    SourceModuleImportResolution, canonicalize_source_module_segments, logical_source_import_candidates,
-    resolve_program_source_imports,
+    SourceModuleImportResolution, canonicalize_source_module_segments, logical_module_segments_from_file,
+    logical_source_import_candidates, resolve_program_source_imports,
 };
 use crate::frontend::testing_markers::{
     TestingMarkerSemantics, load_testing_marker_semantics, testing_marker_semantics_from_manifest,
@@ -3356,6 +3356,134 @@ pub(crate) fn collect_modules_detailed_with_session(
     path: PathBuf,
     session: &CompilationSession,
 ) -> Result<Vec<ParsedModule>, CliDiagnosticFailure> {
+    collect_modules_detailed_from_seeds(
+        path.clone(),
+        session,
+        vec![(
+            path.to_string_lossy().to_string(),
+            "main".to_string(),
+            vec!["main".to_string()],
+        )],
+    )
+}
+
+/// Collect every authored source module for library publication, including modules not imported by `src/lib.incn`.
+pub(crate) fn collect_library_modules_detailed_with_session(
+    path: PathBuf,
+    session: &CompilationSession,
+) -> Result<Vec<ParsedModule>, CliDiagnosticFailure> {
+    let seeds = library_source_seeds(&path, session).map_err(CliDiagnosticFailure::from)?;
+    let entry_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let seeds = seeds
+        .into_iter()
+        .map(|(source_file, module_name, path_segments)| {
+            (source_file.to_string_lossy().to_string(), module_name, path_segments)
+        })
+        .collect();
+    let mut modules = collect_modules_detailed_from_seeds(path.clone(), session, seeds)?;
+    if let Some(entry_index) = modules.iter().position(|module| {
+        module
+            .file_path
+            .canonicalize()
+            .unwrap_or_else(|_| module.file_path.clone())
+            == entry_path
+    }) {
+        let entry = modules.remove(entry_index);
+        modules.push(entry);
+    }
+    Ok(modules)
+}
+
+/// Build the single validated source set used by checked and unprojected library publication.
+pub(crate) fn library_source_seeds(
+    path: &Path,
+    session: &CompilationSession,
+) -> CliResult<Vec<(PathBuf, String, Vec<String>)>> {
+    let mut source_files = Vec::new();
+    collect_incan_source_files(&session.source_root, &mut source_files).map_err(|error| {
+        CliError::failure(format!(
+            "failed to discover library source modules under {}: {error}",
+            session.source_root.display()
+        ))
+    })?;
+    source_files.sort();
+
+    let entry_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let sdk_namespace_roots = if env::var_os(SDK_PROVIDER_BUILD_ENV).is_some() {
+        let project_root = session
+            .manifest
+            .as_ref()
+            .map(ProjectManifest::project_root)
+            .unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")));
+        Some(sdk_provider_bootstrap_namespace_roots(project_root)?)
+    } else {
+        None
+    };
+    let mut logical_sources = BTreeMap::<Vec<String>, PathBuf>::new();
+    let mut seeds = vec![(path.to_path_buf(), "main".to_string(), vec!["main".to_string()])];
+    for source_file in source_files {
+        let canonical = source_file.canonicalize().unwrap_or_else(|_| source_file.clone());
+        if canonical == entry_path {
+            continue;
+        }
+        let Some(path_segments) = logical_module_segments_from_file(&session.source_root, &source_file) else {
+            continue;
+        };
+        if is_unselected_package_entrypoint(&session.source_root, &source_file, &entry_path) {
+            continue;
+        }
+        if sdk_namespace_roots
+            .as_ref()
+            .is_some_and(|roots| path_segments.first().is_none_or(|root| !roots.contains(root)))
+        {
+            continue;
+        }
+        if let Some(existing) = logical_sources.insert(path_segments.clone(), canonical.clone()) {
+            return Err(CliError::failure(format!(
+                "{} and {} both resolve to library module `{}`; use either a module file or a directory entrypoint",
+                existing.display(),
+                canonical.display(),
+                path_segments.join(".")
+            )));
+        }
+        seeds.push((canonical, path_segments.join("_"), path_segments));
+    }
+    Ok(seeds)
+}
+
+/// Return whether a root `main.incn` or `lib.incn` is the package entrypoint not selected by this build.
+fn is_unselected_package_entrypoint(source_root: &Path, source_file: &Path, selected_entrypoint: &Path) -> bool {
+    let canonical_source_root = source_root.canonicalize().unwrap_or_else(|_| source_root.to_path_buf());
+    let canonical_source_file = source_file.canonicalize().unwrap_or_else(|_| source_file.to_path_buf());
+    if canonical_source_file == selected_entrypoint || canonical_source_file.parent() != Some(&canonical_source_root) {
+        return false;
+    }
+    canonical_source_file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| matches!(stem, "lib" | "main"))
+}
+
+/// Recursively collect authored `.incn` files without following directory symlinks.
+fn collect_incan_source_files(directory: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_incan_source_files(&entry.path(), files)?;
+        } else if file_type.is_file() && entry.path().extension().is_some_and(|extension| extension == "incn") {
+            files.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
+/// Collect one source graph from explicit seed modules through an already-resolved compilation session.
+fn collect_modules_detailed_from_seeds(
+    path: PathBuf,
+    session: &CompilationSession,
+    mut to_process: Vec<(String, String, Vec<String>)>,
+) -> Result<Vec<ParsedModule>, CliDiagnosticFailure> {
     let base_dir = path.parent().unwrap_or(Path::new("."));
     let mut modules = Vec::new();
     let mut processed = HashSet::new();
@@ -3371,13 +3499,6 @@ pub(crate) fn collect_modules_detailed_with_session(
             segments
         }
     };
-    // (file_path, module_name, path_segments)
-    let mut to_process: Vec<(String, String, Vec<String>)> = vec![(
-        path.to_string_lossy().to_string(),
-        "main".to_string(),
-        vec!["main".to_string()],
-    )];
-
     while let Some((file_path, module_name, path_segments)) = to_process.pop() {
         if processed.contains(&file_path) {
             continue;
@@ -6452,6 +6573,67 @@ def main() -> None:
                 .iter()
                 .any(|error| error.message.contains("Unknown package feature `missing`"))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn library_source_seeds_deduplicate_imports_across_noncanonical_source_roots_issue948()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let source_root = tmp.path().join("stdlib");
+        let project_root = source_root.join("components/core");
+        let entrypoint = project_root.join("src/lib.incn");
+        let operations = source_root.join("traits/ops.incn");
+        std::fs::create_dir_all(entrypoint.parent().ok_or("entrypoint must have a parent")?)?;
+        std::fs::create_dir_all(operations.parent().ok_or("operations must have a parent")?)?;
+        std::fs::write(
+            project_root.join("incan.toml"),
+            "[project]\nname = \"core\"\n\n[build]\nsource-root = \"../..\"\n",
+        )?;
+        std::fs::write(&entrypoint, "import traits.ops\n")?;
+        std::fs::write(
+            &operations,
+            "pub def add(left: int, right: int) -> int:\n  return left + right\n",
+        )?;
+
+        let session = CompilationSession::discover_with_feature_selection(&entrypoint, &FeatureSelection::default())?;
+        let modules = collect_library_modules_detailed_with_session(entrypoint, &session)
+            .map_err(|failure| failure.render_human())?;
+        let operations_modules = modules
+            .iter()
+            .filter(|module| module.path_segments == ["traits".to_string(), "ops".to_string()])
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            operations_modules.len(),
+            1,
+            "all-source discovery and an authored import must share one canonical source identity"
+        );
+        assert_eq!(operations_modules[0].file_path, operations.canonicalize()?);
+        Ok(())
+    }
+
+    #[test]
+    fn library_source_seeds_exclude_the_unselected_root_entrypoint_issue948() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let tmp = tempfile::tempdir()?;
+        let source_root = tmp.path().join("src");
+        std::fs::create_dir_all(&source_root)?;
+        let lib = source_root.join("lib.incn");
+        let main = source_root.join("main.incn");
+        std::fs::write(&lib, "pub def exported() -> int:\n  return 1\n")?;
+        std::fs::write(&main, "def main() -> None:\n  pass\n")?;
+
+        assert!(!is_unselected_package_entrypoint(
+            &source_root,
+            &lib,
+            &lib.canonicalize()?
+        ));
+        assert!(is_unselected_package_entrypoint(
+            &source_root,
+            &main,
+            &lib.canonicalize()?
+        ));
         Ok(())
     }
 

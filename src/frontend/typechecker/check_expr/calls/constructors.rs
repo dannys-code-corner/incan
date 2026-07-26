@@ -15,6 +15,7 @@ impl TypeChecker {
     pub(in crate::frontend::typechecker::check_expr::calls) fn check_model_or_class_constructor_call(
         &mut self,
         type_name: &str,
+        display_name: &str,
         fields: &std::collections::HashMap<String, FieldInfo>,
         args: &[CallArg],
         call_span: Span,
@@ -23,8 +24,10 @@ impl TypeChecker {
         if args.iter().any(|a| matches!(a, CallArg::Positional(_))) {
             // Typecheck argument expressions regardless, so type errors in expressions still show up.
             self.check_call_args(args);
-            self.errors
-                .push(errors::positional_constructor_args_not_supported(type_name, call_span));
+            self.errors.push(errors::positional_constructor_args_not_supported(
+                display_name,
+                call_span,
+            ));
             return self.constructor_result_type(type_name);
         }
 
@@ -40,7 +43,7 @@ impl TypeChecker {
                 // Still typecheck the expression exactly once so nested diagnostics are preserved.
                 self.check_expr(expr);
                 self.errors
-                    .push(errors::missing_field(type_name, field_name, expr.span));
+                    .push(errors::missing_field(display_name, field_name, expr.span));
                 continue;
             };
 
@@ -86,7 +89,9 @@ impl TypeChecker {
         for (field_name, info) in fields {
             if !info.has_default && !provided.contains_key(field_name) {
                 self.errors.push(errors::missing_required_constructor_field(
-                    type_name, field_name, call_span,
+                    display_name,
+                    field_name,
+                    call_span,
                 ));
             }
         }
@@ -411,7 +416,7 @@ impl TypeChecker {
                         _ => None,
                     });
                 if let Some(fields) = ctor_fields {
-                    self.check_model_or_class_constructor_call(name, &fields, args, span)
+                    self.check_model_or_class_constructor_call(name, name, &fields, args, span)
                 } else {
                     self.constructor_result_type(name)
                 }

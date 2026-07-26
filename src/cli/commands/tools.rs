@@ -16,7 +16,7 @@ use crate::cli::{CliError, CliResult, ExitCode};
 use crate::frontend::api_metadata::{
     ApiDeclaration, ApiFunction, ApiPartial, CHECKED_API_METADATA_SCHEMA_VERSION, CheckedApiMetadataPackage,
     CheckedApiPackageIdentity, collect_checked_api_alias_metadata, collect_checked_api_metadata,
-    materialize_api_alias_projections, validate_checked_api_docstrings,
+    materialize_api_alias_projections, materialize_checked_api_public_namespaces, validate_checked_api_docstrings,
 };
 use crate::frontend::contract_metadata::{
     CanonicalModelBundle, read_model_bundles_from_json, read_project_model_bundles,
@@ -916,11 +916,15 @@ fn collect_api_metadata_package(path: &Path) -> CliResult<CheckedApiMetadataPack
         return Err(CliError::failure(all_errors.trim_end()));
     }
 
-    Ok(CheckedApiMetadataPackage {
+    let mut package = CheckedApiMetadataPackage {
         schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
         package: manifest.as_ref().and_then(checked_api_package_identity),
         modules: metadata_modules,
-    })
+        public_namespaces: Vec::new(),
+    };
+    materialize_checked_api_public_namespaces(&mut package)
+        .map_err(|error| CliError::failure(format!("failed to inspect checked module namespaces: {error}")))?;
+    Ok(package)
 }
 
 /// Analyze a registry inspection entry path once and collect compiler-owned metadata for all local modules.

@@ -5,6 +5,7 @@
 //! tooling can share one structural representation.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +40,58 @@ pub struct CheckedApiMetadataPackage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<CheckedApiPackageIdentity>,
     pub modules: Vec<CheckedApiMetadata>,
+    /// Materialized public namespace projection consumed at package boundaries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public_namespaces: Vec<CheckedApiPublicNamespace>,
 }
+
+/// One public package namespace materialized by the producer from its checked source-module graph.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckedApiPublicNamespace {
+    pub path: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<CheckedApiPublicNamespaceMember>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_modules: Vec<String>,
+}
+
+/// One declaration exposed through a materialized public package namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckedApiPublicNamespaceMember {
+    pub name: String,
+    /// Exact producer-local module path followed by the declaration name.
+    pub source_path: Vec<String>,
+}
+
+/// Failure while materializing or validating one checked package's public namespace graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckedApiPublicNamespaceError {
+    DuplicateSourceModule { module_path: Vec<String> },
+    MissingMaterializedNamespace { module_path: Vec<String> },
+    SerializedProjectionMismatch,
+}
+
+impl fmt::Display for CheckedApiPublicNamespaceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateSourceModule { module_path } => write!(
+                formatter,
+                "multiple source files resolve to checked module `{}`",
+                module_path.join(".")
+            ),
+            Self::MissingMaterializedNamespace { module_path } => write!(
+                formatter,
+                "checked module `{}` is missing from its materialized public namespace graph",
+                module_path.join(".")
+            ),
+            Self::SerializedProjectionMismatch => {
+                formatter.write_str("serialized public namespace projection does not match checked API modules")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CheckedApiPublicNamespaceError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckedApiPackageIdentity {
@@ -239,6 +291,9 @@ pub struct ApiAlias {
     pub name: String,
     pub anchor: SourceAnchor,
     pub target_path: Vec<String>,
+    /// Whether the source import or alias explicitly participates in the package's public API.
+    #[serde(default)]
+    pub is_public: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projected_function: Option<ApiProjectedFunction>,
 }
@@ -775,6 +830,196 @@ pub fn materialize_api_alias_projections(modules: &mut [CheckedApiMetadata]) {
     }
 }
 
+/// Materialize the deterministic public namespace graph owned by one checked package API.
+pub fn materialize_checked_api_public_namespaces(
+    api: &mut CheckedApiMetadataPackage,
+) -> Result<(), CheckedApiPublicNamespaceError> {
+    let mut module_paths = HashSet::new();
+    for module in &api.modules {
+        if !module_paths.insert(module.module_path.clone()) {
+            return Err(CheckedApiPublicNamespaceError::DuplicateSourceModule {
+                module_path: module.module_path.clone(),
+            });
+        }
+    }
+
+    let mut namespaces = HashMap::<Vec<String>, CheckedApiPublicNamespace>::new();
+    for module in &api.modules {
+        if matches!(module.module_path.as_slice(), [root] if root == "lib" || root == "main") {
+            continue;
+        }
+        for len in 1..=module.module_path.len() {
+            let path = module.module_path[..len].to_vec();
+            namespaces
+                .entry(path.clone())
+                .or_insert_with(|| CheckedApiPublicNamespace {
+                    path,
+                    members: Vec::new(),
+                    child_modules: Vec::new(),
+                });
+            if len > 1 {
+                let parent = module.module_path[..len - 1].to_vec();
+                let child = module.module_path[len - 1].clone();
+                namespaces
+                    .entry(parent.clone())
+                    .or_insert_with(|| CheckedApiPublicNamespace {
+                        path: parent,
+                        members: Vec::new(),
+                        child_modules: Vec::new(),
+                    })
+                    .child_modules
+                    .push(child);
+            }
+        }
+        for declaration in module
+            .declarations
+            .iter()
+            .filter(|declaration| checked_api_declaration_is_public_namespace_member(declaration))
+        {
+            let Some(name) = api_declaration_public_name(declaration) else {
+                continue;
+            };
+            let mut source_path = module.module_path.clone();
+            source_path.push(name.to_string());
+            let member = CheckedApiPublicNamespaceMember {
+                name: name.to_string(),
+                source_path,
+            };
+            let namespace = namespaces.get_mut(&module.module_path).ok_or_else(|| {
+                CheckedApiPublicNamespaceError::MissingMaterializedNamespace {
+                    module_path: module.module_path.clone(),
+                }
+            })?;
+            namespace.members.push(member.clone());
+            if module.module_path.len() > 1 {
+                let parent_path = module.module_path[..module.module_path.len() - 1].to_vec();
+                let parent = namespaces.get_mut(parent_path.as_slice()).ok_or({
+                    CheckedApiPublicNamespaceError::MissingMaterializedNamespace {
+                        module_path: parent_path,
+                    }
+                })?;
+                parent.members.push(member);
+            }
+        }
+    }
+    let mut namespaces = namespaces.into_values().collect::<Vec<_>>();
+    for namespace in &mut namespaces {
+        namespace
+            .members
+            .sort_by(|left, right| (&left.name, &left.source_path).cmp(&(&right.name, &right.source_path)));
+        namespace.members.dedup();
+        namespace.child_modules.sort();
+        namespace.child_modules.dedup();
+    }
+    namespaces.sort_by(|left, right| left.path.cmp(&right.path));
+    api.public_namespaces = namespaces;
+    Ok(())
+}
+
+/// Validate that a serialized namespace projection exactly matches its checked declaration modules.
+pub fn validate_checked_api_public_namespaces(
+    api: &CheckedApiMetadataPackage,
+) -> Result<(), CheckedApiPublicNamespaceError> {
+    if api.public_namespaces.is_empty() {
+        return Ok(());
+    }
+    let serialized = api.public_namespaces.clone();
+    let mut derived = api.clone();
+    derived.public_namespaces.clear();
+    materialize_checked_api_public_namespaces(&mut derived)?;
+    if serialized != derived.public_namespaces {
+        return Err(CheckedApiPublicNamespaceError::SerializedProjectionMismatch);
+    }
+    Ok(())
+}
+
+/// Return every materialized public module path carried by one checked package API.
+pub fn checked_api_public_module_paths(api: &CheckedApiMetadataPackage) -> Vec<Vec<String>> {
+    if !api.public_namespaces.is_empty() {
+        return api
+            .public_namespaces
+            .iter()
+            .map(|namespace| namespace.path.clone())
+            .collect();
+    }
+    let mut compatibility = api.clone();
+    materialize_checked_api_public_namespaces(&mut compatibility)
+        .map(|()| {
+            compatibility
+                .public_namespaces
+                .into_iter()
+                .map(|namespace| namespace.path)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Return source API modules whose public declarations participate directly in one materialized namespace.
+pub fn checked_api_modules_for_public_namespace<'a>(
+    api: &'a CheckedApiMetadataPackage,
+    module_path: &[String],
+) -> Vec<&'a CheckedApiMetadata> {
+    let source_modules = checked_api_public_namespace(api, module_path)
+        .map(|namespace| {
+            namespace
+                .members
+                .iter()
+                .filter_map(|member| member.source_path.get(..member.source_path.len().saturating_sub(1)))
+                .map(<[String]>::to_vec)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    api.modules
+        .iter()
+        .filter(|module| source_modules.contains(&module.module_path))
+        .collect()
+}
+
+/// Return one materialized namespace, deriving a compatibility projection only for older artifacts.
+pub fn checked_api_public_namespace(
+    api: &CheckedApiMetadataPackage,
+    module_path: &[String],
+) -> Option<CheckedApiPublicNamespace> {
+    if let Some(namespace) = api
+        .public_namespaces
+        .iter()
+        .find(|namespace| namespace.path == module_path)
+    {
+        return Some(namespace.clone());
+    }
+    let mut compatibility = api.clone();
+    materialize_checked_api_public_namespaces(&mut compatibility).ok()?;
+    compatibility
+        .public_namespaces
+        .into_iter()
+        .find(|namespace| namespace.path == module_path)
+}
+
+/// Return whether checked metadata authorizes a declaration in an automatic package namespace.
+pub fn checked_api_declaration_is_public_namespace_member(declaration: &ApiDeclaration) -> bool {
+    match declaration {
+        ApiDeclaration::Alias(alias) => alias.is_public,
+        _ => true,
+    }
+}
+
+/// Return the public spelling carried by one checked API declaration.
+pub fn api_declaration_public_name(declaration: &ApiDeclaration) -> Option<&str> {
+    match declaration {
+        ApiDeclaration::Function(item) => Some(&item.name),
+        ApiDeclaration::Model(item) => Some(&item.name),
+        ApiDeclaration::Class(item) => Some(&item.name),
+        ApiDeclaration::Trait(item) => Some(&item.name),
+        ApiDeclaration::Enum(item) => Some(&item.name),
+        ApiDeclaration::Newtype(item) => Some(&item.name),
+        ApiDeclaration::TypeAlias(item) => Some(&item.name),
+        ApiDeclaration::Const(item) => Some(&item.name),
+        ApiDeclaration::Static(item) => Some(&item.name),
+        ApiDeclaration::Alias(item) => Some(&item.name),
+        ApiDeclaration::Partial(item) => Some(&item.name),
+    }
+}
+
 #[derive(Debug)]
 struct ApiAliasProjectionRequest {
     path: Vec<String>,
@@ -1207,11 +1452,12 @@ fn api_const(
 
 /// Convert an import declaration into API alias metadata.
 fn api_aliases(import: &ImportDecl, span: Span, module_path: &[String]) -> Vec<ApiAlias> {
+    let is_public = public(import.visibility);
     match &import.kind {
         ImportKind::From { module, items } => {
             let base_path =
                 canonicalize_source_module_segments(&decorator_resolution::path_segments_with_prefix(module));
-            aliases_from_items(items, base_path, span, module_path)
+            aliases_from_items(items, base_path, span, module_path, is_public)
         }
         ImportKind::RustFrom {
             crate_name,
@@ -1221,11 +1467,12 @@ fn api_aliases(import: &ImportDecl, span: Span, module_path: &[String]) -> Vec<A
         } => {
             let mut base_path = vec!["rust".to_string(), crate_name.clone()];
             base_path.extend(path.iter().cloned());
-            aliases_from_items(items, base_path, span, module_path)
+            aliases_from_items(items, base_path, span, module_path, is_public)
         }
-        ImportKind::PubFrom { library, items } => {
-            let base_path = vec!["pub".to_string(), library.clone()];
-            aliases_from_items(items, base_path, span, module_path)
+        ImportKind::PubFrom { library, path, items } => {
+            let mut base_path = vec!["pub".to_string(), library.clone()];
+            base_path.extend(path.iter().cloned());
+            aliases_from_items(items, base_path, span, module_path, is_public)
         }
         _ => Vec::new(),
     }
@@ -1238,6 +1485,7 @@ fn checked_api_aliases_for_declaration(declaration: &Declaration, span: Span, mo
             name: alias.name.clone(),
             anchor: anchor(module_path, &alias.name, span),
             target_path: alias.target.segments.clone(),
+            is_public: true,
             projected_function: None,
         }],
         // Module-level `from ... import ...` bindings are part of a module's public surface, including facade modules
@@ -1256,6 +1504,7 @@ fn aliases_from_items(
     base_path: Vec<String>,
     span: Span,
     module_path: &[String],
+    is_public: bool,
 ) -> Vec<ApiAlias> {
     items
         .iter()
@@ -1267,6 +1516,7 @@ fn aliases_from_items(
                 anchor: anchor(module_path, &name, span),
                 name,
                 target_path,
+                is_public,
                 projected_function: None,
             }
         })
@@ -3162,10 +3412,78 @@ pub from crate.widgets import Widget as PublicWidget
 
         assert_eq!(alias.name, "PublicWidget");
         assert_eq!(alias.anchor.id, "lib::PublicWidget");
+        assert!(alias.is_public);
         assert_eq!(
             alias.target_path,
             vec!["crate".to_string(), "widgets".to_string(), "Widget".to_string()]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn checked_api_materializes_public_namespace_members_and_children_issue948() -> Result<(), String> {
+        let mut index =
+            metadata_for("pub def build() -> int:\n  return 1\n").map_err(|errors| format!("{errors:?}"))?;
+        index.module_path = vec!["hyperquant".to_string(), "index".to_string()];
+        let mut package = CheckedApiMetadataPackage {
+            schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+            package: None,
+            modules: vec![index],
+            public_namespaces: Vec::new(),
+        };
+
+        materialize_checked_api_public_namespaces(&mut package).map_err(|error| error.to_string())?;
+
+        let parent = checked_api_public_namespace(&package, &["hyperquant".to_string()])
+            .ok_or_else(|| "missing parent namespace".to_string())?;
+        assert_eq!(parent.child_modules, vec!["index".to_string()]);
+        assert_eq!(parent.members.len(), 1);
+        assert_eq!(parent.members[0].name, "build");
+        assert_eq!(
+            parent.members[0].source_path,
+            vec!["hyperquant".to_string(), "index".to_string(), "build".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checked_api_rejects_duplicate_logical_source_modules_issue948() -> Result<(), String> {
+        let mut first = metadata_for("pub def left() -> int:\n  return 1\n").map_err(|errors| format!("{errors:?}"))?;
+        first.module_path = vec!["hyperquant".to_string()];
+        let mut second =
+            metadata_for("pub def right() -> int:\n  return 2\n").map_err(|errors| format!("{errors:?}"))?;
+        second.module_path = vec!["hyperquant".to_string()];
+        let mut package = CheckedApiMetadataPackage {
+            schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+            package: None,
+            modules: vec![first, second],
+            public_namespaces: Vec::new(),
+        };
+
+        let Err(error) = materialize_checked_api_public_namespaces(&mut package) else {
+            return Err("duplicate logical modules unexpectedly produced a public namespace graph".to_string());
+        };
+
+        assert!(error.to_string().contains("multiple source files"));
+        assert!(error.to_string().contains("hyperquant"));
+        Ok(())
+    }
+
+    #[test]
+    fn checked_api_metadata_marks_implementation_imports_private() -> Result<(), String> {
+        let source = "from crate.widgets import Widget\n";
+        let metadata = metadata_for_src_lib(source).map_err(|errs| format!("{errs:?}"))?;
+        let alias = metadata
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                ApiDeclaration::Alias(alias) => Some(alias),
+                _ => None,
+            })
+            .ok_or_else(|| "expected internal alias metadata for registry projection".to_string())?;
+
+        assert_eq!(alias.name, "Widget");
+        assert!(!alias.is_public);
         Ok(())
     }
 

@@ -45,14 +45,90 @@ from db.models import User
 import shared::utils::format_date
 ```
 
+## Publish a structured library
+
+Create the library with its public declarations in ordinary source modules:
+
+```text
+hyperquant-lib/
+├── incan.toml
+└── src/
+    ├── lib.incn
+    └── hyperquant/
+        ├── index.incn
+        └── search.incn
+```
+
+```incan
+# src/hyperquant/index.incn
+pub model HyperquantIndex:
+  pub size: int
+
+pub def build_index(size: int) -> HyperquantIndex:
+  return HyperquantIndex(size=size)
+
+def pack_bits(size: int) -> int:
+  return size
+```
+
+```incan
+# src/hyperquant/search.incn
+from hyperquant.index import HyperquantIndex
+
+pub def search(index: HyperquantIndex) -> int:
+  return index.size
+```
+
+Build the checked library artifact:
+
+```bash
+cd hyperquant-lib
+incan build --lib
+```
+
+Add the library to the consumer:
+
+```toml
+[dependencies]
+hyperquant_lib = { path = "../hyperquant-lib" }
+```
+
+Import the source-derived namespace:
+
+```incan
+from pub::hyperquant_lib import hyperquant
+
+def main() -> None:
+  index = hyperquant.build_index(1024)
+  println(hyperquant.search(index))
+```
+
+No entry in `src/lib.incn` is needed merely to make `hyperquant` exist. Keep explicit `pub from` entries there when you also want a curated flat facade:
+
+```incan
+# src/lib.incn
+pub from hyperquant.index import HyperquantIndex, build_index
+```
+
+When sibling modules publish the same declaration name, import through the exact child module instead of the parent:
+
+```incan
+from pub::codecs.encoding.base64 import encode
+from pub::codecs.encoding.hex import encode as encode_hex
+```
+
+The compiler reports the conflicting source modules if you try the ambiguous parent import.
+
 ## How module discovery works (practical view)
 
 When you import a local module, the compiler:
 
-1. Resolves the path (handling `.`, `..`, `super`, `crate`)
-2. Looks for the `.incn` file (or `mod.incn` for directories)
-3. Parses and type-checks that file
-4. Makes its types and functions available in your importing file
+1. Resolves the path (handling `.`, `..`, `super`, `crate`).
+2. Looks for the `.incn` file (or `mod.incn` for directories).
+3. Parses and type-checks that file.
+4. Makes its types and functions available in your importing file.
+
+Published-library consumers follow a different trust boundary: they resolve `pub::` imports from the checked `.incnlib` artifact and generated library crate rather than re-reading the dependency's source.
 
 ## Examples from the repo
 

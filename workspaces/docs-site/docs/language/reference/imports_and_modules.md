@@ -50,6 +50,61 @@ import models::User
 import utils::format_currency as fmt
 ```
 
+## Published library namespaces
+
+`incan build --lib` preserves the checked module hierarchy below a library's configured source root (normally `src/`). A source directory becomes a public package namespace automatically; there is no `pub module` declaration.
+
+Given this producer layout:
+
+```text
+src/
+├── lib.incn
+└── hyperquant/
+    ├── index.incn
+    └── search.incn
+```
+
+public declarations in the immediate source files are available through the directory namespace:
+
+```incan
+from pub::hees_ai import hyperquant
+
+index = hyperquant.build_index()
+matches = hyperquant.search(index)
+```
+
+The exact source module remains importable when a consumer wants a narrower boundary:
+
+```incan
+from pub::hees_ai.hyperquant.index import HyperquantIndex, build_index
+from pub::hees_ai::hyperquant::search import search
+```
+
+Dots and `::` are both accepted after the `pub::package` root. Formatting uses dots for the nested package path. Direct module imports are also supported:
+
+```incan
+import pub::hees_ai.hyperquant as hq
+```
+
+Only declarations explicitly marked `pub` participate in the package namespace. Private declarations and private implementation imports remain unavailable to consumers. An explicit `pub from ... import ...` inside a source module can publish a facade alias for public callables, types, constants, statics, and traits.
+
+The directory namespace exposes declarations from its own source unit, when present, and its immediate child source files. Deeper directories remain child namespaces. If separate child files publish the same name, the parent member is ambiguous and the compiler requires the exact child path:
+
+```incan
+from pub::codecs.encoding.base64 import encode
+from pub::codecs.encoding.hex import encode as encode_hex
+```
+
+This permits sibling APIs to use natural names without making the package unpublishable. Within an automatic directory namespace, a declaration from that directory's own source unit takes precedence over a child namespace with the same name, while the child remains available through its full path. At the package root, an explicit flat export from `src/lib.incn` and an automatic child namespace with the same name are ambiguous; consumers must select the exact nested path.
+
+Explicit package-root exports in `src/lib.incn` remain compatible:
+
+```incan
+pub from hyperquant.index import HyperquantIndex
+```
+
+Consumers can therefore use either the flat facade (`from pub::hees_ai import HyperquantIndex`) or the preserved module hierarchy. The generated `.incnlib` checked API is authoritative for public declarations, visibility, compiler resolution, diagnostics, and editor completion; consumers do not inspect or re-typecheck the producer source. Codegraph import records preserve the canonical nested package path written by the consumer. The source-module paths recorded by the checked API and the compiled module set determine the matching generated Rust file and facade layout.
+
 ## Import path rules
 
 ### Child directory imports

@@ -247,6 +247,7 @@ fn manifest_with_api_declaration_issue883(declaration: ApiDeclaration) -> Librar
             module_path: vec!["private_api".to_string()],
             declarations: vec![declaration],
         }],
+        public_namespaces: Vec::new(),
     });
     manifest
 }
