@@ -7612,6 +7612,32 @@ async def main() -> None:
     }
 
     #[test]
+    fn test_run_iterator_adapters_as_loop_and_comprehension_sources_issue950_953() {
+        let Ok(output) = incan_command()
+            .args([
+                "run",
+                "tests/codegen_snapshots/issue950_953_iterator_adapter_sources.incn",
+            ])
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+        else {
+            panic!("failed to run incan");
+        };
+
+        assert!(
+            output.status.success(),
+            "incan run issue950_953_iterator_adapter_sources failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "11\n0:beta\n1:alpha\n2\nalpha\n2\n",
+            "iterator adapters must preserve item types and source-owned polling across loops and comprehensions"
+        );
+    }
+
+    #[test]
     fn test_run_rfc088_iterator_sum_float_and_newtype_matrix() {
         let Ok(output) = incan_command()
             .args(["run", "tests/fixtures/rfc088_iterator_sum_runtime.incn"])

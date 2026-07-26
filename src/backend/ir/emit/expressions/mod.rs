@@ -130,6 +130,26 @@ pub(in crate::backend::ir::emit) fn method_name_uses_mutable_receiver(name: &str
 }
 
 impl<'a> IrEmitter<'a> {
+    /// Bridge a canonical Incan `Iterator[T]` value into the Rust iterator consumed by loop and comprehension syntax.
+    ///
+    /// Adapter models expose the source-owned `Iterator.__next__() -> Option[T]` contract rather than implementing
+    /// Rust's `std::iter::Iterator`. This bridge keeps polling semantics in one place and avoids source-expression
+    /// heuristics for individual adapters such as `take`, `zip`, or `enumerate`.
+    pub(in crate::backend::ir::emit) fn emit_incan_iterator_source(
+        &self,
+        iterable: &TypedExpr,
+    ) -> Result<Option<TokenStream>, EmitError> {
+        if !iterable.ty.is_iterator_protocol() {
+            return Ok(None);
+        }
+        let source = self.emit_expr(iterable)?;
+        let next = methods::iterator_methods::next_call(&quote! { __incan_iter });
+        Ok(Some(quote! {{
+            let mut __incan_iter = #source;
+            std::iter::from_fn(move || #next)
+        }}))
+    }
+
     /// Build a typed tuple-field read for compiler-expanded tuple unpacking.
     pub(super) fn tuple_field_expr(expr: &TypedExpr, idx: usize, ty: IrType) -> TypedExpr {
         TypedExpr::new(

@@ -29,7 +29,7 @@ use incan_core::lang::{magic_methods, trait_bounds::rust as tb};
 
 mod collection_methods;
 mod fast_paths;
-mod iterator_methods;
+pub(super) mod iterator_methods;
 mod string_methods;
 
 use collection_methods::emit_collection_method;

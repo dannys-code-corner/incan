@@ -166,7 +166,11 @@ fn emit_iter_receiver(receiver: &TypedExpr, r: &TokenStream) -> TokenStream {
             let items = plan_owned_iterator_source(receiver).apply(r.clone());
             quote! { crate::__incan_std::derives::collection::ListIterator { items: #items, index: 0i64 } }
         }
-        IrType::NamedGeneric(name, _) | IrType::Struct(name) if is_iterator_protocol_type_name(name) => quote! { (#r) },
+        IrType::NamedGeneric(name, _) | IrType::Struct(name)
+            if core_traits::from_qualified_str(name) == Some(TraitId::Iterator) =>
+        {
+            quote! { (#r) }
+        }
         _ => quote! { (#r) },
     }
 }
@@ -183,16 +187,8 @@ fn receiver_type_for_iterator_dispatch(receiver_ty: &IrType) -> &IrType {
     receiver_ty
 }
 
-/// Return whether a nominal IR type name denotes the standard `Iterator` protocol.
-///
-/// Lowering may preserve a short stdlib name or a qualified path. Only the final path segment is semantically relevant
-/// for routing RFC 088 known methods through this emitter.
-fn is_iterator_protocol_type_name(name: &str) -> bool {
-    name.rsplit("::").next() == Some(core_traits::as_str(TraitId::Iterator))
-}
-
 /// Emit a fully-qualified call to the Incan iterator protocol's `__next__` method.
-fn next_call(iter: &TokenStream) -> TokenStream {
+pub(in crate::backend::ir::emit::expressions) fn next_call(iter: &TokenStream) -> TokenStream {
     quote! { crate::__incan_std::derives::collection::Iterator::__next__(&mut #iter) }
 }
 

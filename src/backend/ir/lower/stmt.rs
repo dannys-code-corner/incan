@@ -1279,6 +1279,8 @@ impl AstLowering {
                 // Infer loop variable type from iterable and add to scope
                 let loop_var_ty = if let Some(protocol) = &protocol_iteration {
                     self.lower_resolved_type(&protocol.item_type)
+                } else if let Some(item_ty) = iterable.ty.iterator_item_type() {
+                    item_ty.clone()
                 } else {
                     match &iterable.ty {
                         IrType::List(elem) => (**elem).clone(),
