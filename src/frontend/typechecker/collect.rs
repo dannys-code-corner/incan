@@ -796,7 +796,7 @@ impl TypeChecker {
                             name: canonical,
                             source_name: Some(trait_name.clone()),
                             type_args: Vec::new(),
-                            module_path: None,
+                            module_path: Some(module_path.clone()),
                         });
                     }
                 }
@@ -819,7 +819,7 @@ impl TypeChecker {
                             name: derive_name.clone(),
                             source_name: Some(trait_name.clone()),
                             type_args: Vec::new(),
-                            module_path: None,
+                            module_path: Some(module_segments.to_vec()),
                         });
                     }
                 } else if self.lookup_trait_info(derive_name).is_some() {

@@ -1117,6 +1117,94 @@ def test_artifact_path() -> None:
 }
 
 #[test]
+fn compiled_json_trait_owner_crosses_library_boundaries_issue946() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let provider_root = tmp.path().join("json_provider");
+    let _provider_main = write_minimal_project(
+        &provider_root,
+        "json_provider",
+        "\n[sdk]\nprofile = \"minimal\"\ncomponents = [\"stdlib-data\"]\n",
+    )?;
+    fs::write(
+        provider_root.join("src/lib.incn"),
+        "pub from crate.codec import encode_item\npub from crate.models import Item\n",
+    )?;
+    fs::write(
+        provider_root.join("src/models.incn"),
+        r#"from std.serde import json
+
+@derive(json)
+pub model Item:
+  pub value: str
+"#,
+    )?;
+    fs::write(
+        provider_root.join("src/codec.incn"),
+        r#"from std.serde.json import Serialize
+from crate.models import Item
+
+pub def encode_item(item: Item) -> str:
+  return item.to_json()
+"#,
+    )?;
+
+    let provider_build = run_incan(&provider_root, &["build", "--lib"])?;
+    assert_success(
+        &provider_build,
+        "multi-module JSON provider library with a direct Serialize import",
+    );
+    let generated_encoder = fs::read_to_string(provider_root.join("target/lib/src/codec.rs"))?;
+    assert!(
+        generated_encoder.contains("__incan_std::serde::json::Serialize::to_json(&item)"),
+        "generated encoder must retain the canonical source trait owner:\n{generated_encoder}"
+    );
+    assert!(
+        !generated_encoder.contains("return json::Serialize::to_json(&item)"),
+        "generated encoder cannot rely on another source module's `json` import:\n{generated_encoder}"
+    );
+
+    let consumer_root = tmp.path().join("consumer");
+    let consumer_main = write_minimal_project(
+        &consumer_root,
+        "json_consumer",
+        "[dependencies]\njson_provider = { path = \"../json_provider\" }\n",
+    )?;
+    fs::write(
+        &consumer_main,
+        r#"from pub::json_provider import Item, encode_item
+
+def main() -> None:
+  println(encode_item(Item(value="ok")))
+"#,
+    )?;
+    let tests_dir = consumer_root.join("tests");
+    fs::create_dir_all(&tests_dir)?;
+    fs::write(
+        tests_dir.join("test_json_provider.incn"),
+        r#"from pub::json_provider import Item, encode_item
+from std.testing import assert_eq
+
+def test_compiled_json_provider() -> None:
+  assert_eq(encode_item(Item(value="ok")), "{\"value\":\"ok\"}")
+"#,
+    )?;
+
+    let consumer_run = run_incan(&consumer_root, &["run"])?;
+    assert_success(&consumer_run, "consumer of the compiled multi-module JSON provider");
+    assert!(
+        String::from_utf8_lossy(&consumer_run.stdout).contains("{\"value\":\"ok\"}"),
+        "unexpected compiled JSON provider output:\n{}",
+        String::from_utf8_lossy(&consumer_run.stdout)
+    );
+    let consumer_test = run_incan(&consumer_root, &["test"])?;
+    assert_success(
+        &consumer_test,
+        "package test batch consuming the compiled multi-module JSON provider",
+    );
+    Ok(())
+}
+
+#[test]
 fn data_component_owns_hashing_without_linking_the_codecs_provider() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(
