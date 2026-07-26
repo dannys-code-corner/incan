@@ -1059,6 +1059,7 @@ fn api_trait(
             .map(|(name, ty)| FieldExport {
                 name: name.clone(),
                 ty: type_ref_from_resolved(ty),
+                surface_type_name: Some(ty.to_string()),
                 visibility: crate::library_manifest::FieldVisibilityExport::Public,
                 has_default: false,
                 default: None,
@@ -1449,6 +1450,7 @@ fn field(field: &crate::frontend::library_exports::CheckedField) -> FieldExport 
     FieldExport {
         name: field.name.clone(),
         ty: type_ref_from_resolved(&field.ty),
+        surface_type_name: field.surface_type_name.clone(),
         visibility: match field.visibility {
             Visibility::Private => crate::library_manifest::FieldVisibilityExport::Private,
             Visibility::Public => crate::library_manifest::FieldVisibilityExport::Public,

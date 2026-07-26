@@ -1017,7 +1017,8 @@ fn extract_type_signatures(program: &ast::Program) -> Vec<(String, TypeInfo)> {
                                 })
                                 .collect(),
                         ),
-                        field_default_metadata: HashMap::new(),
+                        field_default_metadata: Box::new(HashMap::new()),
+                        field_provider_libraries: Box::new(HashMap::new()),
                         field_order: class.fields.iter().map(|field| field.node.name.clone()).collect(),
                         properties: std::collections::HashMap::new(),
                         method_overloads,
@@ -1147,10 +1148,15 @@ fn extract_field_signatures(
     fields
         .iter()
         .map(|field| {
+            let ty = ast_type_to_resolved_with_rust_imports(&field.node.ty.node, type_params, rust_imports);
             (
                 field.node.name.clone(),
                 FieldInfo {
-                    ty: ast_type_to_resolved_with_rust_imports(&field.node.ty.node, type_params, rust_imports),
+                    surface_type_name: Some(crate::frontend::symbols::field_surface_type_name(
+                        &field.node.ty.node,
+                        &ty,
+                    )),
+                    ty,
                     visibility: field.node.visibility,
                     owner: Some(owner.to_string()),
                     has_default: field.node.default.is_some(),

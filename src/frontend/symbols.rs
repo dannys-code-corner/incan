@@ -631,7 +631,13 @@ pub struct ClassInfo {
     /// signature or distinguish an already-canonical provider path from a child module's local path. This sidecar
     /// keeps the original checked metadata intact when a local child is exported again, including an `Unsupported`
     /// sentinel that preserves provider-owned default optionality when the expression cannot cross the manifest.
-    pub field_default_metadata: HashMap<String, crate::frontend::library_exports::CheckedParamDefault>,
+    /// Boxed with source defaults so canonical provider expressions do not inflate every symbol-table entry.
+    pub field_default_metadata: Box<HashMap<String, crate::frontend::library_exports::CheckedParamDefault>>,
+    /// Compiled dependency that owns each inherited field.
+    ///
+    /// Source-declared fields have no entry. The map is copied with inherited members so ownership survives source
+    /// module boundaries instead of being reconstructed from the final subclass name.
+    pub field_provider_libraries: Box<HashMap<String, String>>,
     pub field_order: Vec<String>,
     pub properties: HashMap<String, PropertyInfo>,
     pub methods: HashMap<String, MethodInfo>,
@@ -793,11 +799,119 @@ pub struct VariantInfo {
 #[derive(Debug, Clone)]
 pub struct FieldInfo {
     pub ty: ResolvedType,
+    /// Canonical Incan source spelling retained for reflection and documentation.
+    ///
+    /// This is presentation metadata only. Typechecking and lowering continue to use [`Self::ty`] as the semantic
+    /// authority.
+    pub surface_type_name: Option<String>,
     pub visibility: crate::frontend::ast::Visibility,
     pub owner: Option<String>,
     pub has_default: bool,
     pub alias: Option<String>,
     pub description: Option<String>,
+}
+
+/// Return the user-facing field type name without making presentation metadata a second semantic authority.
+///
+/// Ordinary Incan types use the resolved type's canonical spelling, which normalizes compatibility aliases such as
+/// `Dict` to `dict`. Rust-backed types retain the authored Incan spelling because their resolved representation carries
+/// a canonical Rust path that must never leak through `FieldInfo.type_name`.
+pub(crate) fn field_surface_type_name(source: &Type, resolved: &ResolvedType) -> String {
+    if resolved_type_contains_rust_path(resolved) {
+        source.to_string()
+    } else {
+        canonical_incan_type_name(resolved)
+    }
+}
+
+/// Render one resolved type with canonical Incan collection spellings while preserving its semantic shape.
+fn canonical_incan_type_name(ty: &ResolvedType) -> String {
+    let mut canonical = ty.clone();
+    canonicalize_collection_type_names(&mut canonical);
+    canonical.to_string()
+}
+
+/// Normalize compatibility aliases such as `List` recursively without changing nominal or Rust type identity.
+fn canonicalize_collection_type_names(ty: &mut ResolvedType) {
+    match ty {
+        ResolvedType::Generic(name, args) => {
+            if let Some(collection) = collections::from_str(name) {
+                *name = match collection {
+                    CollectionTypeId::List => "list",
+                    CollectionTypeId::Dict => "dict",
+                    CollectionTypeId::Set => "set",
+                    CollectionTypeId::Tuple
+                    | CollectionTypeId::Option
+                    | CollectionTypeId::Result
+                    | CollectionTypeId::FrozenList
+                    | CollectionTypeId::FrozenDict
+                    | CollectionTypeId::FrozenSet
+                    | CollectionTypeId::Generator => collections::as_str(collection),
+                }
+                .to_string();
+            }
+            for arg in args {
+                canonicalize_collection_type_names(arg);
+            }
+        }
+        ResolvedType::FrozenList(inner)
+        | ResolvedType::FrozenSet(inner)
+        | ResolvedType::TypeToken(inner)
+        | ResolvedType::Ref(inner)
+        | ResolvedType::RefMut(inner) => canonicalize_collection_type_names(inner),
+        ResolvedType::FrozenDict(key, value) => {
+            canonicalize_collection_type_names(key);
+            canonicalize_collection_type_names(value);
+        }
+        ResolvedType::Function(params, result) => {
+            for param in params {
+                canonicalize_collection_type_names(&mut param.ty);
+            }
+            canonicalize_collection_type_names(result);
+        }
+        ResolvedType::Tuple(args) => {
+            for arg in args {
+                canonicalize_collection_type_names(arg);
+            }
+        }
+        ResolvedType::Never
+        | ResolvedType::Int
+        | ResolvedType::Float
+        | ResolvedType::Numeric(_)
+        | ResolvedType::Bool
+        | ResolvedType::Str
+        | ResolvedType::Bytes
+        | ResolvedType::FrozenStr
+        | ResolvedType::FrozenBytes
+        | ResolvedType::Unit
+        | ResolvedType::Named(_)
+        | ResolvedType::TypeVar(_)
+        | ResolvedType::SelfType
+        | ResolvedType::RustPath(_)
+        | ResolvedType::CallSiteInfer
+        | ResolvedType::Unknown => {}
+    }
+}
+
+/// Return whether a resolved field type contains canonical Rust-path metadata at any nesting depth.
+fn resolved_type_contains_rust_path(ty: &ResolvedType) -> bool {
+    match ty {
+        ResolvedType::RustPath(_) => true,
+        ResolvedType::FrozenList(inner)
+        | ResolvedType::FrozenSet(inner)
+        | ResolvedType::TypeToken(inner)
+        | ResolvedType::Ref(inner)
+        | ResolvedType::RefMut(inner) => resolved_type_contains_rust_path(inner),
+        ResolvedType::FrozenDict(key, value) => {
+            resolved_type_contains_rust_path(key) || resolved_type_contains_rust_path(value)
+        }
+        ResolvedType::Generic(_, args) | ResolvedType::Tuple(args) => args.iter().any(resolved_type_contains_rust_path),
+        ResolvedType::Function(params, result) => {
+            params.iter().any(|param| resolved_type_contains_rust_path(&param.ty))
+                || resolved_type_contains_rust_path(result)
+        }
+        _ => false,
+    }
 }
 
 /// Computed property information.
@@ -1107,6 +1221,20 @@ fn resolve_qualified_rust_type_path(segments: &[String], symbols: &SymbolTable) 
 
 /// Resolve an AST type annotation into the canonical semantic type representation.
 pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
+    resolve_type_with_rust_arg_renderer(ty, symbols, &render_resolved_type_as_rust_arg, &|_| {})
+}
+
+/// Resolve an AST type while allowing the typechecker to preserve provider identity inside opaque Rust applications.
+pub(crate) fn resolve_type_with_rust_arg_renderer<F, G>(
+    ty: &Type,
+    symbols: &SymbolTable,
+    render_rust_arg: &F,
+    qualify_structured_rust_arg: &G,
+) -> ResolvedType
+where
+    F: Fn(&ResolvedType) -> String,
+    G: Fn(&mut ResolvedType),
+{
     match ty {
         Type::Qualified(segments) => resolve_qualified_rust_type_path(segments, symbols),
         Type::Simple(name) => {
@@ -1163,10 +1291,34 @@ pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
         }
         Type::ConstrainedPrimitive(name, _) => {
             let base = Type::Simple(name.clone());
-            resolve_type(&base, symbols)
+            resolve_type_with_rust_arg_renderer(&base, symbols, render_rust_arg, qualify_structured_rust_arg)
         }
         Type::Generic(name, args) => {
-            let resolved_args: Vec<_> = args.iter().map(|a| resolve_type(&a.node, symbols)).collect();
+            let mut resolved_args: Vec<_> = args
+                .iter()
+                .map(|arg| {
+                    resolve_type_with_rust_arg_renderer(
+                        &arg.node,
+                        symbols,
+                        render_rust_arg,
+                        qualify_structured_rust_arg,
+                    )
+                })
+                .collect();
+            if let Some(id) = symbols.lookup(name)
+                && let Some(symbol) = symbols.get(id)
+                && let SymbolKind::RustItem(info) = &symbol.kind
+                && !matches!(info.binding, RustImportBindingKind::CrateRoot)
+            {
+                if rust_generic_preserves_nominal_ir(info) {
+                    for arg in &mut resolved_args {
+                        qualify_structured_rust_arg(arg);
+                    }
+                } else {
+                    let rendered_args = resolved_args.iter().map(render_rust_arg).collect::<Vec<_>>().join(", ");
+                    return ResolvedType::RustPath(format!("{}<{rendered_args}>", info.path));
+                }
+            }
             if name == "Type" {
                 return ResolvedType::TypeToken(Box::new(
                     resolved_args.first().cloned().unwrap_or(ResolvedType::Unknown),
@@ -1203,20 +1355,145 @@ pub fn resolve_type(ty: &Type, symbols: &SymbolTable) -> ResolvedType {
         Type::Function(params, ret) => {
             let resolved_params: Vec<_> = params
                 .iter()
-                .map(|p| CallableParam::positional(resolve_type(&p.node, symbols)))
+                .map(|param| {
+                    CallableParam::positional(resolve_type_with_rust_arg_renderer(
+                        &param.node,
+                        symbols,
+                        render_rust_arg,
+                        qualify_structured_rust_arg,
+                    ))
+                })
                 .collect();
-            let resolved_ret = resolve_type(&ret.node, symbols);
+            let resolved_ret =
+                resolve_type_with_rust_arg_renderer(&ret.node, symbols, render_rust_arg, qualify_structured_rust_arg);
             ResolvedType::Function(resolved_params, Box::new(resolved_ret))
         }
-        Type::Ref(inner) => ResolvedType::Ref(Box::new(resolve_type(&inner.node, symbols))),
-        Type::RefMut(inner) => ResolvedType::RefMut(Box::new(resolve_type(&inner.node, symbols))),
+        Type::Ref(inner) => ResolvedType::Ref(Box::new(resolve_type_with_rust_arg_renderer(
+            &inner.node,
+            symbols,
+            render_rust_arg,
+            qualify_structured_rust_arg,
+        ))),
+        Type::RefMut(inner) => ResolvedType::RefMut(Box::new(resolve_type_with_rust_arg_renderer(
+            &inner.node,
+            symbols,
+            render_rust_arg,
+            qualify_structured_rust_arg,
+        ))),
         Type::Unit => ResolvedType::Unit,
         Type::Tuple(elems) => {
-            let resolved_elems: Vec<_> = elems.iter().map(|e| resolve_type(&e.node, symbols)).collect();
+            let resolved_elems: Vec<_> = elems
+                .iter()
+                .map(|element| {
+                    resolve_type_with_rust_arg_renderer(
+                        &element.node,
+                        symbols,
+                        render_rust_arg,
+                        qualify_structured_rust_arg,
+                    )
+                })
+                .collect();
             ResolvedType::Tuple(resolved_elems)
         }
         Type::SelfType => ResolvedType::SelfType,
         Type::Infer => ResolvedType::CallSiteInfer,
+    }
+}
+
+/// Return whether one compiler-owned Rust generic keeps its structured semantic IR representation.
+///
+/// `Box[T]` participates in receiver/method semantics that consume `ResolvedType::Generic`. Other Rust applications,
+/// including standard-library types such as `PhantomData[T]`, retain their complete canonical display for declaration
+/// emission across compiled-library boundaries.
+fn rust_generic_preserves_nominal_ir(info: &RustItemInfo) -> bool {
+    matches!(
+        info.path.as_str(),
+        "std::boxed::Box" | "alloc::boxed::Box" | "rust::std::boxed::Box" | "rust::alloc::boxed::Box"
+    )
+}
+
+/// Render one checked type as a Rust generic argument without retaining source-only collection spellings.
+pub(crate) fn render_resolved_type_as_rust_arg(ty: &ResolvedType) -> String {
+    match ty {
+        ResolvedType::Never => "!".to_string(),
+        ResolvedType::Int => "i64".to_string(),
+        ResolvedType::Float => "f64".to_string(),
+        ResolvedType::Numeric(id) => numerics::rust_name(*id).to_string(),
+        ResolvedType::Bool => "bool".to_string(),
+        ResolvedType::Str => "String".to_string(),
+        ResolvedType::Bytes => "Vec<u8>".to_string(),
+        ResolvedType::FrozenStr => "incan_stdlib::frozen::FrozenStr".to_string(),
+        ResolvedType::FrozenBytes => "incan_stdlib::frozen::FrozenBytes".to_string(),
+        ResolvedType::FrozenList(inner) => format!(
+            "incan_stdlib::frozen::FrozenList<{}>",
+            render_resolved_type_as_rust_arg(inner)
+        ),
+        ResolvedType::FrozenDict(key, value) => format!(
+            "incan_stdlib::frozen::FrozenDict<{}, {}>",
+            render_resolved_type_as_rust_arg(key),
+            render_resolved_type_as_rust_arg(value)
+        ),
+        ResolvedType::FrozenSet(inner) => format!(
+            "incan_stdlib::frozen::FrozenSet<{}>",
+            render_resolved_type_as_rust_arg(inner)
+        ),
+        ResolvedType::Unit => "()".to_string(),
+        ResolvedType::Named(name) => name
+            .strip_prefix("pub::")
+            .map_or_else(|| name.clone(), ToString::to_string),
+        ResolvedType::TypeVar(name) => name.clone(),
+        ResolvedType::Generic(name, args) => {
+            if collections::from_str(name.as_str()) == Some(CollectionTypeId::Tuple) {
+                return render_rust_tuple(args);
+            }
+            let base = match collections::from_str(name.as_str()) {
+                Some(CollectionTypeId::List) => "Vec",
+                Some(CollectionTypeId::Dict) => "std::collections::HashMap",
+                Some(CollectionTypeId::Set) => "std::collections::HashSet",
+                Some(CollectionTypeId::Option) => "Option",
+                Some(CollectionTypeId::Result) => "Result",
+                Some(CollectionTypeId::FrozenList) => "incan_stdlib::frozen::FrozenList",
+                Some(CollectionTypeId::FrozenDict) => "incan_stdlib::frozen::FrozenDict",
+                Some(CollectionTypeId::FrozenSet) => "incan_stdlib::frozen::FrozenSet",
+                Some(CollectionTypeId::Generator) => "incan_stdlib::iter::Generator",
+                Some(CollectionTypeId::Tuple) | None => name,
+            };
+            let rendered_args = args
+                .iter()
+                .map(render_resolved_type_as_rust_arg)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{base}<{rendered_args}>")
+        }
+        ResolvedType::Function(params, ret) => {
+            let params = params
+                .iter()
+                .map(|param| render_resolved_type_as_rust_arg(&param.ty))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("fn({params}) -> {}", render_resolved_type_as_rust_arg(ret))
+        }
+        ResolvedType::TypeToken(inner) => {
+            format!(
+                "incan_stdlib::reflection::TypeToken<{}>",
+                render_resolved_type_as_rust_arg(inner)
+            )
+        }
+        ResolvedType::Tuple(items) => render_rust_tuple(items),
+        ResolvedType::SelfType => "Self".to_string(),
+        ResolvedType::Ref(inner) => format!("&{}", render_resolved_type_as_rust_arg(inner)),
+        ResolvedType::RefMut(inner) => format!("&mut {}", render_resolved_type_as_rust_arg(inner)),
+        ResolvedType::RustPath(path) => path.clone(),
+        ResolvedType::CallSiteInfer | ResolvedType::Unknown => "_".to_string(),
+    }
+}
+
+/// Render one checked tuple using Rust's single-element trailing-comma rule.
+fn render_rust_tuple(items: &[ResolvedType]) -> String {
+    let rendered = items.iter().map(render_resolved_type_as_rust_arg).collect::<Vec<_>>();
+    match rendered.as_slice() {
+        [only] => format!("({only},)"),
+        _ => format!("({})", rendered.join(", ")),
     }
 }
 
@@ -1408,5 +1685,128 @@ mod tests {
         let ty = Type::Qualified(vec!["proto_type".to_string(), "Binary".to_string()]);
         let r = resolve_type(&ty, &table);
         assert_eq!(r, ResolvedType::RustPath("substrait::proto::type::Binary".to_string()));
+    }
+
+    #[test]
+    fn resolve_type_canonicalizes_generic_rust_import_and_nested_collection() {
+        let mut table = SymbolTable::new();
+        for (name, path) in [
+            ("RustEnvelope", "rust_shadow::Envelope"),
+            ("RustToken", "rust_shadow::Token"),
+        ] {
+            table.define(Symbol {
+                name: name.to_string(),
+                kind: SymbolKind::RustItem(RustItemInfo {
+                    crate_name: "rust_shadow".to_string(),
+                    path: path.to_string(),
+                    binding: RustImportBindingKind::FromImport,
+                    metadata: None,
+                }),
+                span: Span::default(),
+                scope: 0,
+            });
+        }
+        let ty = Type::Generic(
+            "RustEnvelope".to_string(),
+            vec![Spanned::new(
+                Type::Generic(
+                    "list".to_string(),
+                    vec![Spanned::new(Type::Simple("RustToken".to_string()), Span::default())],
+                ),
+                Span::default(),
+            )],
+        );
+
+        assert_eq!(
+            resolve_type(&ty, &table),
+            ResolvedType::RustPath("rust_shadow::Envelope<Vec<rust_shadow::Token>>".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_type_retains_non_nominal_standard_generic_path() {
+        let mut table = SymbolTable::new();
+        table.define(Symbol {
+            name: "PhantomData".to_string(),
+            kind: SymbolKind::RustItem(RustItemInfo {
+                crate_name: "std".to_string(),
+                path: "std::marker::PhantomData".to_string(),
+                binding: RustImportBindingKind::FromImport,
+                metadata: None,
+            }),
+            span: Span::default(),
+            scope: 0,
+        });
+        table.define(Symbol {
+            name: "Payload".to_string(),
+            kind: SymbolKind::Type(TypeInfo::TypeAlias),
+            span: Span::default(),
+            scope: 0,
+        });
+        let ty = Type::Generic(
+            "PhantomData".to_string(),
+            vec![Spanned::new(Type::Simple("Payload".to_string()), Span::default())],
+        );
+
+        assert_eq!(
+            resolve_type(&ty, &table),
+            ResolvedType::RustPath("std::marker::PhantomData<Payload>".to_string())
+        );
+    }
+
+    #[test]
+    fn field_surface_type_name_uses_canonical_incan_collection_spelling() {
+        let source = Type::Generic(
+            "Dict".to_string(),
+            vec![
+                Spanned::new(Type::Simple("str".to_string()), Span::default()),
+                Spanned::new(Type::Simple("TelemetryValue".to_string()), Span::default()),
+            ],
+        );
+        let resolved = ResolvedType::Generic(
+            "dict".to_string(),
+            vec![ResolvedType::Str, ResolvedType::Named("TelemetryValue".to_string())],
+        );
+
+        assert_eq!(field_surface_type_name(&source, &resolved), "dict[str, TelemetryValue]");
+
+        let source = Type::Generic(
+            "List".to_string(),
+            vec![Spanned::new(Type::Simple("int".to_string()), Span::default())],
+        );
+        let resolved = ResolvedType::Generic("List".to_string(), vec![ResolvedType::Int]);
+
+        assert_eq!(field_surface_type_name(&source, &resolved), "list[int]");
+    }
+
+    #[test]
+    fn field_surface_type_name_preserves_authored_spelling_for_nested_rust_types() {
+        let source = Type::Generic(
+            "Box".to_string(),
+            vec![Spanned::new(
+                Type::Generic(
+                    "RustEnvelope".to_string(),
+                    vec![Spanned::new(
+                        Type::Generic(
+                            "list".to_string(),
+                            vec![Spanned::new(Type::Simple("RustToken".to_string()), Span::default())],
+                        ),
+                        Span::default(),
+                    )],
+                ),
+                Span::default(),
+            )],
+        );
+        let resolved = ResolvedType::Generic(
+            "Box".to_string(),
+            vec![ResolvedType::RustPath(
+                "rust_shadow::Envelope<Vec<rust_shadow::Token>>".to_string(),
+            )],
+        );
+
+        assert_eq!(
+            field_surface_type_name(&source, &resolved),
+            "Box[RustEnvelope[list[RustToken]]]"
+        );
     }
 }

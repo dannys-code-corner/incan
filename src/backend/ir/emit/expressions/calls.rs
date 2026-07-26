@@ -1508,6 +1508,7 @@ mod tests {
                 ty: TypeRef::Named {
                     name: "int".to_string(),
                 },
+                surface_type_name: None,
                 visibility: FieldVisibilityExport::Private,
                 has_default: false,
                 default: None,
@@ -1519,6 +1520,7 @@ mod tests {
                 ty: TypeRef::Named {
                     name: "str".to_string(),
                 },
+                surface_type_name: None,
                 visibility: FieldVisibilityExport::Public,
                 has_default: true,
                 default: Some(ParamDefaultExport::String("sealed".to_string())),
@@ -1531,6 +1533,7 @@ mod tests {
             ty: TypeRef::Named {
                 name: "bool".to_string(),
             },
+            surface_type_name: None,
             visibility: FieldVisibilityExport::Public,
             has_default: false,
             default: None,

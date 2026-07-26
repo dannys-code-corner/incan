@@ -18,6 +18,7 @@ impl AstLowering {
         let fields = vec![StructField {
             name: "0".to_string(),
             ty: underlying_ty.clone(),
+            surface_type_name: None,
             visibility: Visibility::Public,
             default: None,
             alias: None,

@@ -398,6 +398,8 @@ pub struct IrEmitter<'a> {
     enum_variant_aliases: std::collections::HashMap<(String, String), String>,
     /// Struct field type lookup: (StructName, FieldName) -> IrType
     struct_field_types: std::collections::HashMap<(String, String), IrType>,
+    /// Source-level field type spelling used solely for generated reflection metadata.
+    struct_field_surface_type_names: std::collections::HashMap<(String, String), Option<String>>,
     /// Struct field visibility lookup: (StructName, FieldName) -> Visibility
     struct_field_visibilities: std::collections::HashMap<(String, String), Visibility>,
     /// Struct field name order (as declared): StructName -> [FieldName...]
@@ -552,6 +554,7 @@ impl<'a> IrEmitter<'a> {
             enum_variant_fields: std::collections::HashMap::new(),
             enum_variant_aliases: std::collections::HashMap::new(),
             struct_field_types: std::collections::HashMap::new(),
+            struct_field_surface_type_names: std::collections::HashMap::new(),
             struct_field_visibilities: std::collections::HashMap::new(),
             struct_field_names: std::collections::HashMap::new(),
             struct_field_aliases: std::collections::HashMap::new(),
@@ -1852,15 +1855,15 @@ impl<'a> IrEmitter<'a> {
                     self.struct_field_names
                         .insert(s.name.clone(), s.fields.iter().map(|f| f.name.clone()).collect());
                     for field in &s.fields {
-                        self.struct_field_types
-                            .insert((s.name.clone(), field.name.clone()), field.ty.clone());
-                        self.struct_field_aliases
-                            .insert((s.name.clone(), field.name.clone()), field.alias.clone());
+                        let key = (s.name.clone(), field.name.clone());
+                        self.struct_field_types.insert(key.clone(), field.ty.clone());
+                        self.struct_field_surface_type_names
+                            .insert(key.clone(), field.surface_type_name.clone());
+                        self.struct_field_aliases.insert(key.clone(), field.alias.clone());
                         self.struct_field_descriptions
-                            .insert((s.name.clone(), field.name.clone()), field.description.clone());
+                            .insert(key.clone(), field.description.clone());
                         if let Some(default) = &field.default {
-                            self.struct_field_defaults
-                                .insert((s.name.clone(), field.name.clone()), default.clone());
+                            self.struct_field_defaults.insert(key, default.clone());
                         }
                     }
                 }
@@ -1944,14 +1947,13 @@ impl<'a> IrEmitter<'a> {
             fields.iter().map(|field| field.name.clone()).collect(),
         );
         for field in fields {
-            self.struct_field_types.insert(
-                (name.to_string(), field.name.clone()),
-                Self::manifest_type_ref_to_ir_type(&field.ty),
-            );
-            self.struct_field_aliases
-                .insert((name.to_string(), field.name.clone()), field.alias.clone());
-            self.struct_field_descriptions
-                .insert((name.to_string(), field.name.clone()), field.description.clone());
+            let key = (name.to_string(), field.name.clone());
+            self.struct_field_types
+                .insert(key.clone(), Self::manifest_type_ref_to_ir_type(&field.ty));
+            self.struct_field_surface_type_names
+                .insert(key.clone(), field.surface_type_name.clone());
+            self.struct_field_aliases.insert(key.clone(), field.alias.clone());
+            self.struct_field_descriptions.insert(key, field.description.clone());
         }
     }
 
@@ -2601,6 +2603,7 @@ mod tests {
                 StructField {
                     name: "secret".to_string(),
                     ty: private_ty,
+                    surface_type_name: None,
                     visibility: Visibility::Private,
                     default: Some(private_default),
                     alias: None,
@@ -2609,6 +2612,7 @@ mod tests {
                 StructField {
                     name: "label".to_string(),
                     ty: public_ty,
+                    surface_type_name: None,
                     visibility: Visibility::Public,
                     default: None,
                     alias: None,
@@ -2617,6 +2621,7 @@ mod tests {
                 StructField {
                     name: "revision".to_string(),
                     ty: trailing_ty,
+                    surface_type_name: None,
                     visibility: Visibility::Private,
                     default: Some(trailing_default),
                     alias: None,

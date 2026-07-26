@@ -5,7 +5,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::frontend::ast::{Expr, ParamKind, Span, Spanned};
+use crate::frontend::ast::{Expr, ParamKind, Span, Spanned, Visibility};
+use crate::frontend::library_exports::CheckedParamDefault;
 use crate::frontend::symbols::{
     CallableParam, FunctionOverloadInfo, NewtypePrimitiveConstraint, ResolvedType, TypeBoundInfo,
 };
@@ -216,6 +217,12 @@ pub struct RustInteropArtifacts {
 /// Declaration-level binding rewrites and visibility facts consumed by lowering.
 #[derive(Debug, Default, Clone)]
 pub struct DeclarationArtifacts {
+    /// Checked, parent-first field layouts for local classes.
+    ///
+    /// Local subclasses can inherit from classes reconstructed from compiled dependency manifests. Those parents do
+    /// not have consumer-side AST declarations, so lowering must consume this checked layout instead of rediscovering
+    /// inherited fields from syntax.
+    pub(crate) class_layouts: HashMap<String, ClassLayoutInfo>,
     /// Compiler-checked construction semantics for local newtypes.
     ///
     /// Lowering consumes this snapshot instead of rediscovering newtypes from tuple-struct shape or raw decorators.
@@ -318,6 +325,61 @@ pub struct RegistryExplicitEntryInfo {
     pub key_span: (usize, usize),
     pub subject_span: (usize, usize),
     pub descriptor_span: (usize, usize),
+}
+
+/// Typechecker-owned class layout consumed by backend struct lowering.
+#[derive(Debug, Clone)]
+pub(crate) struct ClassLayoutInfo {
+    /// Whether the source class participates in the compiled library's public ABI.
+    pub(crate) is_public: bool,
+    /// Generic parameters that must remain unqualified inside Rust type displays.
+    pub(crate) type_params: Vec<String>,
+    /// Flattened fields in constructor ABI order: oldest ancestor first, then local fields.
+    pub(crate) fields: Vec<ClassFieldLayoutInfo>,
+    /// Ordered field names that violated the checked class-layout invariant.
+    ///
+    /// Lowering fails closed when this is non-empty instead of silently emitting a smaller Rust struct.
+    pub(crate) missing_fields: Vec<String>,
+    /// Defaults whose checked provider semantics cannot be materialized in a flattened consumer subclass.
+    ///
+    /// Typechecking diagnoses these at the class declaration. Lowering also fails closed if a caller attempts to use
+    /// artifacts from an unsuccessful typecheck.
+    pub(crate) unmaterializable_defaults: Vec<String>,
+}
+
+/// One checked class field retained across the frontend/backend boundary.
+#[derive(Debug, Clone)]
+pub(crate) struct ClassFieldLayoutInfo {
+    /// Source-visible field name.
+    pub(crate) name: String,
+    /// Fully resolved field type selected by the typechecker.
+    pub(crate) ty: ResolvedType,
+    /// Source-level Incan spelling retained solely for reflection and documentation.
+    pub(crate) surface_type_name: Option<String>,
+    /// Checked source visibility, including visibility reconstructed from compiled manifests.
+    pub(crate) visibility: Visibility,
+    /// Checked initializer plan, retaining whether the expression belongs to this source unit or a compiled provider.
+    pub(crate) default: Option<ClassFieldDefaultInfo>,
+    /// Compiled dependency that owns this inherited field, when it is not redeclared by a local class.
+    pub(crate) provider_library: Option<String>,
+    /// Canonical source field alias used for construction and access.
+    pub(crate) alias: Option<String>,
+    /// Source-authored field description preserved for generated reflection metadata.
+    pub(crate) description: Option<String>,
+}
+
+/// Checked origin and value for one class-field default.
+#[derive(Debug, Clone)]
+pub(crate) enum ClassFieldDefaultInfo {
+    /// Source expression owned by the current package, including defaults inherited through source classes.
+    Source(Spanned<Expr>),
+    /// Manifest-safe expression owned by a compiled dependency.
+    PublicDependency {
+        /// Dependency key used to qualify constants and helper calls during consumer lowering.
+        library: String,
+        /// Canonical provider-owned default expression.
+        value: CheckedParamDefault,
+    },
 }
 
 /// One compiler-checked newtype construction plan shared by lowering and generated bridges.

@@ -708,6 +708,11 @@ pub enum TypeRef {
 pub struct FieldExport {
     pub name: String,
     pub ty: TypeRef,
+    /// Source-level Incan type spelling used by reflection and documentation.
+    ///
+    /// Older manifests did not retain this presentation-only value, so consumers fall back to the semantic type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_type_name: Option<String>,
     /// Source-level field visibility enforced for compiled-library consumers.
     ///
     /// Older manifests omitted this field and exposed every recorded field to consumers, so absence remains public for
@@ -1619,6 +1624,7 @@ fn field_from_checked(field: &crate::frontend::library_exports::CheckedField) ->
     FieldExport {
         name: field.name.clone(),
         ty: type_ref_from_resolved(&field.ty),
+        surface_type_name: field.surface_type_name.clone(),
         visibility: match field.visibility {
             crate::frontend::ast::Visibility::Private => FieldVisibilityExport::Private,
             crate::frontend::ast::Visibility::Public => FieldVisibilityExport::Public,

@@ -54,6 +54,7 @@ mod type_info;
 mod validate_rust_module;
 
 pub use const_eval::ConstValue;
+pub(crate) use type_info::ClassFieldDefaultInfo;
 pub use type_info::{
     ComputedPropertyAccessInfo, DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FixedUnpackPlan,
     FunctionBindingInfo, IdentKind, PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind,
@@ -158,6 +159,7 @@ impl PublicLibraryTypeIdentity {
     }
 }
 
+const PUBLIC_LIBRARY_NAMESPACE: &str = "pub";
 const PUBLIC_LIBRARY_TYPE_PREFIX: &str = "pub::";
 
 /// Encode one provider-owned public type as an internal `ResolvedType` spelling without adding a new enum variant.
@@ -2322,6 +2324,171 @@ impl TypeChecker {
         }
     }
 
+    /// Snapshot checked class layouts for backend lowering.
+    ///
+    /// The symbol table already contains inherited fields from source and compiled-library parents. Persisting that
+    /// flattened view makes it the semantic authority for lowering and avoids requiring imported classes to have a
+    /// synthetic consumer-side AST declaration.
+    fn record_class_layouts_for_lowering(&mut self, program: &Program) {
+        let mut layouts = HashMap::new();
+        for declaration in &program.declarations {
+            let Declaration::Class(class) = &declaration.node else {
+                continue;
+            };
+            let Some(TypeInfo::Class(info)) = self.lookup_type_info(&class.name).cloned() else {
+                continue;
+            };
+            let mut fields = Vec::with_capacity(info.field_order.len());
+            let mut missing_fields = Vec::new();
+            let mut unmaterializable_defaults = Vec::new();
+            for name in &info.field_order {
+                let Some(field) = info.fields.get(name) else {
+                    missing_fields.push(name.clone());
+                    continue;
+                };
+                let provider_library = info.field_provider_libraries.get(name).cloned();
+                let mut canonical_ty = field.ty.clone();
+                self.canonicalize_public_library_nominals(&mut canonical_ty);
+                let mut emission_ty = canonical_ty.clone();
+                if let Err(message) = crate::frontend::rust_type_display::normalize_for_emission(
+                    &mut emission_ty,
+                    provider_library.as_deref(),
+                    &info.type_params,
+                ) {
+                    self.errors.push(
+                        CompileError::type_error(
+                            format!(
+                                "Checked class '{}' has invalid Rust type metadata for field '{}': {}",
+                                class.name, name, message
+                            ),
+                            declaration.span,
+                        )
+                        .with_hint("Rebuild the declaring library with a compatible Incan compiler"),
+                    );
+                }
+                if let Some(provider) = provider_library.as_deref()
+                    && let Err(message) = crate::frontend::rust_type_display::qualify_for_manifest(
+                        &canonical_ty,
+                        Some(provider),
+                        &info.type_params,
+                    )
+                {
+                    self.errors.push(
+                        CompileError::type_error(
+                            format!(
+                                "Checked class '{}' cannot republish Rust type metadata for field '{}': {}",
+                                class.name, name, message
+                            ),
+                            declaration.span,
+                        )
+                        .with_hint("Rebuild the declaring library with a compatible Incan compiler"),
+                    );
+                }
+                let default = if let Some(value) = info.field_default_metadata.get(name) {
+                    if let Some(provider) = provider_library.as_deref()
+                        && let Err(message) = crate::frontend::library_exports::qualify_checked_default_for_manifest(
+                            value,
+                            provider,
+                            &info.type_params,
+                        )
+                    {
+                        unmaterializable_defaults.push(name.clone());
+                        self.errors.push(
+                            CompileError::type_error(
+                                format!(
+                                    "Checked class '{}' cannot republish default metadata for field '{}': {}",
+                                    class.name, name, message
+                                ),
+                                declaration.span,
+                            )
+                            .with_hint("Rebuild the declaring library with a compatible Incan compiler"),
+                        );
+                    }
+                    match (provider_library.as_ref(), value) {
+                        (Some(library), crate::frontend::library_exports::CheckedParamDefault::Unsupported) => {
+                            unmaterializable_defaults.push(name.clone());
+                            self.errors.push(
+                                CompileError::type_error(
+                                    format!(
+                                        "Class '{}' cannot inherit compiled default for field '{}' because the \
+                                         provider artifact cannot materialize that expression",
+                                        class.name, name
+                                    ),
+                                    declaration.span,
+                                )
+                                .with_hint(format!(
+                                    "Override '{}' in '{}' with a local default expression",
+                                    name, class.name
+                                )),
+                            );
+                            Some(type_info::ClassFieldDefaultInfo::PublicDependency {
+                                library: library.clone(),
+                                value: value.clone(),
+                            })
+                        }
+                        (Some(library), _) => Some(type_info::ClassFieldDefaultInfo::PublicDependency {
+                            library: library.clone(),
+                            value: value.clone(),
+                        }),
+                        (None, _) => {
+                            unmaterializable_defaults.push(name.clone());
+                            self.errors.push(
+                                CompileError::type_error(
+                                    format!(
+                                        "Checked class '{}' lost the dependency identity for inherited default field \
+                                         '{}'",
+                                        class.name, name
+                                    ),
+                                    declaration.span,
+                                )
+                                .with_hint("Re-import the compiled parent through its declared package dependency"),
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    info.field_defaults
+                        .get(name)
+                        .cloned()
+                        .map(type_info::ClassFieldDefaultInfo::Source)
+                };
+                if field.has_default && default.is_none() {
+                    unmaterializable_defaults.push(name.clone());
+                    self.errors.push(CompileError::type_error(
+                        format!(
+                            "Checked class '{}' has no lowering plan for default field '{}'",
+                            class.name, name
+                        ),
+                        declaration.span,
+                    ));
+                }
+                fields.push(type_info::ClassFieldLayoutInfo {
+                    name: name.clone(),
+                    ty: canonical_ty,
+                    surface_type_name: field.surface_type_name.clone(),
+                    visibility: field.visibility,
+                    default,
+                    provider_library,
+                    alias: field.alias.clone(),
+                    description: field.description.clone(),
+                });
+            }
+            unmaterializable_defaults.sort();
+            unmaterializable_defaults.dedup();
+            layouts.insert(
+                class.name.clone(),
+                type_info::ClassLayoutInfo {
+                    is_public: matches!(class.visibility, Visibility::Public),
+                    type_params: info.type_params.clone(),
+                    fields,
+                    missing_fields,
+                    unmaterializable_defaults,
+                },
+            );
+        }
+        self.type_info.declarations.class_layouts = layouts;
+    }
+
     /// Validate local static dependencies before declaration checking.
     ///
     /// `static` initializers may only reference earlier local statics, and dependency cycles are rejected.
@@ -3522,6 +3689,83 @@ impl TypeChecker {
         Some(expanded)
     }
 
+    /// Render one Rust generic argument while retaining compiled nominal ownership.
+    ///
+    /// Public-library type identity is intentionally kept beside `ResolvedType` for ordinary diagnostics and
+    /// compatibility. Rust applications are opaque displays, however, so any imported nominal nested inside them must
+    /// be encoded before the structured argument is rendered to text.
+    fn render_provider_aware_rust_arg(&self, ty: &ResolvedType) -> String {
+        let mut qualified = ty.clone();
+        self.canonicalize_public_library_nominals(&mut qualified);
+        render_resolved_type_as_rust_arg(&qualified)
+    }
+
+    /// Replace locally aliased public-library nominals with their source-unspellable canonical provider path.
+    ///
+    /// Emitted Rust displays and compiled manifests must retain provider identity independently of the aliases that
+    /// happen to be in scope for source typechecking.
+    pub(crate) fn canonicalize_public_library_nominals(&self, ty: &mut ResolvedType) {
+        match ty {
+            ResolvedType::Named(name) => self.qualify_public_library_nominal_name(name),
+            ResolvedType::Generic(name, args) => {
+                self.qualify_public_library_nominal_name(name);
+                for arg in args {
+                    self.canonicalize_public_library_nominals(arg);
+                }
+            }
+            ResolvedType::FrozenList(inner)
+            | ResolvedType::FrozenSet(inner)
+            | ResolvedType::TypeToken(inner)
+            | ResolvedType::Ref(inner)
+            | ResolvedType::RefMut(inner) => self.canonicalize_public_library_nominals(inner),
+            ResolvedType::FrozenDict(key, value) => {
+                self.canonicalize_public_library_nominals(key);
+                self.canonicalize_public_library_nominals(value);
+            }
+            ResolvedType::Function(params, ret) => {
+                for param in params {
+                    self.canonicalize_public_library_nominals(&mut param.ty);
+                }
+                self.canonicalize_public_library_nominals(ret);
+            }
+            ResolvedType::Tuple(items) => {
+                for item in items {
+                    self.canonicalize_public_library_nominals(item);
+                }
+            }
+            ResolvedType::Never
+            | ResolvedType::Int
+            | ResolvedType::Float
+            | ResolvedType::Numeric(_)
+            | ResolvedType::Bool
+            | ResolvedType::Str
+            | ResolvedType::Bytes
+            | ResolvedType::FrozenStr
+            | ResolvedType::FrozenBytes
+            | ResolvedType::Unit
+            | ResolvedType::TypeVar(_)
+            | ResolvedType::SelfType
+            | ResolvedType::RustPath(_)
+            | ResolvedType::CallSiteInfer
+            | ResolvedType::Unknown => {}
+        }
+    }
+
+    /// Qualify one imported public type name when its local alias still carries provider identity.
+    fn qualify_public_library_nominal_name(&self, name: &mut String) {
+        if split_canonical_public_library_type_name(name).is_some()
+            || !self.public_library_type_identities.contains_key(name)
+        {
+            return;
+        }
+        let Some([root, dependency_key, public_name]) = self.import_aliases.get(name).map(Vec::as_slice) else {
+            return;
+        };
+        if root == PUBLIC_LIBRARY_NAMESPACE {
+            *name = canonical_public_library_type_name(dependency_key, public_name);
+        }
+    }
+
     /// Resolve a type annotation and emit diagnostics for reserved or invalid type spellings.
     fn resolve_type_checked(&mut self, ty: &Spanned<Type>) -> ResolvedType {
         if self.validate_source_type_names {
@@ -3551,7 +3795,12 @@ impl TypeChecker {
                 .push(errors::rust_crate_root_used_as_type(name.as_str(), &info.path, ty.span));
             return ResolvedType::Unknown;
         }
-        let resolved = resolve_type(&ty.node, &self.symbols);
+        let resolved = resolve_type_with_rust_arg_renderer(
+            &ty.node,
+            &self.symbols,
+            &|arg| self.render_provider_aware_rust_arg(arg),
+            &|arg| self.canonicalize_public_library_nominals(arg),
+        );
         self.expand_type_aliases(resolved)
     }
 
@@ -4272,6 +4521,7 @@ impl TypeChecker {
         }
 
         self.record_trait_metadata_for_lowering();
+        self.record_class_layouts_for_lowering(program);
 
         // ---- RFC 023: validate rust.module() and @rust.extern rules ----
         self.validate_rust_module_and_extern(program);
@@ -4828,7 +5078,8 @@ impl TypeChecker {
                         derives: Vec::new(),
                         fields: HashMap::new(),
                         field_defaults: Box::new(HashMap::new()),
-                        field_default_metadata: HashMap::new(),
+                        field_default_metadata: Box::new(HashMap::new()),
+                        field_provider_libraries: Box::new(HashMap::new()),
                         field_order: Vec::new(),
                         properties: HashMap::new(),
                         methods: HashMap::new(),

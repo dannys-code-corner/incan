@@ -561,7 +561,7 @@ impl Endian {
 /// ```
 #[derive(Debug, Clone, incan_derive::FieldInfo, incan_derive::IncanClass)]
 pub struct _BytesIO {
-    pub handle: Rc<RefCell<Cursor<Vec<u8>>>>,
+    pub handle: ::std::rc::Rc<::std::cell::RefCell<::std::io::Cursor<Vec<u8>>>>,
 }
 impl incan_stdlib::reflection::HasClassName for _BytesIO {
     fn __class_name__(&self) -> &'static str {

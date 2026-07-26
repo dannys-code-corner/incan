@@ -320,6 +320,10 @@ pub enum IrStructKind {
 pub struct StructField {
     pub name: String,
     pub ty: IrType,
+    /// Source-level Incan type spelling used for generated reflection metadata.
+    ///
+    /// This is deliberately separate from [`Self::ty`], which remains the semantic and Rust-emission authority.
+    pub surface_type_name: Option<String>,
     pub visibility: Visibility,
     /// Optional default initializer expression for this field (used for construction when omitted).
     pub default: Option<super::IrExpr>,

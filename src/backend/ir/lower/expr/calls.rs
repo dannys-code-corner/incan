@@ -346,7 +346,11 @@ impl AstLowering {
     }
 
     /// Lower a metadata-safe exported default expression into the subset of IR that can be materialized by consumers.
-    fn lower_pub_default_expr(&mut self, library: &str, default: &ParamDefaultExport) -> Option<TypedExpr> {
+    pub(in crate::backend::ir::lower) fn lower_pub_default_expr(
+        &mut self,
+        library: &str,
+        default: &ParamDefaultExport,
+    ) -> Option<TypedExpr> {
         match default {
             ParamDefaultExport::Int(value) => Some(TypedExpr::new(IrExprKind::Int(*value), IrType::Int)),
             ParamDefaultExport::Float(value) => value

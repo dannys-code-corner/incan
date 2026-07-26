@@ -92,6 +92,8 @@ pub struct CheckedTypeBound {
 pub struct CheckedField {
     pub name: String,
     pub ty: ResolvedType,
+    /// Source-level Incan type spelling retained for reflection across compiled-library boundaries.
+    pub surface_type_name: Option<String>,
     pub visibility: Visibility,
     pub has_default: bool,
     pub default: Option<CheckedParamDefault>,
@@ -1119,7 +1121,7 @@ fn checked_model_export(model: &ModelDecl, checker: &TypeChecker) -> Option<Chec
         traits: sorted_vec(traits.to_vec()),
         trait_adoptions: sorted_type_bounds(map_type_bound_infos(trait_adoptions)),
         derives: sorted_vec(derives.to_vec()),
-        fields: map_fields(fields, field_order, &defaults, None, checker),
+        fields: map_fields(fields, field_order, &defaults, None, None, &[], checker)?,
         methods: map_method_overloads_with_defaults(method_overloads, &model.methods, checker),
     })
 }
@@ -1135,6 +1137,7 @@ fn checked_class_export(class: &ClassDecl, checker: &TypeChecker) -> Option<Chec
         fields,
         field_defaults,
         field_default_metadata,
+        field_provider_libraries,
         field_order,
         method_overloads,
         ..
@@ -1143,6 +1146,11 @@ fn checked_class_export(class: &ClassDecl, checker: &TypeChecker) -> Option<Chec
         return None;
     };
 
+    let type_params = class
+        .type_params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<Vec<_>>();
     Some(CheckedClassExport {
         name: class.name.clone(),
         type_params: checked_type_params(&class.type_params, checker),
@@ -1155,8 +1163,10 @@ fn checked_class_export(class: &ClassDecl, checker: &TypeChecker) -> Option<Chec
             field_order,
             field_defaults,
             Some(field_default_metadata),
+            Some(field_provider_libraries),
+            &type_params,
             checker,
-        ),
+        )?,
         methods: map_method_overloads_with_defaults(method_overloads, &class.methods, checker),
     })
 }
@@ -1364,8 +1374,10 @@ fn map_fields(
     field_order: &[String],
     default_exprs: &HashMap<String, Spanned<Expr>>,
     preserved_defaults: Option<&HashMap<String, CheckedParamDefault>>,
+    provider_libraries: Option<&HashMap<String, String>>,
+    type_params: &[String],
     checker: &TypeChecker,
-) -> Vec<CheckedField> {
+) -> Option<Vec<CheckedField>> {
     let mut defaults = default_exprs
         .iter()
         .map(|(name, default)| {
@@ -1377,17 +1389,37 @@ fn map_fields(
         .collect::<HashMap<_, _>>();
     if let Some(preserved_defaults) = preserved_defaults {
         for (name, default) in preserved_defaults {
-            defaults.insert(name.as_str(), default.clone());
+            let default = provider_libraries
+                .and_then(|providers| providers.get(name))
+                .map_or_else(
+                    || Ok(default.clone()),
+                    |provider| qualify_checked_default_for_manifest(default, provider, type_params),
+                )
+                .ok()?;
+            defaults.insert(name.as_str(), default);
         }
     }
     let mut used = std::collections::HashSet::new();
     let mut entries = Vec::with_capacity(fields.len());
+    let map_type = |name: &str, info: &FieldInfo| {
+        let mut ty = info.ty.clone();
+        checker.canonicalize_public_library_nominals(&mut ty);
+        crate::frontend::rust_type_display::qualify_for_manifest(
+            &ty,
+            provider_libraries
+                .and_then(|providers| providers.get(name))
+                .map(String::as_str),
+            type_params,
+        )
+        .ok()
+    };
     for name in field_order {
         if let Some(info) = fields.get(name) {
             used.insert(name.as_str());
             entries.push(CheckedField {
                 name: name.clone(),
-                ty: info.ty.clone(),
+                ty: map_type(name, info)?,
+                surface_type_name: info.surface_type_name.clone(),
                 visibility: info.visibility,
                 has_default: defaults.contains_key(name.as_str()),
                 default: defaults.get(name.as_str()).cloned(),
@@ -1401,16 +1433,100 @@ fn map_fields(
         .filter(|(name, _)| !used.contains(name.as_str()))
         .collect::<Vec<_>>();
     remaining.sort_by_key(|(name, _)| *name);
-    entries.extend(remaining.into_iter().map(|(name, info)| CheckedField {
-        name: name.clone(),
-        ty: info.ty.clone(),
-        visibility: info.visibility,
-        has_default: defaults.contains_key(name.as_str()),
-        default: defaults.get(name.as_str()).cloned(),
-        alias: info.alias.clone(),
-        description: info.description.clone(),
-    }));
-    entries
+    entries.extend(
+        remaining
+            .into_iter()
+            .map(|(name, info)| {
+                Some(CheckedField {
+                    name: name.clone(),
+                    ty: map_type(name, info)?,
+                    surface_type_name: info.surface_type_name.clone(),
+                    visibility: info.visibility,
+                    has_default: defaults.contains_key(name.as_str()),
+                    default: defaults.get(name.as_str()).cloned(),
+                    alias: info.alias.clone(),
+                    description: info.description.clone(),
+                })
+            })
+            .collect::<Option<Vec<_>>>()?,
+    );
+    Some(entries)
+}
+
+/// Rebase one inherited compiled default through the current provider's compiler-owned dependency bridge.
+pub(crate) fn qualify_checked_default_for_manifest(
+    default: &CheckedParamDefault,
+    provider: &str,
+    type_params: &[String],
+) -> Result<CheckedParamDefault, String> {
+    let qualify_path = |path: &[String]| {
+        let mut qualified = vec![
+            crate::frontend::rust_type_display::PROVIDER_RUST_BRIDGE_MODULE.to_string(),
+            provider.to_string(),
+        ];
+        qualified.extend(path.iter().cloned());
+        qualified
+    };
+    match default {
+        CheckedParamDefault::List(values) => Ok(CheckedParamDefault::List(
+            values
+                .iter()
+                .map(|value| qualify_checked_default_for_manifest(value, provider, type_params))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        CheckedParamDefault::Dict(entries) => Ok(CheckedParamDefault::Dict(
+            entries
+                .iter()
+                .map(|(key, value)| {
+                    Ok((
+                        qualify_checked_default_for_manifest(key, provider, type_params)?,
+                        qualify_checked_default_for_manifest(value, provider, type_params)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+        )),
+        CheckedParamDefault::ConstRef(path) => Ok(CheckedParamDefault::ConstRef(qualify_path(path))),
+        CheckedParamDefault::Call { path, args, signature } => Ok(CheckedParamDefault::Call {
+            path: qualify_path(path),
+            args: args
+                .iter()
+                .map(|arg| {
+                    Ok(CheckedParamDefaultArg {
+                        name: arg.name.clone(),
+                        value: qualify_checked_default_for_manifest(&arg.value, provider, type_params)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+            signature: signature
+                .as_ref()
+                .map(|signature| -> Result<CheckedParamDefaultCallSignature, String> {
+                    let mut params = signature.params.clone();
+                    for param in &mut params {
+                        param.ty = crate::frontend::rust_type_display::qualify_for_manifest(
+                            &param.ty,
+                            Some(provider),
+                            type_params,
+                        )?;
+                    }
+                    Ok(CheckedParamDefaultCallSignature {
+                        params,
+                        return_type: crate::frontend::rust_type_display::qualify_for_manifest(
+                            &signature.return_type,
+                            Some(provider),
+                            type_params,
+                        )?,
+                    })
+                })
+                .transpose()?,
+        }),
+        CheckedParamDefault::Int(_)
+        | CheckedParamDefault::Float(_)
+        | CheckedParamDefault::Bool(_)
+        | CheckedParamDefault::String(_)
+        | CheckedParamDefault::Bytes(_)
+        | CheckedParamDefault::None
+        | CheckedParamDefault::Unsupported => Ok(default.clone()),
+    }
 }
 
 /// Convert legacy one-method-per-name metadata into checked export methods.

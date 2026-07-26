@@ -34,6 +34,12 @@ enum GenericBaseKind {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedRustPathMode {
+    Nominal,
+    Display,
+}
+
 fn classify_generic_base(name: &str) -> GenericBaseKind {
     if let Some(id) = collections::from_str(name) {
         return GenericBaseKind::Collection(id);
@@ -670,8 +676,28 @@ impl AstLowering {
     /// Convert a frontend `ResolvedType` to an IR type.
     ///
     /// This is used when lowering is driven by the typechecker output rather than AST heuristics.
-    #[allow(clippy::only_used_in_recursion)]
     pub(super) fn lower_resolved_type(&self, ty: &ResolvedType) -> IrType {
+        self.lower_resolved_type_with_rust_path_mode(ty, ResolvedRustPathMode::Nominal)
+    }
+
+    /// Convert a checked declaration type while retaining complete Rust type displays.
+    ///
+    /// Rust metadata can represent types that are not nominal path identifiers, including nested generic types. A
+    /// declaration boundary that no longer has source imports must keep those displays intact for token emission.
+    pub(super) fn lower_resolved_declaration_type(&self, ty: &ResolvedType) -> IrType {
+        self.lower_resolved_type_with_rust_path_mode(ty, ResolvedRustPathMode::Display)
+    }
+
+    /// Lower one checked type while choosing whether Rust paths represent nominal names or complete type displays.
+    ///
+    /// The mode propagates through every nested type so declaration fields retain generic Rust syntax while ordinary
+    /// semantic lowering keeps its established nominal-path representation.
+    #[allow(clippy::only_used_in_recursion)]
+    fn lower_resolved_type_with_rust_path_mode(
+        &self,
+        ty: &ResolvedType,
+        rust_path_mode: ResolvedRustPathMode,
+    ) -> IrType {
         if let ResolvedType::Named(name) = ty
             && let Some((library, public_name)) = split_canonical_public_library_type_name(name)
         {
@@ -682,7 +708,9 @@ impl AstLowering {
         {
             return IrType::NamedGeneric(
                 format!("{library}::{public_name}"),
-                args.iter().map(|arg| self.lower_resolved_type(arg)).collect(),
+                args.iter()
+                    .map(|arg| self.lower_resolved_type_with_rust_path_mode(arg, rust_path_mode))
+                    .collect(),
             );
         }
         match ty {
@@ -699,72 +727,84 @@ impl AstLowering {
             ResolvedType::FrozenBytes => IrType::FrozenBytes,
             ResolvedType::FrozenList(elem) => IrType::NamedGeneric(
                 collections::as_str(CollectionTypeId::FrozenList).to_string(),
-                vec![Self::freeze_const_ir_type(self.lower_resolved_type(elem))],
+                vec![Self::freeze_const_ir_type(
+                    self.lower_resolved_type_with_rust_path_mode(elem, rust_path_mode),
+                )],
             ),
             ResolvedType::FrozenSet(elem) => IrType::NamedGeneric(
                 collections::as_str(CollectionTypeId::FrozenSet).to_string(),
-                vec![Self::freeze_const_ir_type(self.lower_resolved_type(elem))],
+                vec![Self::freeze_const_ir_type(
+                    self.lower_resolved_type_with_rust_path_mode(elem, rust_path_mode),
+                )],
             ),
             ResolvedType::FrozenDict(k, v) => IrType::NamedGeneric(
                 collections::as_str(CollectionTypeId::FrozenDict).to_string(),
                 vec![
-                    Self::freeze_const_ir_type(self.lower_resolved_type(k)),
-                    Self::freeze_const_ir_type(self.lower_resolved_type(v)),
+                    Self::freeze_const_ir_type(self.lower_resolved_type_with_rust_path_mode(k, rust_path_mode)),
+                    Self::freeze_const_ir_type(self.lower_resolved_type_with_rust_path_mode(v, rust_path_mode)),
                 ],
             ),
             ResolvedType::Unit => IrType::Unit,
             ResolvedType::Named(name) => IrType::Struct(name.clone()),
-            ResolvedType::Ref(inner) => IrType::Ref(Box::new(self.lower_resolved_type(inner))),
-            ResolvedType::RefMut(inner) => IrType::RefMut(Box::new(self.lower_resolved_type(inner))),
+            ResolvedType::Ref(inner) => IrType::Ref(Box::new(
+                self.lower_resolved_type_with_rust_path_mode(inner, rust_path_mode),
+            )),
+            ResolvedType::RefMut(inner) => IrType::RefMut(Box::new(
+                self.lower_resolved_type_with_rust_path_mode(inner, rust_path_mode),
+            )),
             ResolvedType::Generic(name, args) => match classify_generic_base(name.as_str()) {
                 GenericBaseKind::Collection(CollectionTypeId::List) => IrType::List(Box::new(
                     args.first()
-                        .map(|t| self.lower_resolved_type(t))
+                        .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
                         .unwrap_or(IrType::Unknown),
                 )),
                 GenericBaseKind::Collection(CollectionTypeId::Dict) => IrType::Dict(
                     Box::new(
                         args.first()
-                            .map(|t| self.lower_resolved_type(t))
+                            .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
                             .unwrap_or(IrType::Unknown),
                     ),
                     Box::new(
                         args.get(1)
-                            .map(|t| self.lower_resolved_type(t))
+                            .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
                             .unwrap_or(IrType::Unknown),
                     ),
                 ),
                 GenericBaseKind::Collection(CollectionTypeId::Set) => IrType::Set(Box::new(
                     args.first()
-                        .map(|t| self.lower_resolved_type(t))
+                        .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
                         .unwrap_or(IrType::Unknown),
                 )),
                 GenericBaseKind::Collection(CollectionTypeId::Option) => IrType::Option(Box::new(
                     args.first()
-                        .map(|t| self.lower_resolved_type(t))
+                        .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
                         .unwrap_or(IrType::Unknown),
                 )),
                 GenericBaseKind::Collection(CollectionTypeId::Result) => IrType::Result(
                     Box::new(
                         args.first()
-                            .map(|t| self.lower_resolved_type(t))
+                            .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
                             .unwrap_or(IrType::Unknown),
                     ),
                     Box::new(
                         args.get(1)
-                            .map(|t| self.lower_resolved_type(t))
+                            .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
                             .unwrap_or(IrType::Unknown),
                     ),
                 ),
-                GenericBaseKind::Collection(CollectionTypeId::Tuple) => {
-                    IrType::Tuple(args.iter().map(|t| self.lower_resolved_type(t)).collect())
-                }
+                GenericBaseKind::Collection(CollectionTypeId::Tuple) => IrType::Tuple(
+                    args.iter()
+                        .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
+                        .collect(),
+                ),
                 GenericBaseKind::Collection(
                     id @ (CollectionTypeId::FrozenList | CollectionTypeId::FrozenSet | CollectionTypeId::FrozenDict),
                 ) => IrType::NamedGeneric(
                     collections::as_str(id).to_string(),
                     args.iter()
-                        .map(|ty| Self::freeze_const_ir_type(self.lower_resolved_type(ty)))
+                        .map(|ty| {
+                            Self::freeze_const_ir_type(self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
+                        })
                         .collect(),
                 ),
                 GenericBaseKind::Collection(CollectionTypeId::Generator) => {
@@ -774,19 +814,26 @@ impl AstLowering {
                         // Preserve the type name rather than panicking during lowering.
                         return IrType::NamedGeneric(
                             name.clone(),
-                            args.iter().map(|t| self.lower_resolved_type(t)).collect(),
+                            args.iter()
+                                .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
+                                .collect(),
                         );
                     };
                     IrType::NamedGeneric(
                         collections::as_str(id).to_string(),
-                        args.iter().map(|t| self.lower_resolved_type(t)).collect(),
+                        args.iter()
+                            .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
+                            .collect(),
                     )
                 }
                 GenericBaseKind::Other => {
                     if let Some(decimal) = decimal_ir_type(name, args) {
                         return decimal;
                     }
-                    let lowered_args: Vec<IrType> = args.iter().map(|t| self.lower_resolved_type(t)).collect();
+                    let lowered_args = args
+                        .iter()
+                        .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
+                        .collect::<Vec<_>>();
                     if name == IR_UNION_TYPE_NAME {
                         return union_ir_type(lowered_args);
                     }
@@ -798,16 +845,29 @@ impl AstLowering {
                 }
             },
             ResolvedType::Function(params, ret) => IrType::Function {
-                params: params.iter().map(|p| self.lower_resolved_type(&p.ty)).collect(),
-                ret: Box::new(self.lower_resolved_type(ret)),
+                params: params
+                    .iter()
+                    .map(|param| self.lower_resolved_type_with_rust_path_mode(&param.ty, rust_path_mode))
+                    .collect(),
+                ret: Box::new(self.lower_resolved_type_with_rust_path_mode(ret, rust_path_mode)),
             },
-            ResolvedType::TypeToken(inner) => IrType::TypeToken(Box::new(self.lower_resolved_type(inner))),
-            ResolvedType::Tuple(items) => IrType::Tuple(items.iter().map(|t| self.lower_resolved_type(t)).collect()),
+            ResolvedType::TypeToken(inner) => IrType::TypeToken(Box::new(
+                self.lower_resolved_type_with_rust_path_mode(inner, rust_path_mode),
+            )),
+            ResolvedType::Tuple(items) => IrType::Tuple(
+                items
+                    .iter()
+                    .map(|ty| self.lower_resolved_type_with_rust_path_mode(ty, rust_path_mode))
+                    .collect(),
+            ),
             ResolvedType::TypeVar(name) => self
                 .active_trait_type_substitution(name)
                 .unwrap_or_else(|| IrType::Generic(name.clone())),
             ResolvedType::SelfType => IrType::SelfType,
-            ResolvedType::RustPath(path) => IrType::Struct(path.clone()),
+            ResolvedType::RustPath(path) => match rust_path_mode {
+                ResolvedRustPathMode::Nominal => IrType::Struct(path.clone()),
+                ResolvedRustPathMode::Display => IrType::RustDisplay(path.clone()),
+            },
             ResolvedType::CallSiteInfer => IrType::Unknown,
             ResolvedType::Unknown => IrType::Unknown,
         }

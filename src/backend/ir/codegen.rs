@@ -41,7 +41,7 @@ use crate::frontend::typechecker::TypeCheckInfo;
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
 use crate::library_manifest::LibraryManifest;
 use crate::provider::{ProviderPlan, SDK_PROVIDER_BUILD_ENV};
-use incan_core::lang::stdlib;
+use incan_core::lang::{rust_keywords, stdlib};
 
 use super::emit::CallableNameResolution;
 use super::scanners::{
@@ -208,6 +208,8 @@ pub struct IrCodegen<'a> {
     fixtures: HashMap<String, (bool, Vec<String>)>,
     /// Rust crates imported via `import rust::` or `from rust::`
     rust_crates: HashSet<String>,
+    /// Crate roots required to keep public class-field Rust identities nameable through a compiled provider.
+    provider_rust_bridge_roots: BTreeSet<String>,
     /// Whether to emit the Zen of Incan at the start of main (set by `import this`)
     emit_zen_in_main: bool,
     /// Functions imported from external Rust crates (name -> true for external)
@@ -262,6 +264,7 @@ impl<'a> IrCodegen<'a> {
             external_rust_functions: HashSet::new(),
             fixtures: HashMap::new(),
             rust_crates: HashSet::new(),
+            provider_rust_bridge_roots: BTreeSet::new(),
             emit_zen_in_main: false,
             declared_crate_names: None,
             provider_plan: None,
@@ -806,6 +809,7 @@ impl<'a> IrCodegen<'a> {
                 self.capture_typechecker_stdlib_cache(&tc);
                 result
             };
+            self.collect_provider_rust_bridge_roots(&module_type_info)?;
             let mut lowering = AstLowering::new_with_type_info(module_type_info);
             self.configure_lowering(&mut lowering);
             lowering.set_current_source_module_name(Some(path_segments.join(".")));
@@ -884,6 +888,60 @@ impl<'a> IrCodegen<'a> {
         for c in crates {
             self.rust_crates.insert(c);
         }
+    }
+
+    /// Publish the checked crate roots required by public class-field Rust identities.
+    ///
+    /// Consumer-generated declarations cannot name a transitive Cargo dependency directly. Library-mode crates expose
+    /// only roots selected from checked public class layouts, including compiled providers that own inherited fields.
+    /// Ordinary application builds remain unchanged.
+    fn attach_provider_rust_dependency_bridge(&self, main_code: String) -> String {
+        if !self.preserve_dependency_public_items {
+            return main_code;
+        }
+        let mut crates = self
+            .provider_rust_bridge_roots
+            .iter()
+            .filter(|crate_name| !crate::frontend::rust_type_display::is_shared_rust_crate(crate_name))
+            .map(|crate_name| rust_keywords::escape_keyword(&crate_name.replace('-', "_")))
+            .collect::<Vec<_>>();
+        crates.sort();
+        crates.dedup();
+        if crates.is_empty() {
+            return main_code;
+        }
+        let reexports = crates
+            .into_iter()
+            .map(|crate_name| format!("    pub use ::{crate_name};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{main_code}\n#[doc(hidden)]\npub mod __incan_provider_rust {{\n{reexports}\n}}\n")
+    }
+
+    /// Accumulate the exact provider and Rust crate roots required by checked public class layouts.
+    fn collect_provider_rust_bridge_roots(&mut self, type_info: &TypeCheckInfo) -> Result<(), GenerationError> {
+        if !self.preserve_dependency_public_items {
+            return Ok(());
+        }
+        for layout in type_info
+            .declarations
+            .class_layouts
+            .values()
+            .filter(|layout| layout.is_public)
+        {
+            for field in &layout.fields {
+                if let Some(provider) = &field.provider_library {
+                    self.provider_rust_bridge_roots.insert(provider.clone());
+                    continue;
+                }
+                let roots = crate::frontend::rust_type_display::public_bridge_roots(&field.ty, &layout.type_params)
+                    .map_err(|message| {
+                        GenerationError::TypeCheck(vec![CompileError::type_error(message, Default::default())])
+                    })?;
+                self.provider_rust_bridge_roots.extend(roots);
+            }
+        }
+        Ok(())
     }
 
     /// Check for `import this`
@@ -1013,6 +1071,7 @@ impl<'a> IrCodegen<'a> {
             self.capture_typechecker_stdlib_cache(&tc);
             result
         };
+        self.collect_provider_rust_bridge_roots(&type_info_opt)?;
 
         // Lower AST to IR using typechecker output when available
         let mut lowering = AstLowering::new_with_type_info(type_info_opt);
@@ -1238,6 +1297,7 @@ impl<'a> IrCodegen<'a> {
             self.capture_typechecker_stdlib_cache(&tc);
             result
         };
+        self.collect_provider_rust_bridge_roots(&module_type_info)?;
         // Use the IR pipeline for module generation too
         let mut lowering = AstLowering::new_with_type_info(module_type_info);
         self.configure_lowering(&mut lowering);
@@ -1416,6 +1476,7 @@ impl<'a> IrCodegen<'a> {
                 self.capture_typechecker_stdlib_cache(&tc);
                 result
             };
+            self.collect_provider_rust_bridge_roots(&module_type_info)?;
             let mut lowering = AstLowering::new_with_type_info(module_type_info);
             self.configure_lowering(&mut lowering);
             lowering.set_current_source_module_name(Some(
@@ -1506,6 +1567,7 @@ impl<'a> IrCodegen<'a> {
                 direct_generated_path_support_items: Some(&mut dependency_reachable_items),
             },
         )?;
+        let main_code = self.attach_provider_rust_dependency_bridge(main_code);
 
         let source_module_paths = lowered_modules
             .iter()
@@ -1700,6 +1762,7 @@ impl<'a> IrCodegen<'a> {
                     self.capture_typechecker_stdlib_cache(&tc);
                     result
                 };
+                self.collect_provider_rust_bridge_roots(&module_type_info)?;
                 let mut lowering = AstLowering::new_with_type_info(module_type_info);
                 self.configure_lowering(&mut lowering);
                 lowering.set_current_source_module_name(Some(path.join(".")));
@@ -1778,6 +1841,7 @@ impl<'a> IrCodegen<'a> {
                 direct_generated_path_support_items: Some(&mut dependency_reachable_items),
             },
         )?;
+        let main_code = self.attach_provider_rust_dependency_bridge(main_code);
 
         let source_module_paths = lowered_modules
             .iter()
@@ -2252,6 +2316,24 @@ def main() -> None:
             "{constants_code}"
         );
         assert_no_generated_unused_lint_allows(constants_code);
+    }
+
+    #[test]
+    fn library_mode_reexports_rust_dependencies_through_compiler_owned_bridge() {
+        let mut codegen = IrCodegen::new();
+        codegen.set_preserve_dependency_public_items(true);
+        codegen
+            .provider_rust_bridge_roots
+            .extend(["rust_shadow".to_string(), "type".to_string(), "std".to_string()]);
+        codegen.rust_crates.insert("private_implementation".to_string());
+
+        let code = codegen.attach_provider_rust_dependency_bridge("pub fn marker() {}\n".to_string());
+
+        assert!(code.contains("pub mod __incan_provider_rust"), "{code}");
+        assert!(code.contains("pub use ::rust_shadow;"), "{code}");
+        assert!(code.contains("pub use ::r#type;"), "{code}");
+        assert!(!code.contains("pub use ::std;"), "{code}");
+        assert!(!code.contains("private_implementation"), "{code}");
     }
 
     #[test]

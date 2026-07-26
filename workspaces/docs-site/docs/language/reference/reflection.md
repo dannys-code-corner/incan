@@ -119,6 +119,7 @@ Notes:
 
 - Field metadata like `[alias="..."]` and `[description="..."]` is **model-only**.
 - For a `class`, `FieldInfo.alias` and `FieldInfo.description` are always `None` and `FieldInfo.wire_name == FieldInfo.name`.
+- Inherited fields retain the declaring package's Incan `type_name` spelling across compiled-library boundaries, even when generated Rust uses a fully qualified provider-owned type path.
 - You do not need to import `FieldInfo` just to call `obj.__fields__()` and inspect the returned records. Import `FieldInfo` only when you want to spell the type explicitly in an annotation.
 
 ### Common patterns
