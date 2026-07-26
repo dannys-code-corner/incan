@@ -2476,6 +2476,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#published-library-namespaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      Published library namespaces
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#import-path-rules" class="md-nav__link">
     <span class="md-ellipsis">
       Import path rules
@@ -6827,6 +6836,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#published-library-namespaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      Published library namespaces
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#import-path-rules" class="md-nav__link">
     <span class="md-ellipsis">
       Import path rules
@@ -7156,6 +7174,38 @@
 <span class="c1"># Import with an alias</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">utils</span><span class="p">::</span><span class="n">format_currency</span> <span class="k">as</span> <span class="n">fmt</span>
 </code></pre></div>
+<h2 id="published-library-namespaces">Published library namespaces<a class="headerlink" href="#published-library-namespaces" title="Permanent link">&para;</a></h2>
+<p><code>incan build --lib</code> preserves the checked module hierarchy below a library's configured source root (normally <code>src/</code>). A source directory becomes a public package namespace automatically; there is no <code>pub module</code> declaration.</p>
+<p>Given this producer layout:</p>
+<div class="language-text highlight"><pre><span></span><code>src/
+├── lib.incn
+└── hyperquant/
+    ├── index.incn
+    └── search.incn
+</code></pre></div>
+<p>public declarations in the immediate source files are available through the directory namespace:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">hees_ai</span> <span class="kn">import</span><span class="w"> </span><span class="nn">hyperquant</span>
+
+<span class="nb">index</span> <span class="o">=</span> <span class="n">hyperquant</span><span class="o">.</span><span class="n">build_index</span><span class="p">()</span>
+<span class="n">matches</span> <span class="o">=</span> <span class="n">hyperquant</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="nb">index</span><span class="p">)</span>
+</code></pre></div>
+<p>The exact source module remains importable when a consumer wants a narrower boundary:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">hees_ai</span><span class="o">.</span><span class="n">hyperquant</span><span class="o">.</span><span class="nb">index</span> <span class="kn">import</span><span class="w"> </span><span class="nn">HyperquantIndex</span><span class="o">,</span><span class="w"> </span><span class="nn">build_index</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">hees_ai</span><span class="p">::</span><span class="n">hyperquant</span><span class="p">::</span><span class="n">search</span> <span class="kn">import</span><span class="w"> </span><span class="nn">search</span>
+</code></pre></div>
+<p>Dots and <code>::</code> are both accepted after the <code>pub::package</code> root. Formatting uses dots for the nested package path. Direct module imports are also supported:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">hees_ai</span><span class="o">.</span><span class="n">hyperquant</span> <span class="k">as</span> <span class="n">hq</span>
+</code></pre></div>
+<p>Only declarations explicitly marked <code>pub</code> participate in the package namespace. Private declarations and private implementation imports remain unavailable to consumers. An explicit <code>pub from ... import ...</code> inside a source module can publish a facade alias for public callables, types, constants, statics, and traits.</p>
+<p>The directory namespace exposes declarations from its own source unit, when present, and its immediate child source files. Deeper directories remain child namespaces. If separate child files publish the same name, the parent member is ambiguous and the compiler requires the exact child path:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">codecs</span><span class="o">.</span><span class="n">encoding</span><span class="o">.</span><span class="n">base64</span> <span class="kn">import</span><span class="w"> </span><span class="nn">encode</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">codecs</span><span class="o">.</span><span class="n">encoding</span><span class="o">.</span><span class="n">hex</span> <span class="kn">import</span><span class="w"> </span><span class="nn">encode</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">encode_hex</span>
+</code></pre></div>
+<p>This permits sibling APIs to use natural names without making the package unpublishable. Within an automatic directory namespace, a declaration from that directory's own source unit takes precedence over a child namespace with the same name, while the child remains available through its full path. At the package root, an explicit flat export from <code>src/lib.incn</code> and an automatic child namespace with the same name are ambiguous; consumers must select the exact nested path.</p>
+<p>Explicit package-root exports in <code>src/lib.incn</code> remain compatible:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="kn">from</span><span class="w"> </span><span class="nn">hyperquant.index</span><span class="w"> </span><span class="kn">import</span> <span class="nc">HyperquantIndex</span>
+</code></pre></div>
+<p>Consumers can therefore use either the flat facade (<code>from pub::hees_ai import HyperquantIndex</code>) or the preserved module hierarchy. The generated <code>.incnlib</code> checked API is authoritative for public declarations, visibility, compiler resolution, diagnostics, and editor completion; consumers do not inspect or re-typecheck the producer source. Codegraph import records preserve the canonical nested package path written by the consumer. The source-module paths recorded by the checked API and the compiled module set determine the matching generated Rust file and facade layout.</p>
 <h2 id="import-path-rules">Import path rules<a class="headerlink" href="#import-path-rules" title="Permanent link">&para;</a></h2>
 <h3 id="child-directory-imports">Child directory imports<a class="headerlink" href="#child-directory-imports" title="Permanent link">&para;</a></h3>
 <p>You can use dots (Python-style) or <code>::</code> (Rust-style):</p>

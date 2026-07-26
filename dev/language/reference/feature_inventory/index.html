@@ -7773,10 +7773,10 @@
 <td>Libraries</td>
 <td style="text-align: right;">0.2</td>
 <td>Build libraries with <code>incan build --lib</code>; consume dependencies through <code>pub::</code> imports.</td>
-<td><code>from pub::mylib import my_function</code><br><code>pub from session import Session</code></td>
-<td>Projects can publish public API manifests and downstream projects can import those public symbols.</td>
+<td><code>from pub::mylib import my_module</code><br><code>from pub::mylib.my_module import my_function</code><br><code>pub from session import Session</code></td>
+<td>Projects publish checked APIs through explicit root facades and source-derived module namespaces.</td>
 <td>Copying source files between projects or relying on private module paths.</td>
-<td><a href="../imports_and_modules/">Imports and modules</a>, <a href="../../../release_notes/0_2/">Release 0.2</a></td>
+<td><a href="../imports_and_modules/">Imports and modules</a>, <a href="../../../release_notes/0_2/">Release 0.2</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></td>
 </tr>
 <tr>
 <td>Module static storage</td>
@@ -8446,12 +8446,13 @@
 <li><strong>Stability:</strong> <code>Stable</code></li>
 <li><strong>Activation:</strong> Build libraries with <code>incan build --lib</code>; consume dependencies through <code>pub::</code> imports.</li>
 <li><strong>Use instead of:</strong> Copying source files between projects or relying on private module paths.</li>
-<li><strong>References:</strong> <a href="../imports_and_modules/">Imports and modules</a>, <a href="../../../release_notes/0_2/">Release 0.2</a></li>
+<li><strong>References:</strong> <a href="../imports_and_modules/">Imports and modules</a>, <a href="../../../release_notes/0_2/">Release 0.2</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></li>
 </ul>
-<p>Projects can publish public API manifests and downstream projects can import those public symbols.</p>
+<p>Projects publish checked APIs through explicit root facades and source-derived module namespaces.</p>
 <p>Canonical forms:</p>
 <ul>
-<li><code>from pub::mylib import my_function</code></li>
+<li><code>from pub::mylib import my_module</code></li>
+<li><code>from pub::mylib.my_module import my_function</code></li>
 <li><code>pub from session import Session</code></li>
 </ul>
 <h3 id="module-static-storage">Module static storage<a class="headerlink" href="#module-static-storage" title="Permanent link">&para;</a></h3>

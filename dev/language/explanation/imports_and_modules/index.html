@@ -4185,6 +4185,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#source-hierarchy-and-package-facades" class="md-nav__link">
+    <span class="md-ellipsis">
+      Source hierarchy and package facades
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#where-to-go-next" class="md-nav__link">
     <span class="md-ellipsis">
       Where to go next
@@ -6560,6 +6569,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#source-hierarchy-and-package-facades" class="md-nav__link">
+    <span class="md-ellipsis">
+      Source hierarchy and package facades
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#where-to-go-next" class="md-nav__link">
     <span class="md-ellipsis">
       Where to go next
@@ -6602,6 +6620,7 @@
 <li>The <strong>standard library</strong> lives under the <code>std</code> namespace (e.g. <code>from std.web import route</code>). The compiler activates features automatically based on which <code>std.*</code> modules you import.</li>
 <li>Some language keywords are <strong>import-activated</strong> (soft keywords), for example <code>async</code> / <code>await</code> after importing <code>std.async</code> (details in the reference page).</li>
 <li>Modules may also export <strong>shared runtime state</strong> via <code>pub static</code>, which importing modules access as the same live storage cell rather than as a copied value.</li>
+<li>Published libraries preserve this same filesystem hierarchy below <code>pub::package</code>. Source directories become package namespaces automatically, while declaration visibility still comes from <code>pub</code>.</li>
 </ul>
 <!-- TODO: Add a link to the standard library sections once we create them -->
 
@@ -6622,6 +6641,10 @@ entrypoint.</p>
 <p>In Rust, you typically need explicit module declarations before importing. In Incan, you generally “just import” and the compiler discovers modules automatically.</p>
 <h3 id="coming-from-python">Coming from Python<a class="headerlink" href="#coming-from-python" title="Permanent link">&para;</a></h3>
 <p>In Python, packages are driven by directory structure and <code>__init__.py</code>. In Incan, directories are recognized as modules without <code>__init__.py</code>; use <code>mod.incn</code> when you need a directory entrypoint.</p>
+<h2 id="source-hierarchy-and-package-facades">Source hierarchy and package facades<a class="headerlink" href="#source-hierarchy-and-package-facades" title="Permanent link">&para;</a></h2>
+<p>A library has two complementary public shapes. Its checked source hierarchy gives consumers stable, scalable namespaces such as <code>pub::hees_ai.hyperquant</code>. Its <code>src/lib.incn</code> can additionally re-export selected declarations as a small flat facade. Preserving both avoids forcing large packages into one enormous root namespace without breaking existing facade imports.</p>
+<p>Directory namespaces expose public declarations from their immediate source units. Deeper directories remain nested. When siblings use the same natural declaration name, the parent spelling is intentionally ambiguous and consumers select the child module. The source tree therefore reduces naming pressure without inventing a separate module registry.</p>
+<p>The checked <code>.incnlib</code> API graph is the authority for declarations and visibility at the package boundary. Compiler resolution and editor discovery project that graph instead of independently rediscovering the producer's source, while codegraph import records retain the canonical nested package path written by the consumer. Generated Rust uses the checked namespace projection and compiled module set to reproduce the physical module and facade layout.</p>
 <h2 id="where-to-go-next">Where to go next<a class="headerlink" href="#where-to-go-next" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Practical multi-file project layouts: <a href="../../how-to/imports_and_modules/">Imports and modules (how-to)</a></li>

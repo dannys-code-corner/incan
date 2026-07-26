@@ -1818,6 +1818,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#publish-a-structured-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      Publish a structured library
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#how-module-discovery-works-practical-view" class="md-nav__link">
     <span class="md-ellipsis">
       How module discovery works (practical view)
@@ -6530,6 +6539,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#publish-a-structured-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      Publish a structured library
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#how-module-discovery-works-practical-view" class="md-nav__link">
     <span class="md-ellipsis">
       How module discovery works (practical view)
@@ -6616,14 +6634,65 @@
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">db.models</span><span class="w"> </span><span class="kn">import</span> <span class="nc">User</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">shared</span><span class="p">::</span><span class="n">utils</span><span class="p">::</span><span class="n">format_date</span>
 </code></pre></div>
+<h2 id="publish-a-structured-library">Publish a structured library<a class="headerlink" href="#publish-a-structured-library" title="Permanent link">&para;</a></h2>
+<p>Create the library with its public declarations in ordinary source modules:</p>
+<div class="language-text highlight"><pre><span></span><code>hyperquant-lib/
+├── incan.toml
+└── src/
+    ├── lib.incn
+    └── hyperquant/
+        ├── index.incn
+        └── search.incn
+</code></pre></div>
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/hyperquant/index.incn</span>
+<span class="k">pub</span> <span class="k">model</span> <span class="nc">HyperquantIndex</span><span class="p">:</span>
+  <span class="k">pub</span> <span class="n">size</span><span class="p">:</span> <span class="nb">int</span>
+
+<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">build_index</span><span class="p">(</span><span class="n">size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">HyperquantIndex</span><span class="p">:</span>
+  <span class="k">return</span> <span class="nc">HyperquantIndex</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="n">size</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">pack_bits</span><span class="p">(</span><span class="n">size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+  <span class="k">return</span> <span class="n">size</span>
+</code></pre></div>
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/hyperquant/search.incn</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">hyperquant.index</span><span class="w"> </span><span class="kn">import</span> <span class="nc">HyperquantIndex</span>
+
+<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">search</span><span class="p">(</span><span class="nb">index</span><span class="p">:</span> <span class="nc">HyperquantIndex</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+  <span class="k">return</span> <span class="nb">index</span><span class="o">.</span><span class="n">size</span>
+</code></pre></div>
+<p>Build the checked library artifact:</p>
+<div class="language-bash highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>hyperquant-lib
+incan<span class="w"> </span>build<span class="w"> </span>--lib
+</code></pre></div>
+<p>Add the library to the consumer:</p>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[dependencies]</span>
+<span class="n">hyperquant_lib</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;../hyperquant-lib&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Import the source-derived namespace:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">hyperquant_lib</span> <span class="kn">import</span><span class="w"> </span><span class="nn">hyperquant</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+  <span class="nb">index</span> <span class="o">=</span> <span class="n">hyperquant</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span><span class="mi">1024</span><span class="p">)</span>
+  <span class="nb">println</span><span class="p">(</span><span class="n">hyperquant</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="nb">index</span><span class="p">))</span>
+</code></pre></div>
+<p>No entry in <code>src/lib.incn</code> is needed merely to make <code>hyperquant</code> exist. Keep explicit <code>pub from</code> entries there when you also want a curated flat facade:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># src/lib.incn</span>
+<span class="k">pub</span> <span class="kn">from</span><span class="w"> </span><span class="nn">hyperquant.index</span><span class="w"> </span><span class="kn">import</span> <span class="nc">HyperquantIndex</span><span class="p">,</span> <span class="n">build_index</span>
+</code></pre></div>
+<p>When sibling modules publish the same declaration name, import through the exact child module instead of the parent:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">codecs</span><span class="o">.</span><span class="n">encoding</span><span class="o">.</span><span class="n">base64</span> <span class="kn">import</span><span class="w"> </span><span class="nn">encode</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">codecs</span><span class="o">.</span><span class="n">encoding</span><span class="o">.</span><span class="n">hex</span> <span class="kn">import</span><span class="w"> </span><span class="nn">encode</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">encode_hex</span>
+</code></pre></div>
+<p>The compiler reports the conflicting source modules if you try the ambiguous parent import.</p>
 <h2 id="how-module-discovery-works-practical-view">How module discovery works (practical view)<a class="headerlink" href="#how-module-discovery-works-practical-view" title="Permanent link">&para;</a></h2>
 <p>When you import a local module, the compiler:</p>
 <ol>
-<li>Resolves the path (handling <code>.</code>, <code>..</code>, <code>super</code>, <code>crate</code>)</li>
-<li>Looks for the <code>.incn</code> file (or <code>mod.incn</code> for directories)</li>
-<li>Parses and type-checks that file</li>
-<li>Makes its types and functions available in your importing file</li>
+<li>Resolves the path (handling <code>.</code>, <code>..</code>, <code>super</code>, <code>crate</code>).</li>
+<li>Looks for the <code>.incn</code> file (or <code>mod.incn</code> for directories).</li>
+<li>Parses and type-checks that file.</li>
+<li>Makes its types and functions available in your importing file.</li>
 </ol>
+<p>Published-library consumers follow a different trust boundary: they resolve <code>pub::</code> imports from the checked <code>.incnlib</code> artifact and generated library crate rather than re-reading the dependency's source.</p>
 <h2 id="examples-from-the-repo">Examples from the repo<a class="headerlink" href="#examples-from-the-repo" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Multi-file example: <code>examples/advanced/multifile/</code></li>
