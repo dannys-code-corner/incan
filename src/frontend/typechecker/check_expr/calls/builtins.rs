@@ -609,6 +609,12 @@ impl TypeChecker {
             if has_call_root_binding {
                 return None;
             }
+            if cid == CollectionTypeId::Set && args.len() > 1 {
+                self.check_call_args(args);
+                self.errors
+                    .push(errors::builtin_max_arity(name, 1, args.len(), call_span));
+                return Some(ResolvedType::Unknown);
+            }
             return match cid {
                 CollectionTypeId::Dict => {
                     let (key_ty, val_ty) = if let Some(arg) = args.first() {
@@ -681,6 +687,7 @@ impl TypeChecker {
                     } else {
                         ResolvedType::Unknown
                     };
+                    self.type_info.record_resolved_collection_constructor(call_span, cid);
                     Some(set_ty(elem_ty))
                 }
                 _ => None,

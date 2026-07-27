@@ -60,7 +60,7 @@ pub const TRAIT_BOUNDS: &[TraitBoundMapping] = &[
     mapping(
         TraitBoundId::Hash,
         "Hash",
-        "Hash",
+        rust::HASH,
         "Hashing support.",
         RFC::_023,
         Since(0, 2),
@@ -120,7 +120,7 @@ pub mod rust {
     pub const PARTIAL_EQ: &str = "PartialEq";
     pub const PARTIAL_ORD: &str = "PartialOrd";
     pub const EQ: &str = "Eq";
-    pub const HASH: &str = "Hash";
+    pub const HASH: &str = "std::hash::Hash";
 
     // Cloning
     pub const CLONE: &str = "Clone";

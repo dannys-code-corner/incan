@@ -6,6 +6,7 @@ use std::fmt;
 
 use super::decl::IrTraitBound;
 use incan_core::lang::traits::{self as core_traits, TraitId};
+use incan_core::lang::types::collections::{self as collections, CollectionTypeId};
 use incan_core::lang::types::numerics::{self, NumericTypeId};
 
 /// Canonical IR generic name used for anonymous union types.
@@ -21,6 +22,15 @@ pub enum Ownership {
     Borrowed,
     /// Mutable borrow (&mut T)
     BorrowedMut,
+}
+
+/// How a set constructor obtains owned elements from one accepted source collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SetConstructorIteration {
+    /// Consume an ordinary mutable collection through `IntoIterator`.
+    IntoOwnedItems,
+    /// Iterate over an immutable collection and clone each borrowed element.
+    CloneBorrowedItems,
 }
 
 /// Mutability of a binding
@@ -127,6 +137,24 @@ pub enum IrType {
 }
 
 impl IrType {
+    /// Return the canonical element and iteration plan for one accepted `Set` constructor source.
+    pub(crate) fn set_constructor_source(&self) -> Option<(&IrType, SetConstructorIteration)> {
+        match self {
+            Self::List(item) | Self::Set(item) => Some((item, SetConstructorIteration::IntoOwnedItems)),
+            Self::NamedGeneric(name, items) => match collections::from_str(name) {
+                Some(CollectionTypeId::List | CollectionTypeId::Set) => items
+                    .first()
+                    .map(|item| (item, SetConstructorIteration::IntoOwnedItems)),
+                Some(CollectionTypeId::FrozenList | CollectionTypeId::FrozenSet) => items
+                    .first()
+                    .map(|item| (item, SetConstructorIteration::CloneBorrowedItems)),
+                _ => None,
+            },
+            Self::Ref(inner) | Self::RefMut(inner) => inner.set_constructor_source(),
+            _ => None,
+        }
+    }
+
     /// Remove one owning provider's qualification from nominal paths while preserving the complete type shape.
     ///
     /// Public-library expressions retain qualified names in consumer IR. Provider-owned signature and anonymous-union

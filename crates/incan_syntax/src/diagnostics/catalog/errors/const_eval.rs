@@ -151,6 +151,11 @@ pub fn builtin_arity(name: &str, expected: usize, found: usize, span: Span) -> C
     CompileError::type_error(format!("{name}() expects {expected} argument(s), got {found}"), span)
 }
 
+/// Report that a builtin-style call supplied more arguments than its surface contract accepts.
+pub fn builtin_max_arity(name: &str, max: usize, found: usize, span: Span) -> CompileError {
+    CompileError::type_error(format!("{name}() expects at most {max} argument(s), got {found}"), span)
+}
+
 pub fn explicit_type_arg_arity(name: &str, expected: usize, found: usize, span: Span) -> CompileError {
     CompileError::type_error(
         format!("{name} expects {expected} explicit type argument(s), got {found}"),

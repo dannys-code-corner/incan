@@ -7638,6 +7638,60 @@ async def main() -> None:
     }
 
     #[test]
+    fn test_run_set_constructor_from_values_issue951() -> Result<(), Box<dyn std::error::Error>> {
+        let output = incan_command()
+            .args(["run", "tests/codegen_snapshots/issue951_set_constructor.incn"])
+            .env("INCAN_SOURCE_ROOT", env!("CARGO_MANIFEST_DIR"))
+            .env(
+                "INCAN_STDLIB",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
+            )
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "incan run issue951_set_constructor failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "source:3\ngeneric-source:3\nset-source:2\n2:2:2:2:2:2:2:1:2:0\n",
+            "set constructors must deduplicate values without consuming a source collection that is used later"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_user_defined_set_shadowing_issue951() -> Result<(), Box<dyn std::error::Error>> {
+        let output = incan_command()
+            .args(["run", "tests/codegen_snapshots/issue951_set_shadowing.incn"])
+            .env("INCAN_SOURCE_ROOT", env!("CARGO_MANIFEST_DIR"))
+            .env(
+                "INCAN_STDLIB",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
+            )
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "incan run issue951_set_shadowing failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "3\n",
+            "a source-defined set function must remain an ordinary call through generated Rust"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_run_rfc088_iterator_sum_float_and_newtype_matrix() {
         let Ok(output) = incan_command()
             .args(["run", "tests/fixtures/rfc088_iterator_sum_runtime.incn"])

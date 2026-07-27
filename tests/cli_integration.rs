@@ -1040,6 +1040,100 @@ def main() -> None:
 }
 
 #[test]
+fn set_constructor_survives_facade_package_and_test_batch_issue951() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let producer_root = tmp.path().join("set_library");
+    let producer_src = producer_root.join("src");
+    fs::create_dir_all(&producer_src)?;
+    fs::write(
+        producer_root.join("incan.toml"),
+        "[project]\nname = \"set_library\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(
+        producer_src.join("sets.incn"),
+        r#""""Publish a collection helper that exercises canonical Set construction."""
+
+
+pub def unique(values: List[str]) -> Set[str]:
+    """Return the distinct values from one source list."""
+    return set(values)
+"#,
+    )?;
+    fs::write(
+        producer_src.join("facade.incn"),
+        r#""""Re-export the public set helper through an intermediate facade."""
+
+pub from sets import unique
+"#,
+    )?;
+    fs::write(
+        producer_src.join("lib.incn"),
+        r#""""Publish the package's stable public facade."""
+
+pub from facade import unique
+"#,
+    )?;
+
+    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    assert_success(
+        &producer_build,
+        "producer build --lib for Set constructor package boundary",
+    );
+
+    let consumer_root = tmp.path().join("set_consumer");
+    let consumer_main = write_minimal_project(
+        &consumer_root,
+        "set_consumer",
+        r#"
+[dependencies]
+set_library = { path = "../set_library" }
+"#,
+    )?;
+    fs::write(
+        &consumer_main,
+        r#""""Consume a compiled helper that constructs a Set behind a facade."""
+
+from pub::set_library import unique
+
+
+def main() -> None:
+    """Print the cardinality returned by the compiled package."""
+    println(len(unique(["beta", "alpha", "beta"])))
+"#,
+    )?;
+    let tests_dir = consumer_root.join("tests");
+    fs::create_dir_all(&tests_dir)?;
+    fs::write(
+        tests_dir.join("test_sets.incn"),
+        r#""""Exercise compiled and local Set construction in one generated test batch."""
+
+from pub::set_library import unique
+from std.testing import assert_eq
+
+
+def test_set_constructor_boundaries() -> None:
+    """Verify the provider facade and test-batch lowering routes."""
+    assert_eq(len(unique(["beta", "alpha", "beta"])), 2)
+    assert_eq(len(set(["gamma", "gamma", "delta"])), 2)
+"#,
+    )?;
+
+    let consumer_run = run_incan(&consumer_root, &["run"])?;
+    assert_success(
+        &consumer_run,
+        "compiled package consumer with a facade-exported Set constructor",
+    );
+    assert_eq!(String::from_utf8(consumer_run.stdout)?, "2\n");
+
+    let consumer_tests = run_incan(&consumer_root, &["test", "tests"])?;
+    assert_success(
+        &consumer_tests,
+        "compiled package and local Set constructors in a generated test batch",
+    );
+    Ok(())
+}
+
+#[test]
 fn compiled_sdk_providers_keep_serde_trait_imports_out_of_consumers() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(tmp.path(), "compiled_sdk_provider_serde", "")?;

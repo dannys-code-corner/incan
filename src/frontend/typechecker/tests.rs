@@ -86,6 +86,78 @@ fn parse_program(source: &str, context: &str) -> crate::frontend::ast::Program {
 }
 
 #[test]
+fn set_constructor_calls_record_canonical_collection_identity_issue951() -> Result<(), String> {
+    let ast = parse_program(
+        r#"
+def main(values: List[str]) -> None:
+  lower = set(values)
+  canonical = Set(values)
+"#,
+        "issue951 set constructor identity",
+    );
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&ast)
+        .map_err(|errors| format!("set constructors should typecheck: {errors:?}"))?;
+
+    let constructors = checker
+        .type_info()
+        .calls
+        .resolved_collection_constructors
+        .values()
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        constructors,
+        vec![CollectionTypeId::Set, CollectionTypeId::Set],
+        "both accepted spellings should resolve through the canonical Set identity"
+    );
+    Ok(())
+}
+
+#[test]
+fn user_defined_set_call_does_not_record_collection_constructor_issue951() -> Result<(), String> {
+    let ast = parse_program(
+        r#"
+def set(values: List[str]) -> int:
+  return len(values)
+
+def main(values: List[str]) -> None:
+  count = set(values)
+"#,
+        "issue951 shadowed set function",
+    );
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&ast)
+        .map_err(|errors| format!("shadowing source function should typecheck: {errors:?}"))?;
+
+    assert!(
+        checker.type_info().calls.resolved_collection_constructors.is_empty(),
+        "a user-defined set function must not be lowered as the Set collection constructor"
+    );
+    Ok(())
+}
+
+#[test]
+fn set_constructor_rejects_more_than_one_source_collection_issue951() {
+    let errors = check_str_err(
+        r#"
+def main(left: List[str], right: List[str]) -> None:
+  invalid = set(left, right)
+"#,
+        "set() should reject multiple source collections",
+    );
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("set() expects at most 1 argument(s), got 2")),
+        "expected a source diagnostic before lowering, got {errors:?}"
+    );
+}
+
+#[test]
 fn stdlib_module_function_calls_accept_default_arguments() -> Result<(), String> {
     let source = r#"
 from std.encoding import hex
