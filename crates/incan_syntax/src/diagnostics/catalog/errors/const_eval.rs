@@ -183,6 +183,14 @@ pub fn builtin_expects_list(name: &str, found: &str, span: Span) -> CompileError
     CompileError::type_error(format!("{name}() expects a list, got {}", found), span)
 }
 
+/// Report a direct `zip(left, right)` operand that cannot be adapted to the source-owned iterator protocol.
+pub fn builtin_zip_argument_not_supported(position: usize, found: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("zip() argument {position} must be a list, FrozenList, or Iterator, got {found}"),
+        span,
+    )
+}
+
 pub fn builtin_list_element_type_not_supported(name: &str, found: &str, span: Span) -> CompileError {
     CompileError::type_error(format!("{name}() does not support list element type {}", found), span)
 }

@@ -32,8 +32,8 @@ pub struct GeneratedPathSupport {
 /// Lowered semantic surfaces that make generated Rust path support items reachable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeneratedPathSupportTrigger {
-    /// Iterator method lowering routes through `std.derives.collection` support types.
-    IteratorMethod,
+    /// Iterator methods and builtin iterator constructors route through `std.derives.collection` support types.
+    IteratorSurface,
 }
 
 /// Borrowed argument shape expected by a generated-method fast path.
@@ -97,7 +97,7 @@ const DIRECT_GENERATED_PATH_SUPPORTS: &[GeneratedPathSupport] = &[GeneratedPathS
         "FlatMapIterator",
         "BatchIterator",
     ],
-    trigger: GeneratedPathSupportTrigger::IteratorMethod,
+    trigger: GeneratedPathSupportTrigger::IteratorSurface,
 }];
 
 const ORDINAL_MAP_METHOD_FAST_PATHS: &[MethodFastPath] = &[

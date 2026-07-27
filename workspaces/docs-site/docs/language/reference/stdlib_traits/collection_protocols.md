@@ -45,6 +45,20 @@ The stdlib provides default Incan implementations for these protocol methods. Th
 | `.skip_while(f)` | `Iterator[T]` | Drops items while `f(item)` returns `true`, then yields the rest. |
 | `.batch(size)` | `Iterator[list[T]]` | Yields adjacent batches and keeps a final non-empty partial batch. |
 
+The builtin `zip(left, right)` is the concise form for pairing two lists, frozen lists, or `Iterator[T]` values directly. The fully qualified `std.builtins.zip(left, right)` spelling has the same behavior. Both return the same lazy `Iterator[tuple[T, U]]` as `left.iter().zip(right.iter())` and stop as soon as either input is exhausted. Use the method form when `zip` is one stage in an existing iterator pipeline:
+
+```incan
+for name, score in zip(names, scores):
+    println(f"{name}: {score}")
+
+ranked: list[tuple[str, int]] = names.iter()
+    .filter(is_visible)
+    .zip(scores.iter())
+    .collect()
+```
+
+Neither form builds a list by itself. Iterate the result directly or call `.collect()` when an owned `list[tuple[T, U]]` is required.
+
 Terminal methods consume the iterator:
 
 | Method | Result | Notes |

@@ -115,6 +115,9 @@ for job in job_iter:
 Some adapters combine or reshape streams:
 
 ```incan
+for name, score in zip(names, scores):
+    println(f"{name}: {score}")
+
 pairs: list[tuple[str, int]] = names.iter()
     .zip(scores.iter())
     .collect()
@@ -123,6 +126,8 @@ chunks: list[list[Job]] = jobs.iter()
     .batch(100)
     .collect()
 ```
+
+Use the builtin `zip(names, scores)` when you are pairing two lists, frozen lists, or existing `Iterator[T]` values directly. Use `.zip(...)` when you already have an iterator pipeline or want to keep the pairing step inside a longer chain. Both forms are lazy, yield `tuple[T, U]` items, and stop at the shorter input; add `.collect()` only when you need a list.
 
 Use `.flat_map(...)` when each input item expands into another iterable value:
 

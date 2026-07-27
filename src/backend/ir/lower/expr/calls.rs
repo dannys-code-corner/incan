@@ -41,6 +41,22 @@ const TYPE_CONSTRUCTOR_HOOK: &str = "__incan_new";
 const API_CRATE_ROOT_SEGMENT: &str = "crate";
 
 impl AstLowering {
+    /// Preserve the frontend type of builtins whose result participates in later type-directed lowering.
+    pub(in crate::backend::ir::lower::expr) fn lowered_builtin_call_type(
+        &self,
+        builtin: BuiltinFn,
+        call_span: ast::Span,
+    ) -> IrType {
+        if !matches!(builtin, BuiltinFn::Zip) {
+            return IrType::Unknown;
+        }
+        self.type_info
+            .as_ref()
+            .and_then(|info| info.expr_type(call_span))
+            .map(|ty| self.lower_resolved_type(ty))
+            .unwrap_or(IrType::Unknown)
+    }
+
     /// Return the builtin member name for an explicit `std.builtins.<name>` callee.
     pub(in crate::backend::ir::lower::expr) fn explicit_builtin_member_name(
         callee: &ast::Spanned<ast::Expr>,
@@ -2605,12 +2621,13 @@ impl AstLowering {
             && let Some(builtin) = BuiltinFn::from_name(name)
         {
             let args_ir = self.lower_call_args(args)?.into_iter().map(|a| a.expr).collect();
+            let result_ty = self.lowered_builtin_call_type(builtin, call_span);
             return Ok((
                 IrExprKind::BuiltinCall {
                     func: builtin,
                     args: args_ir,
                 },
-                IrType::Unknown,
+                result_ty,
             ));
         }
 
@@ -2782,12 +2799,13 @@ impl AstLowering {
             && !matches!(func.ty, IrType::Function { .. })
         {
             let args_ir = self.lower_call_args(args)?.into_iter().map(|a| a.expr).collect();
+            let result_ty = self.lowered_builtin_call_type(builtin, call_span);
             return Ok((
                 IrExprKind::BuiltinCall {
                     func: builtin,
                     args: args_ir,
                 },
-                IrType::Unknown, // Return type depends on the builtin
+                result_ty,
             ));
         }
 

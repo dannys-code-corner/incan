@@ -11,6 +11,7 @@ use super::super::super::expr::{BuiltinFn, IrExprKind, TypedExpr};
 use super::super::super::ownership::ValueUseSite;
 use super::super::super::types::{IrType, SetConstructorIteration};
 use super::super::{EmitError, IrEmitter};
+use super::methods::iterator_methods::emit_iter_receiver;
 use incan_core::lang::builtins::{self, BuiltinFnId};
 use incan_core::lang::types::collections::{self, CollectionTypeId};
 
@@ -72,6 +73,25 @@ fn is_frozen_collection_named_generic(ty: &IrType) -> bool {
 /// Convert a Rust filesystem result into the legacy builtin's declared owned-string error contract.
 fn stringify_file_io_error(result: TokenStream) -> TokenStream {
     quote! { (#result).map_err(|error| error.to_string()) }
+}
+
+/// Emit the builtin `zip(left, right)` as the same source-owned iterator model used by `.zip()`.
+fn emit_zip(emitter: &IrEmitter<'_>, args: &[TypedExpr]) -> Result<Option<TokenStream>, EmitError> {
+    let [left, right, ..] = args else {
+        return Ok(None);
+    };
+    let left_tokens = emitter.emit_expr(left)?;
+    let right_tokens = emitter.emit_expr(right)?;
+    let left_iter = emit_iter_receiver(left, &left_tokens);
+    let right_iter = emit_iter_receiver(right, &right_tokens);
+    Ok(Some(quote! {
+        crate::__incan_std::derives::collection::ZipIterator {
+            left: (#left_iter),
+            right: (#right_iter),
+            left_marker: None,
+            right_marker: None,
+        }
+    }))
 }
 
 /// Return whether `ty` lowers to a Rust string-like value with `.chars()`.
@@ -288,13 +308,7 @@ impl<'a> IrEmitter<'a> {
                 }
             }
             BuiltinFn::Zip => {
-                if args.len() >= 2 {
-                    let a = self.emit_expr(&args[0])?;
-                    let b = self.emit_expr(&args[1])?;
-                    Ok(quote! { #a.iter().zip(#b.iter()) })
-                } else {
-                    Ok(quote! { std::iter::empty::<((), ())>() })
-                }
+                emit_zip(self, args).map(|tokens| tokens.unwrap_or_else(|| quote! { std::iter::empty::<((), ())>() }))
             }
             BuiltinFn::Sorted => {
                 if let Some(arg) = args.first() {
@@ -570,15 +584,7 @@ impl<'a> IrEmitter<'a> {
                     Ok(None)
                 }
             }
-            BuiltinFnId::Zip => {
-                if args.len() >= 2 {
-                    let a = self.emit_expr(&args[0])?;
-                    let b = self.emit_expr(&args[1])?;
-                    Ok(Some(quote! { #a.iter().zip(#b.iter()) }))
-                } else {
-                    Ok(None)
-                }
-            }
+            BuiltinFnId::Zip => emit_zip(self, args),
             BuiltinFnId::Sorted => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;

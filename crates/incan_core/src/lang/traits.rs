@@ -190,22 +190,47 @@ pub fn from_str(name: &str) -> Option<TraitId> {
 
 /// Resolve a bare, canonical source-qualified, or generated-provider spelling to a builtin trait identifier.
 ///
-/// Both Incan source paths (`std.derives.collection.Iterator`) and generated Rust paths
-/// (`stdlib_core::__incan_std::derives::collection::Iterator`) retain the canonical trait name as their final segment.
-/// Other qualified names are rejected so an unrelated package's `Iterator` declaration cannot acquire builtin
-/// semantics by spelling alone.
+/// Qualified lookup uses each source-owned trait's registered module instead of accepting any `std.derives` path with a
+/// familiar final segment. This keeps source and generated-provider identities exact while preventing an unrelated
+/// declaration from acquiring builtin semantics by spelling alone.
 pub fn from_qualified_str(name: &str) -> Option<TraitId> {
     if let Some(id) = from_str(name) {
         return Some(id);
     }
-    if !name.starts_with("std.derives.") && !name.contains("::__incan_std::derives::") {
-        return None;
-    }
-    let final_segment = name
+
+    let canonical = name
         .rsplit(['.', ':'])
         .find(|segment| !segment.is_empty())
-        .unwrap_or(name);
-    from_str(final_segment)
+        .and_then(from_str)?;
+    let source_module = source_module(canonical)?;
+    let source_path = format!("{source_module}.{}", as_str(canonical));
+    if name == source_path {
+        return Some(canonical);
+    }
+
+    let generated_module = generated_module(canonical)?;
+    let generated_suffix = format!("::__incan_std::{generated_module}::{}", as_str(canonical));
+    name.ends_with(&generated_suffix).then_some(canonical)
+}
+
+/// Return the canonical source module for a source-owned builtin trait.
+#[must_use]
+pub const fn source_module(id: TraitId) -> Option<&'static str> {
+    match id {
+        TraitId::Debug | TraitId::Display => Some("std.derives.string"),
+        TraitId::Eq | TraitId::Ord | TraitId::Hash => Some("std.derives.comparison"),
+        TraitId::Clone | TraitId::Default => Some("std.derives.copying"),
+        TraitId::From | TraitId::Into | TraitId::TryFrom | TraitId::TryInto => Some("std.traits.convert"),
+        TraitId::Error => Some("std.traits.error"),
+        TraitId::Iterator | TraitId::Iterable | TraitId::Sum => Some("std.derives.collection"),
+        TraitId::PartialEq | TraitId::PartialOrd | TraitId::IntoIterator | TraitId::Awaitable => None,
+    }
+}
+
+/// Return the generated-provider module for a source-owned builtin trait.
+#[must_use]
+pub fn generated_module(id: TraitId) -> Option<String> {
+    source_module(id).map(|module| module.strip_prefix("std.").unwrap_or(module).replace('.', "::"))
 }
 
 /// Return the canonical spelling for a builtin trait.
@@ -310,7 +335,7 @@ mod tests {
     use super::{TraitId, from_qualified_str};
 
     #[test]
-    fn qualified_lookup_uses_the_canonical_final_segment() {
+    fn qualified_lookup_uses_the_registered_source_owner() {
         assert_eq!(
             from_qualified_str("std.derives.collection.Iterator"),
             Some(TraitId::Iterator)
@@ -319,6 +344,12 @@ mod tests {
             from_qualified_str("stdlib_core::__incan_std::derives::collection::Iterator"),
             Some(TraitId::Iterator)
         );
+        assert_eq!(from_qualified_str("std.traits.convert.From"), Some(TraitId::From));
+        assert_eq!(
+            from_qualified_str("stdlib_core::__incan_std::traits::convert::From"),
+            Some(TraitId::From)
+        );
+        assert_eq!(from_qualified_str("std.derives.other.Iterator"), None);
         assert_eq!(from_qualified_str("RecordIterator"), None);
         assert_eq!(from_qualified_str("custom::Iterator"), None);
     }

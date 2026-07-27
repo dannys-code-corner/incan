@@ -1666,6 +1666,13 @@ fn test_issue951_set_shadowing_codegen() {
 }
 
 #[test]
+fn test_issue950_builtin_zip_only_codegen() {
+    let source = load_test_file("issue950_builtin_zip_only");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("issue950_builtin_zip_only", rust_code);
+}
+
+#[test]
 fn test_empty_list_string_arg_codegen() {
     let source = load_test_file("empty_list_string_arg");
     let rust_code = generate_rust(&source);
