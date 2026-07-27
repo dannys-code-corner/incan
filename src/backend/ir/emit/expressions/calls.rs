@@ -760,51 +760,11 @@ impl<'a> IrEmitter<'a> {
                 .and_then(|path| self.public_dependency_constructor_metadata_for_path(path, &fields))
                 .or_else(|| self.struct_constructor_metadata_for_fields(target_name, &fields))
                 .filter(|metadata| {
-                    metadata.requires_constructor_function || (is_nominal_type_call && function_sig.is_none())
+                    metadata.uses_constructor_function() || (is_nominal_type_call && function_sig.is_none())
                 })
             {
-                let mut provided: std::collections::HashMap<&str, &TypedExpr> = std::collections::HashMap::new();
-                for (name, expr) in &fields {
-                    if let Some(canonical) = metadata.canonical_field_name(name) {
-                        provided.insert(canonical, expr);
-                    }
-                }
-
-                let mut out_fields = Vec::new();
-                for field_name in &metadata.fields {
-                    let field_ident = Self::rust_ident(field_name);
-                    let target_ty = metadata.field_types.get(field_name);
-                    if let Some(value) = provided.get(field_name.as_str()) {
-                        let value = self.emit_expr_for_use(value, ValueUseSite::StructField { target_ty })?;
-                        let value =
-                            if metadata.requires_constructor_function && metadata.default_fields.contains(field_name) {
-                                quote! { Some(#value) }
-                            } else {
-                                value
-                            };
-                        out_fields.push((quote! { #field_ident }, value));
-                    } else if metadata.default_fields.contains(field_name) {
-                        let value = if metadata.requires_constructor_function {
-                            quote! { None }
-                        } else {
-                            let default_expr = metadata.field_defaults.get(field_name).ok_or_else(|| {
-                                EmitError::Unsupported(format!(
-                                    "default for field '{}' on '{}' cannot be materialized",
-                                    field_name, target_name
-                                ))
-                            })?;
-                            self.emit_expr_for_use(default_expr, ValueUseSite::StructField { target_ty })?
-                        };
-                        out_fields.push((quote! { #field_ident }, value));
-                    } else {
-                        return Err(EmitError::Unsupported(format!(
-                            "missing required field '{}' when constructing '{}'",
-                            field_name, target_name
-                        )));
-                    }
-                }
-
-                if metadata.requires_constructor_function {
+                let out_fields = self.emit_named_constructor_arguments(target_name, metadata, &fields)?;
+                if metadata.uses_constructor_function() {
                     let values = out_fields.iter().map(|(_, value)| value);
                     return Ok(quote! { #f(#(#values),*) });
                 }
@@ -1498,8 +1458,10 @@ mod tests {
     }
 
     #[test]
+    /// Confirm compiled-class bridges retain private constructor inputs while preserving exact provider identity.
     fn alternate_type_name_call_uses_exact_private_library_constructor_bridge_issue883()
     -> Result<(), Box<dyn std::error::Error>> {
+        use crate::backend::ir::decl::IrStructKind;
         use crate::backend::ir::emit::StructConstructorMetadata;
         use crate::library_manifest::{FieldExport, FieldVisibilityExport, ParamDefaultExport, TypeRef};
 
@@ -1545,11 +1507,11 @@ mod tests {
         let mut emitter = IrEmitter::new(&registry);
         emitter.pub_dependency_constructor_metadata.insert(
             ("sealed".to_string(), vec!["Vault".to_string()]),
-            StructConstructorMetadata::from_manifest_fields("sealed", &sealed_fields),
+            StructConstructorMetadata::from_manifest_fields("sealed", IrStructKind::Class, &sealed_fields),
         );
         emitter.pub_dependency_constructor_metadata.insert(
             ("decoy".to_string(), vec!["Vault".to_string()]),
-            StructConstructorMetadata::from_manifest_fields("decoy", &decoy_fields),
+            StructConstructorMetadata::from_manifest_fields("decoy", IrStructKind::Class, &decoy_fields),
         );
         let func = TypedExpr::new(
             IrExprKind::Var {
@@ -1583,6 +1545,7 @@ mod tests {
     #[test]
     fn qualified_public_module_model_call_emits_struct_and_constant_paths_issue948()
     -> Result<(), Box<dyn std::error::Error>> {
+        use crate::backend::ir::decl::IrStructKind;
         use crate::backend::ir::emit::StructConstructorMetadata;
         use crate::library_manifest::{FieldExport, FieldVisibilityExport, ParamDefaultExport, TypeRef};
 
@@ -1609,7 +1572,7 @@ mod tests {
                     "HyperquantIndex".to_string(),
                 ],
             ),
-            StructConstructorMetadata::from_manifest_fields("modulelib", &fields),
+            StructConstructorMetadata::from_manifest_fields("modulelib", IrStructKind::Model, &fields),
         );
         let defaulted_class_fields = vec![FieldExport {
             name: "size".to_string(),
@@ -1632,7 +1595,7 @@ mod tests {
                     "IndexBuilder".to_string(),
                 ],
             ),
-            StructConstructorMetadata::from_manifest_fields("modulelib", &defaulted_class_fields),
+            StructConstructorMetadata::from_manifest_fields("modulelib", IrStructKind::Class, &defaulted_class_fields),
         );
         let module = || {
             TypedExpr::new(

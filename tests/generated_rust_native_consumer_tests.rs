@@ -18,6 +18,8 @@ fn incan_binary() -> PathBuf {
 }
 
 fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let stdlib_root = source_root.join("crates/incan_stdlib/stdlib");
     Ok(Command::new(incan_binary())
         .args(args)
         .current_dir(current_dir)
@@ -28,6 +30,10 @@ fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::e
             support::generated_cargo_target_dir(),
         )
         .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store())
+        .env("INCAN_SOURCE_ROOT", source_root)
+        .env("INCAN_STDLIB", &stdlib_root)
+        .env("INCAN_STDLIB_DIR", &stdlib_root)
+        .env("INCAN_TOOLCHAIN_CRATES_DIR", source_root.join("crates"))
         .output()?)
 }
 
@@ -58,6 +64,7 @@ fn write_fixture_file(root: &Path, relative_path: &str, contents: &str) -> Resul
     Ok(())
 }
 
+/// Materialize the generated-library producer fixture, including sealed-model coverage.
 fn write_producer(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let producer = root.join("native_items");
     write_fixture_file(
@@ -74,6 +81,11 @@ fn write_producer(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
         &producer,
         "src/counters.incn",
         include_str!("fixtures/generated_rust_native_consumer/producer/src/counters.incn"),
+    )?;
+    write_fixture_file(
+        &producer,
+        "src/admission.incn",
+        include_str!("fixtures/generated_rust_native_consumer/producer/src/admission.incn"),
     )?;
     Ok(producer)
 }
@@ -93,13 +105,39 @@ fn write_consumer(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(consumer)
 }
 
+/// Materialize the native Rust crate that must not forge private model construction.
+fn write_forge(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let forge = root.join("forge");
+    write_fixture_file(
+        &forge,
+        "Cargo.toml",
+        include_str!("fixtures/generated_rust_native_consumer/forge/Cargo.toml"),
+    )?;
+    write_fixture_file(
+        &forge,
+        "src/lib.rs",
+        include_str!("fixtures/generated_rust_native_consumer/forge/src/lib.rs"),
+    )?;
+    Ok(forge)
+}
+
 #[test]
+/// Verify generated-library Rust retains public capabilities without exposing private constructors.
 fn native_rust_consumer_can_call_generated_public_items() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let producer = write_producer(tmp.path())?;
 
     let build_output = run_incan(&producer, &["build", "--lib"])?;
     assert_success(&build_output, "incan build --lib native consumer producer");
+    let build_diagnostics = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+    assert!(
+        !build_diagnostics.contains("private_interfaces"),
+        "generated producer leaked a private type through a public Rust interface:\n{build_diagnostics}"
+    );
 
     let artifact_root = producer.join("target/lib");
     assert!(
@@ -120,6 +158,32 @@ fn native_rust_consumer_can_call_generated_public_items() -> Result<(), Box<dyn 
         &tmp.path().join("native-cargo-target"),
     )?;
     assert_success(&cargo_test, "native Rust cargo test against generated library");
+
+    let forge = write_forge(tmp.path())?;
+    let forge_check = run_cargo(
+        &forge,
+        &["check", "--offline", "--all-features"],
+        &tmp.path().join("native-cargo-target"),
+    )?;
+    assert!(
+        !forge_check.status.success(),
+        "native Rust forge unexpectedly compiled private model constructor inputs.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&forge_check.stdout),
+        String::from_utf8_lossy(&forge_check.stderr)
+    );
+    let forge_diagnostics = String::from_utf8_lossy(&forge_check.stderr);
+    for nominal in ["Admission", "Defaulted", "Mixed"] {
+        assert!(
+            forge_diagnostics.contains(nominal),
+            "native Rust forge failed for an unrelated reason; expected a constructor diagnostic for {nominal}:\n\
+             {forge_diagnostics}"
+        );
+    }
+    assert!(
+        forge_diagnostics.contains("expected function, tuple struct or tuple variant")
+            || forge_diagnostics.contains("takes 1 argument but 2 arguments were supplied"),
+        "native Rust forge did not fail at the sealed constructor boundary:\n{forge_diagnostics}"
+    );
 
     Ok(())
 }
