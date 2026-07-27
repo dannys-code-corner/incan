@@ -18275,7 +18275,7 @@ def main() -> NodeId:
 }
 
 #[test]
-fn test_user_module_derive_on_newtype_uses_identity_bearing_trait_adoption() -> Result<(), Box<dyn std::error::Error>> {
+fn test_user_module_derives_on_newtypes_use_owner_bearing_trait_adoptions() -> Result<(), Box<dyn std::error::Error>> {
     let yaml_source = r#"
 __derives__ = [Serialize]
 
@@ -18286,9 +18286,13 @@ pub trait Serialize:
 "#;
     let source = r#"
 import yaml
+from yaml import Serialize as YamlSerialize
 
 @derive(yaml)
 pub type Token = newtype str
+
+@derive(YamlSerialize)
+pub type AliasToken = newtype str
 
 def encode[T with yaml.Serialize](value: T) -> str:
   return value.to_yaml()
@@ -18305,14 +18309,35 @@ def main() -> str:
         .map_err(|errors| std::io::Error::other(format!("custom newtype derive failed: {errors:?}")))?;
     let exports = collect_checked_public_exports(&ast, &checker);
     let manifest = LibraryManifest::from_checked_exports("custom_newtype", "0.1.0", &exports);
-    let token = manifest.exports.newtypes.first().ok_or("missing Token export")?;
+    let token = manifest
+        .exports
+        .newtypes
+        .iter()
+        .find(|newtype| newtype.name == "Token")
+        .ok_or("missing Token export")?;
     assert!(
-        token
-            .trait_adoptions
-            .iter()
-            .any(|adoption| adoption.name == "yaml.Serialize" && adoption.source_name.as_deref() == Some("Serialize")),
-        "expected identity-bearing yaml.Serialize adoption, got {:?}",
+        token.trait_adoptions.iter().any(|adoption| {
+            adoption.name == "yaml.Serialize"
+                && adoption.source_name.as_deref() == Some("Serialize")
+                && adoption.module_path.as_deref() == Some(&["yaml".to_string()])
+        }),
+        "expected identity- and owner-bearing yaml.Serialize adoption, got {:?}",
         token.trait_adoptions
+    );
+    let alias_token = manifest
+        .exports
+        .newtypes
+        .iter()
+        .find(|newtype| newtype.name == "AliasToken")
+        .ok_or("missing AliasToken export")?;
+    assert!(
+        alias_token.trait_adoptions.iter().any(|adoption| {
+            adoption.name == "YamlSerialize"
+                && adoption.source_name.as_deref() == Some("Serialize")
+                && adoption.module_path.as_deref() == Some(&["yaml".to_string()])
+        }),
+        "expected directly imported YamlSerialize adoption to retain its canonical owner, got {:?}",
+        alias_token.trait_adoptions
     );
     Ok(())
 }

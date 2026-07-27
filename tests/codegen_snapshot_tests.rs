@@ -3533,6 +3533,51 @@ def main() -> str:
     );
 }
 
+#[test]
+fn test_direct_json_trait_import_keeps_canonical_owner_across_modules_issue946() {
+    let models_source = r#"
+from std.serde import json
+
+@derive(json)
+pub model Item:
+  pub value: str
+"#;
+    let encode_source = r#"
+from std.serde.json import Serialize
+from crate.models import Item
+
+pub def encode(item: Item) -> str:
+  return item.to_json()
+"#;
+    let root_source = r#"
+from crate.encode import encode
+from crate.models import Item
+"#;
+    let models_ast = parse_incan_program(models_source, "JSON model module");
+    let encode_ast = parse_incan_program(encode_source, "JSON encoder module");
+    let root_ast = parse_incan_program(root_source, "JSON library root");
+    let mut codegen = codegen_with_builtin_stdlib_inventory();
+    codegen.add_module_with_path_segments("models", &models_ast, vec!["models".to_string()]);
+    codegen.add_module_with_path_segments("encode", &encode_ast, vec!["encode".to_string()]);
+    let (_root_code, modules) = codegen
+        .try_generate_multi_file_nested(&root_ast, &[vec!["models".to_string()], vec!["encode".to_string()]])
+        .unwrap_or_else(|err| panic!("multi-module JSON library should codegen: {err:?}"));
+    let Some(encode_module) = modules.get(&vec!["encode".to_string()]) else {
+        panic!("missing generated encoder module");
+    };
+    let rust_code = normalize_codegen_output(encode_module);
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+
+    assert!(
+        compact.contains("crate::__incan_std::serde::json::Serialize::to_json(&item)"),
+        "directly imported source traits must preserve their canonical owner in each generated module:\n{rust_code}"
+    );
+    assert!(
+        !compact.contains("returnjson::Serialize::to_json(&item)"),
+        "the encoder module does not import the source `json` module:\n{rust_code}"
+    );
+}
+
 /// RFC 024: module-level derive metadata should let `@derive(json)` adopt serde traits and emit Rust derives.
 #[test]
 fn test_rfc024_module_derive_json_codegen() {
