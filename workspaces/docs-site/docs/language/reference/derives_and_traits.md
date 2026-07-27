@@ -308,7 +308,7 @@ Explicit slots are applied first. `_` slots are inferred from value arguments an
 
 **What is not supported**:
 
-Explicit brackets are supported only for direct calls resolved as Incan functions/methods. Using brackets on other call shapes is an error (not ignored), for example:
+Explicit brackets are supported for direct Incan function and method calls. A type-associated Rust call may also use `Type.method[T](...)` when the imported Rust receiver declares type parameters only; this emits Rust's `Type::<T>::method(...)` form. Receiver types containing const parameters are rejected because Incan v0.5 has no const-value call-site argument syntax. Using brackets on other call shapes is an error (not ignored), for example:
 
 - Built-in calls like `len[int](...)`
 - Calls to functions imported from Rust (`from rust::...`)

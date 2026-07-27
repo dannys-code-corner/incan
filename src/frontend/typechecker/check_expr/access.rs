@@ -3,18 +3,21 @@
 //! These helpers validate access patterns like `xs[i]`, `xs[a:b]`, `obj.field`, and `obj.method(...)`, emitting
 //! diagnostics for missing fields/methods and incompatible uses.
 
+use std::collections::HashMap;
+
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::resolved_type_subst::{substitute_resolved_type, type_param_subst_map};
 use crate::frontend::symbols::*;
 use crate::frontend::typechecker::helpers::{
     collection_name, collection_type_id, generator_ty, is_frozen_bytes, is_frozen_str, is_intlike_for_index, list_ty,
-    option_ty, string_method_return,
+    option_ty, render_resolved_type_as_rust_arg, string_method_return,
 };
 use crate::frontend::typechecker::type_info::{RustMethodTraitImportUse, RustTraitImportInfo};
 use crate::frontend::typechecker::{IdentKind, canonical_public_library_type_name};
 use incan_core::interop::{
-    RustCollectionFamily, RustFieldInfo, RustFunctionSig, RustItemKind, metadata_free_method_signature,
+    RustCollectionFamily, RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata,
+    metadata_free_method_signature,
 };
 use incan_core::lang::magic_methods;
 use incan_core::lang::surface::collection_helpers::{self, BuiltinCollectionHelperId};
@@ -76,10 +79,12 @@ struct RustTraitMethodCall<'a> {
 struct RustPathMethodCall<'a> {
     rust_path: &'a str,
     method: &'a str,
+    receiver_metadata: Option<&'a RustItemMetadata>,
     type_args: &'a [Spanned<Type>],
     args: &'a [CallArg],
     arg_types: &'a [ResolvedType],
     receiver_span: Span,
+    expected_return_ty: Option<&'a ResolvedType>,
     span: Span,
 }
 
@@ -1401,6 +1406,45 @@ impl TypeChecker {
         }
     }
 
+    /// Return metadata attached to the exact imported Rust receiver expression.
+    ///
+    /// Multiple compiled providers may describe the same canonical Rust path. The selected public import remains the
+    /// semantic authority for its reexport rather than allowing a later path-only lookup to select another provider.
+    fn rust_metadata_for_receiver_expr(&self, receiver: &Spanned<Expr>) -> Option<RustItemMetadata> {
+        match &receiver.node {
+            Expr::Ident(name) => {
+                let SymbolKind::RustItem(info) = &self.lookup_symbol(name)?.kind else {
+                    return None;
+                };
+                info.metadata.clone()
+            }
+            Expr::Paren(inner) => self.rust_metadata_for_receiver_expr(inner),
+            _ => None,
+        }
+    }
+
+    /// Prefer exact receiver metadata when it can authoritatively answer one method lookup.
+    fn rust_metadata_for_receiver_method(
+        &self,
+        rust_path: &str,
+        method: &str,
+        receiver_metadata: Option<&RustItemMetadata>,
+    ) -> Option<RustItemMetadata> {
+        if let Some(metadata) = receiver_metadata {
+            let is_authoritative = match &metadata.kind {
+                RustItemKind::Type(type_info) => {
+                    type_info.methods.iter().any(|candidate| candidate.name == method)
+                        || type_info.metadata_completeness.has_methods()
+                }
+                _ => true,
+            };
+            if is_authoritative {
+                return Some(metadata.clone());
+            }
+        }
+        self.rust_item_metadata_for_method_call(rust_path, method)
+    }
+
     /// Return the canonical Rust path for a nominal receiver.
     fn rust_canonical_path_for_nominal_receiver(
         &self,
@@ -1637,9 +1681,178 @@ impl TypeChecker {
         None
     }
 
-    /// Check if a Rust type has generic parameters.
-    fn is_type_generic(&self, rust_path: &str) -> Option<bool> {
-        Some(rust_path.contains('<') || rust_path.contains("::<"))
+    /// Whether a contextual type is one specialization of `rust_path`.
+    fn contextual_type_matches_rust_owner(expected: &ResolvedType, rust_path: &str) -> bool {
+        match expected {
+            ResolvedType::RustPath(path) => path.split('<').next().is_some_and(|base| base == rust_path),
+            ResolvedType::Generic(name, _) | ResolvedType::Named(name) => {
+                name.strip_prefix("rust::").unwrap_or(name) == rust_path
+            }
+            _ => false,
+        }
+    }
+
+    /// Find the concrete receiver occupying a `Self` position in one expected result.
+    fn contextual_rust_receiver_type(
+        actual: &ResolvedType,
+        expected: &ResolvedType,
+        rust_path: &str,
+    ) -> Option<ResolvedType> {
+        match actual {
+            ResolvedType::RustPath(path)
+                if path == "Self" && Self::contextual_type_matches_rust_owner(expected, rust_path) =>
+            {
+                Some(expected.clone())
+            }
+            ResolvedType::RustPath(path)
+                if path.split('<').next().is_some_and(|base| base == rust_path)
+                    && Self::contextual_type_matches_rust_owner(expected, rust_path) =>
+            {
+                Some(expected.clone())
+            }
+            ResolvedType::Generic(name, _) | ResolvedType::Named(name)
+                if name.strip_prefix("rust::").unwrap_or(name) == rust_path
+                    && Self::contextual_type_matches_rust_owner(expected, rust_path) =>
+            {
+                Some(expected.clone())
+            }
+            ResolvedType::Ref(inner) => match expected {
+                ResolvedType::Ref(expected_inner) => {
+                    Self::contextual_rust_receiver_type(inner, expected_inner, rust_path)
+                }
+                _ => None,
+            },
+            ResolvedType::RefMut(inner) => match expected {
+                ResolvedType::RefMut(expected_inner) => {
+                    Self::contextual_rust_receiver_type(inner, expected_inner, rust_path)
+                }
+                _ => None,
+            },
+            ResolvedType::Generic(name, args) => match expected {
+                ResolvedType::Generic(expected_name, expected_args)
+                    if name == expected_name && args.len() == expected_args.len() =>
+                {
+                    args.iter()
+                        .zip(expected_args)
+                        .find_map(|(actual, expected)| Self::contextual_rust_receiver_type(actual, expected, rust_path))
+                }
+                _ => None,
+            },
+            ResolvedType::Tuple(items) => match expected {
+                ResolvedType::Tuple(expected_items) if items.len() == expected_items.len() => items
+                    .iter()
+                    .zip(expected_items)
+                    .find_map(|(actual, expected)| Self::contextual_rust_receiver_type(actual, expected, rust_path)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Resolve type arguments from one contextual Rust receiver specialization.
+    fn rust_owner_type_args(&self, receiver: &ResolvedType, rust_path: &str) -> Option<Vec<ResolvedType>> {
+        match receiver {
+            ResolvedType::Generic(name, args) if name.strip_prefix("rust::").unwrap_or(name) == rust_path => {
+                Some(args.clone())
+            }
+            ResolvedType::RustPath(display) => {
+                let normalized = display.strip_prefix("rust::").unwrap_or(display);
+                let (base, args) = Self::rust_generic_base_and_args(normalized)?;
+                if base != rust_path {
+                    return None;
+                }
+                Some(
+                    args.into_iter()
+                        .map(|arg| self.resolved_type_from_rust_display(arg))
+                        .collect(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    /// Substitute exact Rust identifiers in one metadata display.
+    fn substitute_rust_owner_display(
+        display: &str,
+        substitutions: &HashMap<&str, String>,
+        receiver_display: &str,
+    ) -> String {
+        let mut rendered = String::with_capacity(display.len());
+        let mut chars = display.char_indices().peekable();
+        while let Some((start, ch)) = chars.next() {
+            if ch == '_' || ch.is_alphanumeric() {
+                let mut end = start + ch.len_utf8();
+                while let Some((idx, next)) = chars.peek().copied() {
+                    if next == '_' || next.is_alphanumeric() {
+                        chars.next();
+                        end = idx + next.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let ident = &display[start..end];
+                let preceded_by_lifetime = start > 0 && display[..start].ends_with('\'');
+                if ident == "Self" {
+                    rendered.push_str(receiver_display);
+                } else if !preceded_by_lifetime {
+                    rendered.push_str(substitutions.get(ident).map_or(ident, String::as_str));
+                } else {
+                    rendered.push_str(ident);
+                }
+            } else {
+                rendered.push(ch);
+            }
+        }
+        rendered
+    }
+
+    /// Specialize one inspected associated-function signature with its receiver's concrete type arguments.
+    fn specialize_rust_owner_signature(
+        &self,
+        sig: &RustFunctionSig,
+        rust_path: &str,
+        type_params: &[String],
+        type_args: &[ResolvedType],
+    ) -> RustFunctionSig {
+        let receiver_display = if type_args.is_empty() {
+            rust_path.to_string()
+        } else {
+            format!(
+                "{rust_path}<{}>",
+                type_args
+                    .iter()
+                    .map(render_resolved_type_as_rust_arg)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let substitutions = type_params
+            .iter()
+            .zip(type_args)
+            .map(|(param, arg)| (param.as_str(), render_resolved_type_as_rust_arg(arg)))
+            .collect::<HashMap<_, _>>();
+        RustFunctionSig {
+            type_params: sig.type_params.clone(),
+            params: sig
+                .params
+                .iter()
+                .map(|param| incan_core::interop::RustParam {
+                    name: param.name.clone(),
+                    type_display: Self::substitute_rust_owner_display(
+                        param.type_display.as_str(),
+                        &substitutions,
+                        receiver_display.as_str(),
+                    ),
+                })
+                .collect(),
+            return_type: Self::substitute_rust_owner_display(
+                sig.return_type.as_str(),
+                &substitutions,
+                receiver_display.as_str(),
+            ),
+            is_async: sig.is_async,
+            is_unsafe: sig.is_unsafe,
+        }
     }
 
     /// Resolve and validate a method call on a rust-inspect-backed path.
@@ -1651,10 +1864,12 @@ impl TypeChecker {
         let RustPathMethodCall {
             rust_path,
             method,
+            receiver_metadata,
             type_args,
             args,
             arg_types,
             receiver_span,
+            expected_return_ty,
             span,
         } = call;
         let preserves_lookup_arg_shape = RustCollectionFamily::for_canonical_path(rust_path)
@@ -1662,7 +1877,7 @@ impl TypeChecker {
         if preserves_lookup_arg_shape {
             self.type_info.record_regular_method_arg_shape(receiver_span, method);
         }
-        let Some(metadata) = self.rust_item_metadata_for_method_call(rust_path, method) else {
+        let Some(metadata) = self.rust_metadata_for_receiver_method(rust_path, method, receiver_metadata) else {
             if let Some(import_use) = self.record_unique_rust_trait_import_for_method_call(method, span)
                 && let Some(sig) = import_use.signature.as_ref()
             {
@@ -1680,10 +1895,12 @@ impl TypeChecker {
                 RustPathMethodCall {
                     rust_path,
                     method,
+                    receiver_metadata,
                     type_args,
                     args,
                     arg_types,
                     receiver_span,
+                    expected_return_ty,
                     span,
                 },
                 preserves_lookup_arg_shape,
@@ -1693,10 +1910,14 @@ impl TypeChecker {
             return None;
         };
         match &metadata.kind {
-            RustItemKind::Type(_) => {
-                let Some(sig) = metadata_free_method_signature(rust_path, method)
-                    .or_else(|| self.rust_method_signature(rust_path, method))
-                else {
+            RustItemKind::Type(type_info) => {
+                let Some(sig) = metadata_free_method_signature(rust_path, method).or_else(|| {
+                    type_info
+                        .methods
+                        .iter()
+                        .find(|candidate| candidate.name == method)
+                        .map(|candidate| candidate.signature.clone())
+                }) else {
                     if let Some(import_use) = self.record_rust_extension_trait_import_for_call(&metadata, method, span)
                         && let Some(sig) = import_use.signature.as_ref()
                     {
@@ -1727,10 +1948,12 @@ impl TypeChecker {
                         RustPathMethodCall {
                             rust_path,
                             method,
+                            receiver_metadata,
                             type_args,
                             args,
                             arg_types,
                             receiver_span,
+                            expected_return_ty,
                             span,
                         },
                         preserves_lookup_arg_shape,
@@ -1740,23 +1963,74 @@ impl TypeChecker {
                     // Stay permissive when no unambiguous imported trait or trait method signature can be selected.
                     return Some(ResolvedType::Unknown);
                 };
+                let receiver_is_type_name = matches!(
+                    self.type_info.ident_kind(receiver_span),
+                    Some(IdentKind::TypeName | IdentKind::RustImport)
+                );
+                let specializes_receiver = receiver_is_type_name && !type_info.type_params.is_empty();
+                let declared_type_params = if specializes_receiver {
+                    type_info.type_params.as_slice()
+                } else {
+                    sig.type_params.as_slice()
+                };
+                let mut resolved_type_args = Vec::new();
                 if !type_args.is_empty() {
-                    let types_has_generic = self.is_type_generic(rust_path)?;
-                    if !sig.type_params.is_empty() && type_args.len() != sig.type_params.len() {
+                    if specializes_receiver && type_info.has_const_params {
+                        self.errors
+                            .push(errors::rust_receiver_const_generics_not_supported(rust_path, span));
+                        return Some(ResolvedType::Unknown);
+                    }
+                    if type_args.len() != declared_type_params.len() {
                         self.errors.push(errors::explicit_type_arg_arity(
                             method,
-                            sig.type_params.len(),
+                            declared_type_params.len(),
                             type_args.len(),
                             span,
                         ));
                         return Some(ResolvedType::Unknown);
                     }
-                    if sig.type_params.is_empty() && !types_has_generic {
+                    if declared_type_params.is_empty() {
                         self.errors
                             .push(errors::explicit_call_site_type_args_not_supported(span));
                         return Some(ResolvedType::Unknown);
                     }
+                    resolved_type_args = type_args.iter().map(|ty| self.resolve_type_checked(ty)).collect();
+                    self.type_info
+                        .calls
+                        .call_site_monomorph_type_args
+                        .insert((span.start, span.end), resolved_type_args.clone());
                 }
+                let contextual_receiver = if specializes_receiver && resolved_type_args.is_empty() {
+                    expected_return_ty.and_then(|expected| {
+                        let return_display = self.rust_display_for_owner_path(sig.return_type.as_str(), rust_path);
+                        let actual = self.resolved_type_from_rust_display(return_display.as_str());
+                        Self::contextual_rust_receiver_type(&actual, expected, rust_path)
+                    })
+                } else {
+                    None
+                };
+                if let Some(receiver) = contextual_receiver.as_ref() {
+                    if type_info.has_const_params {
+                        self.errors
+                            .push(errors::rust_receiver_const_generics_not_supported(rust_path, span));
+                        return Some(ResolvedType::Unknown);
+                    }
+                    if let Some(contextual_args) = self.rust_owner_type_args(receiver, rust_path)
+                        && contextual_args.len() == type_info.type_params.len()
+                    {
+                        resolved_type_args = contextual_args;
+                    }
+                }
+                let effective_sig = if specializes_receiver && !resolved_type_args.is_empty() {
+                    self.specialize_rust_owner_signature(
+                        &sig,
+                        rust_path,
+                        type_info.type_params.as_slice(),
+                        resolved_type_args.as_slice(),
+                    )
+                } else {
+                    sig.clone()
+                };
                 if Self::rust_signature_has_receiver(&sig)
                     && sig.params[1..].iter().any(|param| {
                         let normalized = param.type_display.replace(' ', "");
@@ -1768,12 +2042,20 @@ impl TypeChecker {
                 let callable_display = format!("rust::{rust_path}.{method}");
                 let ret = self.validate_rust_method_call(
                     callable_display.as_str(),
-                    &sig,
+                    &effective_sig,
                     args,
                     arg_types,
                     preserves_lookup_arg_shape,
                     span,
                 );
+                if specializes_receiver && !resolved_type_args.is_empty() {
+                    let params = if Self::rust_signature_has_receiver(&effective_sig) {
+                        &effective_sig.params[1..]
+                    } else {
+                        &effective_sig.params
+                    };
+                    self.record_rust_call_site_params(span, params, callable_display.as_str(), true);
+                }
                 Some(Self::substitute_rust_self_type(ret, rust_path))
             }
             RustItemKind::Unsupported { description } => {
@@ -1842,10 +2124,12 @@ impl TypeChecker {
         let RustPathMethodCall {
             rust_path,
             method,
+            receiver_metadata: _,
             type_args: _,
             args,
             arg_types,
             receiver_span: _,
+            expected_return_ty: _,
             span,
         } = call;
         let sig: RustFunctionSig = metadata_free_method_signature(rust_path, method)?;
@@ -3649,10 +3933,12 @@ impl TypeChecker {
             let Some(ret) = self.resolve_rust_path_method_call(RustPathMethodCall {
                 rust_path: &path,
                 method,
+                receiver_metadata: self.rust_metadata_for_receiver_expr(base).as_ref(),
                 type_args,
                 args,
                 arg_types: &arg_types,
                 receiver_span: base.span,
+                expected_return_ty,
                 span,
             }) else {
                 // Metadata backend disabled/unavailable: preserve permissive RFC 005 behavior.
@@ -4157,10 +4443,12 @@ impl TypeChecker {
                         && let Some(ret) = self.resolve_rust_path_method_call(RustPathMethodCall {
                             rust_path: path,
                             method: resolved_method,
+                            receiver_metadata: None,
                             type_args,
                             args,
                             arg_types: &arg_types,
                             receiver_span: base.span,
+                            expected_return_ty,
                             span,
                         })
                     {
@@ -4263,10 +4551,12 @@ impl TypeChecker {
                             && let Some(ret) = self.resolve_rust_path_method_call(RustPathMethodCall {
                                 rust_path: path,
                                 method: resolved_method,
+                                receiver_metadata: None,
                                 type_args,
                                 args,
                                 arg_types: &arg_types,
                                 receiver_span: base.span,
+                                expected_return_ty,
                                 span,
                             })
                         {

@@ -653,24 +653,43 @@ fn parameter_default_materializability_is_all_or_nothing() {
 
 #[test]
 fn manifest_io_round_trip_preserves_rust_abi_metadata() -> Result<(), Box<dyn std::error::Error>> {
-    use incan_core::interop::{RustFunctionSig, RustItemKind, RustItemMetadata, RustParam, RustVisibility};
+    use incan_core::interop::{
+        RustFunctionSig, RustItemKind, RustItemMetadata, RustParam, RustTypeInfo, RustVisibility,
+    };
 
     let mut manifest = LibraryManifest::new("mylib", "0.1.0");
-    manifest.rust_abi = LibraryRustAbi::from_items(vec![RustItemMetadata {
-        canonical_path: "mylib_runtime::parse".to_string(),
-        definition_path: Some("mylib_runtime::parse".to_string()),
-        visibility: RustVisibility::Public,
-        kind: RustItemKind::Function(RustFunctionSig {
-            type_params: Vec::new(),
-            params: vec![RustParam {
-                name: Some("source".to_string()),
-                type_display: "&str".to_string(),
-            }],
-            return_type: "Result<mylib_runtime::Plan, mylib_runtime::Error>".to_string(),
-            is_async: true,
-            is_unsafe: false,
-        }),
-    }]);
+    manifest.rust_abi = LibraryRustAbi::from_items(vec![
+        RustItemMetadata {
+            canonical_path: "mylib_runtime::parse".to_string(),
+            definition_path: Some("mylib_runtime::parse".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Function(RustFunctionSig {
+                type_params: Vec::new(),
+                params: vec![RustParam {
+                    name: Some("source".to_string()),
+                    type_display: "&str".to_string(),
+                }],
+                return_type: "Result<mylib_runtime::Plan, mylib_runtime::Error>".to_string(),
+                is_async: true,
+                is_unsafe: false,
+            }),
+        },
+        RustItemMetadata {
+            canonical_path: "mylib_runtime::Factory".to_string(),
+            definition_path: Some("mylib_runtime::Factory".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: vec!["T".to_string()],
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: Vec::new(),
+                implemented_traits: Vec::new(),
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    ]);
 
     let tmp = tempfile::tempdir()?;
     let path = tmp.path().join("mylib.incnlib");
@@ -678,6 +697,15 @@ fn manifest_io_round_trip_preserves_rust_abi_metadata() -> Result<(), Box<dyn st
     let loaded = LibraryManifest::read_from_path(&path)?;
 
     assert_eq!(loaded, manifest);
+    let factory = loaded
+        .rust_abi
+        .as_ref()
+        .and_then(|abi| abi.get("mylib_runtime::Factory"))
+        .ok_or("expected receiver-generic Rust type metadata")?;
+    let RustItemKind::Type(factory) = &factory.kind else {
+        return Err("expected Rust type metadata".into());
+    };
+    assert_eq!(factory.type_params, ["T"]);
     Ok(())
 }
 
@@ -765,9 +793,10 @@ fn manifest_validation_rejects_duplicate_rust_abi_paths() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn manifest_validation_rejects_unsupported_rust_abi_schema_version() {
-    let raw = format!(
-        r#"{{
+fn manifest_validation_rejects_stale_and_future_rust_abi_schema_versions() {
+    for unsupported in [1, RUST_ABI_SCHEMA_VERSION + 1] {
+        let raw = format!(
+            r#"{{
   "name": "mylib",
   "version": "0.1.0",
   "incan_version": "{}",
@@ -779,13 +808,21 @@ fn manifest_validation_rejects_unsupported_rust_abi_schema_version() {
     "items": []
   }}
 }}"#,
-        crate::version::INCAN_VERSION,
-        LIBRARY_MANIFEST_FORMAT,
-        RUST_ABI_SCHEMA_VERSION + 1
-    );
+            crate::version::INCAN_VERSION,
+            LIBRARY_MANIFEST_FORMAT,
+            unsupported
+        );
 
-    let err = LibraryManifest::from_json_str(&raw);
-    assert!(err.is_err(), "expected unsupported Rust ABI schema to fail");
+        let err = LibraryManifest::from_json_str(&raw);
+        assert!(
+            matches!(
+                err,
+                Err(LibraryManifestError::Invalid(ref message))
+                    if message.contains(&format!("rust_abi.schema_version {unsupported} is unsupported"))
+            ),
+            "expected unsupported Rust ABI schema {unsupported} to fail, got {err:?}"
+        );
+    }
 }
 
 #[test]

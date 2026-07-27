@@ -2097,7 +2097,12 @@ impl TypeChecker {
         if let Some(function) = &export.projected_function {
             return Some(SymbolKind::Function(self.function_info_from_manifest(function)));
         }
-        if let Some(target_path) = Self::manifest_identity_target_path(manifest, &export.name)
+        let identity_target_path = Self::manifest_identity_target_path(manifest, &export.name);
+        let target_path = identity_target_path.unwrap_or(export.target_path.as_slice());
+        if let Some(kind) = Self::symbol_kind_from_manifest_rust_target(manifest, target_path) {
+            return Some(kind);
+        }
+        if let Some(target_path) = identity_target_path
             && !visited.contains(target_path)
             && let Some(kind) = self.symbol_kind_from_manifest_path(manifest, target_path)
         {
@@ -2120,6 +2125,24 @@ impl TypeChecker {
             return None;
         };
         self.symbol_kind_from_manifest_alias(manifest, target_alias, visited)
+    }
+
+    /// Reconstruct a checked `rust::` reexport from the ABI metadata shipped beside the public manifest.
+    fn symbol_kind_from_manifest_rust_target(manifest: &LibraryManifest, target_path: &[String]) -> Option<SymbolKind> {
+        let [namespace, crate_name, rest @ ..] = target_path else {
+            return None;
+        };
+        if namespace != "rust" || rest.is_empty() {
+            return None;
+        }
+        let path = target_path[1..].join("::");
+        let metadata = manifest.rust_abi.as_ref()?.get(&path)?.clone();
+        Some(SymbolKind::RustItem(RustItemInfo {
+            crate_name: crate_name.clone(),
+            metadata: Some(metadata),
+            path,
+            binding: RustImportBindingKind::FromImport,
+        }))
     }
 
     /// Return the canonical target path published by the manifest identity graph for one public name.
@@ -2396,6 +2419,10 @@ impl TypeChecker {
         self.remap_symbol_kind_with_import_aliases(&mut kind, imported_type_aliases);
         Self::mark_compiled_class_field_provider(&mut kind, library);
 
+        if let SymbolKind::RustItem(info) = kind {
+            self.define_rust_import_binding(local_name, info, span);
+            return;
+        }
         if let SymbolKind::FunctionOverloads(overloads) = &kind {
             self.record_function_overload_binding(&local_name, overloads, true);
         }

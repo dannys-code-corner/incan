@@ -20,6 +20,7 @@ use ra_ap_syntax::{
 };
 
 use super::error::RustMetadataError;
+use super::generic_params::{SourceOwnerGenerics, source_owner_generics};
 use super::loader::RustWorkspace;
 
 fn map_visibility(vis: Visibility) -> RustVisibility {
@@ -635,17 +636,24 @@ fn source_function_param_type_display(f: Function, param: &ra_ap_hir::Param<'_>,
     source_function_type_display(f, text.as_str(), db)
 }
 
-/// Return source-declared type parameters in their Rust turbofish order.
+/// Return source-declared function type parameters in declaration order.
 fn source_function_type_params(f: Function, db: &RootDatabase) -> Vec<String> {
-    f.source(db)
-        .into_iter()
-        .flat_map(|source| source.value.generic_param_list())
-        .flat_map(|params| params.generic_params())
-        .filter_map(|param| match param {
-            ast::GenericParam::TypeParam(param) => param.name().map(|name| name.text().to_string()),
-            ast::GenericParam::ConstParam(_) | ast::GenericParam::LifetimeParam(_) => None,
-        })
-        .collect()
+    source_owner_generics(f.source(db).and_then(|source| source.value.generic_param_list())).type_params
+}
+
+/// Return source-declared generics for an ADT receiver.
+fn source_adt_generics(adt: Adt, db: &RootDatabase) -> SourceOwnerGenerics {
+    let params = match adt {
+        Adt::Struct(item) => item.source(db).and_then(|source| source.value.generic_param_list()),
+        Adt::Union(item) => item.source(db).and_then(|source| source.value.generic_param_list()),
+        Adt::Enum(item) => item.source(db).and_then(|source| source.value.generic_param_list()),
+    };
+    source_owner_generics(params)
+}
+
+/// Return source-declared generics for a type alias receiver.
+fn source_type_alias_generics(alias: ra_ap_hir::TypeAlias, db: &RootDatabase) -> SourceOwnerGenerics {
+    source_owner_generics(alias.source(db).and_then(|source| source.value.generic_param_list()))
 }
 
 /// Extract a Rust function signature from inspection metadata.
@@ -1007,7 +1015,10 @@ fn extract_rust_item_inner(
         ModuleDef::Function(f) => RustItemKind::Function(extract_function_sig(f, db, dt)),
         ModuleDef::Adt(adt) => {
             let ty = adt.ty(db);
+            let generics = source_adt_generics(adt, db);
             RustItemKind::Type(RustTypeInfo {
+                type_params: generics.type_params,
+                has_const_params: generics.has_const_params,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: collect_inherent_methods(ty.clone(), db, dt),
@@ -1022,6 +1033,8 @@ fn extract_rust_item_inner(
         ModuleDef::BuiltinType(b) => {
             let ty = b.ty(db);
             RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: collect_inherent_methods(ty.clone(), db, dt),
@@ -1039,7 +1052,10 @@ fn extract_rust_item_inner(
         ModuleDef::Trait(t) => RustItemKind::Trait(trait_info(t, db, dt)),
         ModuleDef::TypeAlias(a) => {
             let ty = a.ty(db);
+            let generics = source_type_alias_generics(a, db);
             RustItemKind::Type(RustTypeInfo {
+                type_params: generics.type_params,
+                has_const_params: generics.has_const_params,
                 alias_target: source_type_alias_target_display(a, db).or_else(|| Some(format_ty(&ty, db, dt))),
                 metadata_completeness: Default::default(),
                 methods: collect_inherent_methods(ty.clone(), db, dt),
@@ -1349,6 +1365,44 @@ impl Codec {
             .find(|method| method.name == "decode")
             .ok_or_else(|| std::io::Error::other("expected decode metadata"))?;
         assert_eq!(decode.signature.params[1].type_display, "&[u8]");
+        Ok(())
+    }
+
+    #[test]
+    fn type_metadata_preserves_owner_type_parameters() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        fs::create_dir_all(tmp.path().join("src"))?;
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            r#"[package]
+name = "demo_owner_generic_probe"
+version = "0.1.0"
+edition = "2021"
+"#,
+        )?;
+        fs::write(
+            tmp.path().join("src/lib.rs"),
+            r#"pub struct Factory<'a, T, const N: usize, U> {
+    left: &'a T,
+    right: U,
+}
+
+impl<'a, T, const N: usize, U> Factory<'a, T, N, U> {
+    pub fn new(left: &'a T, right: U) -> Self {
+        Self { left, right }
+    }
+}
+"#,
+        )?;
+
+        let workspace = RustWorkspace::load(tmp.path(), &|_| ())?;
+        let metadata = extract_rust_item(&workspace, "demo_owner_generic_probe::Factory")?;
+        let RustItemKind::Type(info) = metadata.kind else {
+            return Err(std::io::Error::other("expected type metadata").into());
+        };
+        assert_eq!(info.type_params, ["T", "U"]);
+        assert!(info.has_const_params);
+        assert_eq!(info.methods[0].signature.type_params, Vec::<String>::new());
         Ok(())
     }
 

@@ -1250,6 +1250,19 @@ pub struct RustVariantInfo {
 /// Method, field, and variant surface for a Rust ADT or builtin type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RustTypeInfo {
+    /// Source-declared type parameters in declaration order, with lifetimes elided.
+    ///
+    /// These belong to the Rust type declaration, not to one method. Associated calls such as
+    /// `Fft.new[f32](...)` specialize this receiver surface while method-level generic parameters remain recorded on
+    /// [`RustFunctionSig`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub type_params: Vec<String>,
+    /// Whether the declaration contains const parameters that occupy Rust turbofish positions.
+    ///
+    /// Incan v0.5 can specialize type-only receivers. Retaining this fact makes const-bearing owners fail closed
+    /// rather than shifting a later type argument into a const slot.
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub has_const_params: bool,
     /// Pretty-printed target type when this item is a Rust `type` alias.
     ///
     /// Ordinary structs, enums, traits, and builtins leave this empty. Alias targets are metadata, not a substitute
@@ -1269,6 +1282,11 @@ pub struct RustTypeInfo {
     pub fields: Vec<RustFieldInfo>,
     /// Enum variants when the type is an enum; empty for non-enums.
     pub variants: Vec<RustVariantInfo>,
+}
+
+/// Return whether a serialized compatibility flag is disabled.
+fn bool_is_false(value: &bool) -> bool {
+    !value
 }
 
 /// Whether Rust type metadata came from a full HIR extraction or from a partial syntax fallback.
@@ -1345,6 +1363,8 @@ mod tests {
             definition_path: Some(path.to_string()),
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: Vec::new(),

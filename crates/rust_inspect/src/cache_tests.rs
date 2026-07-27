@@ -9,6 +9,8 @@ fn dummy_type_metadata(path: &str) -> RustItemMetadata {
         definition_path: None,
         visibility: RustVisibility::Public,
         kind: RustItemKind::Type(RustTypeInfo {
+            type_params: Vec::new(),
+            has_const_params: false,
             alias_target: None,
             metadata_completeness: Default::default(),
             methods: Vec::new(),
@@ -26,6 +28,8 @@ fn dummy_reexported_type_metadata(path: &str, definition_path: &str) -> RustItem
         definition_path: Some(definition_path.to_string()),
         visibility: RustVisibility::Public,
         kind: RustItemKind::Type(RustTypeInfo {
+            type_params: Vec::new(),
+            has_const_params: false,
             alias_target: None,
             metadata_completeness: Default::default(),
             methods: Vec::new(),
@@ -65,6 +69,24 @@ fn source_and_generated_type_displays_preserve_never_type() {
         ),
         RUST_NEVER_TYPE_DISPLAY,
     );
+}
+
+/// Syntax-only metadata preserves owner type parameters while excluding unsupported lifetime and const parameters.
+#[test]
+fn generated_type_metadata_preserves_owner_type_parameters() -> Result<(), Box<dyn std::error::Error>> {
+    let external_crates = HashSet::new();
+    let source = r#"
+pub struct Factory<'a, T, const N: usize> {
+    pub value: T,
+    marker: std::marker::PhantomData<&'a [u8; N]>,
+}
+"#;
+    let info = generated_type_info_from_source(source, &["Factory"], "demo", &[], &external_crates)
+        .ok_or_else(|| std::io::Error::other("expected generated Factory metadata"))?;
+
+    assert_eq!(info.type_params, ["T"]);
+    assert!(info.has_const_params);
+    Ok(())
 }
 
 #[test]
@@ -267,6 +289,8 @@ fn raw_identifier_alias_hits_existing_cached_item() -> Result<(), Box<dyn std::e
             definition_path: Some("incan_stdlib::r#async::sync::Semaphore".to_string()),
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: Vec::new(),
