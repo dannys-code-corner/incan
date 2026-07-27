@@ -1133,48 +1133,55 @@ impl TypeChecker {
         ResolvedType::Function(params, Box::new(ret))
     }
 
-    /// Replace Rust metadata's `Self` placeholder with the concrete receiver path at a call site.
-    fn substitute_rust_self_type(ty: ResolvedType, rust_path: &str) -> ResolvedType {
+    /// Replace Rust metadata's `Self` placeholder with one concrete receiver type at a call site.
+    fn substitute_rust_self_type_with_resolved(ty: ResolvedType, receiver: &ResolvedType) -> ResolvedType {
         match ty {
-            ResolvedType::RustPath(path) if path == "Self" => ResolvedType::RustPath(rust_path.to_string()),
-            ResolvedType::Ref(inner) => ResolvedType::Ref(Box::new(Self::substitute_rust_self_type(*inner, rust_path))),
-            ResolvedType::RefMut(inner) => {
-                ResolvedType::RefMut(Box::new(Self::substitute_rust_self_type(*inner, rust_path)))
-            }
+            ResolvedType::RustPath(path) if path == "Self" => receiver.clone(),
+            ResolvedType::Ref(inner) => ResolvedType::Ref(Box::new(Self::substitute_rust_self_type_with_resolved(
+                *inner, receiver,
+            ))),
+            ResolvedType::RefMut(inner) => ResolvedType::RefMut(Box::new(
+                Self::substitute_rust_self_type_with_resolved(*inner, receiver),
+            )),
             ResolvedType::Generic(name, args) => ResolvedType::Generic(
                 name,
                 args.into_iter()
-                    .map(|arg| Self::substitute_rust_self_type(arg, rust_path))
+                    .map(|arg| Self::substitute_rust_self_type_with_resolved(arg, receiver))
                     .collect(),
             ),
             ResolvedType::Tuple(items) => ResolvedType::Tuple(
                 items
                     .into_iter()
-                    .map(|item| Self::substitute_rust_self_type(item, rust_path))
+                    .map(|item| Self::substitute_rust_self_type_with_resolved(item, receiver))
                     .collect(),
             ),
-            ResolvedType::FrozenList(inner) => {
-                ResolvedType::FrozenList(Box::new(Self::substitute_rust_self_type(*inner, rust_path)))
-            }
-            ResolvedType::FrozenSet(inner) => {
-                ResolvedType::FrozenSet(Box::new(Self::substitute_rust_self_type(*inner, rust_path)))
-            }
+            ResolvedType::FrozenList(inner) => ResolvedType::FrozenList(Box::new(
+                Self::substitute_rust_self_type_with_resolved(*inner, receiver),
+            )),
+            ResolvedType::FrozenSet(inner) => ResolvedType::FrozenSet(Box::new(
+                Self::substitute_rust_self_type_with_resolved(*inner, receiver),
+            )),
             ResolvedType::FrozenDict(key, value) => ResolvedType::FrozenDict(
-                Box::new(Self::substitute_rust_self_type(*key, rust_path)),
-                Box::new(Self::substitute_rust_self_type(*value, rust_path)),
+                Box::new(Self::substitute_rust_self_type_with_resolved(*key, receiver)),
+                Box::new(Self::substitute_rust_self_type_with_resolved(*value, receiver)),
             ),
             ResolvedType::Function(params, ret) => ResolvedType::Function(
                 params
                     .into_iter()
                     .map(|param| CallableParam {
-                        ty: Self::substitute_rust_self_type(param.ty, rust_path),
+                        ty: Self::substitute_rust_self_type_with_resolved(param.ty, receiver),
                         ..param
                     })
                     .collect(),
-                Box::new(Self::substitute_rust_self_type(*ret, rust_path)),
+                Box::new(Self::substitute_rust_self_type_with_resolved(*ret, receiver)),
             ),
             other => other,
         }
+    }
+
+    /// Replace Rust metadata's `Self` placeholder with the concrete receiver path at a call site.
+    fn substitute_rust_self_type(ty: ResolvedType, rust_path: &str) -> ResolvedType {
+        Self::substitute_rust_self_type_with_resolved(ty, &ResolvedType::RustPath(rust_path.to_string()))
     }
 
     /// Build a Rust function type and resolve `Self` return or parameter positions against `rust_path`.

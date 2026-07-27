@@ -685,7 +685,7 @@ impl TypeChecker {
     }
 
     /// Record inspected Rust parameter types so codegen can emit the same borrow shape the typechecker accepted.
-    fn record_rust_call_site_params(
+    pub(in crate::frontend::typechecker) fn record_rust_call_site_params(
         &mut self,
         span: Span,
         params: &[incan_core::interop::RustParam],
@@ -1038,6 +1038,8 @@ mod validate_rust_function_call_tests {
             definition_path: Some(definition_path.to_string()),
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: Vec::new(),
@@ -1938,6 +1940,8 @@ mod validate_rust_function_call_tests {
                 definition_path: Some("substrait::proto::Plan".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],

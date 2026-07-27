@@ -32,6 +32,7 @@ use crate::cache_resolve::{crate_name_for_path, dependency_manifest_dir_for_crat
 use crate::cache_timing::{CallTrace, log_timing_stage, rust_inspect_timing_enabled};
 use crate::error::RustMetadataError;
 use crate::extractor::extract_rust_item;
+use crate::generic_params::source_owner_generics;
 use crate::loader::RustWorkspace;
 
 /// Cache for [`RustWorkspace`] instances and extracted [`RustItemMetadata`].
@@ -163,7 +164,7 @@ struct DiskCacheEnvelope {
 }
 
 // Bump when extracted metadata semantics change in a way that makes previously persisted items unsafe to reuse.
-const DISK_CACHE_FORMAT: u32 = 17;
+const DISK_CACHE_FORMAT: u32 = 18;
 const DISK_CACHE_FILE: &str = ".incan_rust_inspect_cache.json";
 // Backward-compatibility read path for caches written before the crate/module rename.
 const LEGACY_DISK_CACHE_FILE: &str = ".incan_rust_metadata_cache.json";
@@ -1967,7 +1968,7 @@ fn source_function_signature(
     }
 }
 
-/// Return source-declared type parameters in Rust turbofish order.
+/// Return source-declared type parameters in declaration order, excluding lifetime and const parameters.
 fn source_function_type_params(function: &ast::Fn) -> Vec<String> {
     function
         .generic_param_list()
@@ -2474,11 +2475,14 @@ fn source_type_alias_metadata(
     let alias_target = alias
         .ty()
         .map(|ty| ctx.alias_target_display(ty.syntax().text().to_string().as_str()));
+    let generics = source_owner_generics(alias.generic_param_list());
     Some(RustItemMetadata {
         canonical_path: canonical_path.to_string(),
         definition_path: Some(definition),
         visibility: RustVisibility::Public,
         kind: RustItemKind::Type(RustTypeInfo {
+            type_params: generics.type_params,
+            has_const_params: generics.has_const_params,
             alias_target,
             metadata_completeness: RustTypeMetadataCompleteness::FieldsAndVariantsOnly,
             methods: Vec::new(),
@@ -2518,6 +2522,7 @@ fn source_struct_metadata(
     let name = generated_source_name(struct_item.name()?.to_string().as_str());
     let definition = ctx.definition_path(name.as_str());
     let target_display = source_owned_type_display(ctx.crate_name, ctx.module_path, name.as_str());
+    let generics = source_owner_generics(struct_item.generic_param_list());
     let methods = source_inherent_methods_for_type(
         inner,
         source_root,
@@ -2538,6 +2543,8 @@ fn source_struct_metadata(
         definition_path: Some(definition),
         visibility: RustVisibility::Public,
         kind: RustItemKind::Type(RustTypeInfo {
+            type_params: generics.type_params,
+            has_const_params: generics.has_const_params,
             alias_target: None,
             metadata_completeness: RustTypeMetadataCompleteness::FieldsAndVariantsOnly,
             methods,
@@ -2587,6 +2594,7 @@ fn source_enum_metadata(
     let name = generated_source_name(enum_item.name()?.to_string().as_str());
     let definition = ctx.definition_path(name.as_str());
     let target_display = source_owned_type_display(ctx.crate_name, ctx.module_path, name.as_str());
+    let generics = source_owner_generics(enum_item.generic_param_list());
     let methods = source_inherent_methods_for_type(
         inner,
         source_root,
@@ -2612,6 +2620,8 @@ fn source_enum_metadata(
         definition_path: Some(definition),
         visibility: RustVisibility::Public,
         kind: RustItemKind::Type(RustTypeInfo {
+            type_params: generics.type_params,
+            has_const_params: generics.has_const_params,
             alias_target: None,
             metadata_completeness: RustTypeMetadataCompleteness::FieldsAndVariantsOnly,
             methods,
@@ -3316,7 +3326,10 @@ fn generated_struct_metadata(
             .collect(),
         _ => Vec::new(),
     };
+    let generics = source_owner_generics(struct_item.generic_param_list());
     Some(RustTypeInfo {
+        type_params: generics.type_params,
+        has_const_params: generics.has_const_params,
         alias_target: None,
         metadata_completeness: RustTypeMetadataCompleteness::FieldsAndVariantsOnly,
         methods: Vec::new(),
@@ -3386,7 +3399,10 @@ fn generated_enum_metadata(
         })
         .collect::<Vec<_>>();
     variants.sort_by(|a, b| a.name.cmp(&b.name));
+    let generics = source_owner_generics(enum_item.generic_param_list());
     Some(RustTypeInfo {
+        type_params: generics.type_params,
+        has_const_params: generics.has_const_params,
         alias_target: None,
         metadata_completeness: RustTypeMetadataCompleteness::FieldsAndVariantsOnly,
         methods: Vec::new(),

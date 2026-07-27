@@ -12145,6 +12145,53 @@ mod rfc031_pub_import_integration_tests {
             .output()?)
     }
 
+    /// Write the shared Rust dependency used by receiver-generic application and compiled-provider acceptance tests.
+    fn write_receiver_factory_dependency(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let rust_dir = root.join("receiver_factory");
+        std::fs::create_dir_all(rust_dir.join("src"))?;
+        std::fs::write(
+            rust_dir.join("Cargo.toml"),
+            "[package]\nname = \"receiver_factory\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )?;
+        std::fs::write(
+            rust_dir.join("src/lib.rs"),
+            r#"pub struct Factory<T> {
+    marker: std::marker::PhantomData<T>,
+}
+
+pub struct ConstructionError;
+
+pub enum Mode {
+    Input,
+}
+
+pub struct PairFactory<T, U> {
+    value: T,
+    marker: U,
+}
+
+impl<T> Factory<T> {
+    pub fn new(_size: i64, _mode: Mode) -> Result<Self, ConstructionError> {
+        Ok(Self {
+            marker: std::marker::PhantomData,
+        })
+    }
+}
+
+impl<T, U> PairFactory<T, U> {
+    pub fn new(value: T, marker: U) -> Self {
+        Self { value, marker }
+    }
+
+    pub fn first(value: T) -> T {
+        value
+    }
+}
+"#,
+        )?;
+        Ok(())
+    }
+
     #[test]
     fn consumer_build_infers_rust_generic_return_from_unwrap_context_issue852() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -12210,6 +12257,195 @@ def test_generic_json_result_infers_from_parameter_context() -> None:
             "expected the package test batch to compile and run the inferred generic JSON result.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&test_output.stdout),
             String::from_utf8_lossy(&test_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn receiver_generic_rust_associated_functions_build_explicitly_and_contextually_issue961()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        write_receiver_factory_dependency(tmp.path())?;
+        let project_dir = tmp.path().join("consumer");
+        let main_path = write_project_files(
+            &project_dir,
+            "[project]\nname = \"receiver_generic_associated_consumer\"\n\n[rust-dependencies.receiver_factory]\npath = \"../receiver_factory\"\n",
+            r#"from rust::receiver_factory import ConstructionError, Factory, Mode, PairFactory
+
+
+def accept_factory(result: Result[Factory[f32], ConstructionError]) -> None:
+    match result:
+        Ok(_) => pass
+        Err(_) => pass
+
+
+def accept_pair(value: PairFactory[i64, str]) -> None:
+    pass
+
+
+def main() -> None:
+    explicit: Result[Factory[f32], ConstructionError] = Factory.new[f32](8, Mode.Input)
+    contextual: Result[Factory[f32], ConstructionError] = Factory.new(8, Mode.Input)
+    explicit_pair: PairFactory[i64, str] = PairFactory.new[i64, str](7, "marker")
+    contextual_pair: PairFactory[i64, str] = PairFactory.new(7, "marker")
+    first: str = PairFactory.first[str, i64]("value")
+    accept_factory(explicit)
+    accept_factory(contextual)
+    accept_factory(Factory.new(8, Mode.Input))
+    accept_pair(explicit_pair)
+    accept_pair(contextual_pair)
+    accept_pair(PairFactory.new(7, "marker"))
+    if len(first) == 0:
+        print(first)
+"#,
+        )?;
+
+        let check_output = run_check(&main_path)?;
+        assert!(
+            check_output.status.success(),
+            "expected receiver-generic associated functions to typecheck.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&check_output.stdout),
+            String::from_utf8_lossy(&check_output.stderr)
+        );
+
+        let out_dir = tmp.path().join("out");
+        let build_output = run_build(&main_path, &out_dir)?;
+        assert!(
+            build_output.status.success(),
+            "expected generated Rust to compile receiver-generic associated calls.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build_output.stdout),
+            String::from_utf8_lossy(&build_output.stderr)
+        );
+        let generated_main = std::fs::read_to_string(out_dir.join("src/main.rs"))?;
+        let compact_generated_main = generated_main.split_whitespace().collect::<String>();
+        assert!(
+            compact_generated_main.contains("PairFactory::<i64,String,>::new"),
+            "expected receiver-side turbofish for both owner type parameters:\n{generated_main}"
+        );
+        assert!(
+            compact_generated_main.contains("PairFactory::<String,i64>::first"),
+            "expected owner specialization on a non-Self return:\n{generated_main}"
+        );
+        assert!(
+            compact_generated_main.contains("accept_pair(PairFactory::new(7,\"marker\".into()))")
+                || compact_generated_main.contains("accept_pair(PairFactory::new(7,\"marker\".to_string()))"),
+            "expected contextual receiver specialization to preserve the owned String parameter:\n{generated_main}"
+        );
+
+        let tests_dir = project_dir.join("tests");
+        std::fs::create_dir_all(&tests_dir)?;
+        std::fs::write(
+            tests_dir.join("test_receiver_generic_associated.incn"),
+            r#"from rust::receiver_factory import ConstructionError, Factory, Mode, PairFactory
+
+
+def accept_factory(result: Result[Factory[f32], ConstructionError]) -> None:
+    match result:
+        Ok(_) => pass
+        Err(_) => pass
+
+
+def accept_pair(value: PairFactory[i64, str]) -> None:
+    pass
+
+
+def test_explicit_and_contextual_receiver_generics() -> None:
+    accept_factory(Factory.new[f32](8, Mode.Input))
+    accept_factory(Factory.new(8, Mode.Input))
+    accept_pair(PairFactory.new[i64, str](7, "marker"))
+    accept_pair(PairFactory.new(7, "marker"))
+    assert PairFactory.first[str, i64]("value") == "value"
+    assert true
+"#,
+        )?;
+        let test_output = run_test(&tests_dir)?;
+        assert!(
+            test_output.status.success(),
+            "expected package test batches to compile receiver-generic associated calls.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&test_output.stdout),
+            String::from_utf8_lossy(&test_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_provider_preserves_receiver_generic_rust_associated_functions_issue961()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        write_receiver_factory_dependency(tmp.path())?;
+        let provider_root = tmp.path().join("receiver_factory_api");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            "[project]\nname = \"receiver_factory_api\"\nversion = \"0.1.0\"\n\n[rust-dependencies.receiver_factory]\npath = \"../receiver_factory\"\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.incn"),
+            "pub from rust::receiver_factory import ConstructionError, Factory, Mode, PairFactory\n",
+        )?;
+        let provider_build = run_build_lib(&provider_root)?;
+        assert!(
+            provider_build.status.success(),
+            "expected receiver-generic Rust metadata producer to build.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_build.stdout),
+            String::from_utf8_lossy(&provider_build.stderr)
+        );
+        let provider_manifest =
+            LibraryManifest::read_from_path(&provider_root.join("target/lib/receiver_factory_api.incnlib"))?;
+        let factory_metadata = provider_manifest
+            .rust_abi
+            .as_ref()
+            .and_then(|abi| abi.get("receiver_factory::PairFactory"))
+            .ok_or("expected PairFactory metadata in compiled provider")?;
+        let incan_core::interop::RustItemKind::Type(factory_metadata) = &factory_metadata.kind else {
+            return Err("expected compiled PairFactory type metadata".into());
+        };
+        assert_eq!(factory_metadata.type_params, ["T", "U"]);
+        assert!(!factory_metadata.has_const_params);
+
+        let compiled_consumer_root = tmp.path().join("compiled_consumer");
+        let compiled_consumer_main = write_project_files(
+            &compiled_consumer_root,
+            "[project]\nname = \"receiver_factory_compiled_consumer\"\n\n[dependencies]\nreceiver_factory_api = { path = \"../receiver_factory_api\" }\n",
+            r#"from pub::receiver_factory_api import ConstructionError, Factory, Mode, PairFactory
+
+
+def accept_factory(result: Result[Factory[f32], ConstructionError]) -> None:
+    match result:
+        Ok(_) => pass
+        Err(_) => pass
+
+
+def accept_pair(value: PairFactory[i64, str]) -> None:
+    pass
+
+
+def main() -> None:
+    accept_factory(Factory.new[f32](8, Mode.Input))
+    accept_factory(Factory.new(8, Mode.Input))
+    pair: PairFactory[i64, str] = PairFactory.new[i64, str](7, "marker")
+    inferred: PairFactory[i64, str] = PairFactory.new(7, "marker")
+    accept_pair(pair)
+    accept_pair(inferred)
+    accept_pair(PairFactory.new(7, "marker"))
+    if PairFactory.first[str, i64]("value") == "value":
+        pass
+"#,
+        )?;
+        let compiled_consumer_check = run_check(&compiled_consumer_main)?;
+        assert!(
+            compiled_consumer_check.status.success(),
+            "expected compiled provider consumer to typecheck receiver generics.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&compiled_consumer_check.stdout),
+            String::from_utf8_lossy(&compiled_consumer_check.stderr)
+        );
+        let compiled_consumer_out = tmp.path().join("compiled_consumer_out");
+        let compiled_consumer_build = run_build(&compiled_consumer_main, &compiled_consumer_out)?;
+        assert!(
+            compiled_consumer_build.status.success(),
+            "expected compiled provider consumer to build receiver generics.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&compiled_consumer_build.stdout),
+            String::from_utf8_lossy(&compiled_consumer_build.stderr)
         );
         Ok(())
     }

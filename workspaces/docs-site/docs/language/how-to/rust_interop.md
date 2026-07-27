@@ -50,6 +50,49 @@ The same rule applies to path segments after `rust::` (for example `rust::substr
 
 For Rust struct fields whose real Rust identifier is a keyword, use the keyword spelling in Incan field access and named constructor arguments. For example, a Rust field declared as `r#type` is available as `value.type` and `TypeName(type=value)` in Incan source; generated Rust still uses the real raw identifier. An ordinary Rust field named `type_` remains `value.type_`.
 
+### Constructing a generic Rust receiver
+
+Some Rust crates define constructors on a generic type while the constructor itself has no generic parameters. In Rust this is written as `Fft::<f32>::new(...)`. When the receiver declaration contains type parameters only, put those arguments after the associated function name in Incan:
+
+```incan
+from rust::rubato import Fft, FixedSync, ResamplerConstructionError
+
+result: Result[Fft[f32], ResamplerConstructionError] = Fft.new[f32](
+    48_000,
+    24_000,
+    480,
+    1,
+    FixedSync.Input,
+)
+```
+
+The brackets specialize `Fft`, not `new`. Do not write `Fft[f32].new(...)`: bracketed types are type expressions, not runtime receiver expressions.
+
+You may omit the explicit receiver argument when the expected result fixes it uniquely:
+
+```incan
+result: Result[Fft[f32], ResamplerConstructionError] = Fft.new(
+    48_000,
+    24_000,
+    480,
+    1,
+    FixedSync.Input,
+)
+```
+
+Expected function parameters provide the same context:
+
+```incan
+def register(result: Result[Fft[f32], ResamplerConstructionError]) -> None:
+    ...
+
+register(Fft.new(48_000, 24_000, 480, 1, FixedSync.Input))
+```
+
+Use the explicit form when there is no result annotation or parameter context from which the receiver specialization can be inferred. Incan specializes the complete inspected signature, so owner parameters used by arguments and non-`Self` returns are checked consistently before Rust generation.
+
+Rust const-generic receiver declarations are not supported by this v0.5 call shape. Incan reports a checked error because its brackets accept types, not const values; wrap that API behind a type-only Rust or Incan receiver rather than relying on rustc to reinterpret the arguments.
+
 ## Dependency Management
 
 When you use `import rust::crate_name`, Incan automatically adds the dependency to your generated `Cargo.toml`. Dependencies are resolved using a three-tier precedence system:
@@ -221,6 +264,29 @@ Body-less `rusttype` adoption is only accepted when Rust metadata proves that th
 When a library exposes Rust-backed items, run `incan build --lib` before another project consumes it through `pub::`. The generated `.incnlib` embeds a versioned Rust ABI payload containing the canonical Rust item signatures captured during the producer build.
 
 Consumers load that shipped ABI metadata first for Rust-backed imported symbols. `rust_inspect` remains available for producer capture, local workspace imports, and explicit fallback/debug paths, but a packaged dependency should not require consumer-side workspace inspection for signatures that were already published in its `.incnlib`.
+
+A library can deliberately publish a checked Rust import:
+
+```incan
+# Native façade library
+pub from rust::rubato import Fft, FixedSync, ResamplerConstructionError
+```
+
+After building that library with `incan build --lib`, a consumer imports the same types through the package boundary:
+
+```incan
+from pub::audio_native import Fft, FixedSync, ResamplerConstructionError
+
+result: Result[Fft[f32], ResamplerConstructionError] = Fft.new(
+    48_000,
+    24_000,
+    480,
+    1,
+    FixedSync.Input,
+)
+```
+
+The selected `pub::audio_native` artifact remains the authority for those reexports and their shipped Rust ABI. Associated calls made through the imported type receiver therefore cannot silently pick a different checked signature from another dependency that happens to expose the same canonical Rust path.
 
 ### Calling imported Rust functions
 
