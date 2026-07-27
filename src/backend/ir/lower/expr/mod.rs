@@ -1327,6 +1327,26 @@ impl AstLowering {
                         },
                         result_ty,
                     )
+                } else if let IrType::Tuple(items) = &obj.ty {
+                    let index = Self::extract_int_literal(i)
+                        .and_then(|raw| {
+                            let len = i64::try_from(items.len()).ok()?;
+                            let normalized = if raw < 0 { len.checked_add(raw)? } else { raw };
+                            usize::try_from(normalized).ok()
+                        })
+                        .filter(|index| *index < items.len())
+                        .ok_or_else(|| LoweringError {
+                            message: "typechecked tuple index was not a statically resolved field".to_string(),
+                            span: super::super::IrSpan::default(),
+                        })?;
+                    let elem_ty = items.get(index).cloned().unwrap_or(IrType::Unknown);
+                    (
+                        IrExprKind::Field {
+                            object: Box::new(obj),
+                            field: index.to_string(),
+                        },
+                        elem_ty,
+                    )
                 } else {
                     let elem_ty = match &obj.ty {
                         IrType::List(e) => (**e).clone(),

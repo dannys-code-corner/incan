@@ -1629,6 +1629,13 @@ fn test_rfc088_iterator_adapters_codegen() {
 }
 
 #[test]
+fn test_issue950_953_iterator_adapter_sources_codegen() {
+    let source = load_test_file("issue950_953_iterator_adapter_sources");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("issue950_953_iterator_adapter_sources", rust_code);
+}
+
+#[test]
 fn test_empty_list_string_arg_codegen() {
     let source = load_test_file("empty_list_string_arg");
     let rust_code = generate_rust(&source);

@@ -664,12 +664,12 @@ impl TypeChecker {
 
     /// Return whether `name` is the canonical RFC 088 iterable protocol trait spelling.
     fn is_iterable_protocol_name(name: &str) -> bool {
-        name == Self::iterable_protocol_name()
+        core_traits::from_qualified_str(name) == Some(TraitId::Iterable)
     }
 
     /// Return whether `name` is the canonical RFC 088 iterator protocol trait spelling.
     fn is_iterator_protocol_name(name: &str) -> bool {
-        name == Self::iterator_protocol_name()
+        core_traits::from_qualified_str(name) == Some(TraitId::Iterator)
     }
 
     /// Return the element type for values that can participate in the RFC 088 iterator protocol surface.

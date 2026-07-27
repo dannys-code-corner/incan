@@ -68,6 +68,9 @@ impl<'a> IrEmitter<'a> {
 
     /// Emit the owned iterator expression consumed by one generator `for` clause.
     fn emit_generator_iterable(&self, iterable: &TypedExpr) -> Result<TokenStream, EmitError> {
+        if let Some(iter) = self.emit_incan_iterator_source(iterable)? {
+            return Ok(iter);
+        }
         match &iterable.kind {
             IrExprKind::BuiltinCall {
                 func: BuiltinFn::Enumerate,
@@ -347,6 +350,9 @@ impl<'a> IrEmitter<'a> {
 
     /// Emit iterable expressions that already produce iterator items with the ownership shape a comprehension expects.
     fn emit_direct_comprehension_iterable(&self, iterable: &TypedExpr) -> Result<Option<TokenStream>, EmitError> {
+        if let Some(iter) = self.emit_incan_iterator_source(iterable)? {
+            return Ok(Some(iter));
+        }
         match &iterable.kind {
             IrExprKind::BuiltinCall {
                 func: BuiltinFn::Enumerate,

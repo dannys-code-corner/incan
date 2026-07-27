@@ -1513,6 +1513,9 @@ impl<'a> IrEmitter<'a> {
                 }
                 _ => {}
             }
+            if let Some(iter) = self.emit_incan_iterator_source(iterable)? {
+                return Ok(iter);
+            }
         }
 
         let iter = self.emit_expr(iterable)?;

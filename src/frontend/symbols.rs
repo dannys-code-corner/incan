@@ -1095,6 +1095,18 @@ impl ResolvedType {
             _ => None,
         }
     }
+
+    /// Return the canonical owned Incan `Iterator[T]` item type.
+    pub(crate) fn iterator_item_type(&self) -> Option<&ResolvedType> {
+        match self {
+            ResolvedType::Generic(name, args)
+                if traits::from_qualified_str(name) == Some(TraitId::Iterator) && args.len() == 1 =>
+            {
+                args.first()
+            }
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for ResolvedType {
@@ -1818,5 +1830,20 @@ mod tests {
             field_surface_type_name(&source, &resolved),
             "Box[RustEnvelope[list[RustToken]]]"
         );
+    }
+
+    #[test]
+    fn resolved_iterator_item_type_uses_canonical_trait_identity_issue950_953() {
+        let qualified = ResolvedType::Generic(
+            "stdlib_core::__incan_std::derives::collection::Iterator".to_string(),
+            vec![ResolvedType::Tuple(vec![ResolvedType::Int, ResolvedType::Str])],
+        );
+        let similarly_named = ResolvedType::Generic("RecordIterator".to_string(), vec![ResolvedType::Int]);
+
+        assert_eq!(
+            qualified.iterator_item_type(),
+            Some(&ResolvedType::Tuple(vec![ResolvedType::Int, ResolvedType::Str]))
+        );
+        assert_eq!(similarly_named.iterator_item_type(), None);
     }
 }

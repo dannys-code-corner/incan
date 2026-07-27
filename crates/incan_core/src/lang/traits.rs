@@ -188,6 +188,26 @@ pub fn from_str(name: &str) -> Option<TraitId> {
         .map(|t| t.id)
 }
 
+/// Resolve a bare, canonical source-qualified, or generated-provider spelling to a builtin trait identifier.
+///
+/// Both Incan source paths (`std.derives.collection.Iterator`) and generated Rust paths
+/// (`stdlib_core::__incan_std::derives::collection::Iterator`) retain the canonical trait name as their final segment.
+/// Other qualified names are rejected so an unrelated package's `Iterator` declaration cannot acquire builtin
+/// semantics by spelling alone.
+pub fn from_qualified_str(name: &str) -> Option<TraitId> {
+    if let Some(id) = from_str(name) {
+        return Some(id);
+    }
+    if !name.starts_with("std.derives.") && !name.contains("::__incan_std::derives::") {
+        return None;
+    }
+    let final_segment = name
+        .rsplit(['.', ':'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(name);
+    from_str(final_segment)
+}
+
 /// Return the canonical spelling for a builtin trait.
 pub fn as_str(id: TraitId) -> &'static str {
     info_for(id).canonical
@@ -282,5 +302,24 @@ const fn info(
         since,
         stability: Stability::Stable,
         examples: &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TraitId, from_qualified_str};
+
+    #[test]
+    fn qualified_lookup_uses_the_canonical_final_segment() {
+        assert_eq!(
+            from_qualified_str("std.derives.collection.Iterator"),
+            Some(TraitId::Iterator)
+        );
+        assert_eq!(
+            from_qualified_str("stdlib_core::__incan_std::derives::collection::Iterator"),
+            Some(TraitId::Iterator)
+        );
+        assert_eq!(from_qualified_str("RecordIterator"), None);
+        assert_eq!(from_qualified_str("custom::Iterator"), None);
     }
 }

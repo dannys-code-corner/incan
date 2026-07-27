@@ -9446,6 +9446,36 @@ def after_positive_prefix(items: Iterator[int]) -> list[int]:
 }
 
 #[test]
+fn test_rfc088_iterator_zip_preserves_tuple_item_types_in_for_loop_issue950() {
+    let source = r#"
+def score_pairs(left: list[float], right: list[float]) -> float:
+  mut score = 0.0
+  for pair in left.iter().zip(right.iter()):
+    score += pair[0] * pair[1]
+  return score
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_rfc088_direct_iterator_loop_consumes_binding_issue950() {
+    let source = r#"
+def consume_twice(items: Iterator[int]) -> int:
+  mut total = 0
+  for item in items:
+    total += item
+  return total + items.count()
+"#;
+    let errs = check_str_err(source, "direct iterator loop must consume its source binding");
+    assert!(
+        errs.iter()
+            .any(|error| error.message.contains("iterator binding `items` was consumed")),
+        "unexpected errors: {:?}",
+        errs.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_rfc088_flat_map_accepts_list_callback_result() {
     let source = r#"
 def words_for(_n: int) -> list[str]:

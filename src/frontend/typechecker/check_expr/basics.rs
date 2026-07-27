@@ -29,7 +29,7 @@ impl TypeChecker {
         if let Some(consumed_span) = self.consumed_iterator_bindings.get(name).copied() {
             self.errors.push(CompileError::type_error(
                 format!(
-                    "iterator binding `{name}` was consumed by a terminal iterator method at byte range {}..{}; clone or recreate the iterator before reusing it",
+                    "iterator binding `{name}` was consumed by an iterator operation at byte range {}..{}; clone or recreate the iterator before reusing it",
                     consumed_span.start, consumed_span.end
                 ),
                 span,

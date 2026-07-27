@@ -5,6 +5,7 @@
 use std::fmt;
 
 use super::decl::IrTraitBound;
+use incan_core::lang::traits::{self as core_traits, TraitId};
 use incan_core::lang::types::numerics::{self, NumericTypeId};
 
 /// Canonical IR generic name used for anonymous union types.
@@ -239,6 +240,26 @@ impl IrType {
             }
             _ => None,
         }
+    }
+
+    /// Return the canonical owned Incan `Iterator[T]` item type.
+    ///
+    /// The type may retain a canonical source or generated-provider qualification. Trait identity still comes from
+    /// the shared language registry rather than from a backend-local list of iterator adapter model names.
+    pub(crate) fn iterator_item_type(&self) -> Option<&IrType> {
+        match self {
+            Self::NamedGeneric(name, args)
+                if core_traits::from_qualified_str(name) == Some(TraitId::Iterator) && args.len() == 1 =>
+            {
+                args.first()
+            }
+            _ => None,
+        }
+    }
+
+    /// Return whether this type is the canonical Incan iterator protocol surface.
+    pub(crate) fn is_iterator_protocol(&self) -> bool {
+        self.iterator_item_type().is_some()
     }
 
     /// Get the Incan-style type name (for reflection/display to users).
@@ -760,6 +781,21 @@ mod tests {
     fn test_incan_name_named_generic() {
         let ty = IrType::NamedGeneric("Json".to_string(), vec![IrType::Struct("User".to_string())]);
         assert_eq!(ty.incan_name(), "Json[User]");
+    }
+
+    #[test]
+    fn iterator_item_type_uses_canonical_trait_identity_issue950_953() {
+        let qualified = IrType::NamedGeneric(
+            "stdlib_core::__incan_std::derives::collection::Iterator".to_string(),
+            vec![IrType::Tuple(vec![IrType::Int, IrType::String])],
+        );
+        let similarly_named = IrType::NamedGeneric("RecordIterator".to_string(), vec![IrType::Int]);
+
+        assert_eq!(
+            qualified.iterator_item_type(),
+            Some(&IrType::Tuple(vec![IrType::Int, IrType::String]))
+        );
+        assert_eq!(similarly_named.iterator_item_type(), None);
     }
 
     /// Regression for #755/#892: external unions accept only members qualified by their own provider.

@@ -1384,6 +1384,9 @@ impl TypeChecker {
             ResolvedType::FrozenList(elem) | ResolvedType::FrozenSet(elem) => elem.as_ref().clone(),
             ResolvedType::FrozenDict(key, _) => key.as_ref().clone(),
             ResolvedType::Generic(name, args) => {
+                if let Some(elem) = iter_ty.iterator_item_type() {
+                    return elem.clone();
+                }
                 match collection_type_id(name.as_str()) {
                     Some(CollectionTypeId::List) | Some(CollectionTypeId::Set) if !args.is_empty() => args[0].clone(),
                     Some(CollectionTypeId::Dict) if args.len() >= 2 => {
@@ -1410,6 +1413,11 @@ impl TypeChecker {
         iter_expr: &Spanned<Expr>,
         iter_ty: &ResolvedType,
     ) -> ResolvedType {
+        if iter_ty.iterator_item_type().is_some()
+            && let Expr::Ident(name) = &iter_expr.node
+        {
+            self.consumed_iterator_bindings.insert(name.clone(), iter_expr.span);
+        }
         let elem_ty = self.infer_iterator_element_type(iter_ty);
         if !matches!(elem_ty, ResolvedType::Unknown) || matches!(iter_ty, ResolvedType::Unknown) {
             return elem_ty;

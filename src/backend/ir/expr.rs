@@ -942,21 +942,13 @@ impl MethodKind {
                 Some(Self::Iterator(IteratorMethodKind::Iter))
             }
             IrType::NamedGeneric(type_name, _) | IrType::Struct(type_name)
-                if is_iterator_protocol_type_name(type_name) =>
+                if core_traits::from_qualified_str(type_name) == Some(TraitId::Iterator) =>
             {
                 iterator_method_kind(name).map(Self::Iterator)
             }
             _ => None,
         }
     }
-}
-
-/// Return whether a nominal IR type name denotes the standard `Iterator` protocol.
-///
-/// Lowering can preserve either short stdlib names (`Iterator`) or qualified paths, depending on import and metadata
-/// context. Method classification only needs the nominal protocol family, so it accepts the final path segment.
-fn is_iterator_protocol_type_name(name: &str) -> bool {
-    name.rsplit("::").next() == Some(core_traits::as_str(TraitId::Iterator))
 }
 
 /// Classify an RFC 088 iterator method name into the structured backend method family.
