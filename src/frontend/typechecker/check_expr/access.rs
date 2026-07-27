@@ -1807,6 +1807,32 @@ impl TypeChecker {
         rendered
     }
 
+    /// Apply checked Rust type substitutions to one inspected signature.
+    fn specialize_rust_signature(
+        sig: &RustFunctionSig,
+        substitutions: &HashMap<&str, String>,
+        receiver_display: &str,
+    ) -> RustFunctionSig {
+        RustFunctionSig {
+            type_params: sig.type_params.clone(),
+            params: sig
+                .params
+                .iter()
+                .map(|param| incan_core::interop::RustParam {
+                    name: param.name.clone(),
+                    type_display: Self::substitute_rust_owner_display(
+                        param.type_display.as_str(),
+                        substitutions,
+                        receiver_display,
+                    ),
+                })
+                .collect(),
+            return_type: Self::substitute_rust_owner_display(sig.return_type.as_str(), substitutions, receiver_display),
+            is_async: sig.is_async,
+            is_unsafe: sig.is_unsafe,
+        }
+    }
+
     /// Specialize one inspected associated-function signature with its receiver's concrete type arguments.
     fn specialize_rust_owner_signature(
         &self,
@@ -1832,28 +1858,24 @@ impl TypeChecker {
             .zip(type_args)
             .map(|(param, arg)| (param.as_str(), render_resolved_type_as_rust_arg(arg)))
             .collect::<HashMap<_, _>>();
-        RustFunctionSig {
-            type_params: sig.type_params.clone(),
-            params: sig
-                .params
-                .iter()
-                .map(|param| incan_core::interop::RustParam {
-                    name: param.name.clone(),
-                    type_display: Self::substitute_rust_owner_display(
-                        param.type_display.as_str(),
-                        &substitutions,
-                        receiver_display.as_str(),
-                    ),
-                })
-                .collect(),
-            return_type: Self::substitute_rust_owner_display(
-                sig.return_type.as_str(),
-                &substitutions,
-                receiver_display.as_str(),
-            ),
-            is_async: sig.is_async,
-            is_unsafe: sig.is_unsafe,
-        }
+        Self::specialize_rust_signature(sig, &substitutions, receiver_display.as_str())
+    }
+
+    /// Specialize one inspected method signature with explicit, non-placeholder method type arguments.
+    fn specialize_rust_method_signature(
+        &self,
+        sig: &RustFunctionSig,
+        rust_path: &str,
+        type_args: &[ResolvedType],
+    ) -> RustFunctionSig {
+        let substitutions = sig
+            .type_params
+            .iter()
+            .zip(type_args)
+            .filter(|(_, arg)| !matches!(arg, ResolvedType::CallSiteInfer | ResolvedType::Unknown))
+            .map(|(param, arg)| (param.as_str(), render_resolved_type_as_rust_arg(arg)))
+            .collect::<HashMap<_, _>>();
+        Self::specialize_rust_signature(sig, &substitutions, rust_path)
     }
 
     /// Resolve and validate a method call on a rust-inspect-backed path.
@@ -2021,6 +2043,8 @@ impl TypeChecker {
                         type_info.type_params.as_slice(),
                         resolved_type_args.as_slice(),
                     )
+                } else if !resolved_type_args.is_empty() {
+                    self.specialize_rust_method_signature(&sig, rust_path, resolved_type_args.as_slice())
                 } else {
                     sig.clone()
                 };
@@ -2098,10 +2122,26 @@ impl TypeChecker {
         if !self.validate_rust_method_type_arg_arity(call.method, &call.sig.type_params, call.type_args, call.span) {
             return ResolvedType::Unknown;
         }
+        let resolved_type_args = call
+            .type_args
+            .iter()
+            .map(|arg| self.resolve_type_checked(arg))
+            .collect::<Vec<_>>();
+        if !resolved_type_args.is_empty() {
+            self.type_info
+                .calls
+                .call_site_monomorph_type_args
+                .insert((call.span.start, call.span.end), resolved_type_args.clone());
+        }
+        let effective_sig = if resolved_type_args.is_empty() {
+            call.sig.clone()
+        } else {
+            self.specialize_rust_method_signature(call.sig, call.rust_path, resolved_type_args.as_slice())
+        };
         let callable_display = format!("rust::{}.{}", call.rust_path, call.method);
         let ret = self.validate_rust_method_call(
             callable_display.as_str(),
-            call.sig,
+            &effective_sig,
             call.args,
             call.arg_types,
             call.preserves_lookup_arg_shape,
@@ -2155,11 +2195,26 @@ impl TypeChecker {
         if !self.validate_rust_method_type_arg_arity(method, &sig.type_params, type_args, span) {
             return Some(ResolvedType::Unknown);
         }
+        let resolved_type_args = type_args
+            .iter()
+            .map(|arg| self.resolve_type_checked(arg))
+            .collect::<Vec<_>>();
+        if !resolved_type_args.is_empty() {
+            self.type_info
+                .calls
+                .call_site_monomorph_type_args
+                .insert((span.start, span.end), resolved_type_args.clone());
+        }
+        let effective_sig = if resolved_type_args.is_empty() {
+            sig.clone()
+        } else {
+            self.specialize_rust_method_signature(&sig, rust_path, resolved_type_args.as_slice())
+        };
         let callable_display = format!("rust::{rust_path}.{method}");
         let error_count = self.errors.len();
         let ret = self.validate_rust_method_call(
             callable_display.as_str(),
-            &sig,
+            &effective_sig,
             args,
             arg_types,
             preserves_lookup_arg_shape,
@@ -3914,10 +3969,28 @@ impl TypeChecker {
             }
         });
 
+        // Rust callable bounds are not available until receiver metadata selects the method signature below. Defer
+        // direct closures on Rust receivers so the selected `Fn`/`FnMut` bound can contextually type them once, rather
+        // than first checking their parameters as unknowns and retaining spurious errors from that incomplete pass.
+        let rust_receiver_path = self.rust_canonical_path_for_receiver_type(&base_ty);
+        let defer_rust_closures = rust_receiver_path.is_some();
+
         // Collect arg types for method-specific validation.
         let arg_types: Vec<ResolvedType> = args
             .iter()
-            .map(|arg| self.check_method_arg_with_rust_callable_alias(arg, contextual_rust_callable.as_ref()))
+            .map(|arg| {
+                let is_closure = match arg {
+                    CallArg::Positional(expr)
+                    | CallArg::Named(_, expr)
+                    | CallArg::PositionalUnpack(expr)
+                    | CallArg::KeywordUnpack(expr) => matches!(expr.node, Expr::Closure(_, _)),
+                };
+                if defer_rust_closures && contextual_rust_callable.is_none() && is_closure {
+                    ResolvedType::Unknown
+                } else {
+                    self.check_method_arg_with_rust_callable_alias(arg, contextual_rust_callable.as_ref())
+                }
+            })
             .collect();
 
         if self.receiver_has_computed_property(&base_ty, method, span) {
@@ -3930,7 +4003,7 @@ impl TypeChecker {
             return ret;
         }
 
-        if let Some(path) = self.rust_canonical_path_for_receiver_type(&base_ty) {
+        if let Some(path) = rust_receiver_path {
             if let Some(params) = self.rust_variant_callable_params(&path, method) {
                 if !type_args.is_empty() {
                     self.errors
