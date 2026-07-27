@@ -607,8 +607,10 @@ impl AstLowering {
                 self.compiled_provider_external_signature(&provider_crate, signature),
             ));
         }
-        let mut cache = crate::frontend::typechecker::stdlib_loader::StdlibAstCache::new();
-        if let Some(method) = cache.lookup_type_method_decl(module_path, type_name, method_name) {
+        if let Some(method) = self
+            .stdlib_cache
+            .lookup_type_method_decl(module_path, type_name, method_name)
+        {
             return self.callable_signature_from_stdlib_method_decl(&method).map(Some);
         }
         Ok(None)
@@ -1244,8 +1246,7 @@ impl AstLowering {
                 ));
             }
         }
-        let mut cache = crate::frontend::typechecker::stdlib_loader::StdlibAstCache::new();
-        let Some(func) = cache.lookup_function_decl(module_path, function_name) else {
+        let Some(func) = self.stdlib_cache.lookup_function_decl(module_path, function_name) else {
             return Ok(None);
         };
         self.callable_signature_from_stdlib_function_decl(&func).map(Some)
