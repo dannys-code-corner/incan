@@ -198,6 +198,34 @@ struct SourceConstructorReexport {
     exported_name: String,
 }
 
+/// Manifest-backed nominal constructor facts that preserve the source declaration category.
+#[derive(Clone)]
+struct ManifestConstructorShape {
+    kind: IrStructKind,
+    fields: Vec<FieldExport>,
+}
+
+/// Rust construction surface selected for one nominal type.
+///
+/// Provider bridges preserve Incan's checked field-privacy boundary across generated Rust crates. A bridge may carry
+/// every public field, but it must never accept a type-private field from a consumer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StructConstructorSurface {
+    /// Construct with a Rust struct literal because every field is available in the current module.
+    DirectStructLiteral,
+    /// Expose the existing public free constructor with every field as an argument.
+    PublicAllFields,
+    /// Expose a public provider bridge that accepts only public fields and owns private defaults.
+    PublicBridge,
+    /// Retain a full-fields helper for generated defining-module code without exporting it.
+    PrivateAllFields,
+    /// Retain a full-fields helper for generated code in the current crate.
+    CrateAllFields,
+    /// Do not emit a free constructor because an external caller would have to provide a private field.
+    Absent,
+}
+
+/// Constructor metadata that selects a safe Rust construction shape for one nominal type.
 #[derive(Clone)]
 pub(super) struct StructConstructorMetadata {
     provider_identity: Option<ConstructorProviderIdentity>,
@@ -206,10 +234,33 @@ pub(super) struct StructConstructorMetadata {
     field_defaults: HashMap<String, super::IrExpr>,
     default_fields: HashSet<String>,
     field_aliases: HashMap<String, String>,
-    requires_constructor_function: bool,
+    type_private_fields: HashSet<String>,
+    constructor_surface: StructConstructorSurface,
 }
 
 impl StructConstructorMetadata {
+    /// Select the external Rust construction surface for one nominal declaration.
+    ///
+    /// Models seal private constructor inputs outside their owner. Classes retain their complete constructor input
+    /// surface even though later member access still observes field privacy.
+    fn external_constructor_surface(
+        kind: IrStructKind,
+        type_private_fields: &HashSet<String>,
+        default_fields: &HashSet<String>,
+    ) -> StructConstructorSurface {
+        if type_private_fields.is_empty() {
+            return StructConstructorSurface::DirectStructLiteral;
+        }
+        match kind {
+            IrStructKind::Model if type_private_fields.iter().all(|field| default_fields.contains(field)) => {
+                StructConstructorSurface::PublicBridge
+            }
+            IrStructKind::Model => StructConstructorSurface::Absent,
+            IrStructKind::Class => StructConstructorSurface::PublicAllFields,
+            IrStructKind::Newtype => StructConstructorSurface::DirectStructLiteral,
+        }
+    }
+
     /// Build constructor-emission metadata from one lowered source-defined struct.
     fn from_struct(s: &IrStruct) -> Self {
         Self {
@@ -247,29 +298,45 @@ impl StructConstructorMetadata {
                         .map(|alias| (alias.clone(), field.name.clone()))
                 })
                 .collect(),
-            requires_constructor_function: false,
+            type_private_fields: s
+                .fields
+                .iter()
+                .filter(|field| field.is_type_private)
+                .map(|field| field.name.clone())
+                .collect(),
+            constructor_surface: StructConstructorSurface::DirectStructLiteral,
         }
     }
 
     /// Build exact constructor metadata for a checked ordinary source dependency.
     ///
-    /// A public source model or class with private fields exposes a provider-local constructor function because Rust
-    /// consumers cannot initialize those fields with a struct literal. The canonical module identity prevents a
-    /// same-named type from another source module from supplying the bridge ABI by short-name or field-shape
-    /// coincidence.
+    /// The canonical module identity prevents a same-named type from another source module from supplying the bridge
+    /// ABI by short-name or field-shape coincidence. Models expose a provider bridge only when every private field has
+    /// a provider-local default; classes preserve their complete constructor input surface.
     fn from_source_dependency(module_path: &[String], s: &IrStruct) -> Self {
         let mut metadata = Self::from_struct(s);
         metadata.provider_identity = Some(ConstructorProviderIdentity::SourceModule(module_path.to_vec()));
-        metadata.requires_constructor_function = matches!(s.kind, IrStructKind::Model | IrStructKind::Class)
-            && s.fields.iter().any(|field| field.is_type_private);
+        metadata.constructor_surface =
+            Self::external_constructor_surface(s.kind, &metadata.type_private_fields, &metadata.default_fields);
         metadata
     }
 
     /// Build constructor-emission metadata from one compiled-library export.
-    fn from_manifest_fields(library: &str, fields: &[FieldExport]) -> Self {
-        let requires_constructor_function = fields
+    ///
+    /// Manifest defaults may be intentionally non-materializable to consumers, so their `has_default` flag remains
+    /// authoritative for provider-bridge eligibility even when no serialized expression is available.
+    fn from_manifest_fields(library: &str, kind: IrStructKind, fields: &[FieldExport]) -> Self {
+        let type_private_fields = fields
             .iter()
-            .any(|field| matches!(field.visibility, FieldVisibilityExport::Private));
+            .filter(|field| matches!(field.visibility, FieldVisibilityExport::Private))
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
+        let default_fields = fields
+            .iter()
+            .filter(|field| field.has_default || field.default.is_some())
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
+        let constructor_surface = Self::external_constructor_surface(kind, &type_private_fields, &default_fields);
         Self {
             provider_identity: Some(ConstructorProviderIdentity::PublicDependency(library.to_string())),
             fields: fields.iter().map(|field| field.name.clone()).collect(),
@@ -279,7 +346,6 @@ impl StructConstructorMetadata {
                 .collect(),
             field_defaults: fields
                 .iter()
-                .filter(|_| !requires_constructor_function)
                 .filter_map(|field| {
                     field
                         .default
@@ -288,17 +354,7 @@ impl StructConstructorMetadata {
                         .map(|default| (field.name.clone(), default))
                 })
                 .collect(),
-            default_fields: fields
-                .iter()
-                .filter(|field| {
-                    if requires_constructor_function {
-                        field.has_default
-                    } else {
-                        field.default.is_some()
-                    }
-                })
-                .map(|field| field.name.clone())
-                .collect(),
+            default_fields,
             field_aliases: fields
                 .iter()
                 .filter_map(|field| {
@@ -309,8 +365,40 @@ impl StructConstructorMetadata {
                         .map(|alias| (alias.clone(), field.name.clone()))
                 })
                 .collect(),
-            requires_constructor_function,
+            type_private_fields,
+            constructor_surface,
         }
+    }
+
+    /// Return whether this metadata selects the provider-owned public-field bridge.
+    fn uses_provider_bridge(&self) -> bool {
+        matches!(self.constructor_surface, StructConstructorSurface::PublicBridge)
+    }
+
+    /// Return whether calls must target a generated free constructor instead of a Rust struct literal.
+    fn uses_constructor_function(&self) -> bool {
+        matches!(
+            self.constructor_surface,
+            StructConstructorSurface::PublicAllFields
+                | StructConstructorSurface::PublicBridge
+                | StructConstructorSurface::PrivateAllFields
+                | StructConstructorSurface::CrateAllFields
+        )
+    }
+
+    /// Iterate in declaration order over the fields accepted by the selected Rust constructor surface.
+    ///
+    /// A provider bridge filters out type-private fields so no external generated crate can serialize a value across
+    /// the nominal privacy boundary.
+    fn constructor_fields(&self) -> impl Iterator<Item = &String> {
+        self.fields
+            .iter()
+            .filter(|field| !self.uses_provider_bridge() || !self.type_private_fields.contains(field.as_str()))
+    }
+
+    /// Return whether `field` is private to the owning nominal type.
+    fn field_is_type_private(&self, field: &str) -> bool {
+        self.type_private_fields.contains(field)
     }
 
     /// Resolve a source-facing field name or alias to the canonical Rust field name.
@@ -600,6 +688,61 @@ impl<'a> IrEmitter<'a> {
             callable_name_used_signature_keys: HashSet::new(),
             callable_name_local_registry: None,
         }
+    }
+
+    /// Plan one named nominal construction through its selected Rust surface.
+    ///
+    /// Both call-shaped and struct-shaped IR use this path so private-field filtering, default transport, and argument
+    /// ordering cannot drift between emitters.
+    pub(super) fn emit_named_constructor_arguments(
+        &self,
+        target_name: &str,
+        metadata: &StructConstructorMetadata,
+        fields: &[(String, TypedExpr)],
+    ) -> Result<Vec<(TokenStream, TokenStream)>, EmitError> {
+        let mut provided = HashMap::<&str, &TypedExpr>::new();
+        for (field, value) in fields {
+            if let Some(canonical) = metadata.canonical_field_name(field) {
+                provided.insert(canonical, value);
+            }
+        }
+
+        if metadata.uses_provider_bridge() && provided.keys().any(|field| metadata.field_is_type_private(field)) {
+            return Err(EmitError::Unsupported(format!(
+                "private field supplied when constructing '{target_name}' through a provider bridge"
+            )));
+        }
+
+        let mut planned = Vec::new();
+        for field_name in metadata.constructor_fields() {
+            let field_ident = Self::rust_ident(field_name);
+            let target_ty = metadata.field_types.get(field_name);
+            let value = if let Some(value) = provided.get(field_name.as_str()) {
+                let value = self.emit_expr_for_use(value, super::ownership::ValueUseSite::StructField { target_ty })?;
+                if metadata.uses_constructor_function() && metadata.default_fields.contains(field_name) {
+                    quote! { Some(#value) }
+                } else {
+                    value
+                }
+            } else if metadata.default_fields.contains(field_name) {
+                if metadata.uses_constructor_function() {
+                    quote! { None }
+                } else {
+                    let default_expr = metadata.field_defaults.get(field_name).ok_or_else(|| {
+                        EmitError::Unsupported(format!(
+                            "default for field '{field_name}' on '{target_name}' cannot be materialized"
+                        ))
+                    })?;
+                    self.emit_expr_for_use(default_expr, super::ownership::ValueUseSite::StructField { target_ty })?
+                }
+            } else {
+                return Err(EmitError::Unsupported(format!(
+                    "missing required field '{field_name}' when constructing '{target_name}'"
+                )));
+            };
+            planned.push((quote! { #field_ident }, value));
+        }
+        Ok(planned)
     }
 
     /// Configure the generated Rust module path for callable-name helper routing.
@@ -1198,13 +1341,50 @@ impl<'a> IrEmitter<'a> {
                 .contains(&(enum_name.to_string(), "message".to_string()))
     }
 
-    /// True when the generated free constructor function for a struct should be retained.
-    pub(super) fn should_emit_struct_constructor(&self, s: &IrStruct) -> bool {
+    /// Select the generated Rust constructor surface while preserving type-private Incan fields.
+    ///
+    /// Public models with only default-backed private fields receive a public-field bridge. Required private model
+    /// fields have no public native constructor, while classes preserve the complete constructor inputs accepted by
+    /// the Incan typechecker.
+    pub(super) fn struct_constructor_surface(&self, s: &IrStruct) -> StructConstructorSurface {
+        if s.fields.is_empty() {
+            return StructConstructorSurface::Absent;
+        }
+
         let analysis = self.generated_use_analysis.borrow();
-        let has_private_fields = matches!(s.kind, IrStructKind::Model | IrStructKind::Class)
-            && s.fields.iter().any(|field| field.is_type_private);
-        analysis.used_constructors.contains(&s.name)
-            || (has_private_fields && matches!(s.visibility, Visibility::Public))
+        let has_type_private_fields = s.fields.iter().any(|field| field.is_type_private);
+        let has_required_type_private_field = s
+            .fields
+            .iter()
+            .any(|field| field.is_type_private && field.default.is_none());
+        let constructor_is_used = analysis.used_constructors.contains(&s.name);
+
+        if matches!(s.visibility, Visibility::Public) && has_type_private_fields {
+            match s.kind {
+                IrStructKind::Model if !has_required_type_private_field => {
+                    return StructConstructorSurface::PublicBridge;
+                }
+                IrStructKind::Model => {
+                    return if constructor_is_used {
+                        StructConstructorSurface::PrivateAllFields
+                    } else {
+                        StructConstructorSurface::Absent
+                    };
+                }
+                IrStructKind::Class => return StructConstructorSurface::PublicAllFields,
+                IrStructKind::Newtype => {}
+            }
+        }
+
+        if !constructor_is_used {
+            return StructConstructorSurface::Absent;
+        }
+
+        match s.visibility {
+            Visibility::Public => StructConstructorSurface::PublicAllFields,
+            Visibility::Crate => StructConstructorSurface::CrateAllFields,
+            Visibility::Private => StructConstructorSurface::PrivateAllFields,
+        }
     }
 
     /// True when a generated private field needs a narrow `dead_code` expectation because Rust cannot see an
@@ -1337,10 +1517,10 @@ impl<'a> IrEmitter<'a> {
             public_names.sort();
             public_names.dedup();
             for public_name in public_names {
-                if let Some(fields) = Self::manifest_constructor_fields_for_public_name(manifest, &public_name) {
+                if let Some(shape) = Self::manifest_constructor_shape_for_public_name(manifest, &public_name) {
                     self.pub_dependency_constructor_metadata.insert(
                         (library.clone(), vec![public_name.clone()]),
-                        StructConstructorMetadata::from_manifest_fields(&library, &fields),
+                        StructConstructorMetadata::from_manifest_fields(&library, shape.kind, &shape.fields),
                     );
                     *counts.entry(public_name).or_default() += 1;
                 }
@@ -1353,8 +1533,7 @@ impl<'a> IrEmitter<'a> {
                         let Some(name) = Self::api_nominal_declaration_name(declaration) else {
                             continue;
                         };
-                        let Some(fields) = Self::manifest_constructor_fields_for_api_declaration(api, declaration)
-                        else {
+                        let Some(shape) = Self::manifest_constructor_shape_for_api_declaration(api, declaration) else {
                             continue;
                         };
                         let mut public_paths = vec![module.module_path.clone()];
@@ -1365,7 +1544,7 @@ impl<'a> IrEmitter<'a> {
                             public_path.push(name.to_string());
                             self.pub_dependency_constructor_metadata.insert(
                                 (library.clone(), public_path),
-                                StructConstructorMetadata::from_manifest_fields(&library, &fields),
+                                StructConstructorMetadata::from_manifest_fields(&library, shape.kind, &shape.fields),
                             );
                         }
                         *counts.entry(name.to_string()).or_default() += 1;
@@ -1390,9 +1569,9 @@ impl<'a> IrEmitter<'a> {
             public_names.dedup();
             for public_name in public_names {
                 if counts.get(&public_name).copied().unwrap_or_default() == 1
-                    && let Some(fields) = Self::manifest_constructor_fields_for_public_name(manifest, &public_name)
+                    && let Some(shape) = Self::manifest_constructor_shape_for_public_name(manifest, &public_name)
                 {
-                    self.register_manifest_constructor_metadata(&library, &public_name, &fields);
+                    self.register_manifest_constructor_metadata(&library, &public_name, shape.kind, &shape.fields);
                 }
             }
         }
@@ -1408,31 +1587,43 @@ impl<'a> IrEmitter<'a> {
         }
     }
 
-    /// Resolve constructor fields for a checked API declaration, following public aliases by exact source path.
-    fn manifest_constructor_fields_for_api_declaration(
+    /// Resolve constructor shape for a checked API declaration, following public aliases by exact source path.
+    fn manifest_constructor_shape_for_api_declaration(
         api: &crate::frontend::api_metadata::CheckedApiMetadataPackage,
         declaration: &ApiDeclaration,
-    ) -> Option<Vec<FieldExport>> {
+    ) -> Option<ManifestConstructorShape> {
         match declaration {
-            ApiDeclaration::Model(model) => Some(model_export_from_api(model).fields),
-            ApiDeclaration::Class(class) => Some(class_export_from_api(class).fields),
+            ApiDeclaration::Model(model) => Some(ManifestConstructorShape {
+                kind: IrStructKind::Model,
+                fields: model_export_from_api(model).fields,
+            }),
+            ApiDeclaration::Class(class) => Some(ManifestConstructorShape {
+                kind: IrStructKind::Class,
+                fields: class_export_from_api(class).fields,
+            }),
             ApiDeclaration::Alias(alias) => Self::api_declaration_for_target_path(api, &alias.target_path)
-                .and_then(|target| Self::manifest_constructor_fields_for_api_declaration(api, target)),
+                .and_then(|target| Self::manifest_constructor_shape_for_api_declaration(api, target)),
             _ => None,
         }
     }
 
-    /// Resolve the constructor fields behind one exact public export, including facade aliases backed by checked API
+    /// Resolve the constructor shape behind one exact public export, including facade aliases backed by checked API
     /// metadata.
-    fn manifest_constructor_fields_for_public_name(
+    fn manifest_constructor_shape_for_public_name(
         manifest: &LibraryManifest,
         public_name: &str,
-    ) -> Option<Vec<FieldExport>> {
+    ) -> Option<ManifestConstructorShape> {
         if let Some(model) = manifest.exports.models.iter().find(|model| model.name == public_name) {
-            return Some(model.fields.clone());
+            return Some(ManifestConstructorShape {
+                kind: IrStructKind::Model,
+                fields: model.fields.clone(),
+            });
         }
         if let Some(class) = manifest.exports.classes.iter().find(|class| class.name == public_name) {
-            return Some(class.fields.clone());
+            return Some(ManifestConstructorShape {
+                kind: IrStructKind::Class,
+                fields: class.fields.clone(),
+            });
         }
         let target_path = manifest
             .contract_metadata
@@ -1451,25 +1642,32 @@ impl<'a> IrEmitter<'a> {
             && let Some(declaration) = Self::api_declaration_for_target_path(api, target_path)
         {
             return match declaration {
-                ApiDeclaration::Model(model) => Some(model_export_from_api(model).fields),
-                ApiDeclaration::Class(class) => Some(class_export_from_api(class).fields),
+                ApiDeclaration::Model(model) => Some(ManifestConstructorShape {
+                    kind: IrStructKind::Model,
+                    fields: model_export_from_api(model).fields,
+                }),
+                ApiDeclaration::Class(class) => Some(ManifestConstructorShape {
+                    kind: IrStructKind::Class,
+                    fields: class_export_from_api(class).fields,
+                }),
                 _ => None,
             };
         }
         let target_name = target_path.last()?;
+        if let Some(model) = manifest.exports.models.iter().find(|model| &model.name == target_name) {
+            return Some(ManifestConstructorShape {
+                kind: IrStructKind::Model,
+                fields: model.fields.clone(),
+            });
+        }
         manifest
             .exports
-            .models
+            .classes
             .iter()
-            .find(|model| &model.name == target_name)
-            .map(|model| model.fields.clone())
-            .or_else(|| {
-                manifest
-                    .exports
-                    .classes
-                    .iter()
-                    .find(|class| &class.name == target_name)
-                    .map(|class| class.fields.clone())
+            .find(|class| &class.name == target_name)
+            .map(|class| ManifestConstructorShape {
+                kind: IrStructKind::Class,
+                fields: class.fields.clone(),
             })
     }
 
@@ -1780,11 +1978,21 @@ impl<'a> IrEmitter<'a> {
         newtypes: &[NewtypeExport],
     ) {
         for model in models {
-            self.register_manifest_constructor_metadata(provider_crate, &model.name, &model.fields);
+            self.register_manifest_constructor_metadata(
+                provider_crate,
+                &model.name,
+                IrStructKind::Model,
+                &model.fields,
+            );
             self.register_manifest_method_metadata(&model.name, &model.methods, &model.type_params);
         }
         for class in classes {
-            self.register_manifest_constructor_metadata(provider_crate, &class.name, &class.fields);
+            self.register_manifest_constructor_metadata(
+                provider_crate,
+                &class.name,
+                IrStructKind::Class,
+                &class.fields,
+            );
             self.register_manifest_method_metadata(&class.name, &class.methods, &class.type_params);
         }
         for enum_ in enums {
@@ -1983,15 +2191,22 @@ impl<'a> IrEmitter<'a> {
                 && existing.field_types == metadata.field_types
                 && existing.default_fields == metadata.default_fields
                 && existing.field_aliases == metadata.field_aliases
-                && existing.requires_constructor_function == metadata.requires_constructor_function
+                && existing.type_private_fields == metadata.type_private_fields
+                && existing.constructor_surface == metadata.constructor_surface
         }) {
             variants.push(metadata);
         }
     }
 
     /// Register constructor metadata reconstructed from a public dependency manifest.
-    fn register_manifest_constructor_metadata(&mut self, library: &str, name: &str, fields: &[FieldExport]) {
-        let metadata = StructConstructorMetadata::from_manifest_fields(library, fields);
+    fn register_manifest_constructor_metadata(
+        &mut self,
+        library: &str,
+        name: &str,
+        kind: IrStructKind,
+        fields: &[FieldExport],
+    ) {
+        let metadata = StructConstructorMetadata::from_manifest_fields(library, kind, fields);
         self.register_constructor_metadata_variant(name, metadata);
         self.struct_field_names.insert(
             name.to_string(),
@@ -2631,7 +2846,7 @@ impl<'a> IrEmitter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConstructorProviderIdentity, IrEmitter, StructConstructorMetadata};
+    use super::{ConstructorProviderIdentity, IrEmitter, StructConstructorMetadata, StructConstructorSurface};
     use crate::backend::ir::decl::{
         IrDecl, IrDeclKind, IrImportItem, IrImportOrigin, IrImportQualifier, IrStruct, IrStructKind, StructField,
         Visibility,
@@ -2734,17 +2949,138 @@ mod tests {
     }
 
     #[test]
-    fn public_source_models_with_private_fields_require_exact_provider_constructor_bridges_issue884() {
+    /// Confirm default-backed private fields retain an exact canonical provider bridge.
+    fn private_default_source_models_expose_public_field_provider_bridges_issue884() {
         let model = checked_source_model();
         let metadata =
             StructConstructorMetadata::from_source_dependency(&["pkg".to_string(), "vaults".to_string()], &model);
-        assert!(metadata.requires_constructor_function);
+        assert_eq!(metadata.constructor_surface, StructConstructorSurface::PublicBridge);
         assert_eq!(
             metadata.provider_identity,
             Some(ConstructorProviderIdentity::SourceModule(vec![
                 "pkg".to_string(),
                 "vaults".to_string()
             ]))
+        );
+    }
+
+    #[test]
+    /// Confirm required private fields leave no native constructor surface.
+    fn constructor_metadata_omits_required_private_fields_from_native_surfaces() {
+        let mut model = checked_source_model();
+        model.fields[0].default = None;
+
+        let metadata =
+            StructConstructorMetadata::from_source_dependency(&["pkg".to_string(), "vaults".to_string()], &model);
+
+        assert_eq!(metadata.constructor_surface, StructConstructorSurface::Absent);
+    }
+
+    #[test]
+    /// Confirm all-public models continue to use direct Rust struct construction in consumers.
+    fn constructor_metadata_keeps_all_public_models_on_struct_literal_surface() {
+        let mut model = checked_source_model();
+        for field in &mut model.fields {
+            field.is_type_private = false;
+            field.visibility = Visibility::Public;
+        }
+
+        let metadata =
+            StructConstructorMetadata::from_source_dependency(&["pkg".to_string(), "vaults".to_string()], &model);
+
+        assert_eq!(
+            metadata.constructor_surface,
+            StructConstructorSurface::DirectStructLiteral
+        );
+    }
+
+    #[test]
+    /// Confirm a provider-private nominal field type cannot leak through a constructor signature.
+    fn constructor_metadata_hides_required_private_nominal_field_types() {
+        let mut model = checked_source_model();
+        model.fields[0].ty = IrType::Struct("PrivateToken".to_string());
+        model.fields[0].default = None;
+
+        let metadata =
+            StructConstructorMetadata::from_source_dependency(&["pkg".to_string(), "vaults".to_string()], &model);
+
+        assert_eq!(metadata.constructor_surface, StructConstructorSurface::Absent);
+    }
+
+    #[test]
+    /// Confirm class constructor metadata preserves private inputs independently of later field-access privacy.
+    fn constructor_metadata_keeps_complete_private_class_input_surface_issue886() {
+        let mut class = checked_source_class(
+            IrType::String,
+            TypedExpr::new(IrExprKind::String("sealed".to_string()), IrType::String),
+            IrType::String,
+            IrType::Int,
+            TypedExpr::new(IrExprKind::Int(1), IrType::Int),
+        );
+        class.fields[0].default = None;
+
+        let metadata =
+            StructConstructorMetadata::from_source_dependency(&["pkg".to_string(), "vaults".to_string()], &class);
+
+        assert_eq!(metadata.constructor_surface, StructConstructorSurface::PublicAllFields);
+        assert_eq!(
+            metadata.constructor_fields().map(String::as_str).collect::<Vec<_>>(),
+            ["secret", "label", "revision"]
+        );
+    }
+
+    #[test]
+    /// Confirm compiled-library metadata filters private defaults from the bridge argument order.
+    fn manifest_constructor_metadata_exports_only_public_fields_for_private_defaults() {
+        use crate::library_manifest::{FieldExport, FieldVisibilityExport, ParamDefaultExport, TypeRef};
+
+        let fields = vec![
+            FieldExport {
+                name: "secret".to_string(),
+                ty: TypeRef::Named {
+                    name: "bool".to_string(),
+                },
+                surface_type_name: None,
+                visibility: FieldVisibilityExport::Private,
+                has_default: true,
+                default: Some(ParamDefaultExport::Bool(true)),
+                alias: None,
+                description: None,
+            },
+            FieldExport {
+                name: "label".to_string(),
+                ty: TypeRef::Named {
+                    name: "str".to_string(),
+                },
+                surface_type_name: None,
+                visibility: FieldVisibilityExport::Public,
+                has_default: false,
+                default: None,
+                alias: None,
+                description: None,
+            },
+        ];
+
+        let bridge = StructConstructorMetadata::from_manifest_fields("sealed", IrStructKind::Model, &fields);
+        assert_eq!(bridge.constructor_surface, StructConstructorSurface::PublicBridge);
+        assert_eq!(
+            bridge.constructor_fields().map(String::as_str).collect::<Vec<_>>(),
+            ["label"]
+        );
+
+        let mut required_private_fields = fields;
+        required_private_fields[0].has_default = false;
+        required_private_fields[0].default = None;
+        let absent =
+            StructConstructorMetadata::from_manifest_fields("sealed", IrStructKind::Model, &required_private_fields);
+        assert_eq!(absent.constructor_surface, StructConstructorSurface::Absent);
+
+        let class =
+            StructConstructorMetadata::from_manifest_fields("sealed", IrStructKind::Class, &required_private_fields);
+        assert_eq!(class.constructor_surface, StructConstructorSurface::PublicAllFields);
+        assert_eq!(
+            class.constructor_fields().map(String::as_str).collect::<Vec<_>>(),
+            ["secret", "label"]
         );
     }
 
@@ -2874,7 +3210,7 @@ mod tests {
         assert_eq!(facade.provider_identity, text.provider_identity);
         assert_eq!(facade.fields, text.fields);
         assert_eq!(facade.default_fields, text.default_fields);
-        assert!(facade.requires_constructor_function);
+        assert_eq!(facade.constructor_surface, StructConstructorSurface::PublicAllFields);
         assert_eq!(text.fields, ["secret", "label", "revision"]);
         assert_eq!(number.fields, ["secret", "label", "revision"]);
         assert_eq!(text.field_types.get("label"), Some(&IrType::String));
@@ -2887,8 +3223,8 @@ mod tests {
             number.default_fields,
             std::collections::HashSet::from(["secret".to_string(), "revision".to_string()])
         );
-        assert!(text.requires_constructor_function);
-        assert!(number.requires_constructor_function);
+        assert_eq!(text.constructor_surface, StructConstructorSurface::PublicAllFields);
+        assert_eq!(number.constructor_surface, StructConstructorSurface::PublicAllFields);
         Ok(())
     }
 }

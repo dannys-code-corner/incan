@@ -10,7 +10,7 @@ use super::super::super::decl::{
     IrEnum, IrEnumValue, IrEnumValueType, IrStruct, IrTypeParam, StructField, VariantFields,
 };
 use super::super::super::types::IrType;
-use super::super::{EmitError, IrEmitter, SERDE_DESERIALIZE_DERIVE, SERDE_SERIALIZE_DERIVE};
+use super::super::{EmitError, IrEmitter, SERDE_DESERIALIZE_DERIVE, SERDE_SERIALIZE_DERIVE, StructConstructorSurface};
 
 impl<'a> IrEmitter<'a> {
     /// Emit a field-level expectation for private generated fields that must remain present for Incan semantics even
@@ -207,12 +207,21 @@ impl<'a> IrEmitter<'a> {
                 })
                 .collect();
 
-            let constructor = if !s.fields.is_empty() && self.should_emit_struct_constructor(s) {
+            let constructor_surface = self.struct_constructor_surface(s);
+            let constructor = if matches!(
+                constructor_surface,
+                StructConstructorSurface::PublicAllFields
+                    | StructConstructorSurface::PublicBridge
+                    | StructConstructorSurface::PrivateAllFields
+                    | StructConstructorSurface::CrateAllFields
+            ) {
                 let mut param_tokens = Vec::with_capacity(s.fields.len());
                 let mut field_assigns = Vec::with_capacity(s.fields.len());
                 for field in &s.fields {
                     let field_name = format_ident!("{}", &field.name);
                     let field_ty = self.emit_type(&field.ty);
+                    let provider_owns_private_default =
+                        matches!(constructor_surface, StructConstructorSurface::PublicBridge) && field.is_type_private;
                     if let Some(default) = field.default.as_ref() {
                         let default = if matches!(field.ty, IrType::String)
                             && let crate::backend::ir::expr::IrExprKind::BinOp {
@@ -231,17 +240,30 @@ impl<'a> IrEmitter<'a> {
                                 },
                             )?
                         };
-                        param_tokens.push(quote! { #field_name: Option<#field_ty> });
-                        field_assigns.push(quote! { #field_name: #field_name.unwrap_or_else(|| #default) });
+                        if provider_owns_private_default {
+                            field_assigns.push(quote! { #field_name: #default });
+                        } else {
+                            param_tokens.push(quote! { #field_name: Option<#field_ty> });
+                            field_assigns.push(quote! { #field_name: #field_name.unwrap_or_else(|| #default) });
+                        }
                     } else {
                         param_tokens.push(quote! { #field_name: #field_ty });
                         field_assigns.push(quote! { #field_name });
                     }
                 }
 
+                let constructor_visibility = match constructor_surface {
+                    StructConstructorSurface::PublicAllFields | StructConstructorSurface::PublicBridge => {
+                        quote! { pub }
+                    }
+                    StructConstructorSurface::CrateAllFields => quote! { pub(crate) },
+                    StructConstructorSurface::PrivateAllFields => quote! {},
+                    StructConstructorSurface::DirectStructLiteral | StructConstructorSurface::Absent => quote! {},
+                };
+
                 quote! {
                     #[allow(non_snake_case, clippy::too_many_arguments)]
-                    #vis fn #name #generics (#(#param_tokens),*) -> #name #generics_bare {
+                    #constructor_visibility fn #name #generics (#(#param_tokens),*) -> #name #generics_bare {
                         #name {
                             #(#field_assigns),*
                         }

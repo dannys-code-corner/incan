@@ -2299,6 +2299,7 @@ pub enum ConformanceRel:
 }
 
 #[test]
+/// Keep source-package class construction on the complete provider-owned constructor surface.
 fn test_issue886_imported_private_source_class_constructor_codegen() -> Result<(), Box<dyn std::error::Error>> {
     let provider_source = r#"
 pub class Vault:
@@ -2340,6 +2341,52 @@ def main() -> None:
         "expected imported private class construction to use the provider bridge; generated:\n{rust_code}"
     );
     insta::assert_snapshot!("issue886_imported_private_source_class_constructor", rust_code);
+    Ok(())
+}
+
+#[test]
+/// Keep source-package model construction on the public-field bridge while private defaults remain provider-owned.
+fn test_issue964_imported_private_source_model_constructor_codegen() -> Result<(), Box<dyn std::error::Error>> {
+    let provider_source = r#"
+pub model Vault:
+  secret: str = "sealed"
+  pub label: str
+  revision: int = 7
+"#;
+    let facade_source = "pub from provider import Vault as FacadeVault\n";
+    let public_api_source = "pub from facade import FacadeVault as ExportedVault\n";
+    let consumer_source = r#"
+from crate.public_api import ExportedVault as PublicVault
+
+def main() -> None:
+  vault = PublicVault(label="visible")
+  println(vault.label)
+"#;
+    let provider_ast = parse_incan_program(provider_source, "private-model provider");
+    let facade_ast = parse_incan_program(facade_source, "private-model facade");
+    let public_api_ast = parse_incan_program(public_api_source, "private-model public API");
+    let consumer_ast = parse_incan_program(consumer_source, "private-model consumer");
+    let mut codegen = codegen_with_builtin_stdlib_inventory();
+    codegen.add_module_with_path_segments("provider", &provider_ast, vec!["provider".to_string()]);
+    codegen.add_module_with_path_segments("facade", &facade_ast, vec!["facade".to_string()]);
+    codegen.add_module_with_path_segments("public_api", &public_api_ast, vec!["public_api".to_string()]);
+    let (consumer_code, _modules) = codegen
+        .try_generate_multi_file_nested(
+            &consumer_ast,
+            &[
+                vec!["provider".to_string()],
+                vec!["facade".to_string()],
+                vec!["public_api".to_string()],
+            ],
+        )
+        .map_err(|err| std::io::Error::other(format!("private source model should codegen: {err:?}")))?;
+    let rust_code = normalize_codegen_output(&consumer_code);
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+    assert!(
+        compact.contains("PublicVault(\"visible\".to_string())"),
+        "expected imported private model construction to use the public-field provider bridge; generated:\n{rust_code}"
+    );
+    insta::assert_snapshot!("issue964_imported_private_source_model_constructor", rust_code);
     Ok(())
 }
 
