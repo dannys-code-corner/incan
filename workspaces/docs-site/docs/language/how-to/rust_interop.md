@@ -93,6 +93,24 @@ Use the explicit form when there is no result annotation or parameter context fr
 
 Rust const-generic receiver declarations are not supported by this v0.5 call shape. Incan reports a checked error because its brackets accept types, not const values; wrap that API behind a type-only Rust or Incan receiver rather than relying on rustc to reinterpret the arguments.
 
+### Supplying generic arguments to an imported Rust method
+
+Imported Rust methods use the same arity-complete bracket rule as Incan methods. If inspection reports three method type parameters, provide either no brackets and let Rust infer all three, or provide exactly three entries. Use `_` for each slot that should remain inferred:
+
+```incan
+from rust::cpal::traits import DeviceTrait
+
+# `device`, `config`, and the callbacks are values prepared by the surrounding audio code.
+stream = device.build_output_stream[f32, _, _](
+    config,
+    on_data,
+    on_error,
+    None,
+)
+```
+
+Writing `build_output_stream[f32](...)` is an error because the method declares three type parameters. Incan reports the required and supplied arity during typechecking instead of emitting an incomplete Rust turbofish. The `_` entries are deliberate inference slots, not optional trailing arguments.
+
 ## Dependency Management
 
 When you use `import rust::crate_name`, Incan automatically adds the dependency to your generated `Cargo.toml`. Dependencies are resolved using a three-tier precedence system:

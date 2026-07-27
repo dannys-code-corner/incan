@@ -70,6 +70,7 @@ struct RustTraitMethodCall<'a> {
     rust_path: &'a str,
     method: &'a str,
     sig: &'a RustFunctionSig,
+    type_args: &'a [Spanned<Type>],
     args: &'a [CallArg],
     arg_types: &'a [ResolvedType],
     preserves_lookup_arg_shape: bool,
@@ -1885,6 +1886,7 @@ impl TypeChecker {
                     rust_path,
                     method,
                     sig,
+                    type_args,
                     args,
                     arg_types,
                     preserves_lookup_arg_shape,
@@ -1925,6 +1927,7 @@ impl TypeChecker {
                             rust_path,
                             method,
                             sig,
+                            type_args,
                             args,
                             arg_types,
                             preserves_lookup_arg_shape,
@@ -1938,6 +1941,7 @@ impl TypeChecker {
                             rust_path,
                             method,
                             sig,
+                            type_args,
                             args,
                             arg_types,
                             preserves_lookup_arg_shape,
@@ -1980,18 +1984,7 @@ impl TypeChecker {
                             .push(errors::rust_receiver_const_generics_not_supported(rust_path, span));
                         return Some(ResolvedType::Unknown);
                     }
-                    if type_args.len() != declared_type_params.len() {
-                        self.errors.push(errors::explicit_type_arg_arity(
-                            method,
-                            declared_type_params.len(),
-                            type_args.len(),
-                            span,
-                        ));
-                        return Some(ResolvedType::Unknown);
-                    }
-                    if declared_type_params.is_empty() {
-                        self.errors
-                            .push(errors::explicit_call_site_type_args_not_supported(span));
+                    if !self.validate_rust_method_type_arg_arity(method, declared_type_params, type_args, span) {
                         return Some(ResolvedType::Unknown);
                     }
                     resolved_type_args = type_args.iter().map(|ty| self.resolve_type_checked(ty)).collect();
@@ -2072,6 +2065,29 @@ impl TypeChecker {
         }
     }
 
+    /// Enforce RFC 054's arity-complete bracket contract for inspected Rust methods.
+    fn validate_rust_method_type_arg_arity(
+        &mut self,
+        method: &str,
+        declared_type_params: &[String],
+        type_args: &[Spanned<Type>],
+        span: Span,
+    ) -> bool {
+        if type_args.is_empty() {
+            return true;
+        }
+        if type_args.len() == declared_type_params.len() {
+            return true;
+        }
+        self.errors.push(errors::explicit_type_arg_arity(
+            method,
+            declared_type_params.len(),
+            type_args.len(),
+            span,
+        ));
+        false
+    }
+
     /// Validate a Rust trait method call and expose only source-meaningful return types.
     ///
     /// Imported Rust trait signatures are useful for parameter planning even when rust-inspect cannot prove the
@@ -2079,6 +2095,9 @@ impl TypeChecker {
     /// that is not an Incan type variable and must not leak into source typing as `rust::T`. Keep those call results
     /// permissive until the Rust compiler infers the concrete type from the emitted Rust context.
     fn validate_rust_trait_method_call(&mut self, call: RustTraitMethodCall<'_>) -> ResolvedType {
+        if !self.validate_rust_method_type_arg_arity(call.method, &call.sig.type_params, call.type_args, call.span) {
+            return ResolvedType::Unknown;
+        }
         let callable_display = format!("rust::{}.{}", call.rust_path, call.method);
         let ret = self.validate_rust_method_call(
             callable_display.as_str(),
@@ -2125,7 +2144,7 @@ impl TypeChecker {
             rust_path,
             method,
             receiver_metadata: _,
-            type_args: _,
+            type_args,
             args,
             arg_types,
             receiver_span: _,
@@ -2133,6 +2152,9 @@ impl TypeChecker {
             span,
         } = call;
         let sig: RustFunctionSig = metadata_free_method_signature(rust_path, method)?;
+        if !self.validate_rust_method_type_arg_arity(method, &sig.type_params, type_args, span) {
+            return Some(ResolvedType::Unknown);
+        }
         let callable_display = format!("rust::{rust_path}.{method}");
         let error_count = self.errors.len();
         let ret = self.validate_rust_method_call(

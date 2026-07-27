@@ -6912,7 +6912,7 @@ stream_host = { path = "rust/stream_host" }
     )?;
     fs::write(
         &main_path,
-        r#"from rust::stream_host import device
+        r#"from rust::stream_host import DeviceTrait, device
 
 def consume(_value: f32) -> None:
   pass
@@ -6926,7 +6926,7 @@ def main() -> None:
     let partial_path = tmp.path().join("src").join("partial.incn");
     fs::write(
         &partial_path,
-        r#"from rust::stream_host import device
+        r#"from rust::stream_host import DeviceTrait, device
 
 def consume(_value: f32) -> None:
   pass
@@ -6958,8 +6958,16 @@ pub fn device() -> Device {
     Device
 }
 
-impl Device {
-    pub fn build_output_stream<T, D, E>(&self, value: T, mut data_callback: D, mut error_callback: E)
+pub trait DeviceTrait {
+    fn build_output_stream<T, D, E>(&self, value: T, data_callback: D, error_callback: E)
+    where
+        T: Copy,
+        D: FnMut(T),
+        E: FnMut(T);
+}
+
+impl DeviceTrait for Device {
+    fn build_output_stream<T, D, E>(&self, value: T, mut data_callback: D, mut error_callback: E)
     where
         T: Copy,
         D: FnMut(T),
