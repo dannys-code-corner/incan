@@ -6843,7 +6843,7 @@ audio_callback = { path = "rust/audio_callback" }
     )?;
     fs::write(
         &main_path,
-        r#"from rust::audio_callback import OutputCallbackInfo, run
+        r#"from rust::audio_callback import DeviceTrait, OutputCallbackInfo, device
 
 def write_silence(_data: &mut list[f32], _info: &OutputCallbackInfo) -> None:
   pass
@@ -6852,8 +6852,9 @@ def report_error(_error: str) -> None:
   pass
 
 def main() -> None:
-  run(write_silence, report_error)
-  run((_data, _info) => println(""), report_error)
+  stream = device()
+  stream.run[f32, _, _](write_silence, report_error)
+  stream.run[f32, _, _]((_data, _info) => println(len(_data)), report_error)
   println("callbacks-built")
 "#,
     )?;
@@ -6873,17 +6874,34 @@ edition = "2021"
     )?;
     fs::write(
         helper_src.join("lib.rs"),
-        r#"pub struct OutputCallbackInfo;
+        r#"pub struct Device;
 
-pub fn run<D, E>(mut data_callback: D, mut error_callback: E)
-where
-    D: FnMut(&mut [f32], &OutputCallbackInfo) + Send + 'static,
-    E: FnMut(String),
-{
-    let mut data = [0.0_f32; 2];
-    let info = OutputCallbackInfo;
-    data_callback(&mut data, &info);
-    error_callback("synthetic callback error".to_string());
+pub struct OutputCallbackInfo;
+
+pub fn device() -> Device {
+    Device
+}
+
+pub trait DeviceTrait {
+    fn run<T, D, E>(&self, data_callback: D, error_callback: E)
+    where
+        T: Copy + Default,
+        D: FnMut(&mut [T], &OutputCallbackInfo) + Send + 'static,
+        E: FnMut(String);
+}
+
+impl DeviceTrait for Device {
+    fn run<T, D, E>(&self, mut data_callback: D, mut error_callback: E)
+    where
+        T: Copy + Default,
+        D: FnMut(&mut [T], &OutputCallbackInfo) + Send + 'static,
+        E: FnMut(String),
+    {
+        let mut data = [T::default(); 2];
+        let info = OutputCallbackInfo;
+        data_callback(&mut data, &info);
+        error_callback("synthetic callback error".to_string());
+    }
 }
 "#,
     )?;
@@ -6892,7 +6910,7 @@ where
     assert_success(&output, "Rust FnMut borrowed-slice callbacks");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "callbacks-built",
+        "2\ncallbacks-built",
         "unexpected borrowed-slice callback output"
     );
     Ok(())
