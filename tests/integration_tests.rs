@@ -12165,6 +12165,32 @@ pub enum Mode {
     Input,
 }
 
+pub struct Device;
+
+pub fn device() -> Device {
+    Device
+}
+
+pub trait DeviceTrait {
+    fn build_output_stream<T, D, E>(&self, value: T, data_callback: D, error_callback: E)
+    where
+        T: Copy,
+        D: FnMut(T),
+        E: FnMut(T);
+}
+
+impl DeviceTrait for Device {
+    fn build_output_stream<T, D, E>(&self, value: T, mut data_callback: D, mut error_callback: E)
+    where
+        T: Copy,
+        D: FnMut(T),
+        E: FnMut(T),
+    {
+        data_callback(value);
+        error_callback(value);
+    }
+}
+
 pub struct PairFactory<T, U> {
     value: T,
     marker: U,
@@ -12446,6 +12472,88 @@ def main() -> None:
             "expected compiled provider consumer to build receiver generics.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&compiled_consumer_build.stdout),
             String::from_utf8_lossy(&compiled_consumer_build.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_provider_preserves_rust_trait_method_generic_arity_issue834() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let tmp = tempfile::tempdir()?;
+        write_receiver_factory_dependency(tmp.path())?;
+        let provider_root = tmp.path().join("stream_api");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            "[project]\nname = \"stream_api\"\nversion = \"0.1.0\"\n\n[rust-dependencies.receiver_factory]\npath = \"../receiver_factory\"\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.incn"),
+            r#"from rust::receiver_factory import DeviceTrait, device
+
+
+def consume(_value: f32) -> None:
+    pass
+
+
+pub def build_stream() -> None:
+    stream = device()
+    stream.build_output_stream[f32, _, _](1.0, consume, consume)
+"#,
+        )?;
+        let provider_build = run_build_lib(&provider_root)?;
+        assert!(
+            provider_build.status.success(),
+            "expected Rust trait-method metadata provider to build.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_build.stdout),
+            String::from_utf8_lossy(&provider_build.stderr)
+        );
+        let generated_provider = std::fs::read_to_string(provider_root.join("target/lib/src/lib.rs"))?;
+        let compact_generated_provider = generated_provider.split_whitespace().collect::<String>();
+        assert!(
+            compact_generated_provider.contains(".build_output_stream::<f32,_,_>"),
+            "expected the complete method turbofish in generated provider Rust:\n{generated_provider}"
+        );
+
+        let consumer_root = tmp.path().join("consumer");
+        let consumer_main = write_project_files(
+            &consumer_root,
+            "[project]\nname = \"stream_api_consumer\"\n\n[dependencies]\nstream_api = { path = \"../stream_api\" }\n",
+            r#"from pub::stream_api import build_stream
+
+
+def main() -> None:
+    build_stream()
+"#,
+        )?;
+
+        let consumer_out = tmp.path().join("consumer_out");
+        let consumer_build = run_build(&consumer_main, &consumer_out)?;
+        assert!(
+            consumer_build.status.success(),
+            "expected the complete Rust trait-method generic arguments to compile through a provider.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_build.stdout),
+            String::from_utf8_lossy(&consumer_build.stderr)
+        );
+
+        let tests_dir = consumer_root.join("tests");
+        std::fs::create_dir_all(&tests_dir)?;
+        std::fs::write(
+            tests_dir.join("test_stream.incn"),
+            r#"from pub::stream_api import build_stream
+
+
+def test_complete_method_generics() -> None:
+    build_stream()
+    assert true
+"#,
+        )?;
+        let test_output = run_test(&tests_dir)?;
+        assert!(
+            test_output.status.success(),
+            "expected package test batches to preserve complete Rust trait-method generics.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&test_output.stdout),
+            String::from_utf8_lossy(&test_output.stderr)
         );
         Ok(())
     }

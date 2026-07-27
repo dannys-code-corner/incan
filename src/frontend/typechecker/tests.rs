@@ -10640,6 +10640,78 @@ def f(w: Widget) -> None:
 
 #[cfg(feature = "rust_inspect")]
 #[test]
+fn rust_extension_trait_method_type_args_require_metadata_declared_arity_issue834()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Device, DeviceTrait
+
+def open(device: Device) -> None:
+  device.build_output_stream[f32]()
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::DeviceTrait".to_string(),
+            definition_path: Some("demo::DeviceTrait".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Trait(RustTraitInfo {
+                items: vec![RustTraitAssoc::Function {
+                    name: "build_output_stream".to_string(),
+                    signature: RustFunctionSig {
+                        type_params: vec!["T".to_string(), "D".to_string(), "E".to_string()],
+                        params: vec![RustParam {
+                            name: Some("self".to_string()),
+                            type_display: "&self".to_string(),
+                        }],
+                        return_type: "()".to_string(),
+                        is_async: false,
+                        is_unsafe: false,
+                    },
+                }],
+            }),
+        },
+    )?;
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Device".to_string(),
+            definition_path: Some("demo::Device".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: Vec::new(),
+                implemented_traits: vec![RustImplementedTrait {
+                    path: "demo::DeviceTrait".to_string(),
+                }],
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    let errors = checker
+        .check_program(&ast)
+        .expect_err("the partial imported Rust trait-method turbofish must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("build_output_stream expects 3 explicit type argument(s), got 1")),
+        "expected imported Rust trait-method generic arity diagnostic, got {errors:?}"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
 fn test_rust_extension_trait_associated_call_records_param_shape() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 from rust::demo import FileDescriptorSet, Message
