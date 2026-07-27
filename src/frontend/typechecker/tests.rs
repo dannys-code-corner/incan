@@ -19391,6 +19391,69 @@ def complete(device: Device) -> None:
 
 #[cfg(feature = "rust_inspect")]
 #[test]
+fn rust_method_type_args_contextualize_inline_borrowed_slice_callback_issue835()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Device
+
+def run(device: Device) -> None:
+  device.build_output_stream[f32, _, _]((_data, _info) => ())
+"#;
+    let ast = parse_program(source, "Rust borrowed-slice callback specialization");
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Device".to_string(),
+            definition_path: Some("demo::Device".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: vec![RustMethodSig {
+                    name: "build_output_stream".to_string(),
+                    signature: RustFunctionSig {
+                        type_params: vec!["T".to_string(), "D".to_string(), "E".to_string()],
+                        params: vec![
+                            RustParam {
+                                name: Some("self".to_string()),
+                                type_display: "&self".to_string(),
+                            },
+                            RustParam {
+                                name: Some("callback".to_string()),
+                                type_display: "impl FnMut(&mut [T], &demo::OutputCallbackInfo)".to_string(),
+                            },
+                        ],
+                        return_type: "()".to_string(),
+                        is_async: false,
+                        is_unsafe: false,
+                    },
+                }],
+                implemented_traits: Vec::new(),
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    checker
+        .check_program(&ast)
+        .map_err(|errors| format!("expected contextual callback typing to succeed, got {errors:?}"))?;
+    assert_eq!(
+        checker.type_info.rust.closure_param_type_displays.values().next(),
+        Some(&vec!["&mut [f32]".to_string(), "&demo::OutputCallbackInfo".to_string(),]),
+        "expected explicit method type arguments to specialize the emitted borrowed-slice callback display"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
 fn rust_associated_calls_specialize_receiver_generics_explicitly_and_contextually()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"

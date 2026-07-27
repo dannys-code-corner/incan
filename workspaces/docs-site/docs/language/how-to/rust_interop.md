@@ -111,6 +111,57 @@ stream = device.build_output_stream[f32, _, _](
 
 Writing `build_output_stream[f32](...)` is an error because the method declares three type parameters. Incan reports the required and supplied arity during typechecking instead of emitting an incomplete Rust turbofish. The `_` entries are deliberate inference slots, not optional trailing arguments.
 
+### Passing callbacks that borrow Rust slices
+
+When an inspected Rust callback bound accepts a borrowed slice, write the corresponding named Incan callback with a borrowed `list[T]`. Incan keeps the inspected Rust spelling for emission, so `&mut list[f32]` becomes `&mut [f32]` at this call boundary rather than changing the representation of ordinary Incan lists:
+
+```incan
+from rust::cpal import Error as CpalError, OutputCallbackInfo, default_host
+from rust::cpal::traits import DeviceTrait, HostTrait
+
+
+def write_silence(_data: &mut list[f32], _info: &OutputCallbackInfo) -> None:
+    pass
+
+
+def report_stream_error(error: CpalError) -> None:
+    println(error.to_string())
+
+
+def main() -> None:
+    host = default_host()
+    match host.default_output_device():
+        Some(device) =>
+            match device.default_output_config():
+                Ok(supported_config) =>
+                    config = supported_config.config()
+                    match device.build_output_stream[f32, _, _](
+                        config,
+                        write_silence,
+                        report_stream_error,
+                        None,
+                    ):
+                        Ok(_) => println("stream-built")
+                        Err(error) => println(error.to_string())
+                Err(error) => println(error.to_string())
+        None => println("no-output-device")
+```
+
+An inline closure receives the same contextual parameter types from the inspected `FnMut` bound:
+
+```incan
+match device.build_output_stream[f32, _, _](
+    config,
+    (_data, _info) => (),
+    report_stream_error,
+    None,
+):
+    Ok(_) => println("stream-built")
+    Err(error) => println(error.to_string())
+```
+
+The inline form assumes `device`, `config`, and `report_stream_error` were prepared exactly as in the complete example above. Borrowed-slice preservation applies only where Rust metadata proves the callback shape; it is not a general conversion between `Vec[T]` and `[T]`.
+
 ## Dependency Management
 
 When you use `import rust::crate_name`, Incan automatically adds the dependency to your generated `Cargo.toml`. Dependencies are resolved using a three-tier precedence system:

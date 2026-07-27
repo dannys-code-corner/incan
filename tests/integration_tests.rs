@@ -12177,6 +12177,12 @@ pub trait DeviceTrait {
         T: Copy,
         D: FnMut(T),
         E: FnMut(T);
+
+    fn run_callbacks<T, D, E>(&self, data_callback: D, error_callback: E)
+    where
+        T: Copy + Default,
+        D: FnMut(&mut [T], &OutputCallbackInfo) + Send + 'static,
+        E: FnMut(String);
 }
 
 impl DeviceTrait for Device {
@@ -12189,7 +12195,21 @@ impl DeviceTrait for Device {
         data_callback(value);
         error_callback(value);
     }
+
+    fn run_callbacks<T, D, E>(&self, mut data_callback: D, mut error_callback: E)
+    where
+        T: Copy + Default,
+        D: FnMut(&mut [T], &OutputCallbackInfo) + Send + 'static,
+        E: FnMut(String),
+    {
+        let mut data = [T::default(); 2];
+        let info = OutputCallbackInfo;
+        data_callback(&mut data, &info);
+        error_callback("synthetic callback error".to_string());
+    }
 }
+
+pub struct OutputCallbackInfo;
 
 pub struct PairFactory<T, U> {
     value: T,
@@ -12552,6 +12572,95 @@ def test_complete_method_generics() -> None:
         assert!(
             test_output.status.success(),
             "expected package test batches to preserve complete Rust trait-method generics.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&test_output.stdout),
+            String::from_utf8_lossy(&test_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_provider_preserves_borrowed_slice_rust_method_callbacks_issue835()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        write_receiver_factory_dependency(tmp.path())?;
+        let provider_root = tmp.path().join("callback_api");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            "[project]\nname = \"callback_api\"\nversion = \"0.1.0\"\n\n[rust-dependencies.receiver_factory]\npath = \"../receiver_factory\"\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.incn"),
+            r#"from rust::receiver_factory import DeviceTrait, OutputCallbackInfo, device
+
+
+def write_silence(_data: &mut list[f32], _info: &OutputCallbackInfo) -> None:
+    pass
+
+
+def report_error(_error: str) -> None:
+    pass
+
+
+pub def exercise_callbacks() -> None:
+    stream = device()
+    stream.run_callbacks[f32, _, _](write_silence, report_error)
+    stream.run_callbacks[f32, _, _]((_data, _info) => println(len(_data)), report_error)
+"#,
+        )?;
+
+        let provider_build = run_build_lib(&provider_root)?;
+        assert!(
+            provider_build.status.success(),
+            "expected borrowed-slice Rust callbacks to compile in a provider.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_build.stdout),
+            String::from_utf8_lossy(&provider_build.stderr)
+        );
+        let generated_provider = std::fs::read_to_string(provider_root.join("target/lib/src/lib.rs"))?;
+        assert!(
+            generated_provider.contains("&mut [f32]"),
+            "expected the named callback to retain the inspected borrowed-slice type:\n{generated_provider}"
+        );
+        assert!(
+            !generated_provider.contains("&mut Vec<f32>"),
+            "borrowed-slice callbacks must not lower to a borrowed Vec:\n{generated_provider}"
+        );
+
+        let consumer_root = tmp.path().join("consumer");
+        let consumer_main = write_project_files(
+            &consumer_root,
+            "[project]\nname = \"callback_api_consumer\"\n\n[dependencies]\ncallback_api = { path = \"../callback_api\" }\n",
+            r#"from pub::callback_api import exercise_callbacks
+
+
+def main() -> None:
+    exercise_callbacks()
+"#,
+        )?;
+        let consumer_build = run_build(&consumer_main, &tmp.path().join("consumer_out"))?;
+        assert!(
+            consumer_build.status.success(),
+            "expected a compiled-provider consumer to build borrowed-slice callback code.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_build.stdout),
+            String::from_utf8_lossy(&consumer_build.stderr)
+        );
+
+        let tests_dir = consumer_root.join("tests");
+        std::fs::create_dir_all(&tests_dir)?;
+        std::fs::write(
+            tests_dir.join("test_callbacks.incn"),
+            r#"from pub::callback_api import exercise_callbacks
+
+
+def test_borrowed_slice_callbacks() -> None:
+    exercise_callbacks()
+    assert true
+"#,
+        )?;
+        let test_output = run_test(&tests_dir)?;
+        assert!(
+            test_output.status.success(),
+            "expected package tests to run through a compiled provider with borrowed-slice callbacks.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&test_output.stdout),
             String::from_utf8_lossy(&test_output.stderr)
         );

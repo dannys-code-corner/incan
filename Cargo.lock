@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "incan"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "blake2",
  "blake3",
@@ -1521,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "incan_codegraph"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "serde",
  "serde_json",
@@ -1529,14 +1529,14 @@ dependencies = [
 
 [[package]]
 name = "incan_core"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "incan_derive"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1545,14 +1545,14 @@ dependencies = [
 
 [[package]]
 name = "incan_semantics_core"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "incan_core",
 ]
 
 [[package]]
 name = "incan_semantics_stdlib"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "incan_core",
  "incan_semantics_core",
@@ -1560,7 +1560,7 @@ dependencies = [
 
 [[package]]
 name = "incan_stdlib"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "axum",
  "incan_core",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "incan_syntax"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "incan_core",
  "incan_semantics_core",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "incan_web_macros"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "axum",
  "incan_stdlib",
@@ -3184,7 +3184,7 @@ dependencies = [
 
 [[package]]
 name = "rust_inspect"
-version = "0.5.0-dev.36"
+version = "0.5.0-dev.37"
 dependencies = [
  "hex",
  "incan_core",
