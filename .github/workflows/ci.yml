@@ -12,6 +12,8 @@ env:
   INCAN_NO_BANNER: 1
   COLD_PROVIDER_TEST_FILTER: >-
     test(/(concurrent_sdk_provider_publication_reuses_one_complete_identity|cold_rooted_workspace_lock_publishes_and_strict_library_build_agrees_issue931|test_run_std_regex_rfc059_surface_from_cold_sdk_provider)/)
+  GENERATED_CACHE_ACCEPTANCE_TEST_FILTER: >-
+    test(/managed_cache_reuses_offline_across_projects_and_cleans_interrupted_entry/)
 
 jobs:
   fmt:
@@ -178,7 +180,7 @@ jobs:
           retention-days: 1
 
   test-linux-shards:
-    name: Test Suite Shard (ubuntu-latest, stable, slice ${{ matrix.partition }}/${{ matrix.total }})
+    name: Test Suite Shard (ubuntu-latest, stable, ${{ matrix.label }})
     runs-on: ubuntu-latest
     needs:
       - test-linux-archive
@@ -188,8 +190,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4]
-        total: [4]
+        include:
+          - label: slice 1/4
+            kind: ordinary
+            partition: 1
+          - label: slice 2/4
+            kind: ordinary
+            partition: 2
+          - label: slice 3/4
+            kind: ordinary
+            partition: 3
+          - label: slice 4/4
+            kind: ordinary
+            partition: 4
+          - label: managed generated-cache acceptance
+            kind: generated-cache
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -223,9 +238,11 @@ jobs:
         run: |
           du -sh target
           df -h "$GITHUB_WORKSPACE"
-      - name: Run test shard
-        # The dedicated acceptance job owns the intentionally cold provider tests. Four ordinary shards plus that
-        # cold job fit the observed hosted-runner capacity, while the archive avoids rebuilding the workspace.
+      - name: Run ordinary test shard
+        if: matrix.kind == 'ordinary'
+        # The separate cold-provider job and generated-cache matrix entry own the heavyweight acceptance tests. Four
+        # ordinary shards plus those lanes fit the observed hosted-runner capacity, while the archive avoids rebuilding
+        # the workspace.
         run: >-
           CARGO_BUILD_JOBS=2
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
@@ -234,8 +251,36 @@ jobs:
           --archive-file target/nextest-ci/test-suite.tar.zst
           --workspace-remap "$GITHUB_WORKSPACE"
           --profile ci
-          --partition slice:${{ matrix.partition }}/${{ matrix.total }}
-          -E "not ($COLD_PROVIDER_TEST_FILTER)"
+          --partition slice:${{ matrix.partition }}/4
+          -E "not (($COLD_PROVIDER_TEST_FILTER) | ($GENERATED_CACHE_ACCEPTANCE_TEST_FILTER))"
+      - name: Verify generated-cache acceptance inventory
+        if: matrix.kind == 'generated-cache'
+        run: |
+          selected="$(
+            cargo nextest list \
+              --archive-file target/nextest-ci/test-suite.tar.zst \
+              --workspace-remap "$GITHUB_WORKSPACE" \
+              --profile ci \
+              -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER" \
+              -T oneline
+          )"
+          printf '%s\n' "$selected"
+          count="$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$count" != "1" ]; then
+            echo "expected exactly 1 generated-cache acceptance test, found $count"
+            exit 1
+          fi
+      - name: Run managed generated-cache acceptance
+        if: matrix.kind == 'generated-cache'
+        run: >-
+          CARGO_BUILD_JOBS=2
+          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
+          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
+          cargo nextest run
+          --archive-file target/nextest-ci/test-suite.tar.zst
+          --workspace-remap "$GITHUB_WORKSPACE"
+          --profile ci
+          -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER"
 
   test-linux-cold-provider:
     name: Cold SDK Provider Acceptance (ubuntu-latest, stable)
@@ -411,7 +456,7 @@ jobs:
           retention-days: 1
 
   test-macos-shards:
-    name: Test Suite Shard (macos-latest, stable, slice ${{ matrix.partition }}/${{ matrix.total }})
+    name: Test Suite Shard (macos-latest, stable, ${{ matrix.label }})
     runs-on: macos-latest
     needs:
       - test-macos-archive
@@ -421,8 +466,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4]
-        total: [4]
+        include:
+          - label: slice 1/4
+            kind: ordinary
+            partition: 1
+          - label: slice 2/4
+            kind: ordinary
+            partition: 2
+          - label: slice 3/4
+            kind: ordinary
+            partition: 3
+          - label: slice 4/4
+            kind: ordinary
+            partition: 4
+          - label: managed generated-cache acceptance
+            kind: generated-cache
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -456,9 +514,11 @@ jobs:
         run: |
           du -sh target
           df -h "$GITHUB_WORKSPACE"
-      - name: Run test shard
-        # The dedicated acceptance job owns the intentionally cold provider tests. Four ordinary shards plus that
-        # cold job fit the observed hosted-runner capacity, while the archive avoids rebuilding the workspace.
+      - name: Run ordinary test shard
+        if: matrix.kind == 'ordinary'
+        # The separate cold-provider job and generated-cache matrix entry own the heavyweight acceptance tests. Four
+        # ordinary shards plus those lanes fit the observed hosted-runner capacity, while the archive avoids rebuilding
+        # the workspace.
         run: >-
           CARGO_BUILD_JOBS=2
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
@@ -467,8 +527,36 @@ jobs:
           --archive-file target/nextest-ci/test-suite.tar.zst
           --workspace-remap "$GITHUB_WORKSPACE"
           --profile ci
-          --partition slice:${{ matrix.partition }}/${{ matrix.total }}
-          -E "not ($COLD_PROVIDER_TEST_FILTER)"
+          --partition slice:${{ matrix.partition }}/4
+          -E "not (($COLD_PROVIDER_TEST_FILTER) | ($GENERATED_CACHE_ACCEPTANCE_TEST_FILTER))"
+      - name: Verify generated-cache acceptance inventory
+        if: matrix.kind == 'generated-cache'
+        run: |
+          selected="$(
+            cargo nextest list \
+              --archive-file target/nextest-ci/test-suite.tar.zst \
+              --workspace-remap "$GITHUB_WORKSPACE" \
+              --profile ci \
+              -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER" \
+              -T oneline
+          )"
+          printf '%s\n' "$selected"
+          count="$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$count" != "1" ]; then
+            echo "expected exactly 1 generated-cache acceptance test, found $count"
+            exit 1
+          fi
+      - name: Run managed generated-cache acceptance
+        if: matrix.kind == 'generated-cache'
+        run: >-
+          CARGO_BUILD_JOBS=2
+          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
+          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
+          cargo nextest run
+          --archive-file target/nextest-ci/test-suite.tar.zst
+          --workspace-remap "$GITHUB_WORKSPACE"
+          --profile ci
+          -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER"
 
   test-macos-cold-provider:
     name: Cold SDK Provider Acceptance (macos-latest, stable)
@@ -670,7 +758,7 @@ jobs:
           retention-days: 1
 
   msrv-test-shards:
-    name: MSRV Test Shard (1.93.0, slice ${{ matrix.partition }}/${{ matrix.total }})
+    name: MSRV Test Shard (1.93.0, ${{ matrix.label }})
     runs-on: ubuntu-latest
     needs:
       - msrv-test-archive
@@ -680,8 +768,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4]
-        total: [4]
+        include:
+          - label: slice 1/4
+            kind: ordinary
+            partition: 1
+          - label: slice 2/4
+            kind: ordinary
+            partition: 2
+          - label: slice 3/4
+            kind: ordinary
+            partition: 3
+          - label: slice 4/4
+            kind: ordinary
+            partition: 4
+          - label: managed generated-cache acceptance
+            kind: generated-cache
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust 1.93.0
@@ -717,9 +818,11 @@ jobs:
         run: |
           du -sh target
           df -h "$GITHUB_WORKSPACE"
-      - name: Run test shard
-        # The dedicated acceptance job owns the intentionally cold provider tests. Four ordinary shards plus that
-        # cold job fit the observed hosted-runner capacity, while the archive avoids rebuilding the workspace.
+      - name: Run ordinary test shard
+        if: matrix.kind == 'ordinary'
+        # The separate cold-provider job and generated-cache matrix entry own the heavyweight acceptance tests. Four
+        # ordinary shards plus those lanes fit the observed hosted-runner capacity, while the archive avoids rebuilding
+        # the workspace.
         run: >-
           CARGO_BUILD_JOBS=2
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
@@ -728,8 +831,36 @@ jobs:
           --archive-file target/nextest-ci/test-suite.tar.zst
           --workspace-remap "$GITHUB_WORKSPACE"
           --profile ci
-          --partition slice:${{ matrix.partition }}/${{ matrix.total }}
-          -E "not ($COLD_PROVIDER_TEST_FILTER)"
+          --partition slice:${{ matrix.partition }}/4
+          -E "not (($COLD_PROVIDER_TEST_FILTER) | ($GENERATED_CACHE_ACCEPTANCE_TEST_FILTER))"
+      - name: Verify generated-cache acceptance inventory
+        if: matrix.kind == 'generated-cache'
+        run: |
+          selected="$(
+            cargo nextest list \
+              --archive-file target/nextest-ci/test-suite.tar.zst \
+              --workspace-remap "$GITHUB_WORKSPACE" \
+              --profile ci \
+              -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER" \
+              -T oneline
+          )"
+          printf '%s\n' "$selected"
+          count="$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$count" != "1" ]; then
+            echo "expected exactly 1 generated-cache acceptance test, found $count"
+            exit 1
+          fi
+      - name: Run managed generated-cache acceptance
+        if: matrix.kind == 'generated-cache'
+        run: >-
+          CARGO_BUILD_JOBS=2
+          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
+          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
+          cargo nextest run
+          --archive-file target/nextest-ci/test-suite.tar.zst
+          --workspace-remap "$GITHUB_WORKSPACE"
+          --profile ci
+          -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER"
 
   msrv-test-cold-provider:
     name: MSRV Cold SDK Provider Acceptance (1.93.0)
