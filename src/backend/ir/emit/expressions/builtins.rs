@@ -9,7 +9,7 @@ use quote::quote;
 
 use super::super::super::expr::{BuiltinFn, IrExprKind, TypedExpr};
 use super::super::super::ownership::ValueUseSite;
-use super::super::super::types::IrType;
+use super::super::super::types::{IrType, SetConstructorIteration};
 use super::super::{EmitError, IrEmitter};
 use incan_core::lang::builtins::{self, BuiltinFnId};
 use incan_core::lang::types::collections::{self, CollectionTypeId};
@@ -366,6 +366,42 @@ impl<'a> IrEmitter<'a> {
                     Ok(quote! { String::from("null") })
                 }
             }
+            BuiltinFn::CollectionConstructor(CollectionTypeId::Set) => {
+                if args.len() > 1 {
+                    return Err(EmitError::InternalInvariant(format!(
+                        "Set collection constructor reached emission with {} arguments",
+                        args.len()
+                    )));
+                }
+                let Some(arg) = args.first() else {
+                    return Ok(quote! { std::collections::HashSet::new() });
+                };
+                let values = self.emit_expr_for_use(
+                    arg,
+                    ValueUseSite::IncanCallArg {
+                        target_ty: Some(&arg.ty),
+                        callee_param: None,
+                        in_return: false,
+                    },
+                )?;
+                match arg
+                    .ty
+                    .set_constructor_source()
+                    .map(|(_, iteration)| iteration)
+                    .unwrap_or(SetConstructorIteration::IntoOwnedItems)
+                {
+                    SetConstructorIteration::CloneBorrowedItems => Ok(quote! {
+                        (#values).iter().cloned().collect::<std::collections::HashSet<_>>()
+                    }),
+                    SetConstructorIteration::IntoOwnedItems => Ok(quote! {
+                        (#values).into_iter().collect::<std::collections::HashSet<_>>()
+                    }),
+                }
+            }
+            BuiltinFn::CollectionConstructor(collection) => Err(EmitError::InternalInvariant(format!(
+                "collection constructor `{}` reached emission without a lowering implementation",
+                collections::as_str(*collection)
+            ))),
             BuiltinFn::ListRepeat => {
                 if args.len() >= 2 {
                     let value = self.emit_expr_for_use(

@@ -27,20 +27,21 @@
 
 use std::collections::{HashMap, HashSet};
 
+use incan_core::lang::types::collections::CollectionTypeId;
 use incan_core::lang::{magic_methods, trait_bounds::rust as tb};
 
 use super::IrProgram;
 use super::decl::{FunctionParam, IrDeclKind, IrFunction, IrTraitBound, IrTypeParam};
 use super::expr::{
-    BinOp, FormatPart, IrCallArg, IrDictEntry, IrExpr, IrExprKind, IrGeneratorClause, IrListEntry, MethodCallArgPolicy,
-    VarRefKind,
+    BinOp, BuiltinFn, FormatPart, IrCallArg, IrDictEntry, IrExpr, IrExprKind, IrGeneratorClause, IrListEntry,
+    MethodCallArgPolicy, VarRefKind,
 };
 use super::ownership::{
     RegularMethodArgumentContext, ValueUseSite, regular_method_argument_use_site, value_use_requires_clone_bound,
     value_use_site_target_ty,
 };
 use super::stmt::{IrStmt, IrStmtKind};
-use super::types::IrType;
+use super::types::{IrType, SetConstructorIteration};
 
 /// Run trait bound inference on an entire IR program.
 ///
@@ -1135,6 +1136,25 @@ fn collect_backend_clone_bounds_in_expr(
             clone_context,
             clone_params,
         ),
+        IrExprKind::BuiltinCall {
+            func: BuiltinFn::CollectionConstructor(CollectionTypeId::Set),
+            args,
+        } => {
+            for arg in args {
+                collect_backend_clone_bounds_for_value_use(
+                    arg,
+                    ValueUseSite::IncanCallArg {
+                        target_ty: Some(&arg.ty),
+                        callee_param: None,
+                        in_return: false,
+                    },
+                    type_param_names,
+                    self_clone_params,
+                    clone_context,
+                    clone_params,
+                );
+            }
+        }
         IrExprKind::BuiltinCall { args, .. } | IrExprKind::Tuple(args) => {
             for arg in args {
                 collect_backend_clone_bounds_in_expr(
@@ -2043,6 +2063,27 @@ fn scan_expr_for_bounds(
             scan_expr_for_bounds(receiver, type_params, params, bounds_map);
             for arg in args {
                 scan_expr_for_bounds(&arg.expr, type_params, params, bounds_map);
+            }
+        }
+
+        // ---- Set construction: recurse and preserve the element's Rust collection requirements ----
+        IrExprKind::BuiltinCall {
+            func: BuiltinFn::CollectionConstructor(CollectionTypeId::Set),
+            args,
+        } => {
+            for arg in args {
+                if let Some((item_ty, iteration)) = arg.ty.set_constructor_source() {
+                    let mut item_type_params = HashSet::new();
+                    collect_generic_type_param_names(item_ty, type_params, &mut item_type_params);
+                    for tp_name in item_type_params {
+                        add_bound(bounds_map, &tp_name, IrTraitBound::simple(tb::EQ));
+                        add_bound(bounds_map, &tp_name, IrTraitBound::simple(tb::HASH));
+                        if iteration == SetConstructorIteration::CloneBorrowedItems {
+                            add_bound(bounds_map, &tp_name, IrTraitBound::simple(tb::CLONE));
+                        }
+                    }
+                }
+                scan_expr_for_bounds(arg, type_params, params, bounds_map);
             }
         }
 

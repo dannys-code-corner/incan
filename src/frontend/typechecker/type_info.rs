@@ -477,6 +477,11 @@ pub struct CallArtifacts {
     pub resolved_method_calls: HashMap<(usize, usize), ResolvedMethodCall>,
     /// Top-level overload callee emitted names selected by the typechecker, keyed by full call expression span.
     pub selected_function_emitted_names: HashMap<(usize, usize), String>,
+    /// Collection constructors selected from the canonical collection vocabulary.
+    ///
+    /// Lowering consumes this decision instead of interpreting a source spelling such as `set(...)` as an ordinary
+    /// function call or independently guessing whether a same-named binding shadows the collection constructor.
+    pub resolved_collection_constructors: HashMap<(usize, usize), CollectionTypeId>,
     /// Direct closures whose contextual parameter types came from a canonical source `CallableN` bound.
     pub source_callable_closures: HashSet<(usize, usize)>,
 }
@@ -1076,6 +1081,21 @@ impl TypeCheckInfo {
             .selected_function_emitted_names
             .get(&(span.start, span.end))
             .map(String::as_str)
+    }
+
+    /// Return the canonical collection constructor selected for one source call.
+    pub fn resolved_collection_constructor(&self, span: Span) -> Option<CollectionTypeId> {
+        self.calls
+            .resolved_collection_constructors
+            .get(&(span.start, span.end))
+            .copied()
+    }
+
+    /// Record the canonical collection constructor selected for one source call.
+    pub(crate) fn record_resolved_collection_constructor(&mut self, span: Span, constructor: CollectionTypeId) {
+        self.calls
+            .resolved_collection_constructors
+            .insert((span.start, span.end), constructor);
     }
 
     /// Record the overloaded Rust emitted callee selected for one source call expression.
