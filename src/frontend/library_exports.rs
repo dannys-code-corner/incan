@@ -13,8 +13,8 @@ use crate::frontend::ast::{
 use crate::frontend::decorator_resolution;
 use crate::frontend::module::canonicalize_source_module_segments;
 use crate::frontend::symbols::{
-    CallableParam, ClassInfo, FieldInfo, FunctionInfo, MethodInfo, ModelInfo, NewtypeInfo, ResolvedType, SymbolKind,
-    TraitInfo, TypeBoundInfo, TypeInfo, ValueEnumBacking, ValueEnumValue, VariableInfo, resolve_type,
+    CallableParam, ClassInfo, FieldInfo, FunctionInfo, MethodInfo, ModelInfo, NewtypeInfo, PropertyInfo, ResolvedType,
+    SymbolKind, TraitInfo, TypeBoundInfo, TypeInfo, ValueEnumBacking, ValueEnumValue, VariableInfo, resolve_type,
 };
 use crate::frontend::typechecker::{PartialProjectionTargetKind, TypeChecker};
 
@@ -99,6 +99,13 @@ pub struct CheckedField {
     pub default: Option<CheckedParamDefault>,
     pub alias: Option<String>,
     pub description: Option<String>,
+}
+
+/// Public computed-property metadata preserved for compiled-library consumers.
+#[derive(Debug, Clone)]
+pub struct CheckedProperty {
+    pub name: String,
+    pub return_type: ResolvedType,
 }
 
 #[derive(Debug, Clone)]
@@ -294,6 +301,7 @@ pub struct CheckedModelExport {
     /// `@derive(...)` names that must remain available to `pub::` consumers.
     pub derives: Vec<String>,
     pub fields: Vec<CheckedField>,
+    pub properties: Vec<CheckedProperty>,
     pub methods: Vec<CheckedMethod>,
 }
 
@@ -307,6 +315,7 @@ pub struct CheckedClassExport {
     /// `@derive(...)` names that must remain available to `pub::` consumers.
     pub derives: Vec<String>,
     pub fields: Vec<CheckedField>,
+    pub properties: Vec<CheckedProperty>,
     pub methods: Vec<CheckedMethod>,
 }
 
@@ -1098,6 +1107,7 @@ fn checked_model_export(model: &ModelDecl, checker: &TypeChecker) -> Option<Chec
         derives,
         fields,
         field_order,
+        properties,
         method_overloads,
         ..
     })) = &symbol.kind
@@ -1123,6 +1133,7 @@ fn checked_model_export(model: &ModelDecl, checker: &TypeChecker) -> Option<Chec
         trait_adoptions: sorted_type_bounds(map_type_bound_infos(trait_adoptions)),
         derives: sorted_vec(derives.to_vec()),
         fields: map_fields(fields, field_order, &defaults, None, None, &[], checker)?,
+        properties: map_public_properties(properties, checker),
         methods: map_method_overloads_with_defaults(method_overloads, &model.methods, checker),
     })
 }
@@ -1140,6 +1151,7 @@ fn checked_class_export(class: &ClassDecl, checker: &TypeChecker) -> Option<Chec
         field_default_metadata,
         field_provider_libraries,
         field_order,
+        properties,
         method_overloads,
         ..
     })) = &symbol.kind
@@ -1168,6 +1180,7 @@ fn checked_class_export(class: &ClassDecl, checker: &TypeChecker) -> Option<Chec
             &type_params,
             checker,
         )?,
+        properties: map_public_properties(properties, checker),
         methods: map_method_overloads_with_defaults(method_overloads, &class.methods, checker),
     })
 }
@@ -1452,6 +1465,24 @@ fn map_fields(
             .collect::<Option<Vec<_>>>()?,
     );
     Some(entries)
+}
+
+/// Project public computed properties into a deterministic compiled-library contract.
+fn map_public_properties(properties: &HashMap<String, PropertyInfo>, checker: &TypeChecker) -> Vec<CheckedProperty> {
+    let mut entries = properties
+        .iter()
+        .filter(|(_, property)| property.visibility == Visibility::Public)
+        .map(|(name, property)| {
+            let mut return_type = property.return_type.clone();
+            checker.canonicalize_public_library_nominals(&mut return_type);
+            CheckedProperty {
+                name: name.clone(),
+                return_type,
+            }
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    entries
 }
 
 /// Rebase one inherited compiled default through the current provider's compiler-owned dependency bridge.

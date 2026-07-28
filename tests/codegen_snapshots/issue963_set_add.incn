@@ -1,0 +1,5 @@
+def main() -> None:
+  mut seen: Set[str] = Set()
+  seen.add("value")
+  seen.add("value")
+  println(len(seen))
