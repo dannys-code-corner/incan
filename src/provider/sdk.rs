@@ -482,6 +482,29 @@ impl SdkSourceCatalog {
         })
     }
 
+    /// Verify that the active compiler supports this source SDK before provider compilation begins.
+    pub fn validate_compiler_version(&self, compiler_version: &str) -> Result<(), SdkInventoryError> {
+        let requirement = VersionReq::parse(&self.compiler_requirement)
+            .map_err(|error| SdkInventoryError::Invalid(format!("invalid compiler_requirement: {error}")))?;
+        let compiler = Version::parse(compiler_version).map_err(|error| {
+            SdkInventoryError::Invalid(format!("invalid compiler version `{compiler_version}`: {error}"))
+        })?;
+        if requirement.matches(&compiler) {
+            Ok(())
+        } else {
+            Err(SdkInventoryError::Invalid(format!(
+                "SDK source {} requires compiler `{}`, but the active compiler is `{compiler_version}`",
+                self.identity(),
+                self.compiler_requirement
+            )))
+        }
+    }
+
+    /// Render the stable source SDK identity for diagnostics.
+    pub fn identity(&self) -> String {
+        format!("{}@{}", self.sdk_id, self.sdk_version)
+    }
+
     /// Return source components in deterministic dependency-first publication order.
     pub fn publication_order(&self) -> Vec<&SdkSourceComponent> {
         let mut ordered = Vec::new();
@@ -1251,6 +1274,27 @@ exclude-components = ["stdlib-data"]
             .get("stdlib-compression")
             .ok_or("missing stdlib-compression source component")?;
         assert_eq!(compression.namespace_roots, set(["compression"]));
+        Ok(())
+    }
+
+    #[test]
+    fn source_catalog_rejects_an_incompatible_compiler_before_provider_builds() -> TestResult {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/incan_stdlib/stdlib")
+            .join(SDK_SOURCE_CATALOG_FILE);
+        let mut catalog = SdkSourceCatalog::read_from_path(&path)?;
+        catalog.compiler_requirement = ">=0.6.0".to_string();
+
+        let error = match catalog.validate_compiler_version(crate::version::INCAN_VERSION) {
+            Ok(()) => {
+                return Err("an incompatible SDK source catalog must be rejected before provider compilation".into());
+            }
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("SDK source"),
+            "expected a source-SDK compatibility diagnostic, got: {error}"
+        );
         Ok(())
     }
 

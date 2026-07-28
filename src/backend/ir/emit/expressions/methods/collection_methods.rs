@@ -44,6 +44,16 @@ pub(super) fn emit_collection_method(
     let r = &info.r;
 
     match kind {
+        CollectionMethodKind::Add => {
+            if let Some(arg) = args.first() {
+                let element_ty = collection_element_type(&receiver.ty);
+                let element =
+                    emitter.emit_expr_for_use(arg, ValueUseSite::CollectionElement { target_ty: element_ty })?;
+                let set_mut = plan_collection_receiver(&receiver.ty, true).apply(r.clone());
+                return Ok(quote! {{ (#set_mut).insert(#element); }});
+            }
+            Ok(quote! { () })
+        }
         CollectionMethodKind::Get => {
             if let Some(arg) = args.first() {
                 let a = emitter.emit_expr(arg)?;

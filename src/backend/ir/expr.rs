@@ -767,6 +767,8 @@ pub enum StringMethodKind {
 /// Known collection-method variants handled by the compiler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CollectionMethodKind {
+    /// `set.add(item)` → `set.insert(item)`.
+    Add,
     /// `x.contains(item)` → varies by collection type
     Contains,
     /// `x.get(key)` → `x.get(key)`
@@ -930,8 +932,12 @@ impl MethodKind {
                 if iterator_methods::from_str(name) == Some(iterator_methods::IteratorMethodId::Iter) {
                     return Some(Self::Iterator(IteratorMethodKind::Iter));
                 }
-                if set_methods::from_str(name).is_some() {
-                    return Some(Self::Collection(CollectionMethodKind::Contains));
+                if let Some(id) = set_methods::from_str(name) {
+                    use set_methods::SetMethodId as S;
+                    return Some(Self::Collection(match id {
+                        S::Add => CollectionMethodKind::Add,
+                        S::Contains => CollectionMethodKind::Contains,
+                    }));
                 }
                 None
             }

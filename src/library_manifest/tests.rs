@@ -96,6 +96,7 @@ fn manifest_io_preserves_private_class_field_visibility_issue883() -> Result<(),
                 description: None,
             },
         ],
+        properties: Vec::new(),
         methods: Vec::new(),
     };
     let manifest = LibraryManifest::from_checked_exports(
@@ -160,6 +161,7 @@ fn legacy_manifest_fields_without_visibility_remain_public_issue883() -> Result<
             alias: None,
             description: None,
         }],
+        properties: Vec::new(),
         methods: Vec::new(),
     });
 
@@ -201,6 +203,7 @@ fn manifest_round_trips_private_model_field_visibility_issue884() -> Result<(), 
             alias: None,
             description: None,
         }],
+        properties: Vec::new(),
         methods: Vec::new(),
     });
 
@@ -266,6 +269,7 @@ fn manifest_round_trips_private_model_field_in_embedded_api_metadata_issue884() 
         trait_adoptions: Vec::new(),
         derives: Vec::new(),
         fields: vec![private_api_field_issue883()],
+        properties: Vec::new(),
         methods: Vec::new(),
     }));
 
@@ -926,6 +930,7 @@ fn manifest_io_round_trip_preserves_rest_parameter_metadata() -> Result<(), Box<
         trait_adoptions: Vec::new(),
         derives: Vec::new(),
         fields: Vec::new(),
+        properties: Vec::new(),
         methods: vec![MethodExport {
             alias_of: None,
             name: "collect".to_string(),
@@ -1237,6 +1242,7 @@ fn manifest_io_round_trip_preserves_generic_method_type_params() -> Result<(), B
         trait_adoptions: Vec::new(),
         derives: Vec::new(),
         fields: Vec::new(),
+        properties: Vec::new(),
         methods: vec![MethodExport {
             alias_of: None,
             name: "get".to_string(),
@@ -1282,6 +1288,7 @@ fn manifest_io_round_trip_preserves_model_and_class_derives() -> Result<(), Box<
         trait_adoptions: Vec::new(),
         derives: vec!["Clone".to_string()],
         fields: Vec::new(),
+        properties: Vec::new(),
         methods: Vec::new(),
     });
     manifest.exports.classes.push(ClassExport {
@@ -1292,6 +1299,7 @@ fn manifest_io_round_trip_preserves_model_and_class_derives() -> Result<(), Box<
         trait_adoptions: Vec::new(),
         derives: vec!["Clone".to_string(), "Debug".to_string()],
         fields: Vec::new(),
+        properties: Vec::new(),
         methods: Vec::new(),
     });
 
@@ -1330,6 +1338,7 @@ fn manifest_io_round_trip_preserves_type_trait_adoptions() -> Result<(), Box<dyn
         trait_adoptions: vec![convert_int.clone(), convert_float.clone()],
         derives: Vec::new(),
         fields: Vec::new(),
+        properties: Vec::new(),
         methods: Vec::new(),
     });
     manifest.exports.classes.push(ClassExport {
@@ -1347,6 +1356,7 @@ fn manifest_io_round_trip_preserves_type_trait_adoptions() -> Result<(), Box<dyn
         }],
         derives: Vec::new(),
         fields: Vec::new(),
+        properties: Vec::new(),
         methods: Vec::new(),
     });
     manifest.exports.enums.push(EnumExport {

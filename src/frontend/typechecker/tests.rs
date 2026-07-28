@@ -2200,6 +2200,7 @@ fn library_index_with_mylib_exports() -> LibraryManifestIndex {
                 trait_adoptions: Vec::new(),
                 derives: Vec::new(),
                 fields: Vec::new(),
+                properties: Vec::new(),
                 methods: Vec::new(),
             }],
             classes: Vec::new(),
@@ -2349,6 +2350,7 @@ fn library_index_with_colliding_pub_type_identities() -> LibraryManifestIndex {
             trait_adoptions: Vec::new(),
             derives: Vec::new(),
             fields: Vec::new(),
+            properties: Vec::new(),
             methods: Vec::new(),
         });
         manifest.exports.models.push(ModelExport {
@@ -2369,6 +2371,7 @@ fn library_index_with_colliding_pub_type_identities() -> LibraryManifestIndex {
                 alias: None,
                 description: None,
             }],
+            properties: Vec::new(),
             methods: Vec::new(),
         });
         manifest.exports.functions.push(FunctionExport {
@@ -2531,6 +2534,7 @@ fn library_index_with_private_class_field_issue883() -> LibraryManifestIndex {
                 description: None,
             },
         ],
+        properties: Vec::new(),
         methods: Vec::new(),
     });
     LibraryManifestIndex::from_entries(HashMap::from([(
@@ -2787,6 +2791,7 @@ fn library_index_with_rfc025_trait_adoptions() -> LibraryManifestIndex {
                 trait_adoptions: vec![convert_int.clone(), convert_float.clone()],
                 derives: Vec::new(),
                 fields: Vec::new(),
+                properties: Vec::new(),
                 methods: vec![
                     MethodExport {
                         alias_of: None,
@@ -2921,6 +2926,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                 trait_adoptions: Vec::new(),
                 derives: Vec::new(),
                 fields: Vec::new(),
+                properties: Vec::new(),
                 methods: Vec::new(),
             }],
             classes: vec![
@@ -2932,6 +2938,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                     trait_adoptions: Vec::new(),
                     derives: Vec::new(),
                     fields: Vec::new(),
+                    properties: Vec::new(),
                     methods: vec![
                         MethodExport {
                             alias_of: None,
@@ -3030,6 +3037,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                     }],
                     derives: vec![clone_trait_name()],
                     fields: Vec::new(),
+                    properties: Vec::new(),
                     methods: Vec::new(),
                 },
                 ClassExport {
@@ -3045,6 +3053,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                     }],
                     derives: vec![clone_trait_name()],
                     fields: Vec::new(),
+                    properties: Vec::new(),
                     methods: vec![MethodExport {
                         alias_of: None,
                         name: "collect".to_string(),

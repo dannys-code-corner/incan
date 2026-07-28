@@ -3211,6 +3211,7 @@ def main() -> None:
             trait_adoptions: Vec::new(),
             derives: Vec::new(),
             fields: Vec::new(),
+            properties: Vec::new(),
             methods: Vec::new(),
         });
         manifest.exports.functions.push(FunctionExport {
