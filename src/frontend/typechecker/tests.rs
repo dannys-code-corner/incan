@@ -8,7 +8,8 @@ use crate::frontend::api_metadata::{
 };
 use crate::frontend::ast::TypeConstraintKey;
 use crate::frontend::library_exports::{
-    CheckedExportKind, CheckedPartialTargetKind, CheckedPresetValue, collect_checked_public_exports,
+    CheckedAliasExport, CheckedExportIdentity, CheckedExportKind, CheckedNamedExport, CheckedPartialTargetKind,
+    CheckedPresetValue, collect_checked_public_exports,
 };
 use crate::frontend::library_manifest_index::{
     LibraryArtifactMetadata, LibraryManifestFailureKind, LibraryManifestIndex, LibraryManifestIndexEntry,
@@ -83,6 +84,78 @@ def main() -> None:
 fn parse_program(source: &str, context: &str) -> crate::frontend::ast::Program {
     let tokens = lexer::lex(source).unwrap_or_else(|errs| panic!("{context} lex failed: {errs:?}"));
     parser::parse(&tokens).unwrap_or_else(|errs| panic!("{context} parse failed: {errs:?}"))
+}
+
+#[test]
+fn set_constructor_calls_record_canonical_collection_identity_issue951() -> Result<(), String> {
+    let ast = parse_program(
+        r#"
+def main(values: List[str]) -> None:
+  lower = set(values)
+  canonical = Set(values)
+"#,
+        "issue951 set constructor identity",
+    );
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&ast)
+        .map_err(|errors| format!("set constructors should typecheck: {errors:?}"))?;
+
+    let constructors = checker
+        .type_info()
+        .calls
+        .resolved_collection_constructors
+        .values()
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        constructors,
+        vec![CollectionTypeId::Set, CollectionTypeId::Set],
+        "both accepted spellings should resolve through the canonical Set identity"
+    );
+    Ok(())
+}
+
+#[test]
+fn user_defined_set_call_does_not_record_collection_constructor_issue951() -> Result<(), String> {
+    let ast = parse_program(
+        r#"
+def set(values: List[str]) -> int:
+  return len(values)
+
+def main(values: List[str]) -> None:
+  count = set(values)
+"#,
+        "issue951 shadowed set function",
+    );
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&ast)
+        .map_err(|errors| format!("shadowing source function should typecheck: {errors:?}"))?;
+
+    assert!(
+        checker.type_info().calls.resolved_collection_constructors.is_empty(),
+        "a user-defined set function must not be lowered as the Set collection constructor"
+    );
+    Ok(())
+}
+
+#[test]
+fn set_constructor_rejects_more_than_one_source_collection_issue951() {
+    let errors = check_str_err(
+        r#"
+def main(left: List[str], right: List[str]) -> None:
+  invalid = set(left, right)
+"#,
+        "set() should reject multiple source collections",
+    );
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("set() expects at most 1 argument(s), got 2")),
+        "expected a source diagnostic before lowering, got {errors:?}"
+    );
 }
 
 #[test]
@@ -4670,6 +4743,8 @@ fn test_rust_item_metadata_lookup_reuses_cached_nominal_item_for_instantiated_ru
                 definition_path: Some("demo::SendError".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     fields: Vec::new(),
@@ -4764,6 +4839,8 @@ fn test_types_compatible_accepts_rust_alias_definition_without_metadata_lookup()
                 definition_path: Some("incan_stdlib::r#async::channel::Sender".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     fields: Vec::new(),
@@ -4803,6 +4880,8 @@ fn test_types_compatible_accepts_rust_path_alias_with_attached_definition_metada
                 definition_path: Some("incan_stdlib::r#async::sync::Semaphore".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     fields: Vec::new(),
@@ -4997,6 +5076,8 @@ def f() -> None:
                 definition_path: Some("demo::Kind".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5025,6 +5106,8 @@ def f() -> None:
                 definition_path: Some("demo::Empty".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5109,6 +5192,8 @@ def f(holder: Holder) -> None:
                 definition_path: Some("demo::Holder".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5138,6 +5223,8 @@ def f(holder: Holder) -> None:
                 definition_path: Some("demo::Item".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5224,6 +5311,8 @@ def f() -> FunctionOption:
                 definition_path: Some("demo::FunctionOption".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5281,6 +5370,8 @@ def f(payload: DemoPayload) -> Container:
                 definition_path: Some("demo::outer::Container".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5307,6 +5398,8 @@ def f(payload: DemoPayload) -> Container:
                 definition_path: Some("demo::defs::Payload".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5487,6 +5580,8 @@ def render[T](value: Label[T]) -> str:
                 definition_path: Some("std::string::String".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![RustMethodSig {
@@ -5545,6 +5640,8 @@ fn seed_async_rust_method_probe_with_options_param(
             definition_path: Some("demo::SessionContext".to_string()),
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: vec![
@@ -5599,6 +5696,8 @@ fn seed_async_rust_method_probe_with_options_param(
             definition_path: Some("demo::CsvReadOptions".to_string()),
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: vec![RustMethodSig {
@@ -5773,6 +5872,8 @@ def render(value: Label) -> str:
                 definition_path: Some("std::string::String".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![RustMethodSig {
@@ -5860,6 +5961,8 @@ def f(x: Envelope) -> None:
                 definition_path: Some("demo::Envelope".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5886,6 +5989,8 @@ def f(x: Envelope) -> None:
                 definition_path: Some("demo::Kind".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5936,6 +6041,8 @@ def f(x: Envelope) -> None:
                 definition_path: Some("demo::Envelope".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -5962,6 +6069,8 @@ def f(x: Envelope) -> None:
                 definition_path: Some("demo::Kind".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -6015,6 +6124,8 @@ def inspect(rel: Rel) -> None:
                 definition_path: Some("demo::Rel".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -6041,6 +6152,8 @@ def inspect(rel: Rel) -> None:
                 definition_path: Some("demo::rel::RelType".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -6066,6 +6179,8 @@ def inspect(rel: Rel) -> None:
                 definition_path: Some("demo::ReadRel".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -6092,6 +6207,8 @@ def inspect(rel: Rel) -> None:
                 definition_path: Some("demo::read_rel::ReadType".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -10490,6 +10607,8 @@ def f(w: Widget) -> None:
                 definition_path: Some("demo::Widget".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: Vec::new(),
@@ -10515,6 +10634,78 @@ def f(w: Widget) -> None:
     assert!(
         !uses.values().any(|import_use| import_use.binding == "BetaRender"),
         "BetaRender should not be selected for Widget.render(): {uses:?}"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_extension_trait_method_type_args_require_metadata_declared_arity_issue834()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Device, DeviceTrait
+
+def open(device: Device) -> None:
+  device.build_output_stream[f32]()
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::DeviceTrait".to_string(),
+            definition_path: Some("demo::DeviceTrait".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Trait(RustTraitInfo {
+                items: vec![RustTraitAssoc::Function {
+                    name: "build_output_stream".to_string(),
+                    signature: RustFunctionSig {
+                        type_params: vec!["T".to_string(), "D".to_string(), "E".to_string()],
+                        params: vec![RustParam {
+                            name: Some("self".to_string()),
+                            type_display: "&self".to_string(),
+                        }],
+                        return_type: "()".to_string(),
+                        is_async: false,
+                        is_unsafe: false,
+                    },
+                }],
+            }),
+        },
+    )?;
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Device".to_string(),
+            definition_path: Some("demo::Device".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: Vec::new(),
+                implemented_traits: vec![RustImplementedTrait {
+                    path: "demo::DeviceTrait".to_string(),
+                }],
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    let errors = checker
+        .check_program(&ast)
+        .expect_err("the partial imported Rust trait-method turbofish must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("build_output_stream expects 3 explicit type argument(s), got 1")),
+        "expected imported Rust trait-method generic arity diagnostic, got {errors:?}"
     );
     Ok(())
 }
@@ -10570,6 +10761,8 @@ def f(encoded: bytes) -> None:
                 definition_path: Some(path.to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: Vec::new(),
@@ -10680,6 +10873,8 @@ def f(encoded: bytes) -> None:
                 definition_path: Some("substrait::proto::Plan".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: Vec::new(),
@@ -10799,6 +10994,8 @@ def choose(rng: ThreadRng, items: List[str]) -> str:
                 definition_path: Some("demo::ThreadRng".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: Vec::new(),
@@ -10865,6 +11062,8 @@ type Thing = rusttype RustThing with Labelled
                 definition_path: Some("demo::RustThing".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -19150,6 +19349,8 @@ def complete(device: Device) -> None:
             definition_path: Some("demo::Device".to_string()),
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: vec![RustMethodSig {
@@ -19184,6 +19385,530 @@ def complete(device: Device) -> None:
     assert!(
         !errors.iter().any(|error| error.message.contains("got 3")),
         "the full Rust method turbofish should remain accepted, got {errors:?}"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_method_type_args_contextualize_inline_borrowed_slice_callback_issue835()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Device
+
+def run(device: Device) -> None:
+  device.build_output_stream[f32, _, _]((_data, _info) => ())
+"#;
+    let ast = parse_program(source, "Rust borrowed-slice callback specialization");
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Device".to_string(),
+            definition_path: Some("demo::Device".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: vec![RustMethodSig {
+                    name: "build_output_stream".to_string(),
+                    signature: RustFunctionSig {
+                        type_params: vec!["T".to_string(), "D".to_string(), "E".to_string()],
+                        params: vec![
+                            RustParam {
+                                name: Some("self".to_string()),
+                                type_display: "&self".to_string(),
+                            },
+                            RustParam {
+                                name: Some("callback".to_string()),
+                                type_display: "impl FnMut(&mut [T], &demo::OutputCallbackInfo)".to_string(),
+                            },
+                        ],
+                        return_type: "()".to_string(),
+                        is_async: false,
+                        is_unsafe: false,
+                    },
+                }],
+                implemented_traits: Vec::new(),
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    checker
+        .check_program(&ast)
+        .map_err(|errors| format!("expected contextual callback typing to succeed, got {errors:?}"))?;
+    assert_eq!(
+        checker.type_info.rust.closure_param_type_displays.values().next(),
+        Some(&vec!["&mut [f32]".to_string(), "&demo::OutputCallbackInfo".to_string(),]),
+        "expected explicit method type arguments to specialize the emitted borrowed-slice callback display"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_associated_calls_specialize_receiver_generics_explicitly_and_contextually()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Factory
+
+def explicit() -> Factory[f32]:
+  return Factory.new[f32]()
+
+def contextual() -> Factory[f32]:
+  value: Factory[f32] = Factory.new()
+  return value
+
+def direct_contextual() -> Factory[f32]:
+  return Factory.new()
+"#;
+    let ast = parse_program(source, "Rust associated receiver generics");
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Factory".to_string(),
+            definition_path: Some("demo::Factory".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: vec!["T".to_string()],
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: vec![RustMethodSig {
+                    name: "new".to_string(),
+                    signature: RustFunctionSig {
+                        type_params: Vec::new(),
+                        params: Vec::new(),
+                        return_type: "Self".to_string(),
+                        is_async: false,
+                        is_unsafe: false,
+                    },
+                }],
+                implemented_traits: Vec::new(),
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    checker
+        .check_program(&ast)
+        .map_err(|errors| format!("expected receiver-generic associated calls to typecheck, got {errors:?}"))?;
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_associated_receiver_type_args_require_owner_arity() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Factory
+
+def invalid() -> Factory[f32]:
+  return Factory.new[f32, str]()
+"#;
+    let ast = parse_program(source, "Rust associated receiver generic arity");
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Factory".to_string(),
+            definition_path: Some("demo::Factory".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: vec!["T".to_string()],
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: vec![RustMethodSig {
+                    name: "new".to_string(),
+                    signature: RustFunctionSig {
+                        type_params: Vec::new(),
+                        params: Vec::new(),
+                        return_type: "Self".to_string(),
+                        is_async: false,
+                        is_unsafe: false,
+                    },
+                }],
+                implemented_traits: Vec::new(),
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    let errors = match checker.check_program(&ast) {
+        Ok(_) => return Err("receiver-generic associated calls must enforce owner arity".into()),
+        Err(errors) => errors,
+    };
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("new expects 1 explicit type argument(s), got 2")),
+        "expected owner-generic arity diagnostic, got {errors:?}"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_associated_calls_apply_owner_generics_to_parameters_and_returns() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Factory
+
+def explicit() -> Factory[i64, str]:
+  return Factory.new[i64, str](1, "marker")
+
+def contextual() -> Factory[i64, str]:
+  return Factory.new(7, "marker")
+
+def owner_value() -> str:
+  return Factory.first[str, i64]("value")
+
+def accept_factory(value: Factory[i64, str]) -> None:
+  pass
+
+def parameter_context() -> None:
+  accept_factory(Factory.new(7, "marker"))
+"#;
+    let ast = parse_program(source, "Rust associated owner substitution");
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Factory".to_string(),
+            definition_path: Some("demo::Factory".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: vec!["T".to_string(), "U".to_string()],
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: vec![
+                    RustMethodSig {
+                        name: "new".to_string(),
+                        signature: RustFunctionSig {
+                            type_params: Vec::new(),
+                            params: vec![
+                                RustParam {
+                                    name: Some("value".to_string()),
+                                    type_display: "T".to_string(),
+                                },
+                                RustParam {
+                                    name: Some("marker".to_string()),
+                                    type_display: "U".to_string(),
+                                },
+                            ],
+                            return_type: "Self".to_string(),
+                            is_async: false,
+                            is_unsafe: false,
+                        },
+                    },
+                    RustMethodSig {
+                        name: "first".to_string(),
+                        signature: RustFunctionSig {
+                            type_params: Vec::new(),
+                            params: vec![RustParam {
+                                name: Some("value".to_string()),
+                                type_display: "T".to_string(),
+                            }],
+                            return_type: "T".to_string(),
+                            is_async: false,
+                            is_unsafe: false,
+                        },
+                    },
+                ],
+                implemented_traits: Vec::new(),
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    checker
+        .check_program(&ast)
+        .map_err(|errors| format!("expected owner-generic parameters and returns to specialize, got {errors:?}"))?;
+    let specialized_calls = checker
+        .type_info()
+        .calls
+        .call_site_callable_params
+        .values()
+        .filter(|params| {
+            matches!(
+                params.as_slice(),
+                [
+                    CallableParam {
+                        ty: ResolvedType::Int,
+                        ..
+                    },
+                    CallableParam {
+                        ty: ResolvedType::Str,
+                        ..
+                    }
+                ]
+            )
+        })
+        .count();
+    assert!(
+        specialized_calls >= 3,
+        "expected explicit, return-context, and parameter-context calls to preserve exact owner-specialized parameters; \
+         got {:?}",
+        checker.type_info().calls.call_site_callable_params
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+fn receiver_factory_manifest(library_name: &str, value_type: &str) -> LibraryManifest {
+    let target_path = vec!["rust".to_string(), "demo".to_string(), "PairFactory".to_string()];
+    let checked_export = CheckedNamedExport {
+        name: "PairFactory".to_string(),
+        identity: CheckedExportIdentity::reexport(target_path.clone(), target_path.clone()),
+        kind: CheckedExportKind::Alias(CheckedAliasExport {
+            name: "PairFactory".to_string(),
+            target_path,
+            projected_function: None,
+        }),
+    };
+    let mut manifest = LibraryManifest::from_checked_exports(library_name, "0.1.0", &[checked_export]);
+    manifest.rust_abi = LibraryRustAbi::from_items(vec![RustItemMetadata {
+        canonical_path: "demo::PairFactory".to_string(),
+        definition_path: Some("demo::PairFactory".to_string()),
+        visibility: RustVisibility::Public,
+        kind: RustItemKind::Type(RustTypeInfo {
+            type_params: vec!["T".to_string(), "U".to_string()],
+            has_const_params: false,
+            alias_target: None,
+            metadata_completeness: Default::default(),
+            methods: vec![RustMethodSig {
+                name: "new".to_string(),
+                signature: RustFunctionSig {
+                    type_params: Vec::new(),
+                    params: vec![
+                        RustParam {
+                            name: Some("value".to_string()),
+                            type_display: value_type.to_string(),
+                        },
+                        RustParam {
+                            name: Some("marker".to_string()),
+                            type_display: "U".to_string(),
+                        },
+                    ],
+                    return_type: "demo::PairFactory<T, U>".to_string(),
+                    is_async: false,
+                    is_unsafe: false,
+                },
+            }],
+            implemented_traits: Vec::new(),
+            fields: Vec::new(),
+            variants: Vec::new(),
+        }),
+    }]);
+    manifest
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn compiled_library_rust_reexport_restores_receiver_generic_metadata() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest = receiver_factory_manifest("receiver_factory_api", "T");
+    let index = LibraryManifestIndex::from_entries(HashMap::from([(
+        "receiver_factory_api".to_string(),
+        LibraryManifestIndexEntry::Loaded {
+            manifest: Box::new(manifest),
+            metadata: LibraryArtifactMetadata::from_crate_root(
+                "receiver_factory_api",
+                "receiver_factory_api",
+                synthetic_artifact_root("receiver_factory_api"),
+            ),
+        },
+    )]));
+    let source = r#"
+from pub::receiver_factory_api import PairFactory
+
+def accept_pair(value: PairFactory[i64, str]) -> None:
+  pass
+
+def run() -> None:
+  accept_pair(PairFactory.new(7, "marker"))
+"#;
+
+    check_str_with_library_index(source, index)
+        .map_err(|errors| format!("expected compiled Rust reexport metadata to typecheck, got {errors:?}"))?;
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn compiled_rust_reexport_uses_selected_provider_abi_for_method_resolution() -> Result<(), Box<dyn std::error::Error>> {
+    let conflicting = receiver_factory_manifest("a_conflicting_factory", "str");
+    let selected = receiver_factory_manifest("z_selected_factory", "T");
+    let index = LibraryManifestIndex::from_entries(HashMap::from([
+        (
+            "a_conflicting_factory".to_string(),
+            LibraryManifestIndexEntry::Loaded {
+                manifest: Box::new(conflicting),
+                metadata: LibraryArtifactMetadata::from_crate_root(
+                    "a_conflicting_factory",
+                    "a_conflicting_factory",
+                    synthetic_artifact_root("a_conflicting_factory"),
+                ),
+            },
+        ),
+        (
+            "z_selected_factory".to_string(),
+            LibraryManifestIndexEntry::Loaded {
+                manifest: Box::new(selected),
+                metadata: LibraryArtifactMetadata::from_crate_root(
+                    "z_selected_factory",
+                    "z_selected_factory",
+                    synthetic_artifact_root("z_selected_factory"),
+                ),
+            },
+        ),
+    ]));
+    let source = r#"
+from pub::z_selected_factory import PairFactory
+
+def run() -> PairFactory[i64, str]:
+  return PairFactory.new(7, "marker")
+"#;
+
+    check_str_with_library_index(source, index)
+        .map_err(|errors| format!("expected the selected provider ABI to own method resolution, got {errors:?}"))?;
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_associated_context_rejects_arguments_that_conflict_with_owner_generics()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Factory
+
+def invalid() -> Factory[i64]:
+  return Factory.new("text")
+"#;
+    let ast = parse_program(source, "Rust associated owner mismatch");
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Factory".to_string(),
+            definition_path: Some("demo::Factory".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: vec!["T".to_string()],
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: vec![RustMethodSig {
+                    name: "new".to_string(),
+                    signature: RustFunctionSig {
+                        type_params: Vec::new(),
+                        params: vec![RustParam {
+                            name: Some("value".to_string()),
+                            type_display: "T".to_string(),
+                        }],
+                        return_type: "Self".to_string(),
+                        is_async: false,
+                        is_unsafe: false,
+                    },
+                }],
+                implemented_traits: Vec::new(),
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    let errors = match checker.check_program(&ast) {
+        Ok(_) => return Err("contextual owner specialization must validate its parameter types".into()),
+        Err(errors) => errors,
+    };
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("expected 'i64'") && error.message.contains("found 'str'")),
+        "expected contextual owner mismatch diagnostic, got {errors:?}"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_associated_receiver_specialization_rejects_const_generic_owners() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Factory
+
+def invalid() -> Factory[f32]:
+  return Factory.new[f32]()
+
+def contextual() -> Factory[f32]:
+  return Factory.new()
+"#;
+    let ast = parse_program(source, "Rust associated const-generic owner");
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Factory".to_string(),
+            definition_path: Some("demo::Factory".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: vec!["T".to_string()],
+                has_const_params: true,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: vec![RustMethodSig {
+                    name: "new".to_string(),
+                    signature: RustFunctionSig {
+                        type_params: Vec::new(),
+                        params: Vec::new(),
+                        return_type: "Self".to_string(),
+                        is_async: false,
+                        is_unsafe: false,
+                    },
+                }],
+                implemented_traits: Vec::new(),
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    let errors = match checker.check_program(&ast) {
+        Ok(_) => return Err("const-generic receiver specialization must fail closed".into()),
+        Err(errors) => errors,
+    };
+    let const_generic_errors = errors
+        .iter()
+        .filter(|error| error.message.contains("has const generic parameters"))
+        .count();
+    assert_eq!(
+        const_generic_errors, 2,
+        "expected explicit and contextual const-generic receiver diagnostics, got {errors:?}"
     );
     Ok(())
 }

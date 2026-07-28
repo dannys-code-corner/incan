@@ -685,7 +685,7 @@ impl TypeChecker {
     }
 
     /// Record inspected Rust parameter types so codegen can emit the same borrow shape the typechecker accepted.
-    fn record_rust_call_site_params(
+    pub(in crate::frontend::typechecker) fn record_rust_call_site_params(
         &mut self,
         span: Span,
         params: &[incan_core::interop::RustParam],
@@ -916,42 +916,24 @@ impl TypeChecker {
 
         for binding in bindings {
             let arg_expr = Self::call_arg_expr(binding.arg);
-            let arg_ty = binding.arg_ty;
             let param = binding.param;
-            let param_display = self.rust_display_for_owner_path(param.type_display.as_str(), callable_display);
-            let normalized = param_display.replace(' ', "");
             let target_ty = self.resolved_rust_boundary_target_from_param_display_for_owner_path(
                 param.type_display.as_str(),
                 callable_display,
             );
-            self.prewarm_rust_type_identity_metadata(arg_ty);
-            self.prewarm_rust_type_identity_metadata(&target_ty);
+            let contextual_arg_ty = if (matches!(arg_expr.node, Expr::Closure(_, _))
+                && matches!(&target_ty, ResolvedType::Function(_, _)))
+                || matches!(arg_expr.node, Expr::Literal(_) | Expr::Unary(_, _))
+            {
+                Some(self.check_expr_with_expected(arg_expr, Some(&target_ty)))
+            } else {
+                None
+            };
+            let arg_ty = contextual_arg_ty.as_ref().unwrap_or(binding.arg_ty);
             if preserves_lookup_arg_shape && self.rust_lookup_probe_boundary_match(arg_ty, &target_ty) {
                 continue;
             }
-            match self.rust_arg_boundary_match(arg_ty, param_display.as_str()) {
-                RustArgBoundaryMatch::Exact => {}
-                RustArgBoundaryMatch::Coercion(kind) => {
-                    if !self.validate_rust_borrow_mutability(kind, arg_expr) {
-                        continue;
-                    }
-                    self.type_info.rust.arg_coercions.insert(
-                        (arg_expr.span.start, arg_expr.span.end),
-                        RustArgCoercionInfo {
-                            rust_target_type: normalized,
-                            target_type: target_ty,
-                            kind,
-                        },
-                    );
-                }
-                RustArgBoundaryMatch::NoMatch => {
-                    self.errors.push(errors::type_mismatch(
-                        param.type_display.as_str(),
-                        &arg_ty.to_string(),
-                        arg_expr.span,
-                    ));
-                }
-            }
+            self.validate_rust_boundary_value(callable_display, param.type_display.as_str(), arg_expr, arg_ty, false);
         }
 
         let ret = self.resolved_rust_call_type_from_sig(sig, callable_display, span);
@@ -1038,6 +1020,8 @@ mod validate_rust_function_call_tests {
             definition_path: Some(definition_path.to_string()),
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: Vec::new(),
@@ -1938,6 +1922,8 @@ mod validate_rust_function_call_tests {
                 definition_path: Some("substrait::proto::Plan".to_string()),
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
@@ -2143,6 +2129,56 @@ mod validate_rust_function_call_tests {
                 .is_some_and(|params| params.len() == 1 && params[0].ty == ResolvedType::TypeVar("implBuf".to_string())),
             "expected Rust by-value impl Trait method param shape to be recorded, got {:?}",
             checker.type_info.calls.call_site_callable_params
+        );
+    }
+
+    #[test]
+    fn validate_rust_method_call_records_borrowed_slice_callback_displays_issue835() {
+        let mut checker = TypeChecker::new();
+        let span = Span::new(30, 40);
+        let callback_span = Span::new(12, 25);
+        let callback_expr = Spanned::new(Expr::Ident("write_silence".to_string()), callback_span);
+        let args = [CallArg::Positional(callback_expr)];
+        let callback_ty = ResolvedType::Function(
+            vec![
+                CallableParam::positional(ResolvedType::RefMut(Box::new(ResolvedType::Generic(
+                    "List".to_string(),
+                    vec![ResolvedType::Numeric(NumericTypeId::F32)],
+                )))),
+                CallableParam::positional(ResolvedType::Ref(Box::new(ResolvedType::RustPath(
+                    "demo::OutputCallbackInfo".to_string(),
+                )))),
+            ],
+            Box::new(ResolvedType::Unit),
+        );
+        let sig = RustFunctionSig {
+            type_params: Vec::new(),
+            params: vec![
+                RustParam {
+                    name: Some("self".to_string()),
+                    type_display: "&self".to_string(),
+                },
+                RustParam {
+                    name: Some("callback".to_string()),
+                    type_display: "impl FnMut(&mut [f32], &demo::OutputCallbackInfo)".to_string(),
+                },
+            ],
+            return_type: "()".to_string(),
+            is_async: false,
+            is_unsafe: false,
+        };
+
+        let _ = checker.validate_rust_method_call("rust::demo::Device.run", &sig, &args, &[callback_ty], false, span);
+
+        assert!(
+            checker.errors.is_empty(),
+            "expected the borrowed-slice callback to satisfy the Rust method bound, got {:?}",
+            checker.errors
+        );
+        assert_eq!(
+            checker.type_info.rust.function_param_type_displays.get("write_silence"),
+            Some(&vec!["&mut [f32]".to_string(), "&demo::OutputCallbackInfo".to_string(),]),
+            "expected method validation to preserve exact callback parameter displays"
         );
     }
 

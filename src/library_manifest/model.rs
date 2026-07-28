@@ -576,7 +576,7 @@ pub struct LibraryRustAbi {
 
 /// Default Rust ABI schema version for manifest payloads that predate explicit serde fields.
 fn default_rust_abi_schema_version() -> u32 {
-    RUST_ABI_SCHEMA_VERSION
+    1
 }
 
 impl LibraryRustAbi {

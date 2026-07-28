@@ -1391,6 +1391,16 @@ pub fn rust_item_shape_not_supported(path: &str, description: &str, span: Span) 
     .with_note("RFC 041 intentionally limits which Rust item shapes are typechecked directly")
 }
 
+/// A Rust associated call tries to specialize a receiver whose turbofish contains const-generic slots.
+pub fn rust_receiver_const_generics_not_supported(path: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Rust receiver `rust::{path}` has const generic parameters that Incan cannot specialize"),
+        span,
+    )
+    .with_hint("Use a Rust or Incan wrapper whose public receiver has type parameters only")
+    .with_note("Incan v0.5 does not accept const values in call-site type-argument syntax")
+}
+
 /// A Rust import is being used as a constructor, but the compiler lacks enough metadata to emit valid Rust.
 pub fn rust_constructor_metadata_unavailable(path: &str, span: Span) -> CompileError {
     CompileError::type_error(

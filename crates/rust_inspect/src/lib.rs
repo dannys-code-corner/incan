@@ -19,6 +19,7 @@ mod cache_resolve;
 mod cache_timing;
 mod error;
 mod extractor;
+mod generic_params;
 mod loader;
 
 pub use cache::RustMetadataCache;
@@ -297,6 +298,8 @@ mod tests {
             definition_path: None,
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: Vec::new(),

@@ -38,6 +38,28 @@ rows = session.read_csv[Order]("orders.csv")
 
 This keeps normal signature typing intact while letting callers pin ambiguous generic slots at API boundaries.
 
+## Rust receiver generics use the same call shape
+
+For an imported Rust type whose receiver generics are all type parameters, `Type.method[T](...)` specializes the receiver type. It corresponds to Rust's `Type::<T>::method(...)`, not `Type::method::<T>(...)`.
+
+```incan
+from rust::rubato import Fft, FixedSync, ResamplerConstructionError
+
+result: Result[Fft[f32], ResamplerConstructionError] = Fft.new[f32](
+    48_000,
+    24_000,
+    480,
+    1,
+    FixedSync.Input,
+)
+```
+
+When an assignment, return annotation, or function parameter already expects `Fft[f32]`, the brackets can be omitted and the same receiver type is inferred from that context. The explicit form remains useful when the result has no constraining context.
+
+Receiver declarations containing Rust const parameters cannot use this syntax in Incan 0.5 because Incan type-argument brackets do not accept const values. The compiler reports that boundary instead of shifting a type argument into the wrong Rust turbofish position. Use a type-only Rust or Incan wrapper for those APIs.
+
+Imported Rust methods may also declare their own type parameters. Their bracket lists are arity-complete just like Incan calls: a three-parameter method accepts `[T, U, V]` or an equally long list containing `_` placeholders, but not a shortened `[T]`. This keeps the checked Incan call and the emitted Rust method turbofish structurally identical.
+
 ## Why `_` exists
 
 Sometimes you only care about one slot and want the rest inferred.

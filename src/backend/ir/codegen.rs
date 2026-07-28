@@ -3967,6 +3967,92 @@ pub def forward(value: Thing) -> None:
 
     #[cfg(feature = "rust_inspect")]
     #[test]
+    fn test_codegen_materializes_owner_specialized_rust_associated_function_arguments()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{
+            RustFunctionSig, RustItemKind, RustItemMetadata, RustMethodSig, RustParam, RustTypeInfo, RustVisibility,
+        };
+
+        let source = r#"
+from rust::demo import PairFactory
+
+def accept_pair(value: PairFactory[i64, str]) -> None:
+  pass
+
+pub def build_pair() -> None:
+  accept_pair(PairFactory.new(7, "marker"))
+"#;
+        let tokens =
+            lexer::lex(source).map_err(|errors| std::io::Error::other(format!("lexing failed: {errors:?}")))?;
+        let ast =
+            parser::parse(&tokens).map_err(|errors| std::io::Error::other(format!("parsing failed: {errors:?}")))?;
+
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut tc = TypeChecker::new();
+        tc.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        tc.rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::PairFactory".to_string(),
+                    definition_path: Some("demo::PairFactory".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: vec!["T".to_string(), "U".to_string()],
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: vec![RustMethodSig {
+                            name: "new".to_string(),
+                            signature: RustFunctionSig {
+                                type_params: Vec::new(),
+                                params: vec![
+                                    RustParam {
+                                        name: Some("value".to_string()),
+                                        type_display: "T".to_string(),
+                                    },
+                                    RustParam {
+                                        name: Some("marker".to_string()),
+                                        type_display: "U".to_string(),
+                                    },
+                                ],
+                                return_type: "demo::PairFactory<T, U>".to_string(),
+                                is_async: false,
+                                is_unsafe: false,
+                            },
+                        }],
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|err| std::io::Error::other(format!("seed rust-inspect type: {err}")))?;
+        tc.check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+
+        let mut lowering = AstLowering::new_with_type_info(tc.type_info().clone());
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+        let compact = code.split_whitespace().collect::<String>();
+
+        assert!(
+            compact.contains("PairFactory::new(7,\"marker\".to_string())")
+                || compact.contains("PairFactory::new(7,\"marker\".into())"),
+            "expected the owner-specialized String parameter to materialize at the Rust boundary; got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
     fn test_codegen_emits_named_field_struct_literal_for_imported_rust_type_constructor()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::frontend::typechecker::TypeChecker;
@@ -3995,6 +4081,8 @@ pub def make_pair() -> Pair:
                     definition_path: Some("demo::Pair".to_string()),
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
                         methods: Vec::new(),
@@ -4071,6 +4159,8 @@ pub def rebuild(join: JoinRel) -> JoinRel:
                     definition_path: Some("demo::JoinRel".to_string()),
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
                         methods: Vec::new(),
@@ -4197,6 +4287,8 @@ pub def forward(payload: Payload) -> int:
                     definition_path: Some("demo::Builder".to_string()),
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
                         methods: vec![
@@ -4464,6 +4556,8 @@ pub async def register_csv() -> None:
                     definition_path: Some("demo::SessionContext".to_string()),
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
                         methods: vec![
@@ -4520,6 +4614,8 @@ pub async def register_csv() -> None:
                     definition_path: Some("demo::CsvReadOptions".to_string()),
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
                         methods: vec![RustMethodSig {

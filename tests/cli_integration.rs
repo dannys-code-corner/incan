@@ -1040,6 +1040,100 @@ def main() -> None:
 }
 
 #[test]
+fn set_constructor_survives_facade_package_and_test_batch_issue951() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let producer_root = tmp.path().join("set_library");
+    let producer_src = producer_root.join("src");
+    fs::create_dir_all(&producer_src)?;
+    fs::write(
+        producer_root.join("incan.toml"),
+        "[project]\nname = \"set_library\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(
+        producer_src.join("sets.incn"),
+        r#""""Publish a collection helper that exercises canonical Set construction."""
+
+
+pub def unique(values: List[str]) -> Set[str]:
+    """Return the distinct values from one source list."""
+    return set(values)
+"#,
+    )?;
+    fs::write(
+        producer_src.join("facade.incn"),
+        r#""""Re-export the public set helper through an intermediate facade."""
+
+pub from sets import unique
+"#,
+    )?;
+    fs::write(
+        producer_src.join("lib.incn"),
+        r#""""Publish the package's stable public facade."""
+
+pub from facade import unique
+"#,
+    )?;
+
+    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    assert_success(
+        &producer_build,
+        "producer build --lib for Set constructor package boundary",
+    );
+
+    let consumer_root = tmp.path().join("set_consumer");
+    let consumer_main = write_minimal_project(
+        &consumer_root,
+        "set_consumer",
+        r#"
+[dependencies]
+set_library = { path = "../set_library" }
+"#,
+    )?;
+    fs::write(
+        &consumer_main,
+        r#""""Consume a compiled helper that constructs a Set behind a facade."""
+
+from pub::set_library import unique
+
+
+def main() -> None:
+    """Print the cardinality returned by the compiled package."""
+    println(len(unique(["beta", "alpha", "beta"])))
+"#,
+    )?;
+    let tests_dir = consumer_root.join("tests");
+    fs::create_dir_all(&tests_dir)?;
+    fs::write(
+        tests_dir.join("test_sets.incn"),
+        r#""""Exercise compiled and local Set construction in one generated test batch."""
+
+from pub::set_library import unique
+from std.testing import assert_eq
+
+
+def test_set_constructor_boundaries() -> None:
+    """Verify the provider facade and test-batch lowering routes."""
+    assert_eq(len(unique(["beta", "alpha", "beta"])), 2)
+    assert_eq(len(set(["gamma", "gamma", "delta"])), 2)
+"#,
+    )?;
+
+    let consumer_run = run_incan(&consumer_root, &["run"])?;
+    assert_success(
+        &consumer_run,
+        "compiled package consumer with a facade-exported Set constructor",
+    );
+    assert_eq!(String::from_utf8(consumer_run.stdout)?, "2\n");
+
+    let consumer_tests = run_incan(&consumer_root, &["test", "tests"])?;
+    assert_success(
+        &consumer_tests,
+        "compiled package and local Set constructors in a generated test batch",
+    );
+    Ok(())
+}
+
+#[test]
 fn compiled_sdk_providers_keep_serde_trait_imports_out_of_consumers() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(tmp.path(), "compiled_sdk_provider_serde", "")?;
@@ -6749,7 +6843,7 @@ audio_callback = { path = "rust/audio_callback" }
     )?;
     fs::write(
         &main_path,
-        r#"from rust::audio_callback import OutputCallbackInfo, run
+        r#"from rust::audio_callback import DeviceTrait, OutputCallbackInfo, device
 
 def write_silence(_data: &mut list[f32], _info: &OutputCallbackInfo) -> None:
   pass
@@ -6758,8 +6852,9 @@ def report_error(_error: str) -> None:
   pass
 
 def main() -> None:
-  run(write_silence, report_error)
-  run((_data, _info) => println(""), report_error)
+  stream = device()
+  stream.run[f32, _, _](write_silence, report_error)
+  stream.run[f32, _, _]((_data, _info) => println(len(_data)), report_error)
   println("callbacks-built")
 "#,
     )?;
@@ -6779,17 +6874,34 @@ edition = "2021"
     )?;
     fs::write(
         helper_src.join("lib.rs"),
-        r#"pub struct OutputCallbackInfo;
+        r#"pub struct Device;
 
-pub fn run<D, E>(mut data_callback: D, mut error_callback: E)
-where
-    D: FnMut(&mut [f32], &OutputCallbackInfo) + Send + 'static,
-    E: FnMut(String),
-{
-    let mut data = [0.0_f32; 2];
-    let info = OutputCallbackInfo;
-    data_callback(&mut data, &info);
-    error_callback("synthetic callback error".to_string());
+pub struct OutputCallbackInfo;
+
+pub fn device() -> Device {
+    Device
+}
+
+pub trait DeviceTrait {
+    fn run<T, D, E>(&self, data_callback: D, error_callback: E)
+    where
+        T: Copy + Default,
+        D: FnMut(&mut [T], &OutputCallbackInfo) + Send + 'static,
+        E: FnMut(String);
+}
+
+impl DeviceTrait for Device {
+    fn run<T, D, E>(&self, mut data_callback: D, mut error_callback: E)
+    where
+        T: Copy + Default,
+        D: FnMut(&mut [T], &OutputCallbackInfo) + Send + 'static,
+        E: FnMut(String),
+    {
+        let mut data = [T::default(); 2];
+        let info = OutputCallbackInfo;
+        data_callback(&mut data, &info);
+        error_callback("synthetic callback error".to_string());
+    }
 }
 "#,
     )?;
@@ -6798,7 +6910,7 @@ where
     assert_success(&output, "Rust FnMut borrowed-slice callbacks");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "callbacks-built",
+        "2\ncallbacks-built",
         "unexpected borrowed-slice callback output"
     );
     Ok(())
@@ -6818,7 +6930,7 @@ stream_host = { path = "rust/stream_host" }
     )?;
     fs::write(
         &main_path,
-        r#"from rust::stream_host import device
+        r#"from rust::stream_host import DeviceTrait, device
 
 def consume(_value: f32) -> None:
   pass
@@ -6832,7 +6944,7 @@ def main() -> None:
     let partial_path = tmp.path().join("src").join("partial.incn");
     fs::write(
         &partial_path,
-        r#"from rust::stream_host import device
+        r#"from rust::stream_host import DeviceTrait, device
 
 def consume(_value: f32) -> None:
   pass
@@ -6864,8 +6976,16 @@ pub fn device() -> Device {
     Device
 }
 
-impl Device {
-    pub fn build_output_stream<T, D, E>(&self, value: T, mut data_callback: D, mut error_callback: E)
+pub trait DeviceTrait {
+    fn build_output_stream<T, D, E>(&self, value: T, data_callback: D, error_callback: E)
+    where
+        T: Copy,
+        D: FnMut(T),
+        E: FnMut(T);
+}
+
+impl DeviceTrait for Device {
+    fn build_output_stream<T, D, E>(&self, value: T, mut data_callback: D, mut error_callback: E)
     where
         T: Copy,
         D: FnMut(T),

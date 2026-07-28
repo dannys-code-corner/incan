@@ -7638,6 +7638,60 @@ async def main() -> None:
     }
 
     #[test]
+    fn test_run_set_constructor_from_values_issue951() -> Result<(), Box<dyn std::error::Error>> {
+        let output = incan_command()
+            .args(["run", "tests/codegen_snapshots/issue951_set_constructor.incn"])
+            .env("INCAN_SOURCE_ROOT", env!("CARGO_MANIFEST_DIR"))
+            .env(
+                "INCAN_STDLIB",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
+            )
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "incan run issue951_set_constructor failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "source:3\ngeneric-source:3\nset-source:2\n2:2:2:2:2:2:2:1:2:0\n",
+            "set constructors must deduplicate values without consuming a source collection that is used later"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_user_defined_set_shadowing_issue951() -> Result<(), Box<dyn std::error::Error>> {
+        let output = incan_command()
+            .args(["run", "tests/codegen_snapshots/issue951_set_shadowing.incn"])
+            .env("INCAN_SOURCE_ROOT", env!("CARGO_MANIFEST_DIR"))
+            .env(
+                "INCAN_STDLIB",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
+            )
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "incan run issue951_set_shadowing failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "3\n",
+            "a source-defined set function must remain an ordinary call through generated Rust"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_run_rfc088_iterator_sum_float_and_newtype_matrix() {
         let Ok(output) = incan_command()
             .args(["run", "tests/fixtures/rfc088_iterator_sum_runtime.incn"])
@@ -12091,6 +12145,99 @@ mod rfc031_pub_import_integration_tests {
             .output()?)
     }
 
+    /// Write the shared Rust dependency used by receiver-generic application and compiled-provider acceptance tests.
+    fn write_receiver_factory_dependency(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let rust_dir = root.join("receiver_factory");
+        std::fs::create_dir_all(rust_dir.join("src"))?;
+        std::fs::write(
+            rust_dir.join("Cargo.toml"),
+            "[package]\nname = \"receiver_factory\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )?;
+        std::fs::write(
+            rust_dir.join("src/lib.rs"),
+            r#"pub struct Factory<T> {
+    marker: std::marker::PhantomData<T>,
+}
+
+pub struct ConstructionError;
+
+pub enum Mode {
+    Input,
+}
+
+pub struct Device;
+
+pub fn device() -> Device {
+    Device
+}
+
+pub trait DeviceTrait {
+    fn build_output_stream<T, D, E>(&self, value: T, data_callback: D, error_callback: E)
+    where
+        T: Copy,
+        D: FnMut(T),
+        E: FnMut(T);
+
+    fn run_callbacks<T, D, E>(&self, data_callback: D, error_callback: E)
+    where
+        T: Copy + Default,
+        D: FnMut(&mut [T], &OutputCallbackInfo) + Send + 'static,
+        E: FnMut(String);
+}
+
+impl DeviceTrait for Device {
+    fn build_output_stream<T, D, E>(&self, value: T, mut data_callback: D, mut error_callback: E)
+    where
+        T: Copy,
+        D: FnMut(T),
+        E: FnMut(T),
+    {
+        data_callback(value);
+        error_callback(value);
+    }
+
+    fn run_callbacks<T, D, E>(&self, mut data_callback: D, mut error_callback: E)
+    where
+        T: Copy + Default,
+        D: FnMut(&mut [T], &OutputCallbackInfo) + Send + 'static,
+        E: FnMut(String),
+    {
+        let mut data = [T::default(); 2];
+        let info = OutputCallbackInfo;
+        data_callback(&mut data, &info);
+        error_callback("synthetic callback error".to_string());
+    }
+}
+
+pub struct OutputCallbackInfo;
+
+pub struct PairFactory<T, U> {
+    value: T,
+    marker: U,
+}
+
+impl<T> Factory<T> {
+    pub fn new(_size: i64, _mode: Mode) -> Result<Self, ConstructionError> {
+        Ok(Self {
+            marker: std::marker::PhantomData,
+        })
+    }
+}
+
+impl<T, U> PairFactory<T, U> {
+    pub fn new(value: T, marker: U) -> Self {
+        Self { value, marker }
+    }
+
+    pub fn first(value: T) -> T {
+        value
+    }
+}
+"#,
+        )?;
+        Ok(())
+    }
+
     #[test]
     fn consumer_build_infers_rust_generic_return_from_unwrap_context_issue852() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -12154,6 +12301,366 @@ def test_generic_json_result_infers_from_parameter_context() -> None:
         assert!(
             test_output.status.success(),
             "expected the package test batch to compile and run the inferred generic JSON result.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&test_output.stdout),
+            String::from_utf8_lossy(&test_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn receiver_generic_rust_associated_functions_build_explicitly_and_contextually_issue961()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        write_receiver_factory_dependency(tmp.path())?;
+        let project_dir = tmp.path().join("consumer");
+        let main_path = write_project_files(
+            &project_dir,
+            "[project]\nname = \"receiver_generic_associated_consumer\"\n\n[rust-dependencies.receiver_factory]\npath = \"../receiver_factory\"\n",
+            r#"from rust::receiver_factory import ConstructionError, Factory, Mode, PairFactory
+
+
+def accept_factory(result: Result[Factory[f32], ConstructionError]) -> None:
+    match result:
+        Ok(_) => pass
+        Err(_) => pass
+
+
+def accept_pair(value: PairFactory[i64, str]) -> None:
+    pass
+
+
+def main() -> None:
+    explicit: Result[Factory[f32], ConstructionError] = Factory.new[f32](8, Mode.Input)
+    contextual: Result[Factory[f32], ConstructionError] = Factory.new(8, Mode.Input)
+    explicit_pair: PairFactory[i64, str] = PairFactory.new[i64, str](7, "marker")
+    contextual_pair: PairFactory[i64, str] = PairFactory.new(7, "marker")
+    first: str = PairFactory.first[str, i64]("value")
+    accept_factory(explicit)
+    accept_factory(contextual)
+    accept_factory(Factory.new(8, Mode.Input))
+    accept_pair(explicit_pair)
+    accept_pair(contextual_pair)
+    accept_pair(PairFactory.new(7, "marker"))
+    if len(first) == 0:
+        print(first)
+"#,
+        )?;
+
+        let check_output = run_check(&main_path)?;
+        assert!(
+            check_output.status.success(),
+            "expected receiver-generic associated functions to typecheck.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&check_output.stdout),
+            String::from_utf8_lossy(&check_output.stderr)
+        );
+
+        let out_dir = tmp.path().join("out");
+        let build_output = run_build(&main_path, &out_dir)?;
+        assert!(
+            build_output.status.success(),
+            "expected generated Rust to compile receiver-generic associated calls.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build_output.stdout),
+            String::from_utf8_lossy(&build_output.stderr)
+        );
+        let generated_main = std::fs::read_to_string(out_dir.join("src/main.rs"))?;
+        let compact_generated_main = generated_main.split_whitespace().collect::<String>();
+        assert!(
+            compact_generated_main.contains("PairFactory::<i64,String,>::new"),
+            "expected receiver-side turbofish for both owner type parameters:\n{generated_main}"
+        );
+        assert!(
+            compact_generated_main.contains("PairFactory::<String,i64>::first"),
+            "expected owner specialization on a non-Self return:\n{generated_main}"
+        );
+        assert!(
+            compact_generated_main.contains("accept_pair(PairFactory::new(7,\"marker\".into()))")
+                || compact_generated_main.contains("accept_pair(PairFactory::new(7,\"marker\".to_string()))"),
+            "expected contextual receiver specialization to preserve the owned String parameter:\n{generated_main}"
+        );
+
+        let tests_dir = project_dir.join("tests");
+        std::fs::create_dir_all(&tests_dir)?;
+        std::fs::write(
+            tests_dir.join("test_receiver_generic_associated.incn"),
+            r#"from rust::receiver_factory import ConstructionError, Factory, Mode, PairFactory
+
+
+def accept_factory(result: Result[Factory[f32], ConstructionError]) -> None:
+    match result:
+        Ok(_) => pass
+        Err(_) => pass
+
+
+def accept_pair(value: PairFactory[i64, str]) -> None:
+    pass
+
+
+def test_explicit_and_contextual_receiver_generics() -> None:
+    accept_factory(Factory.new[f32](8, Mode.Input))
+    accept_factory(Factory.new(8, Mode.Input))
+    accept_pair(PairFactory.new[i64, str](7, "marker"))
+    accept_pair(PairFactory.new(7, "marker"))
+    assert PairFactory.first[str, i64]("value") == "value"
+    assert true
+"#,
+        )?;
+        let test_output = run_test(&tests_dir)?;
+        assert!(
+            test_output.status.success(),
+            "expected package test batches to compile receiver-generic associated calls.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&test_output.stdout),
+            String::from_utf8_lossy(&test_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_provider_preserves_receiver_generic_rust_associated_functions_issue961()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        write_receiver_factory_dependency(tmp.path())?;
+        let provider_root = tmp.path().join("receiver_factory_api");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            "[project]\nname = \"receiver_factory_api\"\nversion = \"0.1.0\"\n\n[rust-dependencies.receiver_factory]\npath = \"../receiver_factory\"\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.incn"),
+            "pub from rust::receiver_factory import ConstructionError, Factory, Mode, PairFactory\n",
+        )?;
+        let provider_build = run_build_lib(&provider_root)?;
+        assert!(
+            provider_build.status.success(),
+            "expected receiver-generic Rust metadata producer to build.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_build.stdout),
+            String::from_utf8_lossy(&provider_build.stderr)
+        );
+        let provider_manifest =
+            LibraryManifest::read_from_path(&provider_root.join("target/lib/receiver_factory_api.incnlib"))?;
+        let factory_metadata = provider_manifest
+            .rust_abi
+            .as_ref()
+            .and_then(|abi| abi.get("receiver_factory::PairFactory"))
+            .ok_or("expected PairFactory metadata in compiled provider")?;
+        let incan_core::interop::RustItemKind::Type(factory_metadata) = &factory_metadata.kind else {
+            return Err("expected compiled PairFactory type metadata".into());
+        };
+        assert_eq!(factory_metadata.type_params, ["T", "U"]);
+        assert!(!factory_metadata.has_const_params);
+
+        let compiled_consumer_root = tmp.path().join("compiled_consumer");
+        let compiled_consumer_main = write_project_files(
+            &compiled_consumer_root,
+            "[project]\nname = \"receiver_factory_compiled_consumer\"\n\n[dependencies]\nreceiver_factory_api = { path = \"../receiver_factory_api\" }\n",
+            r#"from pub::receiver_factory_api import ConstructionError, Factory, Mode, PairFactory
+
+
+def accept_factory(result: Result[Factory[f32], ConstructionError]) -> None:
+    match result:
+        Ok(_) => pass
+        Err(_) => pass
+
+
+def accept_pair(value: PairFactory[i64, str]) -> None:
+    pass
+
+
+def main() -> None:
+    accept_factory(Factory.new[f32](8, Mode.Input))
+    accept_factory(Factory.new(8, Mode.Input))
+    pair: PairFactory[i64, str] = PairFactory.new[i64, str](7, "marker")
+    inferred: PairFactory[i64, str] = PairFactory.new(7, "marker")
+    accept_pair(pair)
+    accept_pair(inferred)
+    accept_pair(PairFactory.new(7, "marker"))
+    if PairFactory.first[str, i64]("value") == "value":
+        pass
+"#,
+        )?;
+        let compiled_consumer_check = run_check(&compiled_consumer_main)?;
+        assert!(
+            compiled_consumer_check.status.success(),
+            "expected compiled provider consumer to typecheck receiver generics.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&compiled_consumer_check.stdout),
+            String::from_utf8_lossy(&compiled_consumer_check.stderr)
+        );
+        let compiled_consumer_out = tmp.path().join("compiled_consumer_out");
+        let compiled_consumer_build = run_build(&compiled_consumer_main, &compiled_consumer_out)?;
+        assert!(
+            compiled_consumer_build.status.success(),
+            "expected compiled provider consumer to build receiver generics.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&compiled_consumer_build.stdout),
+            String::from_utf8_lossy(&compiled_consumer_build.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_provider_preserves_rust_trait_method_generic_arity_issue834() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let tmp = tempfile::tempdir()?;
+        write_receiver_factory_dependency(tmp.path())?;
+        let provider_root = tmp.path().join("stream_api");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            "[project]\nname = \"stream_api\"\nversion = \"0.1.0\"\n\n[rust-dependencies.receiver_factory]\npath = \"../receiver_factory\"\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.incn"),
+            r#"from rust::receiver_factory import DeviceTrait, device
+
+
+def consume(_value: f32) -> None:
+    pass
+
+
+pub def build_stream() -> None:
+    stream = device()
+    stream.build_output_stream[f32, _, _](1.0, consume, consume)
+"#,
+        )?;
+        let provider_build = run_build_lib(&provider_root)?;
+        assert!(
+            provider_build.status.success(),
+            "expected Rust trait-method metadata provider to build.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_build.stdout),
+            String::from_utf8_lossy(&provider_build.stderr)
+        );
+        let generated_provider = std::fs::read_to_string(provider_root.join("target/lib/src/lib.rs"))?;
+        let compact_generated_provider = generated_provider.split_whitespace().collect::<String>();
+        assert!(
+            compact_generated_provider.contains(".build_output_stream::<f32,_,_>"),
+            "expected the complete method turbofish in generated provider Rust:\n{generated_provider}"
+        );
+
+        let consumer_root = tmp.path().join("consumer");
+        let consumer_main = write_project_files(
+            &consumer_root,
+            "[project]\nname = \"stream_api_consumer\"\n\n[dependencies]\nstream_api = { path = \"../stream_api\" }\n",
+            r#"from pub::stream_api import build_stream
+
+
+def main() -> None:
+    build_stream()
+"#,
+        )?;
+
+        let consumer_out = tmp.path().join("consumer_out");
+        let consumer_build = run_build(&consumer_main, &consumer_out)?;
+        assert!(
+            consumer_build.status.success(),
+            "expected the complete Rust trait-method generic arguments to compile through a provider.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_build.stdout),
+            String::from_utf8_lossy(&consumer_build.stderr)
+        );
+
+        let tests_dir = consumer_root.join("tests");
+        std::fs::create_dir_all(&tests_dir)?;
+        std::fs::write(
+            tests_dir.join("test_stream.incn"),
+            r#"from pub::stream_api import build_stream
+
+
+def test_complete_method_generics() -> None:
+    build_stream()
+    assert true
+"#,
+        )?;
+        let test_output = run_test(&tests_dir)?;
+        assert!(
+            test_output.status.success(),
+            "expected package test batches to preserve complete Rust trait-method generics.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&test_output.stdout),
+            String::from_utf8_lossy(&test_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_provider_preserves_borrowed_slice_rust_method_callbacks_issue835()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        write_receiver_factory_dependency(tmp.path())?;
+        let provider_root = tmp.path().join("callback_api");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            "[project]\nname = \"callback_api\"\nversion = \"0.1.0\"\n\n[rust-dependencies.receiver_factory]\npath = \"../receiver_factory\"\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.incn"),
+            r#"from rust::receiver_factory import DeviceTrait, OutputCallbackInfo, device
+
+
+def write_silence(_data: &mut list[f32], _info: &OutputCallbackInfo) -> None:
+    pass
+
+
+def report_error(_error: str) -> None:
+    pass
+
+
+pub def exercise_callbacks() -> None:
+    stream = device()
+    stream.run_callbacks[f32, _, _](write_silence, report_error)
+    stream.run_callbacks[f32, _, _]((_data, _info) => println(len(_data)), report_error)
+"#,
+        )?;
+
+        let provider_build = run_build_lib(&provider_root)?;
+        assert!(
+            provider_build.status.success(),
+            "expected borrowed-slice Rust callbacks to compile in a provider.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_build.stdout),
+            String::from_utf8_lossy(&provider_build.stderr)
+        );
+        let generated_provider = std::fs::read_to_string(provider_root.join("target/lib/src/lib.rs"))?;
+        assert!(
+            generated_provider.contains("&mut [f32]"),
+            "expected the named callback to retain the inspected borrowed-slice type:\n{generated_provider}"
+        );
+        assert!(
+            !generated_provider.contains("&mut Vec<f32>"),
+            "borrowed-slice callbacks must not lower to a borrowed Vec:\n{generated_provider}"
+        );
+
+        let consumer_root = tmp.path().join("consumer");
+        let consumer_main = write_project_files(
+            &consumer_root,
+            "[project]\nname = \"callback_api_consumer\"\n\n[dependencies]\ncallback_api = { path = \"../callback_api\" }\n",
+            r#"from pub::callback_api import exercise_callbacks
+
+
+def main() -> None:
+    exercise_callbacks()
+"#,
+        )?;
+        let consumer_build = run_build(&consumer_main, &tmp.path().join("consumer_out"))?;
+        assert!(
+            consumer_build.status.success(),
+            "expected a compiled-provider consumer to build borrowed-slice callback code.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_build.stdout),
+            String::from_utf8_lossy(&consumer_build.stderr)
+        );
+
+        let tests_dir = consumer_root.join("tests");
+        std::fs::create_dir_all(&tests_dir)?;
+        std::fs::write(
+            tests_dir.join("test_callbacks.incn"),
+            r#"from pub::callback_api import exercise_callbacks
+
+
+def test_borrowed_slice_callbacks() -> None:
+    exercise_callbacks()
+    assert true
+"#,
+        )?;
+        let test_output = run_test(&tests_dir)?;
+        assert!(
+            test_output.status.success(),
+            "expected package tests to run through a compiled provider with borrowed-slice callbacks.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&test_output.stdout),
             String::from_utf8_lossy(&test_output.stderr)
         );

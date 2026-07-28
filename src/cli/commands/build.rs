@@ -643,6 +643,47 @@ impl<'a> LibraryReexportResolver<'a> {
                 continue;
             }
 
+            if let ImportKind::RustFrom {
+                crate_name,
+                path,
+                items,
+                ..
+            } = &import.kind
+            {
+                let Some(exports_by_name) = self.module_exports.get(&module_key(&lib_module.path_segments)) else {
+                    errors.push(diagnostics::errors::library_reexport_unknown_module(
+                        &module_key(&lib_module.path_segments),
+                        &known_modules,
+                        decl.span,
+                    ));
+                    continue;
+                };
+                let mut source_segments = vec!["rust".to_string(), crate_name.clone()];
+                source_segments.extend(path.iter().cloned());
+                let source_path = source_segments.join("::");
+
+                for item in items {
+                    let exported_name = item.alias.as_ref().unwrap_or(&item.name).clone();
+                    if !exported_names.insert(exported_name.clone()) {
+                        errors.push(diagnostics::errors::duplicate_library_export(&exported_name, decl.span));
+                        continue;
+                    }
+
+                    let Some(exports) = exports_by_name.get(&exported_name) else {
+                        let available: Vec<String> = exports_by_name.keys().cloned().collect();
+                        errors.push(diagnostics::errors::import_not_exported(
+                            &item.name,
+                            &source_path,
+                            &available,
+                            decl.span,
+                        ));
+                        continue;
+                    };
+                    resolved.extend(exports.iter().cloned());
+                }
+                continue;
+            }
+
             let ImportKind::From { module, items } = &import.kind else {
                 errors.push(diagnostics::errors::library_pub_reexport_requires_from(decl.span));
                 continue;
@@ -3429,6 +3470,71 @@ impl ChildId {
             CheckedExportKind::TypeAlias(alias) => assert_eq!(alias.name, "PublicWidget"),
             _ => panic!("expected type alias export"),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_library_reexports_accepts_checked_rust_imports() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "pub from rust::receiver_factory import PairFactory as PublicPairFactory\n";
+        let tokens = lexer::lex(source).map_err(|errs| format!("lex errors: {errs:?}"))?;
+        let ast = parser::parse_with_module_path(&tokens, Some("project/src/lib.incn"))
+            .map_err(|errs| format!("parse errors: {errs:?}"))?;
+        let lib_module = ParsedModule {
+            name: "main".to_string(),
+            path_segments: vec!["main".to_string()],
+            file_path: PathBuf::from("project/src/lib.incn"),
+            source: source.to_string(),
+            ast,
+        };
+
+        let pair_factory_export = CheckedNamedExport {
+            name: "PublicPairFactory".to_string(),
+            identity: CheckedExportIdentity::reexport(
+                vec![
+                    "rust".to_string(),
+                    "receiver_factory".to_string(),
+                    "PairFactory".to_string(),
+                ],
+                vec![
+                    "rust".to_string(),
+                    "receiver_factory".to_string(),
+                    "PairFactory".to_string(),
+                ],
+            ),
+            kind: CheckedExportKind::Alias(crate::frontend::library_exports::CheckedAliasExport {
+                name: "PublicPairFactory".to_string(),
+                target_path: vec![
+                    "rust".to_string(),
+                    "receiver_factory".to_string(),
+                    "PairFactory".to_string(),
+                ],
+                projected_function: None,
+            }),
+        };
+        let mut module_exports: HashMap<String, HashMap<String, Vec<CheckedNamedExport>>> = HashMap::new();
+        module_exports.insert(
+            "main".to_string(),
+            HashMap::from([(pair_factory_export.name.clone(), vec![pair_factory_export])]),
+        );
+
+        let resolved = LibraryReexportResolver::new(&module_exports)
+            .resolve(&lib_module)
+            .map_err(|errs| format!("{errs:?}"))?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, "PublicPairFactory");
+        let crate::frontend::library_exports::CheckedExportProjection::Reexport { target_path } =
+            &resolved[0].identity.projection
+        else {
+            return Err("expected Rust import reexport identity".into());
+        };
+        assert_eq!(
+            target_path,
+            &[
+                "rust".to_string(),
+                "receiver_factory".to_string(),
+                "PairFactory".to_string(),
+            ]
+        );
         Ok(())
     }
 
