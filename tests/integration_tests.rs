@@ -7665,6 +7665,33 @@ async def main() -> None:
     }
 
     #[test]
+    fn test_run_set_add_issue963() -> Result<(), Box<dyn std::error::Error>> {
+        let output = incan_command()
+            .args(["run", "tests/codegen_snapshots/issue963_set_add.incn"])
+            .env("INCAN_SOURCE_ROOT", env!("CARGO_MANIFEST_DIR"))
+            .env(
+                "INCAN_STDLIB",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
+            )
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "incan run issue963_set_add failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "1\n",
+            "Set.add must mutate the set and preserve HashSet deduplication"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_run_user_defined_set_shadowing_issue951() -> Result<(), Box<dyn std::error::Error>> {
         let output = incan_command()
             .args(["run", "tests/codegen_snapshots/issue951_set_shadowing.incn"])
@@ -14966,6 +14993,7 @@ pub def aggregate_default(expr: ColumnExpr, output_name: str = DEFAULT_LABEL) ->
             trait_adoptions: Vec::new(),
             derives: Vec::new(),
             fields: Vec::new(),
+            properties: Vec::new(),
             methods: Vec::new(),
         });
         manifest
@@ -15143,6 +15171,7 @@ pub def aggregate_default(expr: ColumnExpr, output_name: str = DEFAULT_LABEL) ->
             trait_adoptions: Vec::new(),
             derives: Vec::new(),
             fields: Vec::new(),
+            properties: Vec::new(),
             methods: Vec::new(),
         });
         manifest.write_to_path(&dep_artifact_root.join("widgets_core.incnlib"))?;
@@ -15222,6 +15251,67 @@ pub def aggregate_default(expr: ColumnExpr, output_name: str = DEFAULT_LABEL) ->
             String::from_utf8_lossy(&consumer_check.stderr)
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_library_preserves_public_computed_property_contract_issue952() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let tmp = tempfile::tempdir()?;
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let stdlib = source_root.join("crates/incan_stdlib/stdlib");
+        let producer_root = tmp.path().join("computed_property_provider");
+        std::fs::create_dir_all(producer_root.join("src"))?;
+        std::fs::write(
+            producer_root.join("incan.toml"),
+            "[project]\nname = \"computed_property_provider\"\nversion = \"0.1.0\"\n",
+        )?;
+        std::fs::write(
+            producer_root.join("src/lib.incn"),
+            "pub class Index:\n  value: int\n\n  pub property dimensions -> int:\n    return self.value\n\npub def make_index() -> Index:\n  return Index(value=2)\n",
+        )?;
+
+        let producer_build = super::incan_command()
+            .args(["build", "--lib"])
+            .current_dir(&producer_root)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_SOURCE_ROOT", source_root)
+            .env("INCAN_STDLIB", &stdlib)
+            .env_remove("INCAN_STDLIB_DIR")
+            .output()?;
+        assert!(
+            producer_build.status.success(),
+            "expected producer library build to succeed.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&producer_build.stdout),
+            String::from_utf8_lossy(&producer_build.stderr)
+        );
+
+        let consumer_root = tmp.path().join("consumer_app");
+        std::fs::create_dir_all(consumer_root.join("src"))?;
+        std::fs::write(
+            consumer_root.join("incan.toml"),
+            "[project]\nname = \"consumer\"\n\n[dependencies]\ncomputed_property_provider = { path = \"../computed_property_provider\" }\n",
+        )?;
+        let consumer_main = consumer_root.join("src/main.incn");
+        std::fs::write(
+            &consumer_main,
+            "from pub::computed_property_provider import make_index\n\ndef main() -> None:\n  index = make_index()\n  println(index.dimensions)\n",
+        )?;
+
+        let consumer_check = super::incan_command()
+            .arg("--check")
+            .arg(&consumer_main)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_SOURCE_ROOT", source_root)
+            .env("INCAN_STDLIB", &stdlib)
+            .env_remove("INCAN_STDLIB_DIR")
+            .output()?;
+        assert!(
+            consumer_check.status.success(),
+            "expected a compiled-library consumer to access a public computed property.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_check.stdout),
+            String::from_utf8_lossy(&consumer_check.stderr)
+        );
         Ok(())
     }
 

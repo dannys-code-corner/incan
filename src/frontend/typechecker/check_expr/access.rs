@@ -4407,9 +4407,13 @@ impl TypeChecker {
                 }
             }
             if collection_type_id(name.as_str()) == Some(CollectionTypeId::Set)
-                && set_methods::from_str(method).is_some()
+                && let Some(id) = set_methods::from_str(method)
             {
-                return ResolvedType::Bool;
+                use set_methods::SetMethodId as M;
+                return match id {
+                    M::Add => ResolvedType::Unit,
+                    M::Contains => ResolvedType::Bool,
+                };
             }
             if collection_type_id(name.as_str()) == Some(CollectionTypeId::Option) && method == "clone" {
                 if !args.is_empty() {

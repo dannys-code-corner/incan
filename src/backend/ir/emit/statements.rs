@@ -1674,6 +1674,7 @@ mod tests {
     #[test]
     fn storage_binding_analysis_matches_method_mutability_policy() -> Result<(), String> {
         let method_kinds = vec![
+            CollectionMethodKind::Add,
             CollectionMethodKind::Insert,
             CollectionMethodKind::Remove,
             CollectionMethodKind::Append,

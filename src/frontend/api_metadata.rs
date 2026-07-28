@@ -19,8 +19,8 @@ use crate::frontend::diagnostics::CompileError;
 use crate::frontend::library_exports::{
     CheckedClassExport, CheckedConstExport, CheckedEnumExport, CheckedExportKind, CheckedField, CheckedFunctionExport,
     CheckedMethod, CheckedModelExport, CheckedNamedExport, CheckedNewtypeExport, CheckedPartialExport,
-    CheckedPartialTargetKind, CheckedPresetValue, CheckedTraitExport, CheckedTypeAliasExport, CheckedTypeBound,
-    CheckedTypeParam, collect_checked_public_exports,
+    CheckedPartialTargetKind, CheckedPresetValue, CheckedProperty, CheckedTraitExport, CheckedTypeAliasExport,
+    CheckedTypeBound, CheckedTypeParam, collect_checked_public_exports,
 };
 use crate::frontend::module::canonicalize_source_module_segments;
 use crate::frontend::typechecker::{ConstValue, TypeChecker};
@@ -28,8 +28,8 @@ use crate::library_manifest::{
     ClassExport, EnumExport, EnumValueExport, EnumValueTypeExport, EnumVariantAliasExport, EnumVariantExport,
     FieldExport, FieldRequirementExport, FunctionExport, MethodExport, ModelExport, NewtypeConstraintExport,
     NewtypeExport, ParamExport, PartialExport, PartialPresetExport, PartialTargetKindExport, PresetDictEntryExport,
-    PresetModelFieldExport, PresetValueExport, ReceiverExport, TraitExport, TypeAliasExport, TypeBoundExport,
-    TypeParamExport, TypeRef, param_default_from_checked, params_from_checked, type_ref_from_resolved,
+    PresetModelFieldExport, PresetValueExport, PropertyExport, ReceiverExport, TraitExport, TypeAliasExport,
+    TypeBoundExport, TypeParamExport, TypeRef, param_default_from_checked, params_from_checked, type_ref_from_resolved,
 };
 
 pub const CHECKED_API_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -163,6 +163,8 @@ pub struct ApiModel {
     pub trait_adoptions: Vec<TypeBoundExport>,
     pub derives: Vec<String>,
     pub fields: Vec<FieldExport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<ApiProperty>,
     pub methods: Vec<ApiMethod>,
 }
 
@@ -181,7 +183,16 @@ pub struct ApiClass {
     pub trait_adoptions: Vec<TypeBoundExport>,
     pub derives: Vec<String>,
     pub fields: Vec<FieldExport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<ApiProperty>,
     pub methods: Vec<ApiMethod>,
+}
+
+/// Public computed-property metadata in checked API output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApiProperty {
+    pub name: String,
+    pub return_type: TypeRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -413,6 +424,14 @@ pub(crate) fn method_export_from_api(method: &ApiMethod) -> MethodExport {
     }
 }
 
+/// Convert a checked API computed property into manifest-style metadata.
+fn property_export_from_api(property: &ApiProperty) -> PropertyExport {
+    PropertyExport {
+        name: property.name.clone(),
+        return_type: property.return_type.clone(),
+    }
+}
+
 /// Convert a checked API model into manifest-style model metadata for public boundary consumers.
 pub(crate) fn model_export_from_api(model: &ApiModel) -> ModelExport {
     ModelExport {
@@ -422,6 +441,7 @@ pub(crate) fn model_export_from_api(model: &ApiModel) -> ModelExport {
         trait_adoptions: model.trait_adoptions.clone(),
         derives: model.derives.clone(),
         fields: model.fields.clone(),
+        properties: model.properties.iter().map(property_export_from_api).collect(),
         methods: model.methods.iter().map(method_export_from_api).collect(),
     }
 }
@@ -436,6 +456,7 @@ pub(crate) fn class_export_from_api(class: &ApiClass) -> ClassExport {
         trait_adoptions: class.trait_adoptions.clone(),
         derives: class.derives.clone(),
         fields: class.fields.clone(),
+        properties: class.properties.iter().map(property_export_from_api).collect(),
         methods: class.methods.iter().map(method_export_from_api).collect(),
     }
 }
@@ -1235,6 +1256,7 @@ fn api_model(
         trait_adoptions: export.trait_adoptions.iter().map(type_bound).collect(),
         derives: export.derives.clone(),
         fields: fields_in_source_order(&model.fields, &export.fields),
+        properties: properties(&export.properties),
         methods: methods(
             &model.methods,
             &model.method_aliases,
@@ -1270,6 +1292,7 @@ fn api_class(
         // Reordering the checked sequence to the child's AST declaration order would make manifest-backed consumers
         // pass positional bridge arguments in a different order than the generated Rust constructor.
         fields: export.fields.iter().map(field).collect(),
+        properties: properties(&export.properties),
         methods: methods(
             &class.methods,
             &class.method_aliases,
@@ -1710,6 +1733,17 @@ fn field(field: &crate::frontend::library_exports::CheckedField) -> FieldExport 
         alias: field.alias.clone(),
         description: field.description.clone(),
     }
+}
+
+/// Convert checked computed properties into API metadata.
+fn properties(properties: &[CheckedProperty]) -> Vec<ApiProperty> {
+    properties
+        .iter()
+        .map(|property| ApiProperty {
+            name: property.name.clone(),
+            return_type: type_ref_from_resolved(&property.return_type),
+        })
+        .collect()
 }
 
 /// Return checked fields ordered to match the source declaration.

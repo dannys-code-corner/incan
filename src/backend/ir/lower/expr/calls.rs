@@ -3693,6 +3693,7 @@ mod tests {
                     trait_adoptions: Vec::new(),
                     derives: Vec::new(),
                     fields: Vec::new(),
+                    properties: Vec::new(),
                     methods: Vec::new(),
                 })],
             }],

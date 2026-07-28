@@ -216,20 +216,31 @@ pub mod set_methods {
     /// Stable identifier for a set method.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum SetMethodId {
+        Add,
         Contains,
     }
 
     pub type SetMethodInfo = LangItemInfo<SetMethodId>;
 
     /// Registry of all set methods.
-    pub const SET_METHODS: &[SetMethodInfo] = &[info(
-        SetMethodId::Contains,
-        "contains",
-        &[],
-        "Return true if the set contains a value.",
-        RFC::_009,
-        Since(0, 1),
-    )];
+    pub const SET_METHODS: &[SetMethodInfo] = &[
+        info(
+            SetMethodId::Add,
+            "add",
+            &[],
+            "Add a value to the set.",
+            RFC::_009,
+            Since(0, 1),
+        ),
+        info(
+            SetMethodId::Contains,
+            "contains",
+            &[],
+            "Return true if the set contains a value.",
+            RFC::_009,
+            Since(0, 1),
+        ),
+    ];
 
     /// Resolve a set method spelling to its stable id.
     pub fn from_str(name: &str) -> Option<SetMethodId> {

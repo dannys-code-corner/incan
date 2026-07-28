@@ -31,8 +31,9 @@ use crate::frontend::typechecker::{
 use crate::library_manifest::{
     AliasExport, ClassExport, ConstExport, EnumExport, EnumValueExport, EnumValueTypeExport, FieldExport,
     FunctionExport, LibraryManifest, MethodExport, ModelExport, NewtypeExport, ParamDefaultExport, ParamExport,
-    ParamKindExport, PartialExport, PartialTargetKindExport, PresetValueExport, ProviderFactKind, ReceiverExport,
-    StaticExport, TraitExport, TypeAliasExport, TypeBoundExport, TypeParamExport, resolved_type_from_manifest_type_ref,
+    ParamKindExport, PartialExport, PartialTargetKindExport, PresetValueExport, PropertyExport, ProviderFactKind,
+    ReceiverExport, StaticExport, TraitExport, TypeAliasExport, TypeBoundExport, TypeParamExport,
+    resolved_type_from_manifest_type_ref,
 };
 use crate::provider::{ProviderModuleResolution, ProviderProvenance};
 use incan_core::interop::{RustItemKind, RustTraitAssoc, fallback_rust_trait_methods, is_rust_capability_bound};
@@ -2950,7 +2951,7 @@ impl TypeChecker {
             derives: export.derives.clone(),
             fields: self.fields_from_manifest(&export.name, &export.fields, false),
             field_order: export.fields.iter().map(|field| field.name.clone()).collect(),
-            properties: std::collections::HashMap::new(),
+            properties: self.properties_from_manifest(&export.name, &export.properties),
             method_overloads,
             methods,
             method_aliases: Self::method_aliases_from_manifest(&export.methods),
@@ -3007,7 +3008,7 @@ impl TypeChecker {
             ),
             field_provider_libraries: Box::new(HashMap::new()),
             field_order: export.fields.iter().map(|field| field.name.clone()).collect(),
-            properties: std::collections::HashMap::new(),
+            properties: self.properties_from_manifest(&export.name, &export.properties),
             method_overloads,
             methods,
             method_aliases: Self::method_aliases_from_manifest(&export.methods),
@@ -3447,6 +3448,28 @@ impl TypeChecker {
                         },
                         alias: field.alias.clone(),
                         description: field.description.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Convert manifest computed properties into public semantic member metadata.
+    fn properties_from_manifest(
+        &self,
+        owner: &str,
+        properties: &[PropertyExport],
+    ) -> std::collections::HashMap<String, PropertyInfo> {
+        properties
+            .iter()
+            .map(|property| {
+                (
+                    property.name.clone(),
+                    PropertyInfo {
+                        return_type: resolved_type_from_manifest_type_ref(&property.return_type),
+                        visibility: crate::frontend::ast::Visibility::Public,
+                        owner: Some(owner.to_string()),
+                        has_body: true,
                     },
                 )
             })

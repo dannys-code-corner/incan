@@ -17,8 +17,8 @@ use crate::frontend::library_exports::{
     CheckedAliasExport, CheckedClassExport, CheckedConstExport, CheckedEnumExport, CheckedExportIdentity,
     CheckedExportKind, CheckedExportProjection, CheckedFunctionExport, CheckedModelExport, CheckedNamedExport,
     CheckedNewtypeExport, CheckedParamDefault, CheckedParamDefaultCallSignature, CheckedPartialExport,
-    CheckedPartialTargetKind, CheckedPresetValue, CheckedStaticExport, CheckedTraitExport, CheckedTypeAliasExport,
-    CheckedTypeBound, CheckedTypeParam,
+    CheckedPartialTargetKind, CheckedPresetValue, CheckedProperty, CheckedStaticExport, CheckedTraitExport,
+    CheckedTypeAliasExport, CheckedTypeBound, CheckedTypeParam,
 };
 use crate::frontend::registry_metadata::CheckedRegistryMetadataPackage;
 use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint, ValueEnumBacking, ValueEnumValue};
@@ -730,6 +730,15 @@ pub struct FieldExport {
     pub description: Option<String>,
 }
 
+/// Exported public computed-property metadata for models and classes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropertyExport {
+    /// Source-level property name.
+    pub name: String,
+    /// Property result type available to compiled-library consumers.
+    pub return_type: TypeRef,
+}
+
 /// Source-level visibility of a model or class field published through a library manifest.
 ///
 /// Private visibility is valid for model and class fields. Legacy manifests that omit this value retain public
@@ -893,6 +902,9 @@ pub struct ModelExport {
     #[serde(default)]
     pub derives: Vec<String>,
     pub fields: Vec<FieldExport>,
+    /// Public computed properties (empty for manifests predating this field).
+    #[serde(default)]
+    pub properties: Vec<PropertyExport>,
     pub methods: Vec<MethodExport>,
 }
 
@@ -912,6 +924,9 @@ pub struct ClassExport {
     #[serde(default)]
     pub derives: Vec<String>,
     pub fields: Vec<FieldExport>,
+    /// Public computed properties (empty for manifests predating this field).
+    #[serde(default)]
+    pub properties: Vec<PropertyExport>,
     pub methods: Vec<MethodExport>,
 }
 
@@ -1636,6 +1651,14 @@ fn field_from_checked(field: &crate::frontend::library_exports::CheckedField) ->
     }
 }
 
+/// Convert checked computed-property metadata into artifact metadata.
+fn property_from_checked(property: &CheckedProperty) -> PropertyExport {
+    PropertyExport {
+        name: property.name.clone(),
+        return_type: type_ref_from_resolved(&property.return_type),
+    }
+}
+
 /// Convert a checked source function export into manifest metadata, including the materializable default subset.
 pub(super) fn function_export_from_checked(export: &CheckedFunctionExport) -> FunctionExport {
     FunctionExport {
@@ -1665,6 +1688,7 @@ fn model_export_from_checked(export: &CheckedModelExport) -> ModelExport {
         trait_adoptions: export.trait_adoptions.iter().map(type_bound_from_checked).collect(),
         derives: export.derives.clone(),
         fields: export.fields.iter().map(field_from_checked).collect(),
+        properties: export.properties.iter().map(property_from_checked).collect(),
         methods: export.methods.iter().map(method_from_checked).collect(),
     }
 }
@@ -1679,6 +1703,7 @@ fn class_export_from_checked(export: &CheckedClassExport) -> ClassExport {
         trait_adoptions: export.trait_adoptions.iter().map(type_bound_from_checked).collect(),
         derives: export.derives.clone(),
         fields: export.fields.iter().map(field_from_checked).collect(),
+        properties: export.properties.iter().map(property_from_checked).collect(),
         methods: export.methods.iter().map(method_from_checked).collect(),
     }
 }

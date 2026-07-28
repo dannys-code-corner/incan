@@ -87,6 +87,7 @@ fn generate_rust_with_widgets_manifest(source: &str) -> String {
         trait_adoptions: Vec::new(),
         derives: Vec::new(),
         fields: Vec::new(),
+        properties: Vec::new(),
         methods: Vec::new(),
     });
     manifest.exports.functions.push(FunctionExport {
@@ -1640,6 +1641,13 @@ fn test_issue951_set_constructor_codegen() {
     let source = load_test_file("issue951_set_constructor");
     let rust_code = generate_rust(&source);
     insta::assert_snapshot!("issue951_set_constructor", rust_code);
+}
+
+#[test]
+fn test_issue963_set_add_codegen() {
+    let source = load_test_file("issue963_set_add");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("issue963_set_add", rust_code);
 }
 
 #[test]

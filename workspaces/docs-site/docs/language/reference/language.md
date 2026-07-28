@@ -664,6 +664,7 @@ Class, model, trait, enum, newtype, field, alias, and module decorators remain l
 
 | Id | Canonical | Aliases | Description | RFC | Since | Stability |
 |---|---|---|---|---|---|---|
+| Add | `add` |  | Add a value to the set. | RFC 009 | 0.1 | Stable |
 | Contains | `contains` |  | Return true if the set contains a value. | RFC 009 | 0.1 | Stable |
 
 

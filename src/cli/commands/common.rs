@@ -522,6 +522,9 @@ fn prepare_sdk_provider_inventory() -> CliResult<Arc<SdkInventory>> {
     })?;
     let catalog = SdkSourceCatalog::read_from_path(&stdlib_root.join(SDK_SOURCE_CATALOG_FILE))
         .map_err(|error| CliError::failure(error.to_string()))?;
+    catalog
+        .validate_compiler_version(crate::version::INCAN_VERSION)
+        .map_err(|error| CliError::failure(error.to_string()))?;
     let current_exe = env::current_exe()
         .map_err(|error| CliError::failure(format!("failed to resolve current incan executable: {error}")))?;
     let cargo_test_binary = env::var_os("CARGO_BIN_EXE_incan")
