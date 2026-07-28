@@ -7742,8 +7742,8 @@
 <span class="n">camera</span><span class="o">.</span><span class="n">look_at</span><span class="p">(</span><span class="nc">Vec3</span><span class="o">.</span><span class="n">zero</span><span class="p">())</span>
 
 <span class="c1"># Add lighting</span>
-<span class="n">scene</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="nc">AmbientLight</span><span class="p">(</span><span class="n">color</span><span class="o">=</span><span class="mh">0x404040</span><span class="p">))</span>
-<span class="n">scene</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="nc">DirectionalLight</span><span class="p">(</span>
+<span class="n">scene</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="nc">AmbientLight</span><span class="p">(</span><span class="n">color</span><span class="o">=</span><span class="mh">0x404040</span><span class="p">))</span>
+<span class="n">scene</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="nc">DirectionalLight</span><span class="p">(</span>
     <span class="n">color</span><span class="o">=</span><span class="mh">0xffffff</span><span class="p">,</span>
     <span class="n">intensity</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
     <span class="n">position</span><span class="o">=</span><span class="nc">Vec3</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
@@ -7758,7 +7758,7 @@
         <span class="n">roughness</span><span class="o">=</span><span class="mf">0.5</span>
     <span class="p">)</span>
 <span class="p">)</span>
-<span class="n">scene</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">cube</span><span class="p">)</span>
+<span class="n">scene</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="n">cube</span><span class="p">)</span>
 
 <span class="c1"># Create renderer</span>
 <span class="n">renderer</span> <span class="o">=</span> <span class="nc">Renderer</span><span class="p">(</span><span class="n">canvas</span><span class="o">=</span><span class="s2">&quot;#canvas&quot;</span><span class="p">)</span>
@@ -7833,7 +7833,7 @@
 
 <span class="c1"># Load 3D model</span>
 <span class="k">model</span> <span class="o">=</span> <span class="k">await</span> <span class="n">load_gltf</span><span class="p">(</span><span class="s2">&quot;model.glb&quot;</span><span class="p">)</span>
-<span class="n">scene</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="k">model</span><span class="p">)</span>
+<span class="n">scene</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="k">model</span><span class="p">)</span>
 
 <span class="c1"># Load texture</span>
 <span class="n">texture</span> <span class="o">=</span> <span class="k">await</span> <span class="n">load_texture</span><span class="p">(</span><span class="s2">&quot;diffuse.png&quot;</span><span class="p">)</span>
@@ -7875,7 +7875,7 @@
     <span class="n">collider</span><span class="o">=</span><span class="nc">Collider</span><span class="o">.</span><span class="n">box</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
     <span class="n">mass</span><span class="o">=</span><span class="mf">1.0</span>
 <span class="p">)</span>
-<span class="n">world</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+<span class="n">world</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
 
 <span class="c1"># Sync physics → graphics</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">animate</span><span class="p">(</span><span class="n">delta</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>

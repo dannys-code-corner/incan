@@ -6804,7 +6804,7 @@
 
 <span class="nd">@test</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="nb">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
 <h3 id="basic-syntax">Basic Syntax<a class="headerlink" href="#basic-syntax" title="Permanent link">&para;</a></h3>
@@ -6948,7 +6948,7 @@ incan<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 
 <span class="nd">@test</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
+    <span class="nf">assert_eq</span><span class="p">(</span><span class="nb">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Production build (<code>incan build</code>):</strong></p>
 <div class="language-rust highlight"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="kt">i64</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">{</span>
@@ -7053,7 +7053,7 @@ Running<span class="w"> </span>tests...
 <span class="nd">@test_module</span>
 <span class="k">module</span> <span class="k">tests</span><span class="p">:</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="nf">assert_eq</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="nf">assert_eq</span><span class="p">(</span><span class="nb">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Rejected:</strong> More syntax to learn, less Pythonic. The <code>@test</code> decorator is simpler.</p>
 <h3 id="2-doctest-only">2. Doctest Only<a class="headerlink" href="#2-doctest-only" title="Permanent link">&para;</a></h3>

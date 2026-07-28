@@ -6841,9 +6841,9 @@
     <span class="k">assert</span> <span class="n">headers</span><span class="o">.</span><span class="nb">keys</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">&quot;content-type&quot;</span><span class="p">,</span> <span class="s2">&quot;cache-control&quot;</span><span class="p">]</span>
 
     <span class="k">mut</span> <span class="n">seen</span> <span class="o">=</span> <span class="nc">OrderedSet</span><span class="p">[</span><span class="nb">str</span><span class="p">]()</span>
-    <span class="n">seen</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">&quot;alice&quot;</span><span class="p">)</span>
-    <span class="n">seen</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">&quot;bob&quot;</span><span class="p">)</span>
-    <span class="n">seen</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="s2">&quot;alice&quot;</span><span class="p">)</span>
+    <span class="n">seen</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="s2">&quot;alice&quot;</span><span class="p">)</span>
+    <span class="n">seen</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="s2">&quot;bob&quot;</span><span class="p">)</span>
+    <span class="n">seen</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="s2">&quot;alice&quot;</span><span class="p">)</span>
 
     <span class="k">assert</span> <span class="n">seen</span><span class="o">.</span><span class="n">to_list</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">&quot;alice&quot;</span><span class="p">,</span> <span class="s2">&quot;bob&quot;</span><span class="p">]</span>
 </code></pre></div>
@@ -6859,9 +6859,9 @@
     <span class="k">assert</span> <span class="n">scores</span><span class="o">.</span><span class="nb">keys</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">&quot;alice&quot;</span><span class="p">,</span> <span class="s2">&quot;bob&quot;</span><span class="p">]</span>
 
     <span class="k">mut</span> <span class="n">ids</span> <span class="o">=</span> <span class="nc">SortedSet</span><span class="p">[</span><span class="nb">int</span><span class="p">]()</span>
-    <span class="n">ids</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="mi">30</span><span class="p">)</span>
-    <span class="n">ids</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
-    <span class="n">ids</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span>
+    <span class="n">ids</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="mi">30</span><span class="p">)</span>
+    <span class="n">ids</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+    <span class="n">ids</span><span class="o">.</span><span class="nb">add</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span>
 
     <span class="k">assert</span> <span class="n">ids</span><span class="o">.</span><span class="n">to_list</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">30</span><span class="p">]</span>
 </code></pre></div>
