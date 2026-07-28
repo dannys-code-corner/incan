@@ -2121,6 +2121,33 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#constructing-a-generic-rust-receiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      Constructing a generic Rust receiver
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supplying-generic-arguments-to-an-imported-rust-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      Supplying generic arguments to an imported Rust method
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#passing-callbacks-that-borrow-rust-slices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Passing callbacks that borrow Rust slices
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6824,6 +6851,33 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#constructing-a-generic-rust-receiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      Constructing a generic Rust receiver
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supplying-generic-arguments-to-an-imported-rust-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      Supplying generic arguments to an imported Rust method
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#passing-callbacks-that-borrow-rust-slices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Passing callbacks that borrow Rust slices
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7181,6 +7235,92 @@ supported. The compiler will tell you to use <code>rust::std::...</code> instead
 </code></pre></div>
 <p>The same rule applies to path segments after <code>rust::</code> (for example <code>rust::substrait::proto::type::Binary</code>).</p>
 <p>For Rust struct fields whose real Rust identifier is a keyword, use the keyword spelling in Incan field access and named constructor arguments. For example, a Rust field declared as <code>r#type</code> is available as <code>value.type</code> and <code>TypeName(type=value)</code> in Incan source; generated Rust still uses the real raw identifier. An ordinary Rust field named <code>type_</code> remains <code>value.type_</code>.</p>
+<h3 id="constructing-a-generic-rust-receiver">Constructing a generic Rust receiver<a class="headerlink" href="#constructing-a-generic-rust-receiver" title="Permanent link">&para;</a></h3>
+<p>Some Rust crates define constructors on a generic type while the constructor itself has no generic parameters. In Rust this is written as <code>Fft::&lt;f32&gt;::new(...)</code>. When the receiver declaration contains type parameters only, put those arguments after the associated function name in Incan:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">rubato</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Fft</span><span class="o">,</span><span class="w"> </span><span class="nn">FixedSync</span><span class="o">,</span><span class="w"> </span><span class="nn">ResamplerConstructionError</span>
+
+<span class="kt">result</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Fft</span><span class="p">[</span><span class="kt">f32</span><span class="p">],</span> <span class="nc">ResamplerConstructionError</span><span class="p">]</span> <span class="o">=</span> <span class="nc">Fft</span><span class="o">.</span><span class="n">new</span><span class="p">[</span><span class="kt">f32</span><span class="p">](</span>
+    <span class="mi">48_000</span><span class="p">,</span>
+    <span class="mi">24_000</span><span class="p">,</span>
+    <span class="mi">480</span><span class="p">,</span>
+    <span class="mi">1</span><span class="p">,</span>
+    <span class="nc">FixedSync</span><span class="o">.</span><span class="nc">Input</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>The brackets specialize <code>Fft</code>, not <code>new</code>. Do not write <code>Fft[f32].new(...)</code>: bracketed types are type expressions, not runtime receiver expressions.</p>
+<p>You may omit the explicit receiver argument when the expected result fixes it uniquely:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kt">result</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Fft</span><span class="p">[</span><span class="kt">f32</span><span class="p">],</span> <span class="nc">ResamplerConstructionError</span><span class="p">]</span> <span class="o">=</span> <span class="nc">Fft</span><span class="o">.</span><span class="n">new</span><span class="p">(</span>
+    <span class="mi">48_000</span><span class="p">,</span>
+    <span class="mi">24_000</span><span class="p">,</span>
+    <span class="mi">480</span><span class="p">,</span>
+    <span class="mi">1</span><span class="p">,</span>
+    <span class="nc">FixedSync</span><span class="o">.</span><span class="nc">Input</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Expected function parameters provide the same context:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">register</span><span class="p">(</span><span class="kt">result</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Fft</span><span class="p">[</span><span class="kt">f32</span><span class="p">],</span> <span class="nc">ResamplerConstructionError</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="o">...</span>
+
+<span class="n">register</span><span class="p">(</span><span class="nc">Fft</span><span class="o">.</span><span class="n">new</span><span class="p">(</span><span class="mi">48_000</span><span class="p">,</span> <span class="mi">24_000</span><span class="p">,</span> <span class="mi">480</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="nc">FixedSync</span><span class="o">.</span><span class="nc">Input</span><span class="p">))</span>
+</code></pre></div>
+<p>Use the explicit form when there is no result annotation or parameter context from which the receiver specialization can be inferred. Incan specializes the complete inspected signature, so owner parameters used by arguments and non-<code>Self</code> returns are checked consistently before Rust generation.</p>
+<p>Rust const-generic receiver declarations are not supported by this v0.5 call shape. Incan reports a checked error because its brackets accept types, not const values; wrap that API behind a type-only Rust or Incan receiver rather than relying on rustc to reinterpret the arguments.</p>
+<h3 id="supplying-generic-arguments-to-an-imported-rust-method">Supplying generic arguments to an imported Rust method<a class="headerlink" href="#supplying-generic-arguments-to-an-imported-rust-method" title="Permanent link">&para;</a></h3>
+<p>Imported Rust methods use the same arity-complete bracket rule as Incan methods. If inspection reports three method type parameters, provide either no brackets and let Rust infer all three, or provide exactly three entries. Use <code>_</code> for each slot that should remain inferred:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">cpal</span><span class="p">::</span><span class="n">traits</span> <span class="kn">import</span><span class="w"> </span><span class="nn">DeviceTrait</span>
+
+<span class="c1"># `device`, `config`, and the callbacks are values prepared by the surrounding audio code.</span>
+<span class="n">stream</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">build_output_stream</span><span class="p">[</span><span class="kt">f32</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">](</span>
+    <span class="n">config</span><span class="p">,</span>
+    <span class="n">on_data</span><span class="p">,</span>
+    <span class="n">on_error</span><span class="p">,</span>
+    <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Writing <code>build_output_stream[f32](...)</code> is an error because the method declares three type parameters. Incan reports the required and supplied arity during typechecking instead of emitting an incomplete Rust turbofish. The <code>_</code> entries are deliberate inference slots, not optional trailing arguments.</p>
+<h3 id="passing-callbacks-that-borrow-rust-slices">Passing callbacks that borrow Rust slices<a class="headerlink" href="#passing-callbacks-that-borrow-rust-slices" title="Permanent link">&para;</a></h3>
+<p>When an inspected Rust callback bound accepts a borrowed slice, write the corresponding named Incan callback with a borrowed <code>list[T]</code>. Incan keeps the inspected Rust spelling for emission, so <code>&amp;mut list[f32]</code> becomes <code>&amp;mut [f32]</code> at this call boundary rather than changing the representation of ordinary Incan lists:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">cpal</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Error</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">CpalError</span><span class="o">,</span><span class="w"> </span><span class="nn">OutputCallbackInfo</span><span class="o">,</span><span class="w"> </span><span class="nn">default_host</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">cpal</span><span class="p">::</span><span class="n">traits</span> <span class="kn">import</span><span class="w"> </span><span class="nn">DeviceTrait</span><span class="o">,</span><span class="w"> </span><span class="nn">HostTrait</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">write_silence</span><span class="p">(</span><span class="n">_data</span><span class="p">:</span> <span class="o">&amp;</span><span class="k">mut</span> <span class="nb">list</span><span class="p">[</span><span class="kt">f32</span><span class="p">],</span> <span class="n">_info</span><span class="p">:</span> <span class="o">&amp;</span><span class="nc">OutputCallbackInfo</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">pass</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">report_stream_error</span><span class="p">(</span><span class="n">error</span><span class="p">:</span> <span class="nc">CpalError</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">println</span><span class="p">(</span><span class="n">error</span><span class="o">.</span><span class="nb">to_string</span><span class="p">())</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">host</span> <span class="o">=</span> <span class="n">default_host</span><span class="p">()</span>
+    <span class="k">match</span> <span class="n">host</span><span class="o">.</span><span class="n">default_output_device</span><span class="p">():</span>
+        <span class="nb">Some</span><span class="p">(</span><span class="n">device</span><span class="p">)</span> <span class="o">=&gt;</span>
+            <span class="k">match</span> <span class="n">device</span><span class="o">.</span><span class="n">default_output_config</span><span class="p">():</span>
+                <span class="nb">Ok</span><span class="p">(</span><span class="n">supported_config</span><span class="p">)</span> <span class="o">=&gt;</span>
+                    <span class="n">config</span> <span class="o">=</span> <span class="n">supported_config</span><span class="o">.</span><span class="n">config</span><span class="p">()</span>
+                    <span class="k">match</span> <span class="n">device</span><span class="o">.</span><span class="n">build_output_stream</span><span class="p">[</span><span class="kt">f32</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">](</span>
+                        <span class="n">config</span><span class="p">,</span>
+                        <span class="n">write_silence</span><span class="p">,</span>
+                        <span class="n">report_stream_error</span><span class="p">,</span>
+                        <span class="kc">None</span><span class="p">,</span>
+                    <span class="p">):</span>
+                        <span class="nb">Ok</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;stream-built&quot;</span><span class="p">)</span>
+                        <span class="nb">Err</span><span class="p">(</span><span class="n">error</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="n">error</span><span class="o">.</span><span class="nb">to_string</span><span class="p">())</span>
+                <span class="nb">Err</span><span class="p">(</span><span class="n">error</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="n">error</span><span class="o">.</span><span class="nb">to_string</span><span class="p">())</span>
+        <span class="kc">None</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;no-output-device&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>An inline closure receives the same contextual parameter types from the inspected <code>FnMut</code> bound:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">match</span> <span class="n">device</span><span class="o">.</span><span class="n">build_output_stream</span><span class="p">[</span><span class="kt">f32</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">](</span>
+    <span class="n">config</span><span class="p">,</span>
+    <span class="p">(</span><span class="n">_data</span><span class="p">,</span> <span class="n">_info</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="p">(),</span>
+    <span class="n">report_stream_error</span><span class="p">,</span>
+    <span class="kc">None</span><span class="p">,</span>
+<span class="p">):</span>
+    <span class="nb">Ok</span><span class="p">(</span><span class="n">_</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="s2">&quot;stream-built&quot;</span><span class="p">)</span>
+    <span class="nb">Err</span><span class="p">(</span><span class="n">error</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">println</span><span class="p">(</span><span class="n">error</span><span class="o">.</span><span class="nb">to_string</span><span class="p">())</span>
+</code></pre></div>
+<p>The inline form assumes <code>device</code>, <code>config</code>, and <code>report_stream_error</code> were prepared exactly as in the complete example above. Borrowed-slice preservation applies only where Rust metadata proves the callback shape; it is not a general conversion between <code>Vec[T]</code> and <code>[T]</code>.</p>
 <h2 id="dependency-management">Dependency Management<a class="headerlink" href="#dependency-management" title="Permanent link">&para;</a></h2>
 <p>When you use <code>import rust::crate_name</code>, Incan automatically adds the dependency to your generated <code>Cargo.toml</code>. Dependencies are resolved using a three-tier precedence system:</p>
 <ol>
@@ -7417,6 +7557,22 @@ hint: Add a version annotation: `import rust::my_crate @ &quot;1.0&quot;` or add
 <h2 id="published-libraries-and-shipped-abi-metadata">Published libraries and shipped ABI metadata<a class="headerlink" href="#published-libraries-and-shipped-abi-metadata" title="Permanent link">&para;</a></h2>
 <p>When a library exposes Rust-backed items, run <code>incan build --lib</code> before another project consumes it through <code>pub::</code>. The generated <code>.incnlib</code> embeds a versioned Rust ABI payload containing the canonical Rust item signatures captured during the producer build.</p>
 <p>Consumers load that shipped ABI metadata first for Rust-backed imported symbols. <code>rust_inspect</code> remains available for producer capture, local workspace imports, and explicit fallback/debug paths, but a packaged dependency should not require consumer-side workspace inspection for signatures that were already published in its <code>.incnlib</code>.</p>
+<p>A library can deliberately publish a checked Rust import:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># Native façade library</span>
+<span class="k">pub</span> <span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">rubato</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Fft</span><span class="o">,</span><span class="w"> </span><span class="nn">FixedSync</span><span class="o">,</span><span class="w"> </span><span class="nn">ResamplerConstructionError</span>
+</code></pre></div>
+<p>After building that library with <code>incan build --lib</code>, a consumer imports the same types through the package boundary:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pub</span><span class="p">::</span><span class="n">audio_native</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Fft</span><span class="o">,</span><span class="w"> </span><span class="nn">FixedSync</span><span class="o">,</span><span class="w"> </span><span class="nn">ResamplerConstructionError</span>
+
+<span class="kt">result</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Fft</span><span class="p">[</span><span class="kt">f32</span><span class="p">],</span> <span class="nc">ResamplerConstructionError</span><span class="p">]</span> <span class="o">=</span> <span class="nc">Fft</span><span class="o">.</span><span class="n">new</span><span class="p">(</span>
+    <span class="mi">48_000</span><span class="p">,</span>
+    <span class="mi">24_000</span><span class="p">,</span>
+    <span class="mi">480</span><span class="p">,</span>
+    <span class="mi">1</span><span class="p">,</span>
+    <span class="nc">FixedSync</span><span class="o">.</span><span class="nc">Input</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>The selected <code>pub::audio_native</code> artifact remains the authority for those reexports and their shipped Rust ABI. Associated calls made through the imported type receiver therefore cannot silently pick a different checked signature from another dependency that happens to expose the same canonical Rust path.</p>
 <h3 id="calling-imported-rust-functions">Calling imported Rust functions<a class="headerlink" href="#calling-imported-rust-functions" title="Permanent link">&para;</a></h3>
 <p>Imported Rust free functions use ordinary Incan call syntax. When the compiler has inspected or shipped Rust signature metadata with parameter names, keyword arguments bind to those Rust parameters and lower to the positional Rust call shape that Cargo expects:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">demo</span> <span class="kn">import</span><span class="w"> </span><span class="nn">create_widget</span>

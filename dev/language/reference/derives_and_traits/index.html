@@ -7585,7 +7585,7 @@ So we can change the destination in one place if we move/rename sections.
 <p><strong>Type checking order</strong>:</p>
 <p>Explicit slots are applied first. <code>_</code> slots are inferred from value arguments and normal compatibility checks. If a slot remains unresolved, the compiler reports a call-site type error.</p>
 <p><strong>What is not supported</strong>:</p>
-<p>Explicit brackets are supported only for direct calls resolved as Incan functions/methods. Using brackets on other call shapes is an error (not ignored), for example:</p>
+<p>Explicit brackets are supported for direct Incan function and method calls. A type-associated Rust call may also use <code>Type.method[T](...)</code> when the imported Rust receiver declares type parameters only; this emits Rust's <code>Type::&lt;T&gt;::method(...)</code> form. Receiver types containing const parameters are rejected because Incan v0.5 has no const-value call-site argument syntax. Using brackets on other call shapes is an error (not ignored), for example:</p>
 <ul>
 <li>Built-in calls like <code>len[int](...)</code></li>
 <li>Calls to functions imported from Rust (<code>from rust::...</code>)</li>

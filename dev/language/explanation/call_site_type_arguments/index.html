@@ -4077,6 +4077,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#rust-receiver-generics-use-the-same-call-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rust receiver generics use the same call shape
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#why-_-exists" class="md-nav__link">
     <span class="md-ellipsis">
       Why _ exists
@@ -6530,6 +6539,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#rust-receiver-generics-use-the-same-call-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rust receiver generics use the same call shape
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#why-_-exists" class="md-nav__link">
     <span class="md-ellipsis">
       Why _ exists
@@ -6597,6 +6615,21 @@
 </code></pre></div>
 <p><code>read_csv[T]</code> defines a generic contract: “for any <code>T</code>, return <code>List[T]</code>”. <code>read_csv[Order](...)</code> specializes that contract at the call site, so <code>rows</code> is typed as <code>List[Order]</code>.</p>
 <p>This keeps normal signature typing intact while letting callers pin ambiguous generic slots at API boundaries.</p>
+<h2 id="rust-receiver-generics-use-the-same-call-shape">Rust receiver generics use the same call shape<a class="headerlink" href="#rust-receiver-generics-use-the-same-call-shape" title="Permanent link">&para;</a></h2>
+<p>For an imported Rust type whose receiver generics are all type parameters, <code>Type.method[T](...)</code> specializes the receiver type. It corresponds to Rust's <code>Type::&lt;T&gt;::method(...)</code>, not <code>Type::method::&lt;T&gt;(...)</code>.</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">rust</span><span class="p">::</span><span class="n">rubato</span> <span class="kn">import</span><span class="w"> </span><span class="nn">Fft</span><span class="o">,</span><span class="w"> </span><span class="nn">FixedSync</span><span class="o">,</span><span class="w"> </span><span class="nn">ResamplerConstructionError</span>
+
+<span class="kt">result</span><span class="p">:</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Fft</span><span class="p">[</span><span class="kt">f32</span><span class="p">],</span> <span class="nc">ResamplerConstructionError</span><span class="p">]</span> <span class="o">=</span> <span class="nc">Fft</span><span class="o">.</span><span class="n">new</span><span class="p">[</span><span class="kt">f32</span><span class="p">](</span>
+    <span class="mi">48_000</span><span class="p">,</span>
+    <span class="mi">24_000</span><span class="p">,</span>
+    <span class="mi">480</span><span class="p">,</span>
+    <span class="mi">1</span><span class="p">,</span>
+    <span class="nc">FixedSync</span><span class="o">.</span><span class="nc">Input</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>When an assignment, return annotation, or function parameter already expects <code>Fft[f32]</code>, the brackets can be omitted and the same receiver type is inferred from that context. The explicit form remains useful when the result has no constraining context.</p>
+<p>Receiver declarations containing Rust const parameters cannot use this syntax in Incan 0.5 because Incan type-argument brackets do not accept const values. The compiler reports that boundary instead of shifting a type argument into the wrong Rust turbofish position. Use a type-only Rust or Incan wrapper for those APIs.</p>
+<p>Imported Rust methods may also declare their own type parameters. Their bracket lists are arity-complete just like Incan calls: a three-parameter method accepts <code>[T, U, V]</code> or an equally long list containing <code>_</code> placeholders, but not a shortened <code>[T]</code>. This keeps the checked Incan call and the emitted Rust method turbofish structurally identical.</p>
 <h2 id="why-_-exists">Why <code>_</code> exists<a class="headerlink" href="#why-_-exists" title="Permanent link">&para;</a></h2>
 <p>Sometimes you only care about one slot and want the rest inferred.</p>
 <p><em>Definition side</em>:</p>
