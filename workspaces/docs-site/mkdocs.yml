@@ -321,6 +321,7 @@ nav:
       - Whitepapers:
           - Overview: whitepapers/index.md
           - Incan ecosystem north star: whitepapers/incan_ecosystem_north_star.md
+          - A Cargo-free toolchain for Incan and Rust: whitepapers/incan_oven_positioning.md
       - Roadmap: roadmap.md
       # XXX: Temporary page while in beta
       - Stability policy: stability.md
