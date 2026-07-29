@@ -16,9 +16,61 @@ env:
     test(/managed_cache_reuses_offline_across_projects_and_cleans_interrupted_entry/)
 
 jobs:
+  changes:
+    name: CI Scope
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Classify the pull request
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          docs_only=false
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch origin "$BASE_REF" --depth=1
+            base_ref="origin/$BASE_REF"
+            changed=false
+            docs_only=true
+
+            while IFS= read -r -d '' file; do
+              changed=true
+              # The two generated reference pages are derived from the compiler,
+              # so they must retain the full generated-reference check.
+              case "$file" in
+                workspaces/docs-site/docs/language/reference/language.md|workspaces/docs-site/docs/language/reference/feature_inventory.md)
+                  docs_only=false
+                  break
+                  ;;
+                workspaces/docs-site/*)
+                  ;;
+                *)
+                  docs_only=false
+                  break
+                  ;;
+              esac
+            done < <(git diff --name-only -z "$base_ref" HEAD)
+
+            if [ "$changed" = false ]; then
+              docs_only=false
+            fi
+          fi
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   fmt:
     name: Format Check
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       # Comment wrapping (comment_width/wrap_comments/format_code_in_doc_comments) requires nightly rustfmt.
@@ -36,6 +88,8 @@ jobs:
   rustdoc-gate:
     name: Rustdoc Gate
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -57,6 +111,8 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -77,6 +133,8 @@ jobs:
   test-linux-archive:
     name: Test Suite Archive (ubuntu-latest, stable)
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
@@ -130,7 +188,10 @@ jobs:
   test-linux-provider:
     name: SDK Provider Warmup (ubuntu-latest, stable)
     runs-on: ubuntu-latest
-    needs: test-linux-archive
+    needs:
+      - changes
+      - test-linux-archive
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -183,8 +244,10 @@ jobs:
     name: Test Suite Shard (ubuntu-latest, stable, ${{ matrix.label }})
     runs-on: ubuntu-latest
     needs:
+      - changes
       - test-linux-archive
       - test-linux-provider
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     strategy:
@@ -285,7 +348,10 @@ jobs:
   test-linux-cold-provider:
     name: Cold SDK Provider Acceptance (ubuntu-latest, stable)
     runs-on: ubuntu-latest
-    needs: test-linux-archive
+    needs:
+      - changes
+      - test-linux-archive
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
@@ -344,9 +410,10 @@ jobs:
     name: Test Suite (ubuntu-latest, stable)
     runs-on: ubuntu-latest
     needs:
+      - changes
       - test-linux-shards
       - test-linux-cold-provider
-    if: ${{ always() }}
+    if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
     steps:
       - name: Verify Ubuntu test shards
         run: |
@@ -363,6 +430,8 @@ jobs:
   test-macos-archive:
     name: Test Suite Archive (macos-latest, stable)
     runs-on: macos-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
@@ -407,7 +476,10 @@ jobs:
   test-macos-provider:
     name: SDK Provider Warmup (macos-latest, stable)
     runs-on: macos-latest
-    needs: test-macos-archive
+    needs:
+      - changes
+      - test-macos-archive
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -459,8 +531,10 @@ jobs:
     name: Test Suite Shard (macos-latest, stable, ${{ matrix.label }})
     runs-on: macos-latest
     needs:
+      - changes
       - test-macos-archive
       - test-macos-provider
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     strategy:
@@ -561,7 +635,10 @@ jobs:
   test-macos-cold-provider:
     name: Cold SDK Provider Acceptance (macos-latest, stable)
     runs-on: macos-latest
-    needs: test-macos-archive
+    needs:
+      - changes
+      - test-macos-archive
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
@@ -620,9 +697,10 @@ jobs:
     name: Test Suite (macos-latest, stable)
     runs-on: ubuntu-latest
     needs:
+      - changes
       - test-macos-shards
       - test-macos-cold-provider
-    if: ${{ always() }}
+    if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
     steps:
       - name: Verify macOS test shards
         run: |
@@ -639,6 +717,8 @@ jobs:
   msrv-build:
     name: MSRV Build (1.93.0)
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust 1.93.0
@@ -661,6 +741,8 @@ jobs:
   msrv-test-archive:
     name: MSRV Test Archive (1.93.0)
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
@@ -707,7 +789,10 @@ jobs:
   msrv-test-provider:
     name: MSRV SDK Provider Warmup (1.93.0)
     runs-on: ubuntu-latest
-    needs: msrv-test-archive
+    needs:
+      - changes
+      - msrv-test-archive
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust 1.93.0
@@ -761,8 +846,10 @@ jobs:
     name: MSRV Test Shard (1.93.0, ${{ matrix.label }})
     runs-on: ubuntu-latest
     needs:
+      - changes
       - msrv-test-archive
       - msrv-test-provider
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     strategy:
@@ -865,7 +952,10 @@ jobs:
   msrv-test-cold-provider:
     name: MSRV Cold SDK Provider Acceptance (1.93.0)
     runs-on: ubuntu-latest
-    needs: msrv-test-archive
+    needs:
+      - changes
+      - msrv-test-archive
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
@@ -926,10 +1016,11 @@ jobs:
     name: MSRV Build/Test (1.93.0)
     runs-on: ubuntu-latest
     needs:
+      - changes
       - msrv-build
       - msrv-test-shards
       - msrv-test-cold-provider
-    if: ${{ always() }}
+    if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
     steps:
       - name: Verify MSRV build and test shards
         run: |
@@ -950,6 +1041,8 @@ jobs:
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -964,6 +1057,8 @@ jobs:
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -978,6 +1073,8 @@ jobs:
   udeps:
     name: Unused Dependencies
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -1054,6 +1151,8 @@ jobs:
   smoke-release:
     name: Smoke Release Build
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -1076,7 +1175,10 @@ jobs:
   smoke-test-shards:
     name: Smoke Test Shard (${{ matrix.name }})
     runs-on: ubuntu-latest
-    needs: smoke-release
+    needs:
+      - changes
+      - smoke-release
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1133,9 +1235,10 @@ jobs:
     name: Smoke Test
     runs-on: ubuntu-latest
     needs:
+      - changes
       - smoke-release
       - smoke-test-shards
-    if: ${{ always() }}
+    if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
     steps:
       - name: Verify smoke jobs
         run: |
@@ -1152,6 +1255,8 @@ jobs:
   generate-rust-docs:
     name: Docs Build
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -1187,8 +1292,10 @@ jobs:
     name: Generated Reference Up-to-date
     runs-on: ubuntu-latest
     needs:
+      - changes
       - test-linux-archive
       - test-linux-provider
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
