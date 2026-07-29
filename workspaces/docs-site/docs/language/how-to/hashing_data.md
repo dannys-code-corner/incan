@@ -59,6 +59,14 @@ h.update(b"partition-key")
 bucket_key = h.finalize_u64()
 ```
 
+## Keep SHA-256 state across methods
+
+Use `Sha256Hasher` when one model or class accumulates a byte stream across methods without retaining every chunk for a later replay:
+
+--8<-- "_snippets/language/examples/sha256_structural_sink.md"
+
+The hasher preserves state, not meaning. Define the ordered canonical bytes for your own identity or serialization contract before calling `append`; `std.hash` only computes the deterministic SHA-256 digest of those bytes. Finalization resets the handle for a new stream.
+
 ## Hash files without loading them
 
 Use file helpers for paths or open files:

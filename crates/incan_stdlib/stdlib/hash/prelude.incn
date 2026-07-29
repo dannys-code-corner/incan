@@ -8,6 +8,7 @@ input. The implementation is split across focused source modules; this prelude k
 from std.hash._core import (
     DEFAULT_CHUNK_SIZE,
     HashError,
+    Sha256Hasher,
     ByteDigestHasher,
     ShakeDigestHasher,
     Hash32DigestHasher,
