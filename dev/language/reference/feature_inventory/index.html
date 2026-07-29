@@ -8193,10 +8193,10 @@
 <td>Stdlib</td>
 <td style="text-align: right;">0.3</td>
 <td>Import from <code>std.hash</code>.</td>
-<td><code>from std.hash import sha256, file_digest</code><br><code>sha256.digest(payload)</code><br><code>xxh3_64.new()</code></td>
-<td><code>std.hash</code> provides deterministic byte, file, reader, and incremental hashing through explicit cryptographic, compatibility, and non-cryptographic algorithm namespaces.</td>
+<td><code>from std.hash import Sha256Hasher, sha256, file_digest</code><br><code>sink: Sha256Hasher = sha256.new()</code><br><code>sha256.digest(payload)</code><br><code>xxh3_64.new()</code></td>
+<td><code>std.hash</code> provides deterministic byte, file, reader, and incremental hashing through explicit cryptographic, compatibility, and non-cryptographic algorithm namespaces. <code>Sha256Hasher</code> is a public stored-state handle for byte streams owned across model or class methods.</td>
 <td>Ad hoc hashing shims, hidden default algorithms, or <code>std.checksum</code> when the caller needs hash rather than checksum semantics.</td>
-<td><a href="../stdlib/hash/">std.hash</a>, <a href="../../how-to/hashing_data/">Hashing data</a>, <a href="../../../RFCs/closed/implemented/065_std_hash/">RFC 065</a>, <a href="../../../release_notes/0_3/">Release 0.3</a></td>
+<td><a href="../stdlib/hash/">std.hash</a>, <a href="../../how-to/hashing_data/">Hashing data</a>, <a href="../../../RFCs/closed/implemented/065_std_hash/">RFC 065</a>, <a href="../../../release_notes/0_3/">Release 0.3</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></td>
 </tr>
 <tr>
 <td><code>std.environ</code> runtime environment access</td>
@@ -9168,12 +9168,13 @@
 <li><strong>Stability:</strong> <code>Stable</code></li>
 <li><strong>Activation:</strong> Import from <code>std.hash</code>.</li>
 <li><strong>Use instead of:</strong> Ad hoc hashing shims, hidden default algorithms, or <code>std.checksum</code> when the caller needs hash rather than checksum semantics.</li>
-<li><strong>References:</strong> <a href="../stdlib/hash/">std.hash</a>, <a href="../../how-to/hashing_data/">Hashing data</a>, <a href="../../../RFCs/closed/implemented/065_std_hash/">RFC 065</a>, <a href="../../../release_notes/0_3/">Release 0.3</a></li>
+<li><strong>References:</strong> <a href="../stdlib/hash/">std.hash</a>, <a href="../../how-to/hashing_data/">Hashing data</a>, <a href="../../../RFCs/closed/implemented/065_std_hash/">RFC 065</a>, <a href="../../../release_notes/0_3/">Release 0.3</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></li>
 </ul>
-<p><code>std.hash</code> provides deterministic byte, file, reader, and incremental hashing through explicit cryptographic, compatibility, and non-cryptographic algorithm namespaces.</p>
+<p><code>std.hash</code> provides deterministic byte, file, reader, and incremental hashing through explicit cryptographic, compatibility, and non-cryptographic algorithm namespaces. <code>Sha256Hasher</code> is a public stored-state handle for byte streams owned across model or class methods.</p>
 <p>Canonical forms:</p>
 <ul>
-<li><code>from std.hash import sha256, file_digest</code></li>
+<li><code>from std.hash import Sha256Hasher, sha256, file_digest</code></li>
+<li><code>sink: Sha256Hasher = sha256.new()</code></li>
 <li><code>sha256.digest(payload)</code></li>
 <li><code>xxh3_64.new()</code></li>
 </ul>
