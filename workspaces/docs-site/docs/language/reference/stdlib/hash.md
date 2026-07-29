@@ -51,23 +51,7 @@ Integer finalizers are intentionally absent from cryptographic namespaces. Use d
 
 `Sha256Hasher` is the public concrete type returned by `sha256.new()`. Use it when one model or class owns an incremental byte stream across several methods:
 
-```incan
-from std.hash import Sha256Hasher, sha256
-
-model StructuralSink:
-    hasher: Sha256Hasher
-
-    def append(mut self, chunk: bytes) -> None:
-        self.hasher.update(chunk)
-
-    def finalize(mut self) -> bytes:
-        return self.hasher.finalize_bytes()
-
-mut sink = StructuralSink(hasher=sha256.new())
-sink.append(b"pay")
-sink.append(b"load")
-digest = sink.finalize()
-```
+--8<-- "_snippets/language/examples/sha256_structural_sink.md"
 
 `finalize_bytes()` returns the digest for bytes supplied so far and resets the handle for a new stream. `Sha256Hasher` hashes exactly the bytes callers give it; it does not choose, serialize, or certify canonical identity bytes for an application.
 
