@@ -185,9 +185,13 @@ pub class _Sha224Hasher with ByteDigestHasher:
         return self.handle.finalize_reset().to_vec()
 
 
-pub class _Sha256Hasher with ByteDigestHasher:
+pub class Sha256Hasher with ByteDigestHasher:
     """
-    Incremental SHA-256 hasher.
+    Storable incremental SHA-256 hasher.
+
+    Create a handle with `sha256.new()`, retain it in a model or class field, then call `update` from each method that
+    contributes canonical bytes. `finalize_bytes()` returns the digest for bytes already supplied and resets the handle
+    for a subsequent byte stream; this type does not define which bytes are canonical for an application identity.
     """
 
     handle: Sha256
@@ -485,8 +489,8 @@ pub class sha256:
         return _must_digest_bytes(data, "sha256", 0)
 
     @staticmethod
-    def new() -> _Sha256Hasher:
-        return _Sha256Hasher(handle=Sha256.default())
+    def new() -> Sha256Hasher:
+        return Sha256Hasher(handle=Sha256.default())
 
 
 @rust.allow("non_camel_case_types")

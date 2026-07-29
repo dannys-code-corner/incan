@@ -1650,6 +1650,14 @@ fn test_issue963_set_add_codegen() {
     insta::assert_snapshot!("issue963_set_add", rust_code);
 }
 
+/// Assert that a public SHA-256 handle can be stored and mutated through a model field.
+#[test]
+fn test_issue969_storable_sha256_hasher_codegen() {
+    let source = load_test_file("issue969_storable_sha256_hasher");
+    let rust_code = generate_rust(&source);
+    insta::assert_snapshot!("issue969_storable_sha256_hasher", rust_code);
+}
+
 #[test]
 fn test_issue951_set_shadowing_codegen() {
     let source = load_test_file("issue951_set_shadowing");

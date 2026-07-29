@@ -5,7 +5,7 @@
 ## Imports
 
 ```incan
-from std.hash import HashError, file_digest, reader_digest, sha256, xxh3_64
+from std.hash import HashError, Sha256Hasher, file_digest, reader_digest, sha256, xxh3_64
 ```
 
 ## Algorithm namespaces
@@ -46,6 +46,30 @@ Every algorithm namespace exposes `new()`. The returned hasher accepts byte chun
 | 128-bit non-cryptographic hashers | `update(chunk: bytes) -> None`, `finalize_bytes() -> bytes`, `finalize_u128() -> u128` |
 
 Integer finalizers are intentionally absent from cryptographic namespaces. Use digest bytes plus `std.encoding.hex` when a textual digest is needed.
+
+## Retain SHA-256 state in a field
+
+`Sha256Hasher` is the public concrete type returned by `sha256.new()`. Use it when one model or class owns an incremental byte stream across several methods:
+
+```incan
+from std.hash import Sha256Hasher, sha256
+
+model StructuralSink:
+    hasher: Sha256Hasher
+
+    def append(mut self, chunk: bytes) -> None:
+        self.hasher.update(chunk)
+
+    def finalize(mut self) -> bytes:
+        return self.hasher.finalize_bytes()
+
+mut sink = StructuralSink(hasher=sha256.new())
+sink.append(b"pay")
+sink.append(b"load")
+digest = sink.finalize()
+```
+
+`finalize_bytes()` returns the digest for bytes supplied so far and resets the handle for a new stream. `Sha256Hasher` hashes exactly the bytes callers give it; it does not choose, serialize, or certify canonical identity bytes for an application.
 
 ## File and reader helpers
 

@@ -1079,14 +1079,17 @@ static std_encoding: RegistryEntry[CapabilityId, CapabilityDescriptor] = capabil
         references=std_encoding_references,
     ),
 )
-const std_hash_forms: FrozenList[str] = ["from std.hash import sha256, file_digest", "sha256.digest(payload)", "xxh3_64.new()"]
+const std_hash_forms: FrozenList[str] = ["from std.hash import Sha256Hasher, sha256, file_digest", "sink: Sha256Hasher = sha256.new()", "sha256.digest(payload)", "xxh3_64.new()"]
 const std_hash_references: FrozenList[CapabilityReference] = [CapabilityReference(
     label="std.hash",
     path="stdlib/hash.md",
 ), CapabilityReference(label="Hashing data", path="../how-to/hashing_data.md"), CapabilityReference(
     label="RFC 065",
     path="../../RFCs/closed/implemented/065_std_hash.md",
-), CapabilityReference(label="Release 0.3", path="../../release_notes/0_3.md")]
+), CapabilityReference(label="Release 0.3", path="../../release_notes/0_3.md"), CapabilityReference(
+    label="Release 0.5",
+    path="../../release_notes/0_5.md",
+)]
 static std_hash: RegistryEntry[CapabilityId, CapabilityDescriptor] = capabilities.entry(
     key=CapabilityId("StdHash"),
     subject=RegistrySubject.current_unit(),
@@ -1098,7 +1101,7 @@ static std_hash: RegistryEntry[CapabilityId, CapabilityDescriptor] = capabilitie
         rfc="RFC 065",
         stability=CapabilityStability.Stable,
         activation="Import from `std.hash`.",
-        summary="`std.hash` provides deterministic byte, file, reader, and incremental hashing through explicit cryptographic, compatibility, and non-cryptographic algorithm namespaces.",
+        summary="`std.hash` provides deterministic byte, file, reader, and incremental hashing through explicit cryptographic, compatibility, and non-cryptographic algorithm namespaces. `Sha256Hasher` is a public stored-state handle for byte streams owned across model or class methods.",
         canonical_forms=std_hash_forms,
         prefer_over="Ad hoc hashing shims, hidden default algorithms, or `std.checksum` when the caller needs hash rather than checksum semantics.",
         references=std_hash_references,

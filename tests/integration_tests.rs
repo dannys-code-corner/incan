@@ -3915,6 +3915,42 @@ def main() -> None:
         Ok(())
     }
 
+    /// Verify that source programs can retain the public SHA-256 hasher across method calls.
+    #[test]
+    fn test_std_hash_storable_sha256_hasher_issue969() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+from std.hash import Sha256Hasher, sha256
+
+model StructuralSink:
+    hasher: Sha256Hasher
+
+    def append(mut self, chunk: bytes) -> None:
+        self.hasher.update(chunk)
+
+    def finalize(mut self) -> bytes:
+        return self.hasher.finalize_bytes()
+
+def main() -> None:
+    mut sink = StructuralSink(hasher=sha256.new())
+    sink.append(b"a")
+    sink.append(b"bc")
+    println(sink.finalize() == sha256.digest(b"abc"))
+"#;
+        let output = incan_command()
+            .args(["run", "-c", source])
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "storable SHA-256 hasher program failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "true");
+        Ok(())
+    }
+
     #[test]
     fn test_std_hash_compile_and_run_digest_file_and_error_paths() -> Result<(), Box<dyn std::error::Error>> {
         // Keep std.hash's generated-project dependencies in the root Cargo graph so CI fetches them before this smoke
