@@ -887,6 +887,8 @@
       
         
       
+        
+      
     
     
       
@@ -1349,6 +1351,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../language/tutorials/checked_c_binding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Checked C binding (experimental)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../language/tutorials/typed_registries/" class="md-nav__link">
         
   
@@ -1400,6 +1423,8 @@
   
     
     
+      
+        
       
         
       
@@ -2062,6 +2087,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../language/how-to/checked_c_bindings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Checked C bindings (experimental)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../language/how-to/rust_types_for_python_devs/" class="md-nav__link">
         
   
@@ -2582,6 +2628,8 @@
       
         
       
+        
+      
     
     
       
@@ -2866,6 +2914,27 @@
   
   <span class="md-ellipsis">
     std.io
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../language/reference/stdlib/interop/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    std.interop
   </span>
   
 
@@ -3611,6 +3680,8 @@
       
         
       
+        
+      
     
     
       
@@ -3738,6 +3809,27 @@
   
   <span class="md-ellipsis">
     Checked catalogues and loaded registries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../language/explanation/checked_c_interop/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Checked C interop
   </span>
   
 
@@ -4131,7 +4223,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_23" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_24" >
         
           
           
@@ -4147,14 +4239,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_5_23" id="__nav_3_5_23_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3_5_24" id="__nav_3_5_24_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_5_23_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_5_23">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_5_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_5_24">
             <span class="md-nav__icon md-icon"></span>
             Models and classes
           </label>
@@ -6614,7 +6706,12 @@
 </ul>
 <h2 id="tooling">Tooling<a class="headerlink" href="#tooling" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Codegraph</strong>: A runnable Incan-authored external importer example uses <code>std.json.parse_jsonl</code> to validate schema-v1 JSONL exports end to end while keeping compiler-owned facts authoritative and unknown future record kinds opaque (RFC 106, #776).</li>
+<li>
+<p><strong>Interop (experimental)</strong>: <code>from std.interop import c</code> activates import-scoped <code>binding</code> declarations for a bounded, checked C free-function foundation. The compiler verifies explicit signatures, enum carriers, and listed plain layouts with Clang before generated Rust emits a private C ABI declaration; direct scalar calls require an explicit <code>unsafe:</code> block and range-check their Incan <code>int</code> conversions. Resource ownership, <code>Out</code> / <code>InOut</code>, shims, artifact locks, and mobile packaging remain outside this first RFC 116 slice (#940).</p>
+</li>
+<li>
+<p><strong>Codegraph</strong>: A runnable Incan-authored external importer example uses <code>std.json.parse_jsonl</code> to validate schema-v1 JSONL exports end to end while keeping compiler-owned facts authoritative and unknown future record kinds opaque (RFC 106, #776).</p>
+</li>
 <li><strong>Diagnostics and codegraph</strong>: Machine-readable diagnostics now carry compiler origin, structured expected and actual values, and labeled related spans across <code>incan check</code>, LSP, and tolerant codegraph exports (#771).</li>
 <li><strong>Workspaces</strong>: RFC 077 adds explicit rooted and virtual project workspaces with deterministic member selection, explicit shared dependency and environment inheritance, one crash-safe root lock, <code>incan workspace inspect</code>, and member-scoped build/check/test/fmt reports (#405).</li>
 <li><strong>npm package</strong>: Installing the npm toolchain adapter no longer emits the package-manager install-script warning now that the release packaging no longer relies on that hook (#812).</li>
