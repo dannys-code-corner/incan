@@ -7422,7 +7422,7 @@
 <span class="nb">range</span><span class="p">(</span><span class="n">start</span><span class="o">..</span><span class="n">end</span><span class="p">)</span>   <span class="c1"># Iterator start..end (Rust-style range literal)</span>
 <span class="nb">range</span><span class="p">(</span><span class="n">start</span><span class="o">..=</span><span class="n">end</span><span class="p">)</span>  <span class="c1"># Iterator start..=end (inclusive end)</span>
 <span class="nb">enumerate</span><span class="p">(</span><span class="nb">iter</span><span class="p">)</span>     <span class="c1"># Iterator with indices</span>
-<span class="nb">zip</span><span class="p">(</span><span class="n">iter1</span><span class="p">,</span> <span class="n">iter2</span><span class="p">)</span>   <span class="c1"># Pair up two iterators</span>
+<span class="nb">zip</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">)</span>    <span class="c1"># Lazy Iterator of pairs; stops at the shorter input</span>
 
 <span class="c1"># Type conversion (Python-like)</span>
 <span class="nb">dict</span><span class="p">()</span>              <span class="c1"># Empty Dict</span>

@@ -6770,6 +6770,16 @@
 </tr>
 </tbody>
 </table>
+<p>The builtin <code>zip(left, right)</code> is the concise form for pairing two lists, frozen lists, or <code>Iterator[T]</code> values directly. The fully qualified <code>std.builtins.zip(left, right)</code> spelling has the same behavior. Both return the same lazy <code>Iterator[tuple[T, U]]</code> as <code>left.iter().zip(right.iter())</code> and stop as soon as either input is exhausted. Use the method form when <code>zip</code> is one stage in an existing iterator pipeline:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">score</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">names</span><span class="p">,</span> <span class="n">scores</span><span class="p">):</span>
+    <span class="nb">println</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">score</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="n">ranked</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="n">names</span><span class="o">.</span><span class="nb">iter</span><span class="p">()</span>
+    <span class="o">.</span><span class="nb">filter</span><span class="p">(</span><span class="n">is_visible</span><span class="p">)</span>
+    <span class="o">.</span><span class="nb">zip</span><span class="p">(</span><span class="n">scores</span><span class="o">.</span><span class="nb">iter</span><span class="p">())</span>
+    <span class="o">.</span><span class="nb">collect</span><span class="p">()</span>
+</code></pre></div>
+<p>Neither form builds a list by itself. Iterate the result directly or call <code>.collect()</code> when an owned <code>list[tuple[T, U]]</code> is required.</p>
 <p>Terminal methods consume the iterator:</p>
 <table>
 <thead>

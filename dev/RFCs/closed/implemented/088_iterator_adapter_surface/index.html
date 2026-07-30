@@ -6969,6 +6969,7 @@
 <p><code>.chain(other)</code> yields all remaining elements from the receiver, then all remaining elements from <code>other</code>.</p>
 <p><code>.enumerate()</code> yields <code>(index, item)</code> pairs, starting at index <code>0</code> and increasing by one for each yielded item.</p>
 <p><code>.zip(other)</code> yields pairs from the receiver and <code>other</code> until either iterator is exhausted.</p>
+<p>The existing builtin <code>zip(left, right)</code> is the direct two-input spelling of the same lazy operation. It returns <code>Iterator[tuple[T, U]]</code>; it does not eagerly build a list. The method spelling remains useful when pairing is one stage in a longer adapter chain.</p>
 <p><code>.take_while(f)</code> yields input items until <code>f(item)</code> first returns <code>false</code>, then stops.</p>
 <p><code>.skip_while(f)</code> discards input items while <code>f(item)</code> returns <code>true</code>, then yields that first non-skipped item and all following items.</p>
 <p><code>.batch(size)</code> yields adjacent <code>list[T]</code> batches with at most <code>size</code> elements. The final batch is yielded when it is non-empty even if it contains fewer than <code>size</code> elements. A <code>size</code> less than or equal to zero must be rejected statically when known at compile time and otherwise must produce the same user-facing error category as other invalid numeric standard-library arguments.</p>
