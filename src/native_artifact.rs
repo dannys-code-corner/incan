@@ -301,6 +301,11 @@ pub fn locked_native_targets_from_section(
     Ok(targets)
 }
 
+/// Validate one target artifact's deployment kind and the fields it is allowed to declare.
+///
+/// The manifest uses mutually exclusive shapes for directly linked static archives, packager-staged bundled files,
+/// and selected toolchain/SDK capabilities. Enforcing that distinction before any file access keeps later target
+/// resolution from interpreting an ambiguous declaration as ambient host discovery.
 fn validate_artifact(
     artifact: &NativeArtifact,
     target: &str,
@@ -376,6 +381,10 @@ fn validate_artifact(
     Ok(())
 }
 
+/// Require each declared artifact dependency to name one distinct sibling in the same target declaration.
+///
+/// Native artifact order is normalized in the lock projection, so dependencies must use stable logical names rather
+/// than filesystem paths or an implicit declaration order.
 fn validate_artifact_dependencies(
     artifact: &NativeArtifact,
     target: &str,
@@ -397,6 +406,7 @@ fn validate_artifact_dependencies(
     Ok(())
 }
 
+/// Require one optional native path field and validate it with the common package-relative path policy.
 fn validate_required_path(path: Option<&str>, label: &str) -> Result<(), String> {
     let Some(path) = path else {
         return Err(format!("{label} requires a package-relative path"));
@@ -404,6 +414,7 @@ fn validate_required_path(path: Option<&str>, label: &str) -> Result<(), String>
     validate_native_path(path, label)
 }
 
+/// Require one optional manifest string field to contain a non-whitespace value.
 fn validate_non_empty(value: Option<&str>, label: &str) -> Result<(), String> {
     if value.is_none_or(|value| value.trim().is_empty()) {
         return Err(format!("{label} must be non-empty"));
@@ -411,6 +422,7 @@ fn validate_non_empty(value: Option<&str>, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate every package path in one manifest list using the shared normalized-relative-path contract.
 fn validate_native_paths(paths: &[String], label: &str) -> Result<(), String> {
     for path in paths {
         validate_native_path(path, label)?;
@@ -418,6 +430,11 @@ fn validate_native_paths(paths: &[String], label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject a path that could escape the package or acquire platform-dependent meaning outside the declaration.
+///
+/// Native inputs are locked by their package-relative identity and content bytes. Absolute, parent-relative, current
+/// directory, backslash, duplicate-separator, and directory spellings would make that identity ambiguous or permit
+/// ambient filesystem lookup.
 fn validate_native_path(path: &str, label: &str) -> Result<(), String> {
     let candidate = Path::new(path);
     if path.trim().is_empty()
@@ -439,6 +456,10 @@ fn validate_native_path(path: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Convert one validated target declaration into a canonical, content-addressed lock projection.
+///
+/// This stage records only already-declared package files and logical deployment facts. It does not build shims,
+/// download artifacts, or probe the host for a library.
 fn lock_native_target(root: &Path, target: &NativeTarget) -> Result<LockedNativeTarget, String> {
     let mut definitions = target.definitions.clone();
     definitions.sort();
@@ -476,6 +497,7 @@ fn lock_native_target(root: &Path, target: &NativeTarget) -> Result<LockedNative
     })
 }
 
+/// Lock one physical artifact while retaining capability-only system artifacts without a package file receipt.
 fn lock_artifact(root: &Path, artifact: &NativeArtifact) -> Result<LockedNativeArtifact, String> {
     let input = artifact
         .path
@@ -497,6 +519,7 @@ fn lock_artifact(root: &Path, artifact: &NativeArtifact) -> Result<LockedNativeA
     })
 }
 
+/// Resolve a list of declared package files into unique, path-sorted content receipts.
 fn lock_inputs(root: &Path, paths: &[String]) -> Result<Vec<LockedNativeInput>, String> {
     let mut inputs = paths
         .iter()
@@ -507,6 +530,7 @@ fn lock_inputs(root: &Path, paths: &[String]) -> Result<Vec<LockedNativeInput>, 
     Ok(inputs)
 }
 
+/// Hash one declared regular package file without following a symlink or consulting an ambient search path.
 fn lock_input(root: &Path, relative: &str) -> Result<LockedNativeInput, String> {
     validate_native_path(relative, "native input")?;
     let path = root.join(relative);
