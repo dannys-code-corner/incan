@@ -5503,6 +5503,43 @@ output = "fixture_bridge"
 }
 
 #[test]
+fn lock_records_android_platform_requirements_without_selecting_a_local_sdk() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let main_path = write_minimal_project(
+        tmp.path(),
+        "oven_android_platform_lock",
+        r#"
+
+[oven.interop]
+schema = 1
+
+[[oven.interop.targets]]
+target = "aarch64-linux-android"
+toolchain = { capability = "android-ndk", version = ">=29, <30" }
+sdk = { capability = "android", version = ">=36, <37" }
+
+[oven.interop.targets.platform]
+kind = "android"
+api-level = 34
+"#,
+    )?;
+    let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
+
+    let lock_output = run_incan(tmp.path(), &["lock", main_arg])?;
+    assert_success(&lock_output, "incan lock with Android platform requirements");
+    let lock: toml::Value = toml::from_str(&fs::read_to_string(tmp.path().join("incan.lock"))?)?;
+    let target = lock["semantic"]["oven"]["interop"]
+        .as_array()
+        .and_then(|targets| targets.first())
+        .ok_or("lock did not contain an Android Oven interop target")?;
+    assert_eq!(target["target"].as_str(), Some("aarch64-linux-android"));
+    assert_eq!(target["sdk"]["capability"].as_str(), Some("android"));
+    assert_eq!(target["platform"]["kind"].as_str(), Some("android"));
+    assert_eq!(target["platform"]["api-level"].as_integer(), Some(34));
+    Ok(())
+}
+
+#[test]
 fn canonical_lock_records_exact_registry_resolution_changes() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(

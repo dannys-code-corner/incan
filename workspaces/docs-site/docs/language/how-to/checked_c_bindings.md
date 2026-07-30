@@ -137,6 +137,10 @@ sdk = { capability = "iphoneos", version = ">=18, <19" }
 headers = ["interop/include/bridge.h"]
 definitions = ["FIXTURE=1"]
 
+[oven.interop.targets.platform]
+kind = "ios"
+deployment-target = "13.0"
+
 [[oven.interop.targets.artifacts]]
 name = "fixture"
 kind = "static"
@@ -156,6 +160,8 @@ output = "fixture_bridge"
 ```
 
 `static` artifacts name a package-owned archive. `bundled` artifacts name a package-owned dynamic library or framework and must also specify its `runtime-name`, `placement`, and `minimum-platform`. `system` artifacts instead name a required toolchain or SDK capability. Shims may be authored in C or C++, but Oven will expose C++ only behind the shim's bounded C contract.
+
+The target triple still names the CPU and operating-system identity. A mobile `platform` table supplies the additional version constraint that later ABI verification and a platform packager require. `kind = "android"` is valid only for `aarch64-linux-android`; it requires the `android` SDK capability and an `api-level` of 21 or later. `kind = "ios"` is valid only for `aarch64-apple-ios`; it requires the `iphoneos` SDK capability and a numeric `major.minor` `deployment-target`. These are package requirements, not paths or a record of the concrete SDK that Oven has selected.
 
 Every declared package file must be a regular, normalized relative path. Running `incan lock` hashes the exact header, artifact, and shim-source bytes into the semantic lock state with the target, compatibility requirements, definitions, and capability requirements. Changing any declared input makes the lock stale; relocating an unchanged package does not change these package-relative entries.
 

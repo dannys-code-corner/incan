@@ -74,6 +74,9 @@ impl OvenInteropSection {
                     target.target
                 ));
             }
+            if let Some(platform) = &target.platform {
+                validate_target_platform(platform, target)?;
+            }
 
             let mut artifact_names = BTreeSet::new();
             for artifact in &target.artifacts {
@@ -161,6 +164,9 @@ pub struct OvenInteropTarget {
     /// Optional compatible SDK capability; Oven records the selected SDK and sysroot separately.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sdk: Option<CapabilityRequirement>,
+    /// Platform facts that complete a mobile target's ABI and deployment requirements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<InteropTargetPlatform>,
     /// Package-relative public or shim headers used for verification.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<String>,
@@ -173,6 +179,99 @@ pub struct OvenInteropTarget {
     /// Authored C or C++ shim source inputs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shims: Vec<InteropShim>,
+}
+
+/// Platform-specific constraints that complete a mobile target identity.
+///
+/// The target triple supplies the CPU and operating-system identity. This profile carries the version fact required
+/// by the Android or Apple toolchain and by a later platform handoff without selecting a machine-local SDK.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "kebab-case")]
+pub enum InteropTargetPlatform {
+    /// Android arm64 verification and deployment require an Android API level.
+    Android {
+        /// Android API level selected for C ABI verification and deployment compatibility.
+        api_level: u32,
+    },
+    /// iOS arm64 verification and deployment require a minimum supported OS version.
+    Ios {
+        /// Minimum iOS version selected for verification and deployment compatibility.
+        deployment_target: String,
+    },
+}
+
+/// Validate the target triple, platform version, and compatible SDK capability required by one mobile profile.
+fn validate_target_platform(platform: &InteropTargetPlatform, target: &OvenInteropTarget) -> Result<(), String> {
+    match platform {
+        InteropTargetPlatform::Android { api_level } => {
+            if target.target != "aarch64-linux-android" {
+                return Err(format!(
+                    "Android platform facts require the `aarch64-linux-android` target, found `{}`",
+                    target.target
+                ));
+            }
+            if *api_level < 21 {
+                return Err(format!(
+                    "Android arm64 target `{}` requires API level 21 or later, found {api_level}",
+                    target.target
+                ));
+            }
+            validate_sdk_capability(target.sdk.as_ref(), "android", "Android", &target.target)
+        }
+        InteropTargetPlatform::Ios { deployment_target } => {
+            if target.target != "aarch64-apple-ios" {
+                return Err(format!(
+                    "iOS platform facts require the `aarch64-apple-ios` target, found `{}`",
+                    target.target
+                ));
+            }
+            if !is_deployment_target_version(deployment_target) {
+                return Err(format!(
+                    "iOS deployment target `{deployment_target}` for `{}` must be a numeric `major.minor` version",
+                    target.target
+                ));
+            }
+            validate_sdk_capability(target.sdk.as_ref(), "iphoneos", "iOS", &target.target)
+        }
+    }
+}
+
+/// Require a mobile profile to name the SDK capability whose concrete installation Oven will later select.
+fn validate_sdk_capability(
+    sdk: Option<&CapabilityRequirement>,
+    expected: &str,
+    platform: &str,
+    target: &str,
+) -> Result<(), String> {
+    let Some(sdk) = sdk else {
+        return Err(format!(
+            "{platform} target `{target}` requires the `{expected}` SDK capability"
+        ));
+    };
+    if sdk.capability == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "{platform} target `{target}` requires the `{expected}` SDK capability, found `{}`",
+            sdk.capability
+        ))
+    }
+}
+
+/// Return whether a declared iOS deployment target has an explicit numeric major and minor version.
+fn is_deployment_target_version(value: &str) -> bool {
+    let mut components = value.split('.');
+    let Some(first) = components.next() else {
+        return false;
+    };
+    let Some(second) = components.next() else {
+        return false;
+    };
+    !first.is_empty()
+        && first.bytes().all(|byte| byte.is_ascii_digit())
+        && !second.is_empty()
+        && second.bytes().all(|byte| byte.is_ascii_digit())
+        && components.all(|component| !component.is_empty() && component.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// One declared physical interop artifact.
@@ -253,6 +352,9 @@ pub struct LockedInteropTarget {
     /// Compatible SDK capability requested by the package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sdk: Option<CapabilityRequirement>,
+    /// Target-platform facts retained for target-specific verification and deployment planning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<InteropTargetPlatform>,
     /// Explicit definitions sorted as part of the target configuration identity.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub definitions: Vec<String>,
@@ -537,6 +639,7 @@ fn lock_interop_target(root: &Path, target: &OvenInteropTarget) -> Result<Locked
             .map(CapabilityRequirement::normalized)
             .transpose()?,
         sdk: target.sdk.as_ref().map(CapabilityRequirement::normalized).transpose()?,
+        platform: target.platform.clone(),
         definitions,
         headers,
         artifacts,
@@ -700,6 +803,7 @@ output = "fixture_bridge"
                     version: Some("eighteen-ish".to_string()),
                 }),
                 sdk: None,
+                platform: None,
                 headers: Vec::new(),
                 definitions: Vec::new(),
                 artifacts: Vec::new(),
@@ -717,6 +821,7 @@ output = "fixture_bridge"
                     version: Some(">=18, <19".to_string()),
                 }),
                 sdk: None,
+                platform: None,
                 headers: vec!["/usr/include/fixture.h".to_string()],
                 definitions: Vec::new(),
                 artifacts: Vec::new(),
@@ -734,6 +839,7 @@ output = "fixture_bridge"
                     capability: "macosx".to_string(),
                     version: Some(">=15, <16".to_string()),
                 }),
+                platform: None,
                 headers: Vec::new(),
                 definitions: Vec::new(),
                 artifacts: vec![InteropArtifact {
@@ -757,6 +863,7 @@ output = "fixture_bridge"
                 target: "x86_64-unknown-linux-gnu".to_string(),
                 toolchain: None,
                 sdk: None,
+                platform: None,
                 headers: Vec::new(),
                 definitions: Vec::new(),
                 artifacts: vec![InteropArtifact {
@@ -773,5 +880,89 @@ output = "fixture_bridge"
             }],
         };
         assert!(invalid_dependency.validate().is_err());
+    }
+
+    #[test]
+    fn mobile_platform_profiles_require_matching_target_sdk_and_version_facts() {
+        let android = OvenInteropSection {
+            schema: OVEN_INTEROP_SCHEMA_VERSION,
+            targets: vec![OvenInteropTarget {
+                target: "aarch64-linux-android".to_string(),
+                toolchain: Some(CapabilityRequirement {
+                    capability: "android-ndk".to_string(),
+                    version: Some(">=29, <30".to_string()),
+                }),
+                sdk: Some(CapabilityRequirement {
+                    capability: "android".to_string(),
+                    version: Some(">=36, <37".to_string()),
+                }),
+                platform: Some(InteropTargetPlatform::Android { api_level: 34 }),
+                headers: Vec::new(),
+                definitions: Vec::new(),
+                artifacts: Vec::new(),
+                shims: Vec::new(),
+            }],
+        };
+        assert!(android.validate().is_ok());
+
+        let apple = OvenInteropSection {
+            schema: OVEN_INTEROP_SCHEMA_VERSION,
+            targets: vec![OvenInteropTarget {
+                target: "aarch64-apple-ios".to_string(),
+                toolchain: Some(CapabilityRequirement {
+                    capability: "apple-clang".to_string(),
+                    version: Some(">=17, <18".to_string()),
+                }),
+                sdk: Some(CapabilityRequirement {
+                    capability: "iphoneos".to_string(),
+                    version: Some(">=18, <19".to_string()),
+                }),
+                platform: Some(InteropTargetPlatform::Ios {
+                    deployment_target: "13.0".to_string(),
+                }),
+                headers: Vec::new(),
+                definitions: Vec::new(),
+                artifacts: Vec::new(),
+                shims: Vec::new(),
+            }],
+        };
+        assert!(apple.validate().is_ok());
+
+        let mut unsupported_android_api = android.clone();
+        unsupported_android_api.targets[0].platform = Some(InteropTargetPlatform::Android { api_level: 20 });
+        assert!(
+            unsupported_android_api
+                .validate()
+                .is_err_and(|error| error.contains("API level 21 or later"))
+        );
+
+        let mut wrong_android_sdk = android;
+        wrong_android_sdk.targets[0].sdk = Some(CapabilityRequirement {
+            capability: "iphoneos".to_string(),
+            version: Some(">=18, <19".to_string()),
+        });
+        assert!(
+            wrong_android_sdk
+                .validate()
+                .is_err_and(|error| error.contains("`android` SDK capability"))
+        );
+
+        let mut incompatible_apple_target = apple.clone();
+        incompatible_apple_target.targets[0].target = "aarch64-apple-darwin".to_string();
+        assert!(
+            incompatible_apple_target
+                .validate()
+                .is_err_and(|error| error.contains("aarch64-apple-ios"))
+        );
+
+        let mut malformed_apple_version = apple;
+        malformed_apple_version.targets[0].platform = Some(InteropTargetPlatform::Ios {
+            deployment_target: "iOS 13".to_string(),
+        });
+        assert!(
+            malformed_apple_version
+                .validate()
+                .is_err_and(|error| error.contains("numeric `major.minor` version"))
+        );
     }
 }
