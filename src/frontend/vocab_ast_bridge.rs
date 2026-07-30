@@ -611,8 +611,24 @@ fn public_decorator_to_internal_with_spans(
             is_call: !decorator.args.is_empty(),
             args,
         },
-        spans.next(),
+        public_decorator_span_or_synthetic(decorator, spans),
     ))
+}
+
+/// Preserve an explicit vocabulary decorator source span while retaining unique synthetic spans for generated helpers.
+///
+/// A companion desugarer may intentionally attach the source declaration span to an ordinary decorator that carries
+/// semantic diagnostics. When it does, downstream checked descriptors must retain that user-facing anchor instead of
+/// exposing an implementation-only synthetic span. Default spans still receive a unique synthetic identity so they
+/// cannot collide with other generated nodes in typechecker metadata.
+fn public_decorator_span_or_synthetic(
+    decorator: &incan_vocab::Decorator,
+    spans: &mut SyntheticSpanAllocator,
+) -> ast::Span {
+    if decorator.span == incan_vocab::Span::default() {
+        return spans.next();
+    }
+    ast::Span::new(decorator.span.start, decorator.span.end.max(decorator.span.start))
 }
 
 /// Convert public statements into internal statements while assigning unique synthetic spans under `anchor`.

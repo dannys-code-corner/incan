@@ -4,7 +4,7 @@ Checked C interop is a language-owned contract for a deliberately small foreign 
 
 ## One declaration authority
 
-The binding source is the authority for the Incan-facing names, C scalar categories, native spellings, and supported plain layouts. The compiler uses the declaration to construct a target-specific C probe; it does not scrape a header to invent a public API or infer safety from generated Rust.
+The binding source is the authority for the Incan-facing names, C scalar categories, native spellings, ownership and output contracts, and supported plain layouts. The compiler uses the declaration to construct a target-specific C probe; it does not scrape a header to invent a public API or infer safety from generated Rust.
 
 ```mermaid
 flowchart LR
@@ -17,6 +17,21 @@ flowchart LR
 ```
 
 The probe is syntax-only. It checks free-function signatures, folds declared enum constants, and checks requested plain-structure size, alignment, and field offsets for the selected host ABI. It neither links the native library nor executes its code. The later generated build still links the system library named by `c.system_library("name")`.
+
+## Inspection is a projection, not another authority
+
+[`incan inspect bindings`](../../tooling/how-to/inspect_checked_c_bindings.md) runs the ordinary checked compilation analysis and projects its binding descriptors for people and tools. It does not reparse vocabulary syntax, scrape headers, or interpret generated Rust. An invalid declaration therefore produces the normal compiler diagnostic instead of a plausible-looking partial report.
+
+The declaration projection deliberately does not absorb facts with different lifecycles:
+
+| Surface | Question it answers |
+| --- | --- |
+| Binding inspection | What ABI, ownership, output, enum, and layout contract did the compiler accept from this source graph? |
+| `[oven.interop]` and `incan.lock` | What target requirements and package-owned physical inputs did the author declare and lock? |
+| Future Oven receipt and store | Which concrete toolchain, SDK, artifacts, commands, and shim outputs satisfied those requirements? |
+| Future editor and codegraph projections | Where are raw declarations, private bridges, and public façades related in source? |
+
+Keeping these projections separate prevents a source inspection from being mistaken for evidence that an artifact was resolved, a shim was built, or a mobile package is ready. They can still share stable binding identities as the tooling vertical grows.
 
 ## Why the boundary begins with C declarations
 
@@ -46,4 +61,4 @@ That is an Oven requirement and locking boundary, not a claim that a build has a
 
 The same restraint still applies to views and general pointers. C strings, spans, caller-owned buffers, scoped foreign views, arbitrary pointer operations, and context-manager syntax need additional lifetime and bounds contracts. The current guarantee is deliberately smaller: opaque resources and output storage remain private compiler-managed carriers, while public APIs use ordinary Incan values.
 
-For a working first binding, start with the [tutorial](../tutorials/checked_c_binding.md). For declaration recipes and diagnostics, use the [how-to guide](../how-to/checked_c_bindings.md). The [`std.interop` reference](../reference/stdlib/interop.md) is the exact syntax and capability contract.
+For a working first binding, start with the [tutorial](../tutorials/checked_c_binding.md). For declaration recipes and diagnostics, use the [binding how-to](../how-to/checked_c_bindings.md). To review what the compiler accepted, use the [inspection how-to](../../tooling/how-to/inspect_checked_c_bindings.md). The [`std.interop` reference](../reference/stdlib/interop.md) is the exact syntax and capability contract.

@@ -33,7 +33,7 @@ Commands:
 
 ## Semantic inspection surfaces
 
-Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use `incan check --format json` for the stable diagnostic plane, `incan build --report json` for successful build and artifact metadata, `incan inspect rust --format json` for current generated Rust output, `incan inspect codegraph --format jsonl` for source-structure graph facts, `incan inspect providers --format json` for SDK component and provider participation, and `incan inspect features --format json` for the additive package-feature graph.
+Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use `incan check --format json` for the stable diagnostic plane, `incan build --report json` for successful build and artifact metadata, `incan inspect rust --format json` for current generated Rust output, `incan inspect codegraph --format jsonl` for source-structure graph facts, `incan inspect providers --format json` for SDK component and provider participation, `incan inspect features --format json` for the additive package-feature graph, and `incan inspect bindings --format json` for checked C declaration facts.
 
 These commands are intentionally not a single full semantic database. They are stable public surfaces that tools can join without scraping terminal prose, generated Rust, or source text independently. When a fact appears in more than one surface, consumers should prefer compiler-owned identity fields, source paths, schema versions, and explicit degraded-state or diagnostic records over human output.
 
@@ -56,7 +56,7 @@ Compilation, locking, and semantic inspection commands share these Incan-owned o
 - `--all-features`: Select every public feature declared by the root package.
 - `--sdk-profile <PROFILE>`: Replace the project's base SDK profile for this invocation while preserving explicit component additions and exclusions from `[sdk]`.
 
-They are supported by `build`, `check`, `run`, `test`, and `lock`, plus the `inspect codegraph`, `inspect providers`, and `inspect features` projections. The package-feature flags do not forward names to Cargo. Backend pass-through remains explicitly prefixed as `--cargo-features`, `--cargo-no-default-features`, and `--cargo-all-features` where supported.
+They are supported by `build`, `check`, `run`, `test`, and `lock`, plus the `inspect codegraph`, `inspect providers`, `inspect features`, and `inspect bindings` projections. The package-feature flags do not forward names to Cargo. Backend pass-through remains explicitly prefixed as `--cargo-features`, `--cargo-no-default-features`, and `--cargo-all-features` where supported.
 
 `incan test --feature <NAME>` is a separate test-runner option for `std.testing.feature("NAME")` collection probes. Use plural `--features` for public package features.
 
@@ -334,6 +334,32 @@ incan inspect features . --format json --no-default-features --features json
 ```
 
 See [SDK components and package features](sdk_components_and_package_features.md) for the state and resolution model.
+
+### `incan inspect bindings`
+
+Usage:
+
+```text
+incan inspect bindings [PATH] [OPTIONS]
+```
+
+Reports compiler-checked C binding declaration facts for a source file or project directory. The JSON report is deterministic and source-anchored: it includes bindings, headers, logical system-library capabilities, symbols, exact C type contracts, enum constants, and plain structures. `PATH` defaults to the current project.
+
+Options:
+
+- `--format text|json`: Output a concise terminal summary or the schema-versioned JSON report (default: `text`).
+- `--features`, `--no-default-features`, `--all-features`: Select which feature-conditioned declarations are checked and projected.
+- `--sdk-profile <PROFILE>`: Select the SDK profile used to resolve the checked source graph.
+
+The command is strict: it emits ordinary compiler diagnostics rather than partial data when the source graph is not valid. Its checked compilation path runs the normal host-target C probe, but the report remains a declaration projection rather than a reusable verification receipt. It does not resolve native artifacts, compile shims, read native lock receipts, classify a bridge or façade, or expose LSP data. Use the [inspection how-to](../how-to/inspect_checked_c_bindings.md) for the review workflow and the [binding inspection JSON schema](binding_inspection_schema.md) for the machine contract.
+
+Examples:
+
+```bash
+incan inspect bindings
+incan inspect bindings src/main.incn --format json
+incan inspect bindings . --format json --features sqlite --sdk-profile minimal
+```
 
 ### `incan run`
 

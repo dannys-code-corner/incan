@@ -49,6 +49,7 @@ use crate::manifest::ProjectManifest;
 use crate::provider::FeatureSelection;
 use crate::workspace::{ResolvedWorkspaceScope, WorkspaceGraph, WorkspaceMember, WorkspaceScopeRequest};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use commands::binding_inspect::BindingInspectionFormat;
 use commands::build_report::{BuildReportFormat, BuildReportOptions, RustInspectionFormat};
 use commands::codegraph::CodegraphInspectionFormat;
 use commands::common::{CargoPolicy, CargoPolicyCliFlags, INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV};
@@ -717,6 +718,21 @@ pub enum InspectCommand {
         #[command(flatten)]
         sdk_profile: SdkProfileCliFlags,
     },
+    /// Inspect compiler-checked C binding declarations
+    Bindings {
+        /// Source file or project directory whose checked C declarations should be inspected
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Output format
+        #[arg(long = "format", value_enum, default_value = "text")]
+        format: BindingInspectionFormat,
+        /// Select Incan package features for this binding projection
+        #[command(flatten)]
+        package_features: PackageFeatureCliFlags,
+        /// Select a non-persistent SDK profile for this binding projection
+        #[command(flatten)]
+        sdk_profile: SdkProfileCliFlags,
+    },
     /// Inspect one complete compiler-checked typed registry without executing user modules
     Registry {
         /// Registry identity, such as `feature::functions` or the unambiguous `package::feature::functions`
@@ -1025,6 +1041,12 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                 package_features,
                 sdk_profile,
             } => commands::inspect_features(&path, format, &package_features.into(), sdk_profile.profile()),
+            InspectCommand::Bindings {
+                path,
+                format,
+                package_features,
+                sdk_profile,
+            } => commands::inspect_bindings(&path, format, &package_features.into(), sdk_profile.profile()),
         },
         Some(Command::Run {
             file,
