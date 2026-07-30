@@ -127,7 +127,10 @@ impl CAbiVerificationPlan {
         Ok(Self {
             target: CAbiTarget::from_interop_target(interop_target)?,
             definitions: interop_target.definitions.clone(),
-            toolchain_identity: interop_target.toolchain.as_ref().map(|requirement| requirement.capability.clone()),
+            toolchain_identity: interop_target
+                .toolchain
+                .as_ref()
+                .map(|requirement| requirement.capability.clone()),
         })
     }
 

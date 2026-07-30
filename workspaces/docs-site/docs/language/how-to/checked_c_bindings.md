@@ -178,7 +178,17 @@ INCAN_C_ABI_CLANG=/path/to/aarch64-linux-android34-clang \
 
 The selected target's `definitions` are passed to both the signature/layout probe and the enum-value probe. The command rejects a target that is not declared by the package. It also keeps the boundary narrow: this checks the source-owned C ABI against that target profile, but it does not cross-compile generated Rust, link declared artifacts, build shims, stage a mobile package, or attest that a compatible `toolchain` or `sdk` requirement matches an installed binary. `INCAN_C_ABI_CLANG` provisions the executable for this invocation; it does not replace the manifest as ABI or target authority.
 
-This declaration and lock slice deliberately does not download artifacts, discover a system library, compile a shim, or define a Gradle/Xcode handover format. Oven will resolve the requirements, select concrete compiler and SDK installations, build shims, cache outputs, and record those choices in its own receipt or store. Do not put signing, provenance admission, or license policy here: publication policy belongs to `incan.pub`.
+## Inspect a locked platform handoff
+
+After locking, inspect the same target requirements as a deterministic platform handoff:
+
+```sh
+incan inspect interop-plan --target aarch64-linux-android --format json
+```
+
+The plan gives a later Gradle or Xcode adapter consistent target, artifact, shim, and placement facts without freezing either adapter's task protocol. It is not an Oven resolution receipt or a deployable application: it contains no local SDK path, selected compiler executable, generated artifact, signing identity, licence admission, or credential.
+
+This declaration, lock, and plan slice deliberately does not download artifacts, discover a system library, compile a shim, or define a Gradle/Xcode handover protocol. Oven will resolve the requirements, select concrete compiler and SDK installations, build shims, cache outputs, and record those choices in its own receipt or store. Do not put signing, provenance admission, or license policy here: publication policy belongs to `incan.pub`.
 
 ## Interpret common failures
 

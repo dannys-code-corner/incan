@@ -68,6 +68,27 @@ fn configured_incan_command(current_dir: &Path, args: &[&str]) -> Command {
     command
 }
 
+/// Return a Clang executable suitable for a header-only C ABI verifier fixture, when this host has one.
+fn c_abi_test_clang() -> Option<String> {
+    if let Some(executable) = std::env::var_os("INCAN_C_ABI_CLANG").filter(|value| !value.is_empty()) {
+        return Some(executable.to_string_lossy().into_owned());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("xcrun").args(["--find", "clang"]).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!path.is_empty()).then_some(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let status = Command::new("clang").arg("--version").status().ok()?;
+        status.success().then_some("clang".to_string())
+    }
+}
+
 /// Run one Unix CLI probe in its own process group so recursive subprocess regressions can be terminated together.
 #[cfg(unix)]
 fn run_incan_with_timeout(
@@ -213,6 +234,58 @@ main = "src/main.incn"
 "#,
     )?;
     Ok(main_path)
+}
+
+/// Write the canonical interop-only lock projection needed by `inspect interop-plan` without compiling SDK providers.
+///
+/// Interop-plan inspection re-hashes declared package inputs itself. The command tests below therefore need a valid
+/// canonical semantic projection, not the unrelated provider-install work performed by `incan lock`.
+fn write_locked_oven_interop_plan(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let manifest = incan::manifest::ProjectManifest::discover(root)?.ok_or("interop fixture manifest was missing")?;
+    let interop = incan::oven_interop::locked_oven_interop_targets(&manifest)?;
+    let lock = incan::lockfile::IncanLock::new_with_semantic(
+        "fixture".to_string(),
+        incan::lockfile::CargoFeatureSelection::default(),
+        incan::lockfile::SemanticLockState {
+            oven: Some(incan::lockfile::LockedOvenState { interop }),
+            ..Default::default()
+        },
+        String::new(),
+    );
+    lock.write(&root.join("incan.lock"))?;
+    Ok(())
+}
+
+/// Write one workspace-root interop projection for a selected member without materializing SDK providers.
+fn write_locked_workspace_oven_interop_plan(
+    workspace_root: &Path,
+    member_root: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let manifest = incan::manifest::ProjectManifest::discover(member_root)?
+        .ok_or("workspace interop fixture member manifest was missing")?;
+    let interop = incan::oven_interop::locked_oven_interop_targets(&manifest)?;
+    let member_root = member_root
+        .strip_prefix(workspace_root)?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let lock = incan::lockfile::IncanLock::new_with_semantic(
+        "fixture".to_string(),
+        incan::lockfile::CargoFeatureSelection::default(),
+        incan::lockfile::SemanticLockState {
+            workspace_members: vec![incan::lockfile::LockedWorkspaceMember {
+                member_root,
+                sdk: None,
+                packages: Vec::new(),
+                feature_edges: Vec::new(),
+                providers: Vec::new(),
+                oven: Some(incan::lockfile::LockedOvenState { interop }),
+            }],
+            ..Default::default()
+        },
+        String::new(),
+    );
+    lock.write(&workspace_root.join("incan.lock"))?;
+    Ok(())
 }
 
 #[test]
@@ -5503,7 +5576,8 @@ output = "fixture_bridge"
 }
 
 #[test]
-fn lock_records_android_platform_requirements_without_selecting_a_local_sdk() -> Result<(), Box<dyn std::error::Error>> {
+fn lock_records_android_platform_requirements_without_selecting_a_local_sdk() -> Result<(), Box<dyn std::error::Error>>
+{
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(
         tmp.path(),
@@ -5536,6 +5610,240 @@ api-level = 34
     assert_eq!(target["sdk"]["capability"].as_str(), Some("android"));
     assert_eq!(target["platform"]["kind"].as_str(), Some("android"));
     assert_eq!(target["platform"]["api-level"].as_integer(), Some(34));
+    Ok(())
+}
+
+#[test]
+fn inspect_interop_plan_is_locked_complete_and_relocatable() -> Result<(), Box<dyn std::error::Error>> {
+    // ---- Declare representative Android deployment requirements ----
+    let tmp = tempfile::tempdir()?;
+    let package = tmp.path().join("package");
+    fs::create_dir_all(&package)?;
+    let _main_path = write_minimal_project(
+        &package,
+        "interop_plan_handoff",
+        r#"
+
+[sdk]
+profile = "minimal"
+
+[oven.interop]
+schema = 1
+
+[[oven.interop.targets]]
+target = "aarch64-linux-android"
+toolchain = { capability = "android-ndk", version = ">=29, <30" }
+sdk = { capability = "android", version = ">=36, <37" }
+headers = ["interop/include/runtime.h"]
+definitions = ["TFLITE_STATIC_MEMORY=1"]
+
+[oven.interop.targets.platform]
+kind = "android"
+api-level = 34
+
+[[oven.interop.targets.artifacts]]
+name = "llama"
+kind = "static"
+path = "interop/lib/libllama.a"
+dependencies = ["tflite"]
+
+[[oven.interop.targets.artifacts]]
+name = "tflite"
+kind = "bundled"
+path = "interop/lib/libtensorflowlite_c.so"
+runtime-name = "libtensorflowlite_c.so"
+placement = "jniLibs/arm64-v8a"
+minimum-platform = "21"
+dependencies = ["log"]
+
+[[oven.interop.targets.artifacts]]
+name = "log"
+kind = "system"
+capability = "android.library.log"
+
+[[oven.interop.targets.shims]]
+name = "llama_bridge"
+language = "cxx"
+sources = ["interop/src/llama_bridge.cc"]
+headers = ["interop/include/runtime.h"]
+output = "llama_bridge"
+"#,
+    )?;
+    fs::create_dir_all(package.join("interop/include"))?;
+    fs::create_dir_all(package.join("interop/src"))?;
+    fs::create_dir_all(package.join("interop/lib"))?;
+    fs::write(package.join("interop/include/runtime.h"), "int runtime(void);\n")?;
+    fs::write(
+        package.join("interop/src/llama_bridge.cc"),
+        "extern \"C\" int runtime(void) { return 0; }\n",
+    )?;
+    fs::write(package.join("interop/lib/libllama.a"), b"llama archive")?;
+    fs::write(
+        package.join("interop/lib/libtensorflowlite_c.so"),
+        b"tflite shared object",
+    )?;
+    // ---- Lock and inspect the complete structured requirement handoff ----
+    write_locked_oven_interop_plan(&package)?;
+    let output = run_incan(
+        &package,
+        &[
+            "inspect",
+            "interop-plan",
+            "--target",
+            "aarch64-linux-android",
+            "--format",
+            "json",
+            ".",
+        ],
+    )?;
+    assert_success(&output, "locked Android interop plan inspection");
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(plan["schema_version"].as_u64(), Some(1));
+    assert_eq!(plan["target"].as_str(), Some("aarch64-linux-android"));
+    assert_eq!(plan["toolchain"]["capability"].as_str(), Some("android-ndk"));
+    assert_eq!(plan["sdk"]["capability"].as_str(), Some("android"));
+    assert_eq!(plan["platform"]["kind"].as_str(), Some("android"));
+    assert_eq!(plan["platform"]["api_level"].as_u64(), Some(34));
+    assert_eq!(plan["include_roots"][0].as_str(), Some("interop/include"));
+    assert_eq!(
+        plan["artifacts"]
+            .as_array()
+            .ok_or("interop plan artifacts were not an array")?
+            .iter()
+            .filter_map(|artifact| artifact["name"].as_str())
+            .collect::<Vec<_>>(),
+        ["log", "tflite", "llama"]
+    );
+    assert_eq!(plan["artifacts"][0]["deployment"].as_str(), Some("system"));
+    assert_eq!(plan["artifacts"][0]["capability"].as_str(), Some("android.library.log"));
+    assert_eq!(plan["artifacts"][1]["deployment"].as_str(), Some("bundle"));
+    assert_eq!(plan["artifacts"][1]["placement"].as_str(), Some("jniLibs/arm64-v8a"));
+    assert_eq!(plan["artifacts"][2]["deployment"].as_str(), Some("static_link"));
+    assert_eq!(plan["shims"][0]["output"].as_str(), Some("llama_bridge"));
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(&package.to_string_lossy().to_string()),
+        "interop plan leaked its original package location"
+    );
+
+    let unknown = run_incan(
+        &package,
+        &["inspect", "interop-plan", "--target", "aarch64-apple-ios", "."],
+    )?;
+    assert_failure(&unknown, "undeclared interop plan target");
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("is not declared and locked by this package"),
+        "unexpected undeclared interop-plan diagnostic:\n{}",
+        String::from_utf8_lossy(&unknown.stderr)
+    );
+
+    // ---- Preserve the plan across relocation and reject stale locked bytes ----
+    let relocated = tmp.path().join("relocated");
+    fs::rename(&package, &relocated)?;
+    let relocated_output = run_incan(
+        &relocated,
+        &[
+            "inspect",
+            "interop-plan",
+            "--target",
+            "aarch64-linux-android",
+            "--format",
+            "json",
+            ".",
+        ],
+    )?;
+    assert_success(&relocated_output, "relocated interop plan inspection");
+    assert_eq!(
+        output.stdout, relocated_output.stdout,
+        "relocating a locked interop package changed its deployment handoff"
+    );
+
+    fs::write(
+        relocated.join("interop/lib/libtensorflowlite_c.so"),
+        b"changed tflite shared object",
+    )?;
+    let stale = run_incan(
+        &relocated,
+        &["inspect", "interop-plan", "--target", "aarch64-linux-android", "."],
+    )?;
+    assert_failure(&stale, "stale interop plan inspection");
+    assert!(
+        String::from_utf8_lossy(&stale.stderr).contains("incan.lock Oven interop requirements are out of date"),
+        "unexpected stale interop-plan diagnostic:\n{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn inspect_interop_plan_uses_the_selected_workspace_member_lock_projection() -> Result<(), Box<dyn std::error::Error>> {
+    // ---- Declare one Oven interop workspace member ----
+    let root = tempfile::tempdir()?;
+    fs::write(
+        root.path().join("incan.toml"),
+        "[workspace]\nmembers = [\"packages/mobile\"]\n",
+    )?;
+    let member = root.path().join("packages/mobile");
+    let _main_path = write_minimal_project(
+        &member,
+        "mobile",
+        r#"
+
+[sdk]
+profile = "minimal"
+
+[oven.interop]
+schema = 1
+
+[[oven.interop.targets]]
+target = "aarch64-apple-ios"
+toolchain = { capability = "apple-clang", version = ">=17, <18" }
+sdk = { capability = "iphoneos", version = ">=18, <19" }
+headers = ["interop/include/accelerate_bridge.h"]
+
+[oven.interop.targets.platform]
+kind = "ios"
+deployment-target = "13.0"
+
+[[oven.interop.targets.artifacts]]
+name = "accelerate"
+kind = "system"
+capability = "apple.framework.Accelerate"
+"#,
+    )?;
+    fs::create_dir_all(member.join("interop/include"))?;
+    fs::write(
+        member.join("interop/include/accelerate_bridge.h"),
+        "float incan_dot(const float *left, const float *right, unsigned long count);\n",
+    )?;
+    // ---- Publish the one canonical workspace lock ----
+    write_locked_workspace_oven_interop_plan(root.path(), &member)?;
+    assert!(
+        root.path().join("incan.lock").is_file() && !member.join("incan.lock").exists(),
+        "interop workspace fixture did not publish exactly one canonical root lock"
+    );
+
+    // ---- Inspect the selected member through its root-lock projection ----
+    let output = run_incan(
+        root.path(),
+        &[
+            "inspect",
+            "interop-plan",
+            "packages/mobile",
+            "--target",
+            "aarch64-apple-ios",
+            "--format",
+            "json",
+        ],
+    )?;
+    assert_success(&output, "workspace member interop plan inspection");
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(plan["target"].as_str(), Some("aarch64-apple-ios"));
+    assert_eq!(plan["platform"]["kind"].as_str(), Some("ios"));
+    assert_eq!(plan["artifacts"][0]["deployment"].as_str(), Some("system"));
+    assert_eq!(
+        plan["artifacts"][0]["capability"].as_str(),
+        Some("apple.framework.Accelerate")
+    );
     Ok(())
 }
 

@@ -4,7 +4,7 @@
 //! claim that a compiler or SDK has already been selected, perform ambient discovery, compile a shim, or decide
 //! application semantics. Oven resolves those requirements and records its selections in a separate build receipt.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path};
 
@@ -16,6 +16,9 @@ use crate::manifest::ProjectManifest;
 
 /// Current compatibility format for the `[oven.interop]` manifest section.
 pub const OVEN_INTEROP_SCHEMA_VERSION: u32 = 1;
+
+/// Current compatibility format for the locked Oven interop deployment-plan projection.
+pub(crate) const OVEN_INTEROP_DEPLOYMENT_PLAN_SCHEMA_VERSION: u32 = 1;
 
 /// Oven-owned manifest settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +88,14 @@ impl OvenInteropSection {
             for artifact in &target.artifacts {
                 validate_artifact_dependencies(artifact, &target.target, &artifact_names)?;
             }
+            ordered_artifact_names(
+                &target.target,
+                target
+                    .artifacts
+                    .iter()
+                    .map(|artifact| (artifact.name.clone(), artifact.dependencies.clone()))
+                    .collect(),
+            )?;
             let mut shim_names = BTreeSet::new();
             for shim in &target.shims {
                 if shim.name.trim().is_empty() || !shim_names.insert(shim.name.clone()) {
@@ -341,6 +352,16 @@ pub enum InteropShimLanguage {
     Cxx,
 }
 
+impl InteropShimLanguage {
+    /// Return the stable vocabulary spelling used by inspect output.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::C => "c",
+            Self::Cxx => "cxx",
+        }
+    }
+}
+
 /// Portable Oven interop requirements frozen in one canonical semantic lock state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LockedInteropTarget {
@@ -419,6 +440,280 @@ pub struct LockedInteropShim {
     pub headers: Vec<LockedInteropInput>,
     /// Logical output name selected for later shim baking.
     pub output: String,
+}
+
+/// One portable Oven interop deployment projection emitted from canonical locked package requirements.
+///
+/// This is the directionally useful platform-packager boundary a future Loaf may carry. It records the package's
+/// locked requirements without embedding a Gradle task, Xcode build phase, signing identity, credential, or a
+/// machine-local toolchain path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct InteropDeploymentPlan {
+    /// Compatibility version for this deployment-plan shape.
+    pub(crate) schema_version: u32,
+    /// Exact compilation and deployment target triple.
+    pub(crate) target: String,
+    /// Compatible toolchain requirement retained from the canonical lock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) toolchain: Option<CapabilityRequirement>,
+    /// Compatible SDK requirement retained from the canonical lock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sdk: Option<CapabilityRequirement>,
+    /// Platform version facts needed by a later Gradle or Xcode adapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) platform: Option<InteropDeploymentPlatform>,
+    /// Locked header files used by verification and future interop compilation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) headers: Vec<LockedInteropInput>,
+    /// Portable package-relative include roots derived from locked headers and shim headers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) include_roots: Vec<String>,
+    /// Explicit preprocessor definitions applied to verification and future shim baking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) definitions: Vec<String>,
+    /// Deterministic dependencies-first static, bundled, and system planning actions.
+    ///
+    /// Explicit dependency edges remain authoritative. A platform adapter must derive linker argument order rather
+    /// than treating this planning sequence as a raw command line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) artifacts: Vec<InteropDeploymentArtifact>,
+    /// Authored shim build inputs and logical outputs required before final platform assembly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) shims: Vec<InteropShimBuildPlan>,
+}
+
+/// One dependency-ordered artifact action in an Oven interop deployment plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct InteropDeploymentArtifact {
+    /// Stable package-local artifact name.
+    pub(crate) name: String,
+    /// Logical sibling artifacts that must be available before this artifact.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) dependencies: Vec<String>,
+    /// Structured platform-neutral action for the declared deployment class.
+    #[serde(flatten)]
+    pub(crate) action: InteropDeploymentAction,
+}
+
+/// Mobile platform facts projected into the JSON handoff independently from manifest field spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum InteropDeploymentPlatform {
+    /// Android arm64 handoff facts.
+    Android {
+        /// Android API level selected for verification and deployment.
+        api_level: u32,
+    },
+    /// iOS arm64 handoff facts.
+    Ios {
+        /// Minimum supported iOS deployment target.
+        deployment_target: String,
+    },
+}
+
+impl From<&InteropTargetPlatform> for InteropDeploymentPlatform {
+    fn from(platform: &InteropTargetPlatform) -> Self {
+        match platform {
+            InteropTargetPlatform::Android { api_level } => Self::Android { api_level: *api_level },
+            InteropTargetPlatform::Ios { deployment_target } => Self::Ios {
+                deployment_target: deployment_target.clone(),
+            },
+        }
+    }
+}
+
+/// Platform-neutral action consumed by a later Gradle, Xcode, or other packager adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "deployment", rename_all = "snake_case")]
+pub(crate) enum InteropDeploymentAction {
+    /// Link one locked package archive into the final product.
+    StaticLink {
+        /// Portable archive path and digest.
+        input: LockedInteropInput,
+    },
+    /// Stage one locked dynamic library or framework for a platform packager.
+    Bundle {
+        /// Portable dynamic artifact path and digest.
+        input: LockedInteropInput,
+        /// Runtime loader name expected by the native dependency graph.
+        runtime_name: String,
+        /// Logical packager placement retained without embedding an absolute output path.
+        placement: String,
+        /// Minimum platform version required by this artifact.
+        minimum_platform: String,
+    },
+    /// Request one explicit library or framework capability from the resolved toolchain or SDK.
+    System {
+        /// Stable capability identity such as `apple.framework.Accelerate`.
+        capability: String,
+    },
+}
+
+/// One authored shim action that Oven must bake before its deployment plan is ready for final assembly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct InteropShimBuildPlan {
+    /// Stable package-local shim name.
+    pub(crate) name: String,
+    /// Selected C or C++ source language.
+    pub(crate) language: InteropShimLanguage,
+    /// Locked authored source inputs.
+    pub(crate) sources: Vec<LockedInteropInput>,
+    /// Locked headers describing the shim's bounded C contract.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) headers: Vec<LockedInteropInput>,
+    /// Logical artifact name produced by the future managed shim baker.
+    pub(crate) output: String,
+}
+
+/// Project one canonical locked target into a deterministic Oven interop deployment handoff.
+///
+/// The projection neither reads the package filesystem nor discovers host libraries. Every physical file comes from
+/// an existing locked input receipt, so relocating the package does not change the emitted plan.
+pub(crate) fn interop_deployment_plan(target: &LockedInteropTarget) -> Result<InteropDeploymentPlan, String> {
+    // ---- Validate and order the artifact graph ----
+    let artifact_names = ordered_artifact_names(
+        &target.target,
+        target
+            .artifacts
+            .iter()
+            .map(|artifact| (artifact.name.clone(), artifact.dependencies.clone()))
+            .collect(),
+    )?;
+    let artifacts_by_name = target
+        .artifacts
+        .iter()
+        .map(|artifact| (artifact.name.as_str(), artifact))
+        .collect::<BTreeMap<_, _>>();
+    let artifacts = artifact_names
+        .iter()
+        .map(|name| {
+            let artifact = artifacts_by_name.get(name.as_str()).ok_or_else(|| {
+                format!(
+                    "Oven interop deployment plan for `{}` lost artifact `{name}` while ordering dependencies",
+                    target.target
+                )
+            })?;
+            deployment_artifact(artifact, &target.target)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // ---- Project authored shim inputs ----
+    let shims = target
+        .shims
+        .iter()
+        .map(|shim| InteropShimBuildPlan {
+            name: shim.name.clone(),
+            language: shim.language,
+            sources: shim.sources.clone(),
+            headers: shim.headers.clone(),
+            output: shim.output.clone(),
+        })
+        .collect();
+
+    Ok(InteropDeploymentPlan {
+        schema_version: OVEN_INTEROP_DEPLOYMENT_PLAN_SCHEMA_VERSION,
+        target: target.target.clone(),
+        toolchain: target.toolchain.clone(),
+        sdk: target.sdk.clone(),
+        platform: target.platform.as_ref().map(InteropDeploymentPlatform::from),
+        headers: target.headers.clone(),
+        include_roots: interop_include_roots(target),
+        definitions: target.definitions.clone(),
+        artifacts,
+        shims,
+    })
+}
+
+/// Convert one locked artifact into the exact action required by its declared deployment class.
+fn deployment_artifact(artifact: &LockedInteropArtifact, target: &str) -> Result<InteropDeploymentArtifact, String> {
+    // ---- Select the structured deployment action ----
+    let action = match artifact.kind {
+        InteropArtifactKind::Static => InteropDeploymentAction::StaticLink {
+            input: required_locked_artifact_input(artifact, target)?,
+        },
+        InteropArtifactKind::Bundled => InteropDeploymentAction::Bundle {
+            input: required_locked_artifact_input(artifact, target)?,
+            runtime_name: required_locked_artifact_field(
+                artifact.runtime_name.as_deref(),
+                artifact,
+                target,
+                "runtime name",
+            )?,
+            placement: required_locked_artifact_field(artifact.placement.as_deref(), artifact, target, "placement")?,
+            minimum_platform: required_locked_artifact_field(
+                artifact.minimum_platform.as_deref(),
+                artifact,
+                target,
+                "minimum platform",
+            )?,
+        },
+        InteropArtifactKind::System => InteropDeploymentAction::System {
+            capability: required_locked_artifact_field(
+                artifact.capability.as_deref(),
+                artifact,
+                target,
+                "system capability",
+            )?,
+        },
+    };
+
+    // ---- Normalize explicit dependency edges ----
+    let mut dependencies = artifact.dependencies.clone();
+    dependencies.sort();
+    Ok(InteropDeploymentArtifact {
+        name: artifact.name.clone(),
+        dependencies,
+        action,
+    })
+}
+
+/// Require one package-file receipt for a static or bundled artifact.
+fn required_locked_artifact_input(
+    artifact: &LockedInteropArtifact,
+    target: &str,
+) -> Result<LockedInteropInput, String> {
+    artifact.input.clone().ok_or_else(|| {
+        format!(
+            "locked Oven interop artifact `{}` on target `{target}` is missing its package-file receipt",
+            artifact.name
+        )
+    })
+}
+
+/// Require one non-empty deployment field from a canonical locked artifact.
+fn required_locked_artifact_field(
+    value: Option<&str>,
+    artifact: &LockedInteropArtifact,
+    target: &str,
+    field: &str,
+) -> Result<String, String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            format!(
+                "locked Oven interop artifact `{}` on target `{target}` is missing its {field}",
+                artifact.name
+            )
+        })
+}
+
+/// Derive deterministic package-relative include roots without leaking the package's current absolute location.
+fn interop_include_roots(target: &LockedInteropTarget) -> Vec<String> {
+    let mut roots = target
+        .headers
+        .iter()
+        .chain(target.shims.iter().flat_map(|shim| shim.headers.iter()))
+        .map(|input| {
+            Path::new(&input.path)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map_or_else(|| ".".to_string(), |parent| parent.to_string_lossy().to_string())
+        })
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 /// Resolve declared Oven interop files into lockable content identities without ambient host discovery.
@@ -550,6 +845,81 @@ fn validate_artifact_dependencies(
         }
     }
     Ok(())
+}
+
+/// Return a stable dependencies-first artifact order and reject malformed or cyclic locked graphs.
+fn ordered_artifact_names(target: &str, artifacts: Vec<(String, Vec<String>)>) -> Result<Vec<String>, String> {
+    // ---- Validate the declared graph shape ----
+    let names = artifacts.iter().map(|(name, _)| name.clone()).collect::<BTreeSet<_>>();
+    if names.len() != artifacts.len() {
+        return Err(format!(
+            "Oven interop target `{target}` artifact names must be unique and non-empty"
+        ));
+    }
+
+    let mut dependency_counts = BTreeMap::new();
+    let mut dependents = BTreeMap::<String, BTreeSet<String>>::new();
+    for (name, dependencies) in artifacts {
+        if name.trim().is_empty() {
+            return Err(format!(
+                "Oven interop target `{target}` artifact names must be unique and non-empty"
+            ));
+        }
+        let unique_dependencies = dependencies.iter().cloned().collect::<BTreeSet<_>>();
+        if unique_dependencies.len() != dependencies.len()
+            || unique_dependencies
+                .iter()
+                .any(|dependency| dependency == &name || !names.contains(dependency))
+        {
+            return Err(format!(
+                "interop artifact `{name}` on target `{target}` must depend on distinct declared sibling artifacts"
+            ));
+        }
+        dependency_counts.insert(name.clone(), unique_dependencies.len());
+        for dependency in unique_dependencies {
+            dependents.entry(dependency).or_default().insert(name.clone());
+        }
+    }
+
+    // ---- Resolve one stable dependencies-first order ----
+    let mut ready = dependency_counts
+        .iter()
+        .filter_map(|(name, count)| (*count == 0).then_some(name.clone()))
+        .collect::<BTreeSet<_>>();
+    let mut ordered = Vec::with_capacity(dependency_counts.len());
+    while let Some(name) = ready.pop_first() {
+        ordered.push(name.clone());
+        if let Some(dependent_names) = dependents.get(&name) {
+            for dependent in dependent_names {
+                let count = dependency_counts.get_mut(dependent).ok_or_else(|| {
+                    format!(
+                        "Oven interop deployment plan for target `{target}` lost dependency state for `{dependent}`"
+                    )
+                })?;
+                *count = count.checked_sub(1).ok_or_else(|| {
+                    format!(
+                        "Oven interop deployment plan for target `{target}` counted dependency `{name}` more than once"
+                    )
+                })?;
+                if *count == 0 {
+                    ready.insert(dependent.clone());
+                }
+            }
+        }
+    }
+
+    // ---- Report unresolved cycles ----
+    if ordered.len() != dependency_counts.len() {
+        let cycle = dependency_counts
+            .iter()
+            .filter_map(|(name, count)| (*count > 0).then_some(name.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "Oven interop target `{target}` artifact dependency graph contains a cycle involving: {cycle}"
+        ));
+    }
+    Ok(ordered)
 }
 
 /// Require one optional interop path field and validate it with the common package-relative path policy.
@@ -734,10 +1104,15 @@ sdk = { capability = "iphoneos", version = ">=18, <19" }
 headers = ["interop/include/bridge.h"]
 definitions = ["FIXTURE=1"]
 
+[oven.interop.targets.platform]
+kind = "ios"
+deployment-target = "13.0"
+
 [[oven.interop.targets.artifacts]]
 name = "fixture"
 kind = "static"
 path = "interop/lib/libfixture.a"
+dependencies = ["foundation"]
 
 [[oven.interop.targets.artifacts]]
 name = "foundation"
@@ -790,6 +1165,146 @@ output = "fixture_bridge"
             second[0].shims[0].sources[0].digest
         );
         Ok(())
+    }
+
+    #[test]
+    fn interop_deployment_plan_is_portable_dependency_ordered_and_complete() -> Result<(), Box<dyn std::error::Error>> {
+        let (workspace, manifest) = project_with_oven_interop_inputs()?;
+        let locked = locked_oven_interop_targets(&manifest)?;
+        let plan = interop_deployment_plan(&locked[0])?;
+
+        assert_eq!(plan.schema_version, OVEN_INTEROP_DEPLOYMENT_PLAN_SCHEMA_VERSION);
+        assert_eq!(plan.target, "aarch64-apple-ios");
+        assert_eq!(
+            plan.toolchain
+                .as_ref()
+                .map(|requirement| requirement.capability.as_str()),
+            Some("apple-clang")
+        );
+        assert_eq!(
+            plan.sdk.as_ref().map(|requirement| requirement.capability.as_str()),
+            Some("iphoneos")
+        );
+        assert_eq!(plan.include_roots, ["interop/include"]);
+        assert_eq!(
+            plan.artifacts
+                .iter()
+                .map(|artifact| artifact.name.as_str())
+                .collect::<Vec<_>>(),
+            ["foundation", "fixture"]
+        );
+        assert!(matches!(
+            &plan.artifacts[0].action,
+            InteropDeploymentAction::System { capability }
+                if capability == "apple.framework.Foundation"
+        ));
+        assert!(matches!(
+            &plan.artifacts[1].action,
+            InteropDeploymentAction::StaticLink { input }
+                if input.path == "interop/lib/libfixture.a"
+                    && input.digest.starts_with("sha256:")
+        ));
+        assert_eq!(plan.artifacts[1].dependencies, ["foundation"]);
+        assert_eq!(plan.shims[0].output, "fixture_bridge");
+        let serialized = serde_json::to_string(&plan)?;
+        assert!(!serialized.contains(&workspace.path().to_string_lossy().to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn interop_deployment_plan_carries_bundled_runtime_placement() -> Result<(), Box<dyn std::error::Error>> {
+        let plan = interop_deployment_plan(&LockedInteropTarget {
+            target: "aarch64-linux-android".to_string(),
+            toolchain: Some(CapabilityRequirement {
+                capability: "android-ndk".to_string(),
+                version: Some(">=29, <30".to_string()),
+            }),
+            sdk: Some(CapabilityRequirement {
+                capability: "android".to_string(),
+                version: Some(">=36, <37".to_string()),
+            }),
+            platform: Some(InteropTargetPlatform::Android { api_level: 34 }),
+            definitions: Vec::new(),
+            headers: Vec::new(),
+            artifacts: vec![LockedInteropArtifact {
+                name: "tflite".to_string(),
+                kind: InteropArtifactKind::Bundled,
+                input: Some(LockedInteropInput {
+                    path: "interop/android/arm64-v8a/libtensorflowlite_c.so".to_string(),
+                    digest: "sha256:fixture".to_string(),
+                }),
+                capability: None,
+                runtime_name: Some("libtensorflowlite_c.so".to_string()),
+                placement: Some("jniLibs/arm64-v8a".to_string()),
+                minimum_platform: Some("21".to_string()),
+                dependencies: Vec::new(),
+            }],
+            shims: Vec::new(),
+        })?;
+
+        assert!(matches!(
+            &plan.artifacts[0].action,
+            InteropDeploymentAction::Bundle {
+                input,
+                runtime_name,
+                placement,
+                minimum_platform,
+            } if input.path == "interop/android/arm64-v8a/libtensorflowlite_c.so"
+                && runtime_name == "libtensorflowlite_c.so"
+                && placement == "jniLibs/arm64-v8a"
+                && minimum_platform == "21"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn interop_artifact_dependency_cycles_are_rejected() {
+        let target = OvenInteropTarget {
+            target: "aarch64-linux-android".to_string(),
+            toolchain: Some(CapabilityRequirement {
+                capability: "android-ndk".to_string(),
+                version: Some(">=29, <30".to_string()),
+            }),
+            sdk: Some(CapabilityRequirement {
+                capability: "android".to_string(),
+                version: Some(">=36, <37".to_string()),
+            }),
+            platform: Some(InteropTargetPlatform::Android { api_level: 34 }),
+            headers: Vec::new(),
+            definitions: Vec::new(),
+            artifacts: vec![
+                InteropArtifact {
+                    name: "model".to_string(),
+                    kind: InteropArtifactKind::Static,
+                    path: Some("interop/lib/model.a".to_string()),
+                    capability: None,
+                    runtime_name: None,
+                    placement: None,
+                    minimum_platform: None,
+                    dependencies: vec!["runtime".to_string()],
+                },
+                InteropArtifact {
+                    name: "runtime".to_string(),
+                    kind: InteropArtifactKind::Static,
+                    path: Some("interop/lib/runtime.a".to_string()),
+                    capability: None,
+                    runtime_name: None,
+                    placement: None,
+                    minimum_platform: None,
+                    dependencies: vec!["model".to_string()],
+                },
+            ],
+            shims: Vec::new(),
+        };
+        let interop = OvenInteropSection {
+            schema: OVEN_INTEROP_SCHEMA_VERSION,
+            targets: vec![target],
+        };
+        assert!(
+            interop
+                .validate()
+                .is_err_and(|error| error.contains("dependency graph contains a cycle"))
+        );
     }
 
     #[test]

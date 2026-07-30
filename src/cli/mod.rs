@@ -54,6 +54,7 @@ use commands::build_report::{BuildReportFormat, BuildReportOptions, RustInspecti
 use commands::codegraph::CodegraphInspectionFormat;
 use commands::common::{CargoPolicy, CargoPolicyCliFlags, INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV};
 use commands::diagnostics::DiagnosticOutputFormat;
+use commands::interop_plan::InteropPlanInspectionFormat;
 use commands::lifecycle::{EnvOutputFormat, VersionBumpArg};
 use commands::provider_inspect::ProviderInspectionFormat;
 use commands::tools::{ToolsDoctorFormat, ToolsMetadataFormat, ToolsModelMetadataFormat};
@@ -323,8 +324,8 @@ pub enum Command {
         /// Select a non-persistent SDK profile for this check
         #[command(flatten)]
         sdk_profile: SdkProfileCliFlags,
-        /// Verify checked C declarations against this declared Oven interop target; this does not cross-compile Rust or
-        /// package an app
+        /// Verify checked C declarations against this declared Oven interop target; this does not cross-compile Rust
+        /// or package an app
         #[arg(long = "interop-target", value_name = "TRIPLE")]
         interop_target: Option<String>,
         /// Select every member in the active workspace
@@ -737,6 +738,18 @@ pub enum InspectCommand {
         #[command(flatten)]
         sdk_profile: SdkProfileCliFlags,
     },
+    /// Inspect one locked Oven interop deployment handoff
+    InteropPlan {
+        /// Project path containing the Oven interop declaration and canonical lock
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Exact target triple to project
+        #[arg(long, value_name = "TRIPLE")]
+        target: String,
+        /// Output format
+        #[arg(long = "format", value_enum, default_value = "text")]
+        format: InteropPlanInspectionFormat,
+    },
     /// Inspect one complete compiler-checked typed registry without executing user modules
     Registry {
         /// Registry identity, such as `feature::functions` or the unambiguous `package::feature::functions`
@@ -1053,6 +1066,9 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                 package_features,
                 sdk_profile,
             } => commands::inspect_bindings(&path, format, &package_features.into(), sdk_profile.profile()),
+            InspectCommand::InteropPlan { path, target, format } => {
+                commands::inspect_interop_plan(&path, &target, format)
+            }
         },
         Some(Command::Run {
             file,
@@ -2694,6 +2710,30 @@ mod tests {
         };
         assert_eq!(interop_target.as_deref(), Some("aarch64-linux-android"));
         assert_eq!(path, std::path::PathBuf::from("src/main.incn"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cli_parse_inspect_interop_plan() -> Result<(), clap::Error> {
+        let inspect = parse_cli([
+            "incan",
+            "inspect",
+            "interop-plan",
+            "--target",
+            "aarch64-linux-android",
+            "--format",
+            "json",
+            ".",
+        ])?;
+        let Some(Command::Inspect {
+            command: InspectCommand::InteropPlan { path, target, format },
+        }) = inspect.command
+        else {
+            return Err(expected_command("inspect interop-plan"));
+        };
+        assert_eq!(path, std::path::PathBuf::from("."));
+        assert_eq!(target, "aarch64-linux-android");
+        assert_eq!(format, InteropPlanInspectionFormat::Json);
         Ok(())
     }
 
