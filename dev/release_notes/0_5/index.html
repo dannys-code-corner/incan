@@ -6623,6 +6623,7 @@
 </ul>
 <h2 id="bugfixes">Bugfixes<a class="headerlink" href="#bugfixes" title="Permanent link">&para;</a></h2>
 <ul>
+<li><strong>Compiler</strong>: A nested source module no longer silently imports itself when a same-leaf bare import collides with the module name. Use <code>crate::module_name</code> for an intended project-root import (#976).</li>
 <li><strong>Language</strong>: Built-in mutable <code>Set[T]</code> values now expose <code>add(value)</code> consistently with the documented collection surface. The operation typechecks as <code>None</code>, lowers to <code>HashSet::insert</code>, and preserves set deduplication (#963).</li>
 <li><strong>Compiler</strong>: Public computed properties on models and classes now travel through checked API metadata and <code>.incnlib</code> contracts, so consumers of a compiled library can typecheck property access using the published result type (#952).</li>
 <li><strong>SDK providers</strong>: Source SDK preparation now validates the catalog's declared compiler range before compiling any component. A stale compiler therefore reports the incompatible source-SDK requirement directly instead of emitting unrelated provider type errors later in preparation (#945).</li>
