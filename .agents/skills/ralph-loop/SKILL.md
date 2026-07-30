@@ -19,7 +19,8 @@ Keep `orchestrate-parallel-work` generic. Use this skill as the opinionated wrap
 - For milestone, RFC-wide, or compiler-boundary work, define the acceptance contract before implementation starts. The contract should name required boundary parity coverage, downstream acceptance lanes, docs/generated-reference gates, performance/progress gates, and any criteria that must be satisfied before an RC or publish step.
 - For language or stdlib work that is meant to be implemented in Incan, dogfood Incan rather than creating a thin `.incn` facade over a custom Rust backend. Direct `from rust::` imports of existing crates/primitives are acceptable when the `.incn` module still owns the behavior; bespoke `incan_stdlib::feature` Rust modules that hide the feature logic are not acceptable unless the maintainer explicitly asks for that backend boundary.
 - Do not let workers assume Incan cannot express something. Before choosing Rust/backend fallback or narrowing a design, workers must inspect current `.incn` precedents, parser/typechecker/codegen tests, or run a small probe and record the specific capability evidence.
-- Every implementation must land in a fresh worktree rooted under `WORKTREE_ROOT` so VS Code picks it up; do not implement in the system `/tmp` or in the main repo checkout.
+- Every implementation must land in a fresh worktree rooted under `WORKTREE_ROOT` so VS Code picks it up. `WORKTREE_ROOT` must resolve to the primary repository's shared sibling `tmp/` directory; do not implement in the system `/tmp`, `/private/tmp`, or in the main repo checkout.
+- Treat Ralph-created worktrees, Cargo targets, generated SDK/provider caches, test-package output, and tool distributions as one managed storage domain. A worker may not create a durable build/output directory outside that domain.
 - Treat each slice as a managed work packet with durable state on disk, not as a chat thread that has to remember its own scope.
 - Treat loop identity as durable state too. A resumed loop must prove that persisted state matches the current user request before using it to choose work.
 - Treat cross-repo consumer work as a verification lane unless the user explicitly puts that repository's implementation work in scope.
@@ -139,16 +140,37 @@ After confirming scope, write the loop identity into `STATE_ROOT/overview.md` be
 
 Default to Codex subagents plus git worktrees under `WORKTREE_ROOT`.
 
-Resolve `WORKTREE_ROOT` once at the start of the loop and record the absolute path in `STATE_ROOT/overview.md`. Use an explicit `RALPH_WORKTREE_ROOT` when the workspace provides one; otherwise derive a portable shared `tmp/` directory from Git's common directory:
+Resolve `WORKTREE_ROOT` once at the start of the loop and record its absolute path in `STATE_ROOT/overview.md`. It is the primary repository's shared sibling `tmp/` directory. `RALPH_WORKTREE_ROOT` is only an assertion of that location: if it resolves elsewhere, stop rather than silently accepting another root. In particular, never use the system temporary directory as a worktree or durable build-output root.
 
 ```sh
 COMMON_GIT_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
 WORKSPACE_ROOT="$(dirname "$(dirname "$COMMON_GIT_DIR")")"
-WORKTREE_ROOT="${RALPH_WORKTREE_ROOT:-$WORKSPACE_ROOT/tmp}"
-mkdir -p "$WORKTREE_ROOT"
+EXPECTED_WORKTREE_ROOT="$WORKSPACE_ROOT/tmp"
+mkdir -p "$EXPECTED_WORKTREE_ROOT"
+EXPECTED_WORKTREE_ROOT="$(cd "$EXPECTED_WORKTREE_ROOT" && pwd -P)"
+if [ -n "${RALPH_WORKTREE_ROOT:-}" ]; then
+  [ -d "$RALPH_WORKTREE_ROOT" ] || {
+    echo "RALPH_WORKTREE_ROOT must already be $EXPECTED_WORKTREE_ROOT" >&2
+    exit 2
+  }
+  [ "$(cd "$RALPH_WORKTREE_ROOT" && pwd -P)" = "$EXPECTED_WORKTREE_ROOT" ] || {
+    echo "RALPH_WORKTREE_ROOT must be $EXPECTED_WORKTREE_ROOT" >&2
+    exit 2
+  }
+fi
+WORKTREE_ROOT="$EXPECTED_WORKTREE_ROOT"
 ```
 
 `git-common-dir` keeps the default stable when the loop runs from a linked worktree.
+
+Before creating a worktree, and before every command that can perform a substantial build, enforce the storage boundary:
+
+1. Record `du -sk "$WORKTREE_ROOT"`, `df -k "$WORKSPACE_ROOT"`, and the primary repository's `git worktree list --porcelain` inventory in `STATE_ROOT/storage-ledger.md`.
+2. Record every Ralph-owned output path in that ledger, including `CARGO_TARGET_DIR`, generated SDK/provider caches, package/distribution output, and test fixtures that copy repositories or build trees.
+3. Put each such path under `WORKTREE_ROOT`, normally under a loop-specific `.ralph-cache/<loop-id>/` directory. Do not rely on a tool's default temporary path.
+4. Treat 20 GiB as a hard combined ceiling for all Ralph-owned material in `WORKTREE_ROOT`. If the ledger or measured root is at the ceiling, do not start another build; first retire an already-integrated Ralph worktree/cache, or report a concrete blocker. Never solve this by moving output to `/tmp` or `/private/tmp`.
+
+For every build/test command, set `CARGO_TARGET_DIR` and `TMPDIR` to that slice's owned locations. Set any project-specific output variables too (for example, `TOOLCHAIN_DIST` for Incan's release-toolchain smoke commands). The ledger must distinguish retained worktrees from reclaimable targets/caches and must name the owner slice. Any primary-repository worktree outside `WORKTREE_ROOT` is legacy or foreign and must be explicitly recorded; a Ralph-owned one is a cleanup blocker, not a reason to create another outside-root worktree. `git worktree remove` alone is not cleanup when a worker placed output in a separate cache directory.
 
 If the user explicitly wants OpenCode:
 
@@ -221,7 +243,7 @@ Do not treat RFC edits or release notes alone as sufficient user documentation.
 
 Before spawning workers, decide whether the task actually decomposes cleanly. If it does not, keep the work local and continue as a single-agent Ralph loop.
 
-When it does decompose, hand off to `orchestrate-parallel-work` for slice definition, ownership, and worktree isolation under `WORKTREE_ROOT`.
+When it does decompose, hand off to `orchestrate-parallel-work` for slice definition, ownership, and worktree isolation under `WORKTREE_ROOT`. Pass the resolved `WORKTREE_ROOT`, loop-specific `.ralph-cache/<loop-id>/` root, and 20 GiB ceiling as mandatory inputs; the delegated orchestrator and workers must not recompute or override their own temporary root.
 
 If the task came from an RFC:
 
@@ -303,6 +325,7 @@ Each worker must own a non-overlapping slice with:
 - explicit non-goals
 - forbidden repositories or paths
 - dedicated worktree path under `WORKTREE_ROOT`
+- dedicated target/cache/output paths under `WORKTREE_ROOT/.ralph-cache/<loop-id>/<slice-id>/`, with the owner recorded in `STATE_ROOT/storage-ledger.md`
 - dedicated slice folder under `STATE_ROOT/<slice-id>/`
 - verification command
 - expected result format
@@ -399,7 +422,8 @@ Worker cleanup is part of integration, not optional closeout. For every slice ma
 3. Record integration metadata in `slices.json`, such as `integrated_at`, `integrated_by`, and `worktree_removed`.
 4. If the worker worktree is clean, remove it with `git worktree remove <worker-path>`.
 5. If the worker worktree is dirty only because of files already integrated into the orchestrator branch or task-owned scratch state, record the inventory in `overview.md` or `slices.json`, then remove that Ralph-owned worker worktree with `git worktree remove --force <worker-path>`.
-6. After the worktree is removed, delete the disposable worker branch only when it is task-owned and the orchestrator branch contains the accepted work.
+6. Remove the slice's Ralph-owned target/cache/output paths from `WORKTREE_ROOT/.ralph-cache/<loop-id>/<slice-id>/`, then update `STATE_ROOT/storage-ledger.md` with the reclaimed size. Do not remove an unowned path or a path with unknown contents.
+7. After the worktree is removed, delete the disposable worker branch only when it is task-owned and the orchestrator branch contains the accepted work.
 
 Do not force-remove a worker worktree with unknown or unintegrated changes. Do not push while accepted slice work exists only in a worker worktree or worker branch.
 
@@ -487,6 +511,10 @@ Do not recurse `ralph-loop` indefinitely. A child loop is a phase owner, not ano
 - [ ] RFC lifecycle state and implementation plan/checklist were confirmed before coding started
 - [ ] Every implementation worker had a clean worktree and non-overlapping ownership
 - [ ] Every implementation worktree lived under the resolved `WORKTREE_ROOT`
+- [ ] `RALPH_WORKTREE_ROOT`, if set, resolved exactly to the primary repository's shared sibling `tmp/` directory
+- [ ] Every Ralph-owned durable target, cache, fixture copy, and distribution output lived under `WORKTREE_ROOT`
+- [ ] `STATE_ROOT/storage-ledger.md` recorded ownership and measured usage before substantial builds
+- [ ] The combined Ralph-owned storage did not exceed the 20 GiB ceiling
 - [ ] Every slice had a durable folder under `STATE_ROOT/<slice-id>/`
 - [ ] The orchestrator maintained `STATE_ROOT/slices.json`
 - [ ] Every `slices.json` entry has `loop_id`, `repo`, and `scope_role`
@@ -501,6 +529,7 @@ Do not recurse `ralph-loop` indefinitely. A child loop is a phase owner, not ano
 - [ ] The orchestrator ran its own integration plan -> do -> check -> act loop
 - [ ] Accepted worker output was consolidated onto the orchestrator branch before final artifacts
 - [ ] Completed worker worktrees were removed, or each kept worker worktree has a recorded reason
+- [ ] Completed worker target/cache/output paths were removed or have a recorded, bounded retention reason
 - [ ] No accepted slice work exists only in a worker worktree or disposable worker branch
 - [ ] Every worker maintained `.agents/state/review-report.md` in its worktree
 - [ ] Every worker or orchestrator touching `.incn` source ran `review-incan-source-quality`
