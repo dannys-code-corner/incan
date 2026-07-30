@@ -4,7 +4,7 @@ Checked C interop is a language-owned contract for a deliberately small foreign 
 
 ## One declaration authority
 
-The binding source is the authority for the Incan-facing names, C scalar categories, native spellings, and supported plain layouts. The compiler uses the declaration to construct a target-specific C probe; it does not scrape a header to invent a public API or infer safety from generated Rust.
+The binding source is the authority for the Incan-facing names, C scalar categories, native spellings, and supported plain layouts. The compiler uses the declaration to construct a target-specific C probe; it does not scrape a header to invent a public API or infer safety from generated Rust. [`incan inspect bindings`](../../tooling/reference/binding_inspection.md) exposes that checked declaration contract for tools and review without substituting a generated-Rust or header-derived interpretation.
 
 ```mermaid
 flowchart LR

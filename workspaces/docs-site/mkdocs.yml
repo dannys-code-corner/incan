@@ -272,6 +272,7 @@ nav:
           - LSP architecture: tooling/explanation/lsp_architecture.md
       - Reference:
           - CLI reference: tooling/reference/cli_reference.md
+          - Checked C binding inspection: tooling/reference/binding_inspection.md
           - Codegraph inspection: tooling/reference/codegraph_inspection.md
           - Agent and tooling docs surfaces: tooling/reference/agent_docs_surfaces.md
           - Checked contract metadata: tooling/reference/contract_metadata.md

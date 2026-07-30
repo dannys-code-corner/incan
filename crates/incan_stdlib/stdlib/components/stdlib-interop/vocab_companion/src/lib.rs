@@ -104,7 +104,7 @@ impl VocabDesugarer for InteropBindingDesugarer {
                 decorators: vec![incan_vocab::Decorator {
                     path: vec!["c".to_string(), "binding".to_string()],
                     args: decorator_args,
-                    span: incan_vocab::Span::default(),
+                    span: declaration.span,
                 }],
                 extends: Some("BindingDeclaration".to_string()),
                 declarative_members,

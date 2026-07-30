@@ -15,6 +15,7 @@
 //! - `stdlib_loader` — RFC 023: Stdlib module loading for compilation
 //! - `tools` — Local toolchain inspection and metadata helpers
 
+pub mod binding_inspect;
 pub mod build;
 pub mod build_report;
 pub mod cache;
@@ -33,6 +34,7 @@ pub(crate) mod vocab_extraction;
 pub mod workspace;
 
 // Re-export public API so callers can use `commands::build_file()` etc.
+pub use binding_inspect::{BindingInspectionFormat, inspect_bindings};
 pub use build::{build_file, build_library, inspect_rust, run_file, run_inline_source};
 pub use cache::{inspect_generated_cache, prune_generated_cache};
 pub use codegraph::{CodegraphInspectionFormat, inspect_codegraph};
