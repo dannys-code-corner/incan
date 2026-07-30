@@ -455,11 +455,11 @@ impl TypeChecker {
 
     /// Validate the source-owned descriptor attached to a checked C binding class.
     ///
-    /// The import-activated `binding` vocabulary lowers to this ordinary
-    /// decorator/class form. Keeping the contract here means the parser only
-    /// transports vocabulary data; all ABI meaning remains explicit and
-    /// typecheckable in the language layer.
+    /// The import-activated `binding` vocabulary lowers to this ordinary decorator/class form, so the parser transports
+    /// only vocabulary data while this language-layer check owns all explicit, inspectable ABI meaning.
     pub(crate) fn validate_c_binding_class(&mut self, class: &ClassDecl) {
+        // A class must contribute one descriptor at most. Rejecting the duplicate before parsing its fields avoids
+        // constructing a partial descriptor whose source authority would depend on decorator ordering.
         let bindings = class
             .decorators
             .iter()
@@ -491,6 +491,8 @@ impl TypeChecker {
             valid = false;
         }
 
+        // The decorator is the declaration's outer envelope: header and link facts live here, while its vocabulary
+        // members describe the named ABI surface below. Keep these channels separate so neither can imply the other.
         let mut header = None;
         let mut link = None;
         for argument in &decorator.node.args {
@@ -550,6 +552,8 @@ impl TypeChecker {
             }
         };
 
+        // Do not register an incomplete descriptor. Later access checking and lowering intentionally consume only this
+        // complete checked product, never the raw class body or a best-effort subset of its declarations.
         let Some((symbols, enums, structs)) = self.validate_c_binding_members(class, decorator.span) else {
             return;
         };
@@ -580,6 +584,8 @@ impl TypeChecker {
         let mut enums = Vec::new();
         let mut raw_symbols = Vec::new();
 
+        // Structures are collected first because the supported scalar call signatures may name a declared plain
+        // structure. The validation pass remains order-independent even when a symbol precedes its structure body.
         let struct_names = class
             .declarative_members
             .iter()
@@ -616,6 +622,8 @@ impl TypeChecker {
                 valid = false;
                 continue;
             }
+            // Every accepted member becomes data in the descriptor. In particular, `symbol` owns no executable body:
+            // it maps one Incan-facing signature to one explicit native spelling for later target verification.
             match kind {
                 BindingMemberId::Symbol => {
                     let Some(return_type) = member.head.return_type.as_ref() else {

@@ -231,9 +231,8 @@ pub(crate) fn verify_checked_c_binding(
 
 /// Extract every native enum expression as an `i64` from Clang's target AST.
 ///
-/// This probe is syntax-only and does not link or execute target code. A
-/// generated anonymous enum lets Clang fold C macros and constant expressions
-/// using the selected target ABI, then its JSON AST reports the exact value.
+/// This syntax-only probe uses an anonymous enum to make Clang fold each macro or constant expression with the selected
+/// ABI; its JSON AST then reports the exact value without linking or executing target code.
 fn verify_enum_values(
     toolchain: &ClangToolchain,
     target: CAbiTarget,
@@ -406,10 +405,8 @@ fn render_verification_probe(binding: &CBindingDescriptor) -> Result<String, CAb
 
 /// Render one carrier check for every source-visible C enum constant.
 ///
-/// The declaration's `c.*` carrier is an explicit ABI promise. C does not
-/// retain a portable reflection API for enumeration values, but `_Generic`
-/// checks the native constant expression after its header macro expansion.
-/// That catches a missing symbol and a physical carrier mismatch without
+/// The declaration's `c.*` carrier is an explicit ABI promise: C offers no portable enum-value reflection, so the probe
+/// uses `_Generic` after macro expansion to reject missing constants and physical carrier mismatches without
 /// inventing a source-level spelling for the platform's enum representation.
 fn render_enum_carrier_probes(
     probe: &mut String,

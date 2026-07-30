@@ -14,6 +14,7 @@ If you’re not sure where you fit, start at [Start here](../start_here/index.md
 - The Incan Book (Basics): [Book index](tutorials/book/index.md)
 - Dates and times: [Dates and times](tutorials/dates_and_times.md)
 - Fallible and infallible paths: [Fallible and infallible paths](tutorials/fallible_and_infallible_paths.md)
+- Checked C binding: [Write your first checked C binding](tutorials/checked_c_binding.md) (experimental)
 - Web framework tutorial: [Web Framework](tutorials/web_framework.md) (advanced; reads like tutorial + how-to)
 
 ## How-to guides (do)
@@ -28,6 +29,7 @@ If you’re not sure where you fit, start at [Start here](../start_here/index.md
 - [Choosing numeric types](how-to/choosing_numeric_types.md)
 - [Performance](how-to/performance.md)
 - [Rust Interop](how-to/rust_interop.md)
+- [Checked C bindings](how-to/checked_c_bindings.md) (experimental)
 
 ## Reference (look up)
 
@@ -68,6 +70,7 @@ If you’re not sure where you fit, start at [Start here](../start_here/index.md
 - [Imports & Modules](explanation/imports_and_modules.md)
 - [Models & Classes](explanation/models_and_classes/index.md)
 - [Scopes & Name Resolution](explanation/scopes_and_name_resolution.md)
+- [How checked C interop is structured](explanation/checked_c_interop.md)
 
 ## See also
 

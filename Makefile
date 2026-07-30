@@ -248,6 +248,11 @@ ci-full: fmt lint udeps
 # Testing
 # =============================================================================
 
+.PHONY: fetch-locked-cargo-sources
+fetch-locked-cargo-sources:
+	@cargo fetch --locked
+	@cargo fetch --manifest-path crates/incan_stdlib/stdlib/components/stdlib-interop/vocab_companion/Cargo.toml --locked
+
 .PHONY: test  ## test - Run all tests
 test: test-prewarm-sdk
 	@echo "\033[1mRunning tests...\033[0m"

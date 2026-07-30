@@ -4736,10 +4736,8 @@ impl TypeChecker {
 
     /// Resolve `Binding.Enum.Variant` through the checked binding descriptor.
     ///
-    /// Binding enum declarations remain data-shaped class members rather than
-    /// ordinary nested source enums. The typechecker records the selected
-    /// member here; target verification supplies its folded numeric value before
-    /// lowering emits an ordinary Incan integer literal.
+    /// Binding enums are data-shaped class members, not source enum declarations. This records the selected variant so
+    /// target verification can supply its folded numeric value before lowering emits an ordinary Incan integer literal.
     fn check_c_binding_enum_constant(&mut self, base: &Spanned<Expr>, field: &str, span: Span) -> Option<ResolvedType> {
         let Expr::Field(binding_expr, enumeration) = &base.node else {
             return None;
