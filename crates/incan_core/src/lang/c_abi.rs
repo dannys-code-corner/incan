@@ -16,6 +16,8 @@ pub enum BindingArgumentId {
 /// Stable declarative member kinds accepted by the checked C foundation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BindingMemberId {
+    /// A nominal opaque C resource and its associated release operation.
+    Resource,
     /// A non-executable raw C function declaration.
     Symbol,
     /// A target-verified C enum carrier.
@@ -36,6 +38,77 @@ pub enum PlainStructArgumentId {
 pub enum SymbolArgumentId {
     /// Exact native C symbol spelling.
     Native,
+}
+
+/// Stable fields accepted by an opaque C resource declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResourceArgumentId {
+    /// Exact native opaque type spelling.
+    Native,
+    /// Binding-local symbol that releases one owned resource.
+    Release,
+}
+
+/// Nested declarative member keyword for one raw C symbol result outcome.
+pub const SYMBOL_OUTCOME_KEYWORD: &str = "outcome";
+
+/// Prefix of compiler-internal nominal identities used for C output-slot handles.
+///
+/// This is not source vocabulary. It lets the frontend retain a binding-qualified slot identity without depending on
+/// backend Rust name generation; lowering maps each slot to a private generated carrier later.
+pub const OUTPUT_SLOT_TYPE_PREFIX: &str = "__incan_c_output_slot";
+
+/// Return the compiler-internal nominal identity for one checked C output slot.
+///
+/// The source offsets distinguish otherwise-identical slots in nested scopes. They are not an exposed ABI detail:
+/// lowering maps every instance of one parameter contract to its private generated Rust carrier.
+pub fn output_slot_type_identity(
+    binding: &str,
+    symbol: &str,
+    parameter: &str,
+    constructor_start: usize,
+    constructor_end: usize,
+) -> String {
+    format!("{OUTPUT_SLOT_TYPE_PREFIX}::{binding}::{symbol}::{parameter}::{constructor_start}_{constructor_end}")
+}
+
+/// Split one compiler-internal C output-slot identity into its checked source components.
+pub fn parse_output_slot_type_identity(value: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = value.split("::");
+    if parts.next()? != OUTPUT_SLOT_TYPE_PREFIX {
+        return None;
+    }
+    let binding = parts.next()?;
+    let symbol = parts.next()?;
+    let parameter = parts.next()?;
+    let instance = parts.next()?;
+    (!instance.is_empty() && parts.next().is_none()).then_some((binding, symbol, parameter))
+}
+
+/// Stable data fields accepted by a C symbol outcome declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SymbolOutcomeArgumentId {
+    /// Output slots initialized by this raw result.
+    Initializes,
+    /// In/out slots updated by this raw result.
+    Updates,
+    /// In/out slots invalidated by this raw result.
+    Invalidates,
+}
+
+/// Stable resource and compiler-managed output wrappers accepted by C binding signatures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResourceTypeConstructorId {
+    /// A non-copyable resource whose declared release operation is owed by the caller.
+    Owned,
+    /// A resource borrowed for the duration of one raw call.
+    Borrowed,
+    /// A resource borrowed mutably for the duration of one raw call.
+    BorrowedMut,
+    /// A foreign output position whose initialization depends on a declared outcome.
+    Out,
+    /// An initialized foreign position that may be updated by a declared outcome.
+    InOut,
 }
 
 /// Stable exact scalar representations accepted by the checked C foundation.
@@ -132,10 +205,41 @@ pub fn binding_argument_from_str(name: &str) -> Option<BindingArgumentId> {
 /// Resolve a C binding member spelling to its stable identifier.
 pub fn binding_member_from_str(name: &str) -> Option<BindingMemberId> {
     match name {
+        "resource" => Some(BindingMemberId::Resource),
         "symbol" => Some(BindingMemberId::Symbol),
         "enum" => Some(BindingMemberId::Enum),
         "struct" => Some(BindingMemberId::Struct),
         _ => None,
+    }
+}
+
+/// Resolve an opaque C resource field to its stable identifier.
+pub fn resource_argument_from_str(name: &str) -> Option<ResourceArgumentId> {
+    match name {
+        "native" => Some(ResourceArgumentId::Native),
+        "release" => Some(ResourceArgumentId::Release),
+        _ => None,
+    }
+}
+
+/// Resolve a C symbol outcome field to its stable identifier.
+pub fn symbol_outcome_argument_from_str(name: &str) -> Option<SymbolOutcomeArgumentId> {
+    match name {
+        "initializes" => Some(SymbolOutcomeArgumentId::Initializes),
+        "updates" => Some(SymbolOutcomeArgumentId::Updates),
+        "invalidates" => Some(SymbolOutcomeArgumentId::Invalidates),
+        _ => None,
+    }
+}
+
+/// Return the canonical spelling for a C resource or output wrapper.
+pub const fn resource_type_constructor_as_str(id: ResourceTypeConstructorId) -> &'static str {
+    match id {
+        ResourceTypeConstructorId::Owned => "c.Owned",
+        ResourceTypeConstructorId::Borrowed => "c.Borrowed",
+        ResourceTypeConstructorId::BorrowedMut => "c.BorrowedMut",
+        ResourceTypeConstructorId::Out => "c.Out",
+        ResourceTypeConstructorId::InOut => "c.InOut",
     }
 }
 
@@ -170,14 +274,17 @@ pub fn is_interop_namespace_path<'a>(segments: impl IntoIterator<Item = &'a str>
 mod tests {
     use super::{
         BINDING_DECLARATION_BASE, BindingArgumentId, BindingMemberId, LinkCapabilityId, PlainStructArgumentId,
-        PointerConstructorId, ScalarTypeId, SymbolArgumentId, binding_argument_from_str, binding_member_from_str,
+        PointerConstructorId, ResourceArgumentId, ResourceTypeConstructorId, SYMBOL_OUTCOME_KEYWORD, ScalarTypeId,
+        SymbolArgumentId, SymbolOutcomeArgumentId, binding_argument_from_str, binding_member_from_str,
         is_interop_namespace_path, is_void_type_spelling, link_capability_from_str, plain_struct_argument_from_str,
-        pointer_constructor_as_str, scalar_type_as_str, scalar_type_from_str, symbol_argument_from_str,
+        pointer_constructor_as_str, resource_argument_from_str, resource_type_constructor_as_str, scalar_type_as_str,
+        scalar_type_from_str, symbol_argument_from_str, symbol_outcome_argument_from_str,
     };
 
     #[test]
     fn checked_c_foundation_vocabulary_is_canonical() {
         assert_eq!(binding_argument_from_str("header"), Some(BindingArgumentId::Header));
+        assert_eq!(binding_member_from_str("resource"), Some(BindingMemberId::Resource));
         assert_eq!(binding_member_from_str("symbol"), Some(BindingMemberId::Symbol));
         assert_eq!(binding_member_from_str("struct"), Some(BindingMemberId::Struct));
         assert_eq!(
@@ -185,6 +292,21 @@ mod tests {
             Some(PlainStructArgumentId::Native)
         );
         assert_eq!(symbol_argument_from_str("native"), Some(SymbolArgumentId::Native));
+        assert_eq!(resource_argument_from_str("native"), Some(ResourceArgumentId::Native));
+        assert_eq!(resource_argument_from_str("release"), Some(ResourceArgumentId::Release));
+        assert_eq!(SYMBOL_OUTCOME_KEYWORD, "outcome");
+        assert_eq!(
+            symbol_outcome_argument_from_str("initializes"),
+            Some(SymbolOutcomeArgumentId::Initializes)
+        );
+        assert_eq!(
+            resource_type_constructor_as_str(ResourceTypeConstructorId::Owned),
+            "c.Owned"
+        );
+        assert_eq!(
+            resource_type_constructor_as_str(ResourceTypeConstructorId::InOut),
+            "c.InOut"
+        );
         assert_eq!(scalar_type_from_str("c.i32"), Some(ScalarTypeId::I32));
         assert_eq!(scalar_type_as_str(ScalarTypeId::CInt), "c.c_int");
         assert_eq!(pointer_constructor_as_str(PointerConstructorId::ConstPtr), "c.ConstPtr");

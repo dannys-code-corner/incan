@@ -40,7 +40,9 @@ use super::decl::{FunctionParam, IrDecl, IrDeclKind, IrImportOrigin, IrImportQua
 use super::expr::{IrCallArg, IrCallArgKind, IrExprKind, MethodCallArgPolicy, VarAccess, VarRefKind};
 use super::stmt::{IrStmt, IrStmtKind};
 use super::types::IrType;
-use super::{FunctionReexport, FunctionSignature, IrCheckedCFunction, IrProgram, Mutability};
+use super::{
+    FunctionReexport, FunctionSignature, IrCheckedCFunction, IrCheckedCResource, IrCheckedCType, IrProgram, Mutability,
+};
 use crate::frontend::ast;
 use crate::frontend::decorator_resolution;
 use crate::frontend::symbols::ResolvedType;
@@ -49,7 +51,6 @@ use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
 use crate::frontend::typechecker::{CBindingType, TypeCheckInfo};
 use crate::provider::ProviderPlan;
 use decl::callable_docstring;
-use incan_core::lang::c_abi::ScalarTypeId;
 use incan_core::lang::conventions;
 use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::stdlib;
@@ -218,7 +219,7 @@ impl AstLowering {
     ///
     /// Raw-call entries are recorded only after the typechecker has validated the binding member, its signature,
     /// and its enclosing `unsafe:` acknowledgement. This converts that checked fact into the deliberately bounded
-    /// scalar callable form understood by the current Rust backend.
+    /// scalar, resource, and output callable form understood by the contained Rust backend.
     pub(super) fn checked_c_function_for_call(&self, span: ast::Span) -> Option<IrCheckedCFunction> {
         let info = self.type_info.as_ref()?;
         let call = info.c_abi.raw_calls.iter().find(|call| call.span == span)?;
@@ -227,24 +228,58 @@ impl AstLowering {
         let parameters = symbol
             .parameters
             .iter()
-            .map(|parameter| match parameter.ty {
-                CBindingType::Scalar(scalar) => Some(scalar),
-                CBindingType::Void | CBindingType::Pointer { .. } | CBindingType::Struct(_) => None,
+            .map(|parameter| Self::checked_c_ir_type(&parameter.ty))
+            .collect::<Option<Vec<_>>>()?;
+        let return_type = Self::checked_c_ir_type(&symbol.return_type)?;
+        let resources = descriptor
+            .resources
+            .iter()
+            .map(|resource| {
+                let release = descriptor
+                    .symbols
+                    .iter()
+                    .find(|symbol| symbol.name == resource.release)?;
+                Some(IrCheckedCResource {
+                    binding: descriptor.class_name.clone(),
+                    resource: resource.name.clone(),
+                    release_native_symbol: release.native.clone(),
+                    release_return_type: Self::checked_c_ir_type(&release.return_type)?,
+                    system_library: descriptor.system_library.clone(),
+                })
             })
-            .collect::<Option<Vec<ScalarTypeId>>>()?;
-        let return_type = match symbol.return_type {
-            CBindingType::Scalar(scalar) => Some(scalar),
-            CBindingType::Void => None,
-            CBindingType::Pointer { .. } | CBindingType::Struct(_) => return None,
-        };
+            .collect::<Option<Vec<_>>>()?;
         Some(IrCheckedCFunction {
             binding: descriptor.class_name.clone(),
             symbol: symbol.name.clone(),
             native_symbol: symbol.native.clone(),
             system_library: descriptor.system_library.clone(),
             parameters,
+            parameter_names: symbol
+                .parameters
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .collect(),
             return_type,
+            resources,
         })
+    }
+
+    /// Lower the bounded checked-C surface into the backend-private ABI plan.
+    pub(super) fn checked_c_ir_type(ty: &CBindingType) -> Option<IrCheckedCType> {
+        match ty {
+            CBindingType::Scalar(scalar) => Some(IrCheckedCType::Scalar(*scalar)),
+            CBindingType::Void => Some(IrCheckedCType::Void),
+            CBindingType::Resource { access, resource } => Some(IrCheckedCType::Resource {
+                access: *access,
+                resource: resource.clone(),
+            }),
+            CBindingType::Output { mode, value } => Some(IrCheckedCType::Output {
+                mode: *mode,
+                value: Box::new(Self::checked_c_ir_type(value)?),
+            }),
+            CBindingType::Nullable(value) => Some(IrCheckedCType::Nullable(Box::new(Self::checked_c_ir_type(value)?))),
+            CBindingType::Pointer { .. } | CBindingType::Struct(_) => None,
+        }
     }
 
     /// Convert a declared callable parameter element type into its runtime parameter type.

@@ -710,6 +710,17 @@ pub fn mutable_rust_borrow_requires_mut(name: &str, span: Span) -> CompileError 
     ))
 }
 
+/// A checked C binding parameter requires an exclusive borrow of an immutable Incan resource binding.
+pub fn mutable_c_borrow_requires_mut(name: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("C binding parameter requires a mutable borrow of '{name}'"),
+        span,
+    )
+    .with_hint(format!(
+        "Declare with 'mut' before passing '{name}' to this C binding symbol"
+    ))
+}
+
 pub fn self_mutation_without_mut(span: Span) -> CompileError {
     CompileError::type_error("Cannot mutate self - method takes immutable self".to_string(), span)
         .with_hint("Change the method signature to use 'mut self':")

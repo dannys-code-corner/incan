@@ -22,7 +22,7 @@ The probe is syntax-only. It checks free-function signatures, folds declared enu
 
 C is an ABI, not a complete ownership model. A header can expose an integer function accurately while saying little about which pointer owns a resource, when a callback expires, or how a caller must size an output buffer. Pretending that a foreign declaration is already a safe Incan API would hide those decisions at exactly the wrong boundary.
 
-The initial slice therefore admits only direct scalar free functions for execution. It lets the project prove that its declared ABI matches a real target header without silently committing to resource, pointer, callback, or packaging semantics that have not been designed. The façade above the binding remains responsible for input validation, native status interpretation, error models, and all future ownership-oriented behavior.
+The current surface adds one narrow ownership model without widening into general pointers. A binding may declare an opaque resource, one matching release operation, and whether each call consumes, shares, or mutably borrows that resource. It may also declare scalar and owned-resource output positions. These are compiler-owned call facts: the source does not expose raw addresses, and generated Rust does not infer ownership from its own requirements. The façade above the binding remains responsible for input validation, native status interpretation, error models, retries, and cancellation.
 
 ## C interop and Rust interop solve different problems
 
@@ -30,7 +30,7 @@ Neither choice is universally better:
 
 | Choose | When it is the better fit today |
 | --- | --- |
-| Checked C binding | The supported foreign boundary is a small, stable C ABI and the needed calls are scalar free functions whose exact declarations can be verified. |
+| Checked C binding | The supported foreign boundary is a small, stable C ABI whose scalar calls, opaque handles, and output positions can be declared and verified exactly. |
 | Rust interop | A maintained Rust crate already exposes the safe API you need, especially for resources, callbacks, async work, collections, or richer types. |
 | A future checked shim | The underlying C API is real but needs an adapter for callbacks, variadics, function tables, bitfields, unions, or lifetime relationships. |
 
@@ -40,6 +40,6 @@ The language in which a library happens to be implemented is not decisive. A C++
 
 This first foundation does not resolve or lock native artifacts, compile C/C++ shims, provision Android or Apple targets, or hand application assemblies to Gradle and Xcode. It also does not make `c.system_library("name")` a portable library-discovery mechanism. Those jobs need target-specific artifact identity and packaging facts, which are distinct from the source ABI declaration.
 
-The same restraint applies to ownership. `Out`, `InOut`, opaque resources, release rules, borrowed views, and context management belong to later work because they require compiler-owned facts that remain correct across a whole call path. Keeping them out of the initial scalar surface makes the current guarantee meaningful: a checked declaration is exact about what it does represent, and explicit about what it does not.
+The same restraint still applies to views and general pointers. C strings, spans, caller-owned buffers, scoped foreign views, arbitrary pointer operations, and context-manager syntax need additional lifetime and bounds contracts. The current guarantee is deliberately smaller: opaque resources and output storage remain private compiler-managed carriers, while public APIs use ordinary Incan values.
 
 For a working first binding, start with the [tutorial](../tutorials/checked_c_binding.md). For declaration recipes and diagnostics, use the [how-to guide](../how-to/checked_c_bindings.md). The [`std.interop` reference](../reference/stdlib/interop.md) is the exact syntax and capability contract.

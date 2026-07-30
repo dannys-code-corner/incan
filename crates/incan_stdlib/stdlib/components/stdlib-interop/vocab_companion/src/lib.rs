@@ -2,8 +2,8 @@
 
 use incan_vocab::{
     DeclarationSurface, DesugarError, DesugarOutput, IncanClassDeclaration, IncanDeclaration, IncanExpr,
-    IncanFromImportDeclaration, IncanImportItem, LibraryManifest, VocabBodyItem, VocabDesugarer,
-    VocabRegistration, VocabSyntaxNode,
+    IncanFromImportDeclaration, IncanImportItem, LibraryManifest, VocabBodyItem, VocabDesugarer, VocabRegistration,
+    VocabSyntaxNode,
 };
 
 /// Namespace that activates the checked C binding surface.
@@ -12,10 +12,14 @@ pub const NAMESPACE: &str = "std.interop";
 pub const BINDING_KEYWORD: &str = "binding";
 /// Declarative non-executable foreign-symbol member keyword.
 pub const SYMBOL_KEYWORD: &str = "symbol";
+/// Declarative opaque C resource member keyword.
+pub const RESOURCE_KEYWORD: &str = "resource";
 /// Declarative C enum member keyword.
 pub const ENUM_KEYWORD: &str = "enum";
 /// Declarative plain C structure member keyword.
 pub const STRUCT_KEYWORD: &str = "struct";
+/// Declarative raw-call outcome keyword nested under one C symbol.
+pub const OUTCOME_KEYWORD: &str = "outcome";
 
 /// Return the checked C binding vocabulary registration.
 #[must_use]
@@ -30,6 +34,16 @@ pub fn library_vocab() -> VocabRegistration {
                     .with_declaration(
                         DeclarationSurface::named(SYMBOL_KEYWORD)
                             .with_signature_head()
+                            .with_statement_body()
+                            .with_declaration(
+                                DeclarationSurface::named(OUTCOME_KEYWORD)
+                                    .with_header_args()
+                                    .with_statement_body(),
+                            ),
+                    )
+                    .with_declaration(
+                        DeclarationSurface::named(RESOURCE_KEYWORD)
+                            .with_header_args()
                             .with_statement_body(),
                     )
                     .with_declaration(
@@ -159,7 +173,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checked_c_surface_contains_only_foundation_members() {
+    fn checked_c_surface_contains_checked_resource_members() {
         let registration = library_vocab();
         let binding = &registration.surfaces()[0].declarations[0];
         let names = binding
@@ -167,6 +181,7 @@ mod tests {
             .iter()
             .map(|declaration| declaration.keyword.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(names, [SYMBOL_KEYWORD, ENUM_KEYWORD, STRUCT_KEYWORD]);
+        assert_eq!(names, [SYMBOL_KEYWORD, RESOURCE_KEYWORD, ENUM_KEYWORD, STRUCT_KEYWORD]);
+        assert_eq!(binding.declarations[0].declarations[0].keyword, OUTCOME_KEYWORD);
     }
 }

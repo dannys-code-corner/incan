@@ -271,11 +271,51 @@ pub struct IrNewtypeConstructionPlan {
     pub supports_string_conversion: bool,
 }
 
+/// One contained checked-C carrier used by an emitted raw binding wrapper.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrCheckedCType {
+    /// One exact C scalar category represented by the ordinary Incan integer carrier.
+    Scalar(ScalarTypeId),
+    /// An opaque resource passed by value, shared borrow, or exclusive borrow.
+    Resource {
+        /// Call-site ownership relationship declared by the binding.
+        access: crate::frontend::typechecker::CResourceAccess,
+        /// Binding-local resource name.
+        resource: String,
+    },
+    /// Compiler-managed output storage passed as one mutable ABI position.
+    Output {
+        /// Initialization contract for the storage.
+        mode: crate::frontend::typechecker::COutputMode,
+        /// Exact C value carried by the storage.
+        value: Box<IrCheckedCType>,
+    },
+    /// A nullable return value.
+    Nullable(Box<IrCheckedCType>),
+    /// A C `void` return.
+    Void,
+}
+
+/// One binding-local opaque resource required by the emitted raw-call wrappers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrCheckedCResource {
+    /// Binding class that scopes the resource name.
+    pub binding: String,
+    /// Binding-local resource name.
+    pub resource: String,
+    /// Native release symbol selected by the checked descriptor.
+    pub release_native_symbol: String,
+    /// Exact result carrier of the declared release symbol.
+    pub release_return_type: IrCheckedCType,
+    /// Logical system-library capability selected by the checked binding.
+    pub system_library: String,
+}
+
 /// One source-checked C function that lowering has authorized for direct emission.
 ///
-/// The typechecker owns the full binding descriptor. This IR record deliberately contains only the executable
-/// scalar subset selected at a checked call site, so the Rust emitter never rediscovers a C signature from source
-/// syntax or a header.
+/// The typechecker owns the full binding descriptor. This IR record contains the bounded scalar, resource, and output
+/// subset selected at a checked call site, so the Rust emitter never rediscovers a C signature from source syntax or
+/// a header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrCheckedCFunction {
     /// Source binding class that owns this function.
@@ -286,34 +326,61 @@ pub struct IrCheckedCFunction {
     pub native_symbol: String,
     /// Logical system library selected by the checked binding.
     pub system_library: String,
-    /// Exact C scalar parameters in declaration order.
-    pub parameters: Vec<ScalarTypeId>,
-    /// Exact C scalar return, or `None` for `void`.
-    pub return_type: Option<ScalarTypeId>,
+    /// Exact checked parameters in declaration order.
+    pub parameters: Vec<IrCheckedCType>,
+    /// Source parameter names paired positionally with `parameters`.
+    pub parameter_names: Vec<String>,
+    /// Exact checked return contract.
+    pub return_type: IrCheckedCType,
+    /// Opaque resource release facts scoped by this binding.
+    pub resources: Vec<IrCheckedCResource>,
 }
 
 impl IrCheckedCFunction {
+    /// Encode one source identifier component without allowing two spellings to collide.
+    fn component(value: &str) -> String {
+        value.bytes().fold(String::new(), |mut encoded, byte| {
+            if byte.is_ascii_alphanumeric() {
+                encoded.push(byte.into());
+            } else {
+                encoded.push('_');
+                encoded.push_str(&format!("{byte:02x}"));
+            }
+            encoded
+        })
+    }
+
     /// Deterministic compiler-private Rust wrapper name.
     pub fn rust_name(&self) -> String {
-        /// Encode one source identifier component without allowing two spellings to collide.
-        fn component(value: &str) -> String {
-            value.bytes().fold(String::new(), |mut encoded, byte| {
-                if byte.is_ascii_alphanumeric() {
-                    encoded.push(byte.into());
-                } else {
-                    encoded.push('_');
-                    encoded.push_str(&format!("{byte:02x}"));
-                }
-                encoded
-            })
-        }
-
-        format!("__incan_c_{}__{}", component(&self.binding), component(&self.symbol))
+        format!(
+            "__incan_c_{}__{}",
+            Self::component(&self.binding),
+            Self::component(&self.symbol)
+        )
     }
 
     /// Deterministic compiler-private FFI declaration name.
     pub fn ffi_rust_name(&self) -> String {
         format!("{}__ffi", self.rust_name())
+    }
+
+    /// Deterministic private nominal wrapper for one owned opaque resource.
+    pub fn resource_rust_type_name(binding: &str, resource: &str) -> String {
+        format!(
+            "__incan_c_resource_{}__{}",
+            Self::component(binding),
+            Self::component(resource)
+        )
+    }
+
+    /// Deterministic private storage carrier for one checked C output parameter.
+    pub fn output_slot_rust_type_name(binding: &str, symbol: &str, parameter: &str) -> String {
+        format!(
+            "__incan_c_output_{}__{}__{}",
+            Self::component(binding),
+            Self::component(symbol),
+            Self::component(parameter)
+        )
     }
 }
 
@@ -387,7 +454,7 @@ impl From<Span> for IrSpan {
 
 #[cfg(test)]
 mod tests {
-    use super::{IrCheckedCFunction, ScalarTypeId};
+    use super::{IrCheckedCFunction, IrCheckedCType, ScalarTypeId};
 
     fn checked_c_function(binding: &str, symbol: &str) -> IrCheckedCFunction {
         IrCheckedCFunction {
@@ -395,8 +462,10 @@ mod tests {
             symbol: symbol.to_string(),
             native_symbol: "fixture".to_string(),
             system_library: "fixture".to_string(),
-            parameters: vec![ScalarTypeId::I32],
-            return_type: Some(ScalarTypeId::I32),
+            parameters: vec![IrCheckedCType::Scalar(ScalarTypeId::I32)],
+            parameter_names: vec!["value".to_string()],
+            return_type: IrCheckedCType::Scalar(ScalarTypeId::I32),
+            resources: Vec::new(),
         }
     }
 

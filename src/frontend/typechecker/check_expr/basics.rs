@@ -35,6 +35,15 @@ impl TypeChecker {
                 span,
             ));
         }
+        if let Some(transfer_span) = self.transferred_c_resource_bindings.get(name).copied() {
+            self.errors.push(CompileError::type_error(
+                format!(
+                    "C resource binding `{name}` was transferred to native code at byte range {}..{}; it cannot be used again",
+                    transfer_span.start, transfer_span.end
+                ),
+                span,
+            ));
+        }
 
         let Some(sym) = self.lookup_symbol(name) else {
             if name == "log" {

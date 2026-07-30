@@ -3726,6 +3726,87 @@ impl TypeChecker {
         self.check_method_call_with_expected(base, method, type_args, args, span, None)
     }
 
+    /// Type-check the consuming read of one compiler-managed C output slot.
+    fn check_c_abi_output_slot_take(
+        &mut self,
+        base: &Spanned<Expr>,
+        method: &str,
+        type_args: &[Spanned<Type>],
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<ResolvedType> {
+        if method != "take" {
+            return None;
+        }
+        let Expr::Ident(local_name) = &base.node else {
+            return None;
+        };
+        let slot_identity = self
+            .symbols
+            .lookup(local_name)
+            .and_then(|symbol_id| self.symbols.get(symbol_id))
+            .and_then(|symbol| match &symbol.kind {
+                SymbolKind::Variable(variable) => match &variable.ty {
+                    ResolvedType::Named(identity)
+                        if incan_core::lang::c_abi::parse_output_slot_type_identity(identity).is_some() =>
+                    {
+                        Some(identity.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            });
+        let slot = slot_identity.as_deref().and_then(|identity| {
+            self.type_info
+                .c_abi
+                .output_slots
+                .iter()
+                .find(|slot| slot.identity == identity)
+                .cloned()
+        });
+        let Some(slot) = slot else {
+            if self.pending_c_abi_output_slots.contains_key(local_name) {
+                self.errors.push(CompileError::type_error(
+                    format!("C output slot `{local_name}` must be passed to a checked raw C call before take()"),
+                    span,
+                ));
+                return Some(ResolvedType::Unknown);
+            }
+            return None;
+        };
+        if !type_args.is_empty() || !args.is_empty() {
+            self.errors.push(CompileError::type_error(
+                "C output slot take() accepts no type or value arguments".to_string(),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        let Some(slot_identity) = slot_identity else {
+            return Some(ResolvedType::Unknown);
+        };
+        if self.consumed_c_abi_output_slots.contains_key(&slot_identity) {
+            self.errors.push(CompileError::type_error(
+                format!("C output slot `{local_name}` may be consumed by take() only once"),
+                span,
+            ));
+            return Some(ResolvedType::Unknown);
+        }
+        if !self.available_c_abi_output_slots.contains(&slot_identity) {
+            self.errors.push(CompileError::type_error(
+                format!(
+                    "C output slot `{local_name}` is not readable on this path; guard take() with a declared {}.{} outcome",
+                    slot.binding, slot.symbol
+                ),
+                span,
+            ));
+            return Some(ResolvedType::Unknown);
+        }
+        self.available_c_abi_output_slots.remove(&slot_identity);
+        self.consumed_c_abi_output_slots.insert(slot_identity, span);
+        Some(Self::c_raw_call_type(&slot.binding, &slot.value))
+    }
+
     /// Type-check a method call with an optional expected result type for overload disambiguation.
     pub(in crate::frontend::typechecker::check_expr) fn check_method_call_with_expected(
         &mut self,
@@ -3736,7 +3817,13 @@ impl TypeChecker {
         span: Span,
         expected_return_ty: Option<&ResolvedType>,
     ) -> ResolvedType {
+        if let Some(result) = self.check_c_abi_output_slot_constructor(base, method, type_args, args, span) {
+            return result;
+        }
         if let Some(result) = self.check_c_binding_symbol_member_call(base, method, type_args, args, span) {
+            return result;
+        }
+        if let Some(result) = self.check_c_abi_output_slot_take(base, method, type_args, args, span) {
             return result;
         }
         if Self::is_explicit_builtin_namespace_expr(base) {

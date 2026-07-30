@@ -77,6 +77,8 @@ pub struct CAbiInteropArtifacts {
     pub bindings: HashMap<String, CBindingDescriptor>,
     /// Direct binding calls admitted through an explicit `unsafe:` acknowledgement.
     pub raw_calls: Vec<CBindingRawCall>,
+    /// Compiler-managed source slots bound to checked `Out` or `InOut` call parameters.
+    pub output_slots: Vec<CAbiOutputSlot>,
     /// Source accesses to target-verified C enum constants.
     pub enum_accesses: Vec<CBindingEnumAccess>,
     /// Folded C enum values keyed by `(binding, enum, variant)` after Clang verification.
@@ -92,6 +94,30 @@ pub struct CBindingRawCall {
     pub binding: String,
     /// Binding-local symbol selected by the call.
     pub symbol: String,
+}
+
+/// One compiler-managed local storage slot used by a checked C output parameter.
+///
+/// The source handle is created with ordinary `c.out[...]()` or `c.inout(...)` syntax. This artifact is recorded
+/// only after a checked raw call proves which binding symbol and exact C carrier own the storage contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CAbiOutputSlot {
+    /// Full source range of the slot constructor call.
+    pub constructor_span: Span,
+    /// Compiler-internal nominal identity for this particular source slot instance.
+    pub identity: String,
+    /// Local source binding that owns the slot handle.
+    pub local_name: String,
+    /// C binding class selected by the raw call.
+    pub binding: String,
+    /// Binding-local native symbol that receives this slot.
+    pub symbol: String,
+    /// Native parameter name represented by this slot.
+    pub parameter: String,
+    /// Whether the slot is fresh output storage or caller-initialized storage.
+    pub mode: COutputMode,
+    /// Exact C value contract carried by the slot, without its outer output wrapper.
+    pub value: CBindingType,
 }
 
 /// One source access to a target-verified C enum constant.
@@ -118,6 +144,8 @@ pub struct CBindingDescriptor {
     pub header: String,
     /// Logical system-library capability selected by the declaration.
     pub system_library: String,
+    /// Nominal opaque resources and their binding-local release associations.
+    pub resources: Vec<CBindingResource>,
     /// Raw C functions declared by the binding.
     pub symbols: Vec<CBindingSymbol>,
     /// C enum carriers whose values are target-verified constants.
@@ -137,6 +165,8 @@ pub struct CBindingSymbol {
     pub parameters: Vec<CBindingParameter>,
     /// Explicit return contract.
     pub return_type: CBindingType,
+    /// Raw outcomes that establish output-slot state after this call.
+    pub outcomes: Vec<CBindingOutcome>,
 }
 
 /// One raw C function parameter.
@@ -157,8 +187,70 @@ pub enum CBindingType {
     Pointer { mutable: bool, pointee: Box<CBindingType> },
     /// A plain by-value C structure named by its binding member.
     Struct(String),
+    /// A nominal resource with one call-site ownership mode.
+    Resource {
+        /// Whether the call borrows or consumes the resource.
+        access: CResourceAccess,
+        /// Binding-local resource declaration name.
+        resource: String,
+    },
+    /// Compiler-managed foreign output storage.
+    Output {
+        /// Whether the storage is uninitialized output or initialized in/out state.
+        mode: COutputMode,
+        /// Checked native value held by the slot.
+        value: Box<CBindingType>,
+    },
+    /// A nullable owned resource factory result.
+    Nullable(Box<CBindingType>),
     /// `None`/unit for a C `void` return.
     Void,
+}
+
+/// Ownership mode declared for one opaque-resource C parameter or result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CResourceAccess {
+    /// Transfer the release obligation to or from the call.
+    Owned,
+    /// Shared access confined to the raw call.
+    Borrowed,
+    /// Exclusive mutable access confined to the raw call.
+    BorrowedMut,
+}
+
+/// Initialization contract for one compiler-managed C output position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum COutputMode {
+    /// Foreign code initializes the position on a declared raw outcome.
+    Out,
+    /// Foreign code receives initialized storage and may update it.
+    InOut,
+}
+
+/// One declared opaque C resource.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingResource {
+    /// Source span of the resource declaration.
+    pub span: Span,
+    /// Incan-local nominal resource name.
+    pub name: String,
+    /// Exact C opaque type spelling.
+    pub native: String,
+    /// Binding-local symbol that releases one owned resource.
+    pub release: String,
+}
+
+/// One raw result value that changes declared output-slot state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingOutcome {
+    /// Binding-local enum and variant spelling, such as `ResultCode.OK`.
+    pub result: String,
+    /// `c.Out[...]` parameters made readable on this path.
+    pub initializes: Vec<String>,
+    /// `c.InOut[...]` parameters updated on this path.
+    pub updates: Vec<String>,
+    /// `c.InOut[...]` parameters invalidated on this path.
+    pub invalidates: Vec<String>,
 }
 
 /// One C enum declaration.

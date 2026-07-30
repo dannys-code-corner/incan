@@ -10,7 +10,7 @@ use super::super::super::expr::{
 };
 use super::super::super::stmt::IrStmtKind;
 use super::super::super::types::IrType;
-use super::super::super::{FunctionSignature, IrStmt, Mutability, TypedExpr};
+use super::super::super::{FunctionSignature, IrCheckedCFunction, IrStmt, Mutability, TypedExpr};
 use super::super::AstLowering;
 use super::super::errors::LoweringError;
 use crate::frontend::api_metadata::{
@@ -55,6 +55,48 @@ impl AstLowering {
             .and_then(|info| info.expr_type(call_span))
             .map(|ty| self.lower_resolved_type(ty))
             .unwrap_or(IrType::Unknown)
+    }
+
+    /// Lower an ordinary output-slot constructor after a checked raw call has bound it to one exact parameter.
+    pub(super) fn lower_checked_c_output_slot_constructor(
+        &mut self,
+        call_span: ast::Span,
+        args: &[ast::CallArg],
+    ) -> Result<Option<(IrExprKind, IrType)>, LoweringError> {
+        let Some(slot) = self
+            .type_info
+            .as_ref()
+            .and_then(|info| {
+                info.c_abi
+                    .output_slots
+                    .iter()
+                    .find(|slot| slot.constructor_span == call_span)
+            })
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let slot_type = IrCheckedCFunction::output_slot_rust_type_name(&slot.binding, &slot.symbol, &slot.parameter);
+        let function = TypedExpr::new(
+            IrExprKind::AssociatedFunction {
+                type_name: slot_type.clone(),
+                function_name: match slot.mode {
+                    crate::frontend::typechecker::COutputMode::Out => "uninit".to_string(),
+                    crate::frontend::typechecker::COutputMode::InOut => "from_incan_value".to_string(),
+                },
+            },
+            IrType::Unknown,
+        );
+        Ok(Some((
+            IrExprKind::Call {
+                func: Box::new(function),
+                type_args: Vec::new(),
+                args: self.lower_call_args(args)?,
+                callable_signature: None,
+                canonical_path: None,
+            },
+            IrType::Struct(slot_type),
+        )))
     }
 
     /// Return the builtin member name for an explicit `std.builtins.<name>` callee.
@@ -2616,6 +2658,9 @@ impl AstLowering {
         args: &[ast::CallArg],
         call_span: ast::Span,
     ) -> Result<(IrExprKind, IrType), LoweringError> {
+        if let Some(lowered) = self.lower_checked_c_output_slot_constructor(call_span, args)? {
+            return Ok(lowered);
+        }
         let source_args = args;
         if let Some(name) = Self::explicit_builtin_member_name(f)
             && let Some(builtin) = BuiltinFn::from_name(name)

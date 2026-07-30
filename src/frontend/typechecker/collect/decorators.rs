@@ -12,10 +12,13 @@ use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::{ResolvedType, SymbolKind, SymbolTable, TypeInfo};
 use crate::frontend::typechecker::TypeChecker;
 use crate::frontend::typechecker::type_info::{
-    CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingParameter, CBindingStruct, CBindingStructField,
-    CBindingSymbol, CBindingType,
+    CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingOutcome, CBindingParameter, CBindingResource,
+    CBindingStruct, CBindingStructField, CBindingSymbol, CBindingType, COutputMode, CResourceAccess,
 };
-use incan_core::lang::c_abi::{self, BindingArgumentId, BindingMemberId, LinkCapabilityId};
+use incan_core::lang::c_abi::{
+    self, BindingArgumentId, BindingMemberId, LinkCapabilityId, ResourceArgumentId, ResourceTypeConstructorId,
+    SymbolOutcomeArgumentId,
+};
 use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::derives;
 use incan_core::lang::stdlib;
@@ -25,6 +28,32 @@ use incan_semantics_core::{DecoratorFeature, SurfaceFeatureKey};
 enum DecoratorValidationTarget {
     AllowsUserDefined,
     RejectsUserDefined(&'static str),
+}
+
+/// Parsed outcome data before it is checked against one C symbol's result and output contracts.
+struct RawCBindingOutcome {
+    result: String,
+    initializes: Vec<String>,
+    updates: Vec<String>,
+    invalidates: Vec<String>,
+}
+
+/// Parsed C symbol data that must wait for the binding's complete enum namespace before outcome validation.
+struct RawCBindingSymbol {
+    span: Span,
+    name: String,
+    native: String,
+    parameters: Vec<CBindingParameter>,
+    return_type: CBindingType,
+    outcomes: Vec<RawCBindingOutcome>,
+}
+
+/// Fully checked members retained in one C binding descriptor.
+struct CBindingMembers {
+    resources: Vec<CBindingResource>,
+    symbols: Vec<CBindingSymbol>,
+    enums: Vec<CBindingEnum>,
+    structs: Vec<CBindingStruct>,
 }
 
 /// Resolve a decorator path to a module path.
@@ -554,7 +583,7 @@ impl TypeChecker {
 
         // Do not register an incomplete descriptor. Later access checking and lowering intentionally consume only this
         // complete checked product, never the raw class body or a best-effort subset of its declarations.
-        let Some((symbols, enums, structs)) = self.validate_c_binding_members(class, decorator.span) else {
+        let Some(members) = self.validate_c_binding_members(class, decorator.span) else {
             return;
         };
         if valid {
@@ -565,24 +594,22 @@ impl TypeChecker {
                     class_name: class.name.clone(),
                     header,
                     system_library,
-                    symbols,
-                    enums,
-                    structs,
+                    resources: members.resources,
+                    symbols: members.symbols,
+                    enums: members.enums,
+                    structs: members.structs,
                 },
             );
         }
     }
 
     /// Validate declarative C members retained by the ordinary lowered class.
-    fn validate_c_binding_members(
-        &mut self,
-        class: &ClassDecl,
-        fallback_span: Span,
-    ) -> Option<(Vec<CBindingSymbol>, Vec<CBindingEnum>, Vec<CBindingStruct>)> {
+    fn validate_c_binding_members(&mut self, class: &ClassDecl, fallback_span: Span) -> Option<CBindingMembers> {
         let mut valid = true;
+        let mut resources = Vec::new();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
-        let mut raw_symbols = Vec::new();
+        let mut raw_symbols = Vec::<RawCBindingSymbol>::new();
 
         // Structures are collected first because the supported scalar call signatures may name a declared plain
         // structure. The validation pass remains order-independent even when a symbol precedes its structure body.
@@ -590,6 +617,12 @@ impl TypeChecker {
             .declarative_members
             .iter()
             .filter(|member| c_abi::binding_member_from_str(&member.keyword) == Some(BindingMemberId::Struct))
+            .filter_map(|member| member.head.name.clone())
+            .collect::<HashSet<_>>();
+        let resource_names = class
+            .declarative_members
+            .iter()
+            .filter(|member| c_abi::binding_member_from_str(&member.keyword) == Some(BindingMemberId::Resource))
             .filter_map(|member| member.head.name.clone())
             .collect::<HashSet<_>>();
 
@@ -625,6 +658,26 @@ impl TypeChecker {
             // Every accepted member becomes data in the descriptor. In particular, `symbol` owns no executable body:
             // it maps one Incan-facing signature to one explicit native spelling for later target verification.
             match kind {
+                BindingMemberId::Resource => {
+                    if !member.head.parameters.is_empty() || member.head.return_type.is_some() {
+                        self.errors.push(CompileError::type_error(
+                            "C resource declarations may not have a signature".to_string(),
+                            span,
+                        ));
+                        valid = false;
+                        continue;
+                    }
+                    let Some((native, release)) = Self::c_resource_fields(member, span, &mut self.errors) else {
+                        valid = false;
+                        continue;
+                    };
+                    resources.push(CBindingResource {
+                        span,
+                        name: name.clone(),
+                        native,
+                        release,
+                    });
+                }
                 BindingMemberId::Symbol => {
                     let Some(return_type) = member.head.return_type.as_ref() else {
                         self.errors.push(CompileError::type_error(
@@ -634,7 +687,9 @@ impl TypeChecker {
                         valid = false;
                         continue;
                     };
-                    let Some(return_type) = Self::c_binding_type(&return_type.source, &struct_names) else {
+                    let Some(return_type) =
+                        Self::c_binding_type(&return_type.source, &resource_names, &struct_names, false)
+                    else {
                         self.errors.push(CompileError::type_error(
                             format!("C symbol `{name}` uses an unsupported return type"),
                             span,
@@ -652,7 +707,9 @@ impl TypeChecker {
                             valid = false;
                             continue;
                         };
-                        let Some(parameter_type) = Self::c_binding_type(&parameter_type.source, &struct_names) else {
+                        let Some(parameter_type) =
+                            Self::c_binding_type(&parameter_type.source, &resource_names, &struct_names, true)
+                        else {
                             self.errors.push(CompileError::type_error(
                                 format!("C symbol `{name}` uses an unsupported parameter type"),
                                 span,
@@ -673,15 +730,17 @@ impl TypeChecker {
                             ty: parameter_type,
                         });
                     }
-                    let Some(native) = Self::c_required_native(member, span, &mut self.errors) else {
+                    let Some((native, raw_outcomes)) = Self::c_symbol_data(member, span, &mut self.errors) else {
                         valid = false;
                         continue;
                     };
-                    raw_symbols.push(CBindingSymbol {
+                    raw_symbols.push(RawCBindingSymbol {
+                        span,
                         name: name.clone(),
                         native,
                         parameters,
                         return_type,
+                        outcomes: raw_outcomes,
                     });
                 }
                 BindingMemberId::Enum => {
@@ -708,7 +767,9 @@ impl TypeChecker {
                         valid = false;
                         continue;
                     }
-                    let Some(structure) = Self::c_struct(member, name, span, &struct_names, &mut self.errors) else {
+                    let Some(structure) =
+                        Self::c_struct(member, name, span, &resource_names, &struct_names, &mut self.errors)
+                    else {
                         valid = false;
                         continue;
                     };
@@ -729,6 +790,12 @@ impl TypeChecker {
                 .collect::<HashSet<_>>()
                 .len()
                 != enums.len()
+            || resources
+                .iter()
+                .map(|resource| &resource.name)
+                .collect::<HashSet<_>>()
+                .len()
+                != resources.len()
             || structs
                 .iter()
                 .map(|structure| &structure.name)
@@ -743,7 +810,60 @@ impl TypeChecker {
             valid = false;
         }
 
-        valid.then_some((raw_symbols, enums, structs))
+        let mut symbols = Vec::with_capacity(raw_symbols.len());
+        for raw_symbol in raw_symbols {
+            let Some(outcomes) = Self::c_symbol_outcomes(
+                raw_symbol.outcomes,
+                &raw_symbol.name,
+                &raw_symbol.return_type,
+                &raw_symbol.parameters,
+                &enums,
+                raw_symbol.span,
+                &mut self.errors,
+            ) else {
+                valid = false;
+                continue;
+            };
+            symbols.push(CBindingSymbol {
+                name: raw_symbol.name,
+                native: raw_symbol.native,
+                parameters: raw_symbol.parameters,
+                return_type: raw_symbol.return_type,
+                outcomes,
+            });
+        }
+
+        for resource in &resources {
+            let release = symbols.iter().find(|symbol| symbol.name == resource.release);
+            if !release.is_some_and(|symbol| {
+                matches!(
+                    symbol.parameters.as_slice(),
+                    [CBindingParameter {
+                        ty: CBindingType::Resource {
+                            access: CResourceAccess::Owned,
+                            resource: parameter_resource,
+                        },
+                        ..
+                    }] if parameter_resource == &resource.name
+                )
+            }) {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C resource `{}` release symbol `{}` must accept exactly c.Owned[{}]",
+                        resource.name, resource.release, resource.name
+                    ),
+                    resource.span,
+                ));
+                valid = false;
+            }
+        }
+
+        valid.then_some(CBindingMembers {
+            resources,
+            symbols,
+            enums,
+            structs,
+        })
     }
 
     /// Prefer a vocabulary member's source span, retaining the binding span for synthesized members.
@@ -755,17 +875,18 @@ impl TypeChecker {
         }
     }
 
-    /// Extract the one required native spelling from a declaration-only C member.
-    fn c_required_native(
+    /// Extract the native opaque spelling and release symbol from one resource declaration.
+    fn c_resource_fields(
         member: &incan_vocab::VocabDeclaration,
         span: Span,
         errors: &mut Vec<CompileError>,
-    ) -> Option<String> {
+    ) -> Option<(String, String)> {
         let mut native = None;
+        let mut release = None;
         for item in &member.body {
             let incan_vocab::VocabBodyItem::Statement(statement) = item else {
                 errors.push(CompileError::type_error(
-                    "C declarations contain data fields only".to_string(),
+                    "C resource declarations contain data fields only".to_string(),
                     span,
                 ));
                 return None;
@@ -775,35 +896,365 @@ impl TypeChecker {
                 incan_vocab::IncanStatement::Assign { target, value } => (target, value),
                 _ => {
                     errors.push(CompileError::type_error(
-                        "C declarations contain data fields only".to_string(),
+                        "C resource declarations contain data fields only".to_string(),
                         span,
                     ));
                     return None;
                 }
             };
-            if c_abi::symbol_argument_from_str(field).is_none() {
+            let Some(argument) = c_abi::resource_argument_from_str(field) else {
                 errors.push(CompileError::type_error(
-                    format!("C declaration does not accept `{field}`"),
-                    span,
-                ));
-                return None;
-            }
-            let incan_vocab::IncanExpr::Str(value) = value else {
-                errors.push(CompileError::type_error(
-                    "C declaration `native` must be a non-empty string literal".to_string(),
+                    format!("C resource does not accept `{field}`"),
                     span,
                 ));
                 return None;
             };
-            if value.is_empty() || native.replace(value.clone()).is_some() {
+            match (argument, value) {
+                (ResourceArgumentId::Native, incan_vocab::IncanExpr::Str(value))
+                    if !value.is_empty() && native.replace(value.clone()).is_none() => {}
+                (ResourceArgumentId::Release, incan_vocab::IncanExpr::Name(value))
+                    if !value.is_empty() && release.replace(value.clone()).is_none() => {}
+                _ => {
+                    errors.push(CompileError::type_error(
+                        format!("C resource `{field}` has the wrong value form or is repeated"),
+                        span,
+                    ));
+                    return None;
+                }
+            }
+        }
+        match (native, release) {
+            (Some(native), Some(release)) => Some((native, release)),
+            _ => {
                 errors.push(CompileError::type_error(
-                    "C declaration requires exactly one non-empty `native` field".to_string(),
+                    "C resource requires one non-empty `native` field and one `release` symbol".to_string(),
+                    span,
+                ));
+                None
+            }
+        }
+    }
+
+    /// Extract the physical symbol spelling and declarative result outcomes from one raw C symbol.
+    fn c_symbol_data(
+        member: &incan_vocab::VocabDeclaration,
+        span: Span,
+        errors: &mut Vec<CompileError>,
+    ) -> Option<(String, Vec<RawCBindingOutcome>)> {
+        let mut native = None;
+        let mut outcomes = Vec::new();
+        for item in &member.body {
+            match item {
+                incan_vocab::VocabBodyItem::Statement(statement) => {
+                    let (field, value) = match statement {
+                        incan_vocab::IncanStatement::Let { name, value, .. }
+                        | incan_vocab::IncanStatement::Assign { target: name, value } => (name, value),
+                        _ => {
+                            errors.push(CompileError::type_error(
+                                "C symbols contain only a `native` field and declarative outcomes".to_string(),
+                                span,
+                            ));
+                            return None;
+                        }
+                    };
+                    if c_abi::symbol_argument_from_str(field).is_none() {
+                        errors.push(CompileError::type_error(
+                            "C symbols accept only the `native` data field".to_string(),
+                            span,
+                        ));
+                        return None;
+                    }
+                    let incan_vocab::IncanExpr::Str(value) = value else {
+                        errors.push(CompileError::type_error(
+                            "C symbol `native` must be a non-empty string literal".to_string(),
+                            span,
+                        ));
+                        return None;
+                    };
+                    if value.is_empty() || native.replace(value.clone()).is_some() {
+                        errors.push(CompileError::type_error(
+                            "C symbols require exactly one non-empty `native` field".to_string(),
+                            span,
+                        ));
+                        return None;
+                    }
+                }
+                incan_vocab::VocabBodyItem::Declaration(outcome) => {
+                    outcomes.push(Self::c_symbol_outcome(outcome, span, errors)?);
+                }
+                _ => {
+                    errors.push(CompileError::type_error(
+                        "C symbols contain only a `native` field and declarative outcomes".to_string(),
+                        span,
+                    ));
+                    return None;
+                }
+            }
+        }
+        native.map(|native| (native, outcomes)).or_else(|| {
+            errors.push(CompileError::type_error(
+                "C symbols require exactly one non-empty `native` field".to_string(),
+                span,
+            ));
+            None
+        })
+    }
+
+    /// Extract one raw result declaration before checking it against a symbol's typed contract.
+    fn c_symbol_outcome(
+        outcome: &incan_vocab::VocabDeclaration,
+        span: Span,
+        errors: &mut Vec<CompileError>,
+    ) -> Option<RawCBindingOutcome> {
+        if outcome.keyword != c_abi::SYMBOL_OUTCOME_KEYWORD
+            || outcome.head.name.is_some()
+            || outcome.head.header_args.len() != 1
+            || !outcome.head.parameters.is_empty()
+            || outcome.head.return_type.is_some()
+            || !outcome.decorators.is_empty()
+        {
+            errors.push(CompileError::type_error(
+                "C symbol outcomes require one qualified result value and no signature".to_string(),
+                span,
+            ));
+            return None;
+        }
+        let Some(result) = Self::c_native_reference(&outcome.head.header_args[0]) else {
+            errors.push(CompileError::type_error(
+                "C symbol outcomes require one qualified enum result value".to_string(),
+                span,
+            ));
+            return None;
+        };
+        let mut initializes = None;
+        let mut updates = None;
+        let mut invalidates = None;
+        for item in &outcome.body {
+            let incan_vocab::VocabBodyItem::Statement(statement) = item else {
+                errors.push(CompileError::type_error(
+                    "C symbol outcomes contain data fields only".to_string(),
+                    span,
+                ));
+                return None;
+            };
+            let (field, value) = match statement {
+                incan_vocab::IncanStatement::Let { name, value, .. }
+                | incan_vocab::IncanStatement::Assign { target: name, value } => (name, value),
+                _ => {
+                    errors.push(CompileError::type_error(
+                        "C symbol outcomes contain data fields only".to_string(),
+                        span,
+                    ));
+                    return None;
+                }
+            };
+            let Some(field) = c_abi::symbol_outcome_argument_from_str(field) else {
+                errors.push(CompileError::type_error(
+                    "C symbol outcomes accept only initializes, updates, or invalidates".to_string(),
+                    span,
+                ));
+                return None;
+            };
+            let Some(names) = Self::c_outcome_parameter_names(value) else {
+                errors.push(CompileError::type_error(
+                    "C symbol outcome fields require a list of unique parameter names".to_string(),
+                    span,
+                ));
+                return None;
+            };
+            let slot = match field {
+                SymbolOutcomeArgumentId::Initializes => &mut initializes,
+                SymbolOutcomeArgumentId::Updates => &mut updates,
+                SymbolOutcomeArgumentId::Invalidates => &mut invalidates,
+            };
+            if slot.replace(names).is_some() {
+                errors.push(CompileError::type_error(
+                    "C symbol outcomes may state each field once".to_string(),
                     span,
                 ));
                 return None;
             }
         }
-        native
+        Some(RawCBindingOutcome {
+            result,
+            initializes: initializes.unwrap_or_default(),
+            updates: updates.unwrap_or_default(),
+            invalidates: invalidates.unwrap_or_default(),
+        })
+    }
+
+    /// Extract an outcome's ordinary distinct parameter-name list.
+    fn c_outcome_parameter_names(value: &incan_vocab::IncanExpr) -> Option<Vec<String>> {
+        let incan_vocab::IncanExpr::List(values) = value else {
+            return None;
+        };
+        let mut names = Vec::with_capacity(values.len());
+        let mut seen = HashSet::new();
+        for value in values {
+            let incan_vocab::IncanExpr::Name(name) = value else {
+                return None;
+            };
+            if name.is_empty() || !seen.insert(name.clone()) {
+                return None;
+            }
+            names.push(name.clone());
+        }
+        Some(names)
+    }
+
+    /// Check raw outcome data against one C symbol's scalar result and output-slot contracts.
+    #[allow(clippy::too_many_arguments)]
+    fn c_symbol_outcomes(
+        raw_outcomes: Vec<RawCBindingOutcome>,
+        symbol_name: &str,
+        return_type: &CBindingType,
+        parameters: &[CBindingParameter],
+        enums: &[CBindingEnum],
+        span: Span,
+        errors: &mut Vec<CompileError>,
+    ) -> Option<Vec<CBindingOutcome>> {
+        let mut outcomes = Vec::with_capacity(raw_outcomes.len());
+        let mut seen_results = HashSet::new();
+        let mut initialized_outputs = HashSet::new();
+        let mut valid = true;
+
+        for raw in raw_outcomes {
+            let Some((enum_name, variant_name)) = raw.result.split_once('.') else {
+                errors.push(CompileError::type_error(
+                    format!(
+                        "C symbol `{symbol_name}` outcome `{}` must name an enum variant",
+                        raw.result
+                    ),
+                    span,
+                ));
+                valid = false;
+                continue;
+            };
+            let Some(enumeration) = enums.iter().find(|enumeration| enumeration.name == enum_name) else {
+                errors.push(CompileError::type_error(
+                    format!(
+                        "C symbol `{symbol_name}` outcome `{}` names an unknown enum",
+                        raw.result
+                    ),
+                    span,
+                ));
+                valid = false;
+                continue;
+            };
+            let Some(_variant) = enumeration.variants.iter().find(|variant| variant.name == variant_name) else {
+                errors.push(CompileError::type_error(
+                    format!(
+                        "C symbol `{symbol_name}` outcome `{}` names an unknown enum variant",
+                        raw.result
+                    ),
+                    span,
+                ));
+                valid = false;
+                continue;
+            };
+            if !matches!(return_type, CBindingType::Scalar(carrier) if carrier == &enumeration.carrier) {
+                errors.push(CompileError::type_error(
+                    format!(
+                        "C symbol `{symbol_name}` outcome `{}` has a carrier incompatible with its return type",
+                        raw.result
+                    ),
+                    span,
+                ));
+                valid = false;
+                continue;
+            }
+            if !seen_results.insert(raw.result.clone()) {
+                errors.push(CompileError::type_error(
+                    format!("C symbol `{symbol_name}` repeats outcome `{}`", raw.result),
+                    span,
+                ));
+                valid = false;
+                continue;
+            }
+
+            let mut mentioned = HashSet::new();
+            let mut outcome_valid = true;
+            for (field, names, expected_mode) in [
+                ("initializes", &raw.initializes, COutputMode::Out),
+                ("updates", &raw.updates, COutputMode::InOut),
+                ("invalidates", &raw.invalidates, COutputMode::InOut),
+            ] {
+                for name in names {
+                    if !mentioned.insert(name.as_str()) {
+                        errors.push(CompileError::type_error(
+                            format!(
+                                "C symbol `{symbol_name}` outcome `{}` repeats parameter `{name}`",
+                                raw.result
+                            ),
+                            span,
+                        ));
+                        outcome_valid = false;
+                        continue;
+                    }
+                    let Some(parameter) = parameters.iter().find(|parameter| parameter.name == *name) else {
+                        errors.push(CompileError::type_error(
+                            format!(
+                                "C symbol `{symbol_name}` outcome `{}` names unknown parameter `{name}`",
+                                raw.result
+                            ),
+                            span,
+                        ));
+                        outcome_valid = false;
+                        continue;
+                    };
+                    if !matches!(&parameter.ty, CBindingType::Output { mode, .. } if *mode == expected_mode) {
+                        let expected = match expected_mode {
+                            COutputMode::Out => "c.Out[...]",
+                            COutputMode::InOut => "c.InOut[...]",
+                        };
+                        errors.push(CompileError::type_error(
+                            format!(
+                                "C symbol `{symbol_name}` outcome `{}` `{field}` must name a {expected} parameter",
+                                raw.result
+                            ),
+                            span,
+                        ));
+                        outcome_valid = false;
+                        continue;
+                    }
+                    if expected_mode == COutputMode::Out {
+                        initialized_outputs.insert(name.clone());
+                    }
+                }
+            }
+            if outcome_valid {
+                outcomes.push(CBindingOutcome {
+                    result: raw.result,
+                    initializes: raw.initializes,
+                    updates: raw.updates,
+                    invalidates: raw.invalidates,
+                });
+            } else {
+                valid = false;
+            }
+        }
+
+        for parameter in parameters {
+            if matches!(
+                &parameter.ty,
+                CBindingType::Output {
+                    mode: COutputMode::Out,
+                    ..
+                }
+            ) && !initialized_outputs.contains(&parameter.name)
+            {
+                errors.push(CompileError::type_error(
+                    format!(
+                        "C symbol `{symbol_name}` must initialize c.Out parameter `{}` through an outcome",
+                        parameter.name
+                    ),
+                    span,
+                ));
+                valid = false;
+            }
+        }
+
+        valid.then_some(outcomes)
     }
 
     /// Collect one C enum and enforce its shared scalar carrier.
@@ -877,6 +1328,7 @@ impl TypeChecker {
         member: &incan_vocab::VocabDeclaration,
         name: &str,
         span: Span,
+        resources: &HashSet<String>,
         structs: &HashSet<String>,
         errors: &mut Vec<CompileError>,
     ) -> Option<CBindingStruct> {
@@ -916,7 +1368,7 @@ impl TypeChecker {
                     ty,
                     value: incan_vocab::IncanExpr::Name(value),
                 } if field == value => {
-                    let Some(ty) = Self::c_binding_type(&ty.source, structs) else {
+                    let Some(ty) = Self::c_binding_type(&ty.source, resources, structs, false) else {
                         errors.push(CompileError::type_error(
                             format!("C struct field `{field}` uses an unsupported C type"),
                             span,
@@ -959,13 +1411,75 @@ impl TypeChecker {
     }
 
     /// Resolve a supported C spelling into the checked binding type model.
-    fn c_binding_type(source: &str, structs: &HashSet<String>) -> Option<CBindingType> {
+    pub(crate) fn c_binding_type(
+        source: &str,
+        resources: &HashSet<String>,
+        structs: &HashSet<String>,
+        accepts_output: bool,
+    ) -> Option<CBindingType> {
         let source = source.trim();
         if c_abi::is_void_type_spelling(source) {
             return Some(CBindingType::Void);
         }
         if let Some(scalar) = c_abi::scalar_type_from_str(source) {
             return Some(CBindingType::Scalar(scalar));
+        }
+        if let Some(inner) = source.strip_prefix("Option[").and_then(|rest| rest.strip_suffix(']')) {
+            let value = Self::c_binding_type(inner, resources, structs, false)?;
+            return matches!(
+                value,
+                CBindingType::Resource {
+                    access: CResourceAccess::Owned,
+                    ..
+                }
+            )
+            .then(|| CBindingType::Nullable(Box::new(value)));
+        }
+        for (constructor, access) in [
+            (ResourceTypeConstructorId::Owned, CResourceAccess::Owned),
+            (ResourceTypeConstructorId::Borrowed, CResourceAccess::Borrowed),
+            (ResourceTypeConstructorId::BorrowedMut, CResourceAccess::BorrowedMut),
+        ] {
+            if let Some(inner) = source
+                .strip_prefix(c_abi::resource_type_constructor_as_str(constructor))
+                .and_then(|rest| rest.strip_prefix('['))
+                .and_then(|rest| rest.strip_suffix(']'))
+            {
+                return resources.contains(inner).then(|| CBindingType::Resource {
+                    access,
+                    resource: inner.to_string(),
+                });
+            }
+        }
+        if accepts_output {
+            for (constructor, mode) in [
+                (ResourceTypeConstructorId::Out, COutputMode::Out),
+                (ResourceTypeConstructorId::InOut, COutputMode::InOut),
+            ] {
+                if let Some(inner) = source
+                    .strip_prefix(c_abi::resource_type_constructor_as_str(constructor))
+                    .and_then(|rest| rest.strip_prefix('['))
+                    .and_then(|rest| rest.strip_suffix(']'))
+                {
+                    let value = Self::c_binding_type(inner, resources, structs, false)?;
+                    if matches!(
+                        (&mode, &value),
+                        (
+                            COutputMode::InOut,
+                            CBindingType::Resource {
+                                access: CResourceAccess::Owned,
+                                ..
+                            }
+                        )
+                    ) {
+                        return None;
+                    }
+                    return Some(CBindingType::Output {
+                        mode,
+                        value: Box::new(value),
+                    });
+                }
+            }
         }
         for (constructor, mutable) in [("c.ConstPtr", false), ("c.MutPtr", true)] {
             if let Some(inner) = source
@@ -975,7 +1489,7 @@ impl TypeChecker {
             {
                 return Some(CBindingType::Pointer {
                     mutable,
-                    pointee: Box::new(Self::c_binding_type(inner, structs)?),
+                    pointee: Box::new(Self::c_binding_type(inner, resources, structs, false)?),
                 });
             }
         }
