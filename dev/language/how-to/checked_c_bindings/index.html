@@ -2185,6 +2185,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#freeze-oven-interop-requirements-for-a-target" class="md-nav__link">
+    <span class="md-ellipsis">
+      Freeze Oven interop requirements for a target
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#interpret-common-failures" class="md-nav__link">
     <span class="md-ellipsis">
       Interpret common failures
@@ -6697,6 +6706,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#freeze-oven-interop-requirements-for-a-target" class="md-nav__link">
+    <span class="md-ellipsis">
+      Freeze Oven interop requirements for a target
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#interpret-common-failures" class="md-nav__link">
     <span class="md-ellipsis">
       Interpret common failures
@@ -6860,6 +6878,38 @@
         <span class="n">right</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span> <span class="o">=</span> <span class="n">right</span>
 </code></pre></div>
 <p>Clang checks each requested field offset, size, and alignment for the selected host target. It does not infer omitted fields or discover a structure from the header. By-value structure and pointer calls are deliberately unavailable in this slice, so do not use a structure declaration as an assertion that you can already pass it across the boundary.</p>
+<h2 id="freeze-oven-interop-requirements-for-a-target">Freeze Oven interop requirements for a target<a class="headerlink" href="#freeze-oven-interop-requirements-for-a-target" title="Permanent link">&para;</a></h2>
+<p>The binding remains the authority for the Incan-facing ABI. When a package needs physical interop inputs, declare its target-specific requirements under <code>[oven.interop]</code> in the package's <code>incan.toml</code>. The declaration names only package-owned files and compatible toolchain or SDK capabilities; it never claims that Oven has selected a local installation or asks the compiler to search the host for headers, libraries, or a C++ installation.</p>
+<div class="language-toml highlight"><span class="filename">incan.toml</span><pre><span></span><code><span class="k">[oven.interop]</span>
+<span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
+
+<span class="k">[[oven.interop.targets]]</span>
+<span class="n">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;aarch64-apple-ios&quot;</span>
+<span class="n">toolchain</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">capability</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;apple-clang&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;&gt;=17, &lt;18&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">sdk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">capability</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;iphoneos&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;&gt;=18, &lt;19&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;interop/include/bridge.h&quot;</span><span class="p">]</span>
+<span class="n">definitions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;FIXTURE=1&quot;</span><span class="p">]</span>
+
+<span class="k">[[oven.interop.targets.artifacts]]</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;fixture&quot;</span>
+<span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;static&quot;</span>
+<span class="n">path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;interop/lib/libfixture.a&quot;</span>
+
+<span class="k">[[oven.interop.targets.artifacts]]</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;foundation&quot;</span>
+<span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;system&quot;</span>
+<span class="n">capability</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;apple.framework.Foundation&quot;</span>
+
+<span class="k">[[oven.interop.targets.shims]]</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;fixture_bridge&quot;</span>
+<span class="n">language</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;c&quot;</span>
+<span class="n">sources</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;interop/src/bridge.c&quot;</span><span class="p">]</span>
+<span class="n">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;interop/include/bridge.h&quot;</span><span class="p">]</span>
+<span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;fixture_bridge&quot;</span>
+</code></pre></div>
+<p><code>static</code> artifacts name a package-owned archive. <code>bundled</code> artifacts name a package-owned dynamic library or framework and must also specify its <code>runtime-name</code>, <code>placement</code>, and <code>minimum-platform</code>. <code>system</code> artifacts instead name a required toolchain or SDK capability. Shims may be authored in C or C++, but Oven will expose C++ only behind the shim's bounded C contract.</p>
+<p>Every declared package file must be a regular, normalized relative path. Running <code>incan lock</code> hashes the exact header, artifact, and shim-source bytes into the semantic lock state with the target, compatibility requirements, definitions, and capability requirements. Changing any declared input makes the lock stale; relocating an unchanged package does not change these package-relative entries.</p>
+<p>This declaration and lock slice deliberately does not download artifacts, discover a system library, compile a shim, or define a Gradle/Xcode handover format. Oven will resolve the requirements, select concrete compiler and SDK installations, build shims, cache outputs, and record those choices in its own receipt or store. Do not put signing, provenance admission, or license policy here: publication policy belongs to <code>incan.pub</code>.</p>
 <h2 id="interpret-common-failures">Interpret common failures<a class="headerlink" href="#interpret-common-failures" title="Permanent link">&para;</a></h2>
 <table>
 <thead>

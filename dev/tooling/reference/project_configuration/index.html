@@ -5231,6 +5231,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#oveninterop" class="md-nav__link">
+    <span class="md-ellipsis">
+      [oven.interop]
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#toolincanenvs" class="md-nav__link">
     <span class="md-ellipsis">
       [tool.incan.envs]
@@ -6928,6 +6937,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#oveninterop" class="md-nav__link">
+    <span class="md-ellipsis">
+      [oven.interop]
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#toolincanenvs" class="md-nav__link">
     <span class="md-ellipsis">
       [tool.incan.envs]
@@ -7137,7 +7155,7 @@
 <h1 id="project-configuration-incantoml">Project configuration (<code>incan.toml</code>)<a class="headerlink" href="#project-configuration-incantoml" title="Permanent link">&para;</a></h1>
 <p>This is the reference for the <code>incan.toml</code> project manifest format. For a practical guide to managing dependencies, see: <a href="../../how-to/dependencies/">Managing dependencies</a>.</p>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p><code>incan.toml</code> is an optional project manifest that lives at your project root. It declares project metadata, build configuration, Incan library dependencies, Rust crate dependencies, and optional vocab companion crate settings. Project-aware commands discover it by walking upward from the current working directory, and file-oriented commands may also resolve it from the provided source path.</p>
+<p><code>incan.toml</code> is an optional project manifest that lives at your project root. It declares project metadata, build configuration, Incan library dependencies, Rust crate dependencies, optional Oven interop requirements, and optional vocab companion crate settings. Project-aware commands discover it by walking upward from the current working directory, and file-oriented commands may also resolve it from the provided source path.</p>
 <div class="language-text highlight"><pre><span></span><code>my_project/
 ├── src/
 │   └── main.incn
@@ -7258,6 +7276,155 @@
 <li><strong>Fallback</strong>: the project root itself (flat layout)</li>
 </ol>
 <p>Most projects use the conventional <code>src/</code> layout and don't need to set this field. It exists for projects that keep their source in a different directory (e.g. <code>lib/</code>).</p>
+<h2 id="oveninterop"><code>[oven.interop]</code><a class="headerlink" href="#oveninterop" title="Permanent link">&para;</a></h2>
+<p>The Oven interop section declares package-owned build inputs and compatibility requirements for checked bindings. It describes what the package requires; it does not claim that Oven has already selected a compiler, SDK, sysroot, or installed library.</p>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[oven.interop]</span>
+<span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
+
+<span class="k">[[oven.interop.targets]]</span>
+<span class="n">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;aarch64-apple-ios&quot;</span>
+<span class="n">toolchain</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">capability</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;apple-clang&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;&gt;=17, &lt;18&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">sdk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">capability</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;iphoneos&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;&gt;=18, &lt;19&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;interop/include/bridge.h&quot;</span><span class="p">]</span>
+<span class="n">definitions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;FEATURE_ENABLED=1&quot;</span><span class="p">]</span>
+
+<span class="k">[[oven.interop.targets.artifacts]]</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;bridge&quot;</span>
+<span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;static&quot;</span>
+<span class="n">path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;interop/lib/libbridge.a&quot;</span>
+
+<span class="k">[[oven.interop.targets.shims]]</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;bridge_shim&quot;</span>
+<span class="n">language</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;cxx&quot;</span>
+<span class="n">sources</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;interop/src/bridge.cpp&quot;</span><span class="p">]</span>
+<span class="n">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;interop/include/bridge.h&quot;</span><span class="p">]</span>
+<span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;bridge_shim&quot;</span>
+</code></pre></div>
+<p>The section currently has one field:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schema</code></td>
+<td>integer</td>
+<td>Oven interop declaration schema. The current value is <code>1</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Each <code>[[oven.interop.targets]]</code> entry accepts:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>target</code></td>
+<td>string</td>
+<td>Unique non-empty compilation and deployment target triple requested by the package.</td>
+</tr>
+<tr>
+<td><code>toolchain</code></td>
+<td>capability requirement</td>
+<td>Optional compatible Clang-family toolchain capability.</td>
+</tr>
+<tr>
+<td><code>sdk</code></td>
+<td>capability requirement</td>
+<td>Optional compatible SDK capability.</td>
+</tr>
+<tr>
+<td><code>headers</code></td>
+<td>list of paths</td>
+<td>Package-relative headers used for verification or shim compilation.</td>
+</tr>
+<tr>
+<td><code>definitions</code></td>
+<td>list of strings</td>
+<td>Explicit preprocessor definitions.</td>
+</tr>
+</tbody>
+</table>
+<p>A capability requirement is an inline table with a non-empty <code>capability</code> and an optional semantic-version requirement:</p>
+<div class="language-toml highlight"><pre><span></span><code><span class="n">toolchain</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">capability</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;clang&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;&gt;=18, &lt;19&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Oven will record its eventual concrete compiler, executable, SDK, and sysroot selections in a build receipt or store. Those resolved machine and tool identities are not package-authored manifest facts.</p>
+<p>Each <code>[[oven.interop.targets.artifacts]]</code> entry has a package-local <code>name</code>, a <code>kind</code>, and optional <code>dependencies</code> naming other artifacts in the same target. The remaining fields depend on <code>kind</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Required fields</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>static</code></td>
+<td><code>path</code></td>
+<td>A package-owned archive linked into the generated product.</td>
+</tr>
+<tr>
+<td><code>bundled</code></td>
+<td><code>path</code>, <code>runtime-name</code>, <code>placement</code>, <code>minimum-platform</code></td>
+<td>A package-owned dynamic library or framework staged by the platform packager.</td>
+</tr>
+<tr>
+<td><code>system</code></td>
+<td><code>capability</code></td>
+<td>A library or framework that Oven must obtain from the selected toolchain or SDK.</td>
+</tr>
+</tbody>
+</table>
+<p>Each <code>[[oven.interop.targets.shims]]</code> entry accepts:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>string</td>
+<td>Unique package-local shim name.</td>
+</tr>
+<tr>
+<td><code>language</code></td>
+<td><code>c</code> or <code>cxx</code></td>
+<td>Source language used when Oven builds the shim.</td>
+</tr>
+<tr>
+<td><code>sources</code></td>
+<td>list of paths</td>
+<td>One or more package-relative authored source files.</td>
+</tr>
+<tr>
+<td><code>headers</code></td>
+<td>list of paths</td>
+<td>Package-relative headers describing the bounded exported contract.</td>
+</tr>
+<tr>
+<td><code>output</code></td>
+<td>string</td>
+<td>Logical name of the artifact Oven will eventually produce.</td>
+</tr>
+</tbody>
+</table>
+<p>All declared paths must be normalized relative paths to regular package files. Absolute paths, parent traversal, symlinks, directories, backslashes, and ambient search paths are rejected.</p>
+<p><code>incan lock</code> writes the normalized requirements and content hashes for package-owned files under <code>semantic.oven.interop</code>. It does not resolve the requirements, compile shims, download artifacts, or emit a platform handover plan. Changing a declared file or requirement makes the lock stale; moving an unchanged package does not change its package-relative entries.</p>
+<p>For an end-to-end binding example, see <a href="../../../language/how-to/checked_c_bindings/#freeze-oven-interop-requirements-for-a-target">Checked C bindings</a>.</p>
 <h2 id="toolincanenvs"><code>[tool.incan.envs]</code><a class="headerlink" href="#toolincanenvs" title="Permanent link">&para;</a></h2>
 <p>Named project environments define reusable command contexts for <code>incan env</code>. They are useful when a project has different test, build, or release workflows that need different environment variables, working directories, or script arguments. The ambient <code>default</code> environment is always available; defining <code>[tool.incan.envs.default]</code> customizes it.</p>
 <div class="language-toml highlight"><pre><span></span><code><span class="k">[tool.incan.envs.default]</span>

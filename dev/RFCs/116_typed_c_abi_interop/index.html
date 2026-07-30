@@ -6858,9 +6858,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#native-artifact-resolution-and-deployment" class="md-nav__link">
+  <a href="#oven-interop-resolution-and-deployment" class="md-nav__link">
     <span class="md-ellipsis">
-      Native artifact resolution and deployment
+      Oven interop resolution and deployment
     </span>
   </a>
   
@@ -7626,22 +7626,22 @@ src/tflite.incn
 <p>The toolchain must compile a generated C verification unit against the resolved headers and definitions. It must check every imported symbol signature, supported calling convention, output position type, and explicit by-value structure layout.</p>
 <p>The verification result must be keyed by the binding declaration, target and ABI profile, header contents, preprocessor definitions, compiler and SDK identity, native library or shim identity, and binding schema version.</p>
 <p>Link-time symbol resolution remains a separate gate. Passing a header probe does not prove that the selected artifact exports the required symbol. Both verification and linking must use the same resolved target plan.</p>
-<h3 id="native-artifact-resolution-and-deployment">Native artifact resolution and deployment<a class="headerlink" href="#native-artifact-resolution-and-deployment" title="Permanent link">&para;</a></h3>
-<p>The package graph must distinguish semantic binding declarations from physical native artifacts. A target variant may select:</p>
+<h3 id="oven-interop-resolution-and-deployment">Oven interop resolution and deployment<a class="headerlink" href="#oven-interop-resolution-and-deployment" title="Permanent link">&para;</a></h3>
+<p>The package graph must distinguish semantic binding declarations from physical interop artifacts. Package authors declare target requirements and package-owned inputs under <code>[oven.interop]</code>; Oven resolves those requirements and records its concrete selections separately. A target variant may require:</p>
 <ul>
 <li>a static archive linked into the generated product</li>
 <li>a bundled shared library or framework staged for platform packaging</li>
 <li>an explicit system library or framework supplied as a toolchain capability</li>
 <li>an authored shim built through a governed package action</li>
-<li>a locked prebuilt shim or native artifact</li>
+<li>a locked prebuilt shim or interop artifact</li>
 </ul>
 <p>Machine-local absolute paths must not become publishable metadata. Explicit local development overrides may exist but must be non-portable, visible in inspection, and excluded from locked publication.</p>
 <p>Static linking should be preferred when supported and legally appropriate. Bundled artifacts must have declared runtime link names, placement, transitive native dependencies, minimum platform constraints, and packaging outputs. System artifacts must identify the providing toolchain or SDK capability.</p>
-<p>The Incan package manager must resolve, verify, build when declared, lock, cache, and stage native artifacts. It must not invent missing shims, accept licenses, supply signing credentials, infer status meaning, silently discover system libraries, or run arbitrary undeclared shell scripts.</p>
-<p>Gradle, Xcode, or another platform packager may remain responsible for final application assembly and signing. Incan must emit one complete target-native plan so users do not manually reproduce include paths, linker flags, ABI directories, runtime search paths, or framework placement.</p>
+<p>Oven must resolve, verify, build when declared, lock, cache, and stage interop artifacts. It must not invent missing shims, accept licenses, supply signing credentials, infer status meaning, silently discover system libraries, or run arbitrary undeclared shell scripts.</p>
+<p>Gradle, Xcode, or another platform packager may remain responsible for final application assembly and signing. Oven must emit one complete target interop plan so users do not manually reproduce include paths, linker flags, ABI directories, runtime search paths, or framework placement.</p>
 <h3 id="packaging-locking-and-reproducibility">Packaging, locking, and reproducibility<a class="headerlink" href="#packaging-locking-and-reproducibility" title="Permanent link">&para;</a></h3>
-<p>A published binding package may include declarations, headers, authored C or C++ shim sources, safe Incan wrappers, and target-specific native artifacts subject to package policy.</p>
-<p>The lock graph must record the logical binding version, binding kind, selected target variant, declaration digest, header digests, definitions, shim source or artifact digests, native artifact digests, deployment class, toolchain and SDK constraints, configuration identity, and package provenance.</p>
+<p>A published binding package may include declarations, headers, authored C or C++ shim sources, safe Incan wrappers, and target-specific interop artifacts subject to package policy.</p>
+<p>The semantic lock records package-authored target constraints, toolchain and SDK capability requirements, header digests, definitions, shim-source digests, artifact digests, deployment requirements, and configuration identity. Oven records resolved compiler and SDK identities, commands, shim outputs, cache identity, and the resulting Loaf or deployment-plan identity in its receipt or store. Publication provenance remains an <code>incan.pub</code> concern.</p>
 <p>Offline and locked modes from RFC 020 apply to every binding input. A locked build must not download, discover, or substitute a different native library because the host happens to provide one.</p>
 <p>Crash-safe artifact publication and cache coordination must follow RFC 112. Compiled-provider selection and package features must reuse RFC 114 instead of introducing C-only feature activation or provider resolution.</p>
 <h3 id="inspection-diagnostics-and-documentation">Inspection, diagnostics, and documentation<a class="headerlink" href="#inspection-diagnostics-and-documentation" title="Permanent link">&para;</a></h3>
@@ -7813,7 +7813,7 @@ src/tflite.incn
 <h3 id="phase-2-owned-resources-and-bounded-bridge-values-941">Phase 2: Owned resources and bounded bridge values (#941)<a class="headerlink" href="#phase-2-owned-resources-and-bounded-bridge-values-941" title="Permanent link">&para;</a></h3>
 <p>Add resource release associations, inferred call-scoped borrowing, <code>Out</code> / <code>InOut</code> initialization rules, bounded strings and spans, scoped copies, and a SQLite proof.</p>
 <h3 id="phase-3-governed-artifacts-and-shims-942">Phase 3: Governed artifacts and shims (#942)<a class="headerlink" href="#phase-3-governed-artifacts-and-shims-942" title="Permanent link">&para;</a></h3>
-<p>Extend the package and lock graph with target-specific native artifacts, authored C/C++ shim inputs, provenance, verification, and offline behavior.</p>
+<p>Extend the package and lock graph with <code>[oven.interop]</code> target requirements, package-owned artifacts, authored C/C++ shim inputs, content identities, and offline drift detection.</p>
 <h3 id="phase-4-tooling-projection-943">Phase 4: Tooling projection (#943)<a class="headerlink" href="#phase-4-tooling-projection-943" title="Permanent link">&para;</a></h3>
 <p>Project checked binding facts, bridge and façade edges, diagnostics, inspection, editor support, generated references, and compatibility documentation from the same descriptor.</p>
 <h3 id="phase-5-mobile-inference-proof-944">Phase 5: Mobile inference proof (#944)<a class="headerlink" href="#phase-5-mobile-inference-proof-944" title="Permanent link">&para;</a></h3>
@@ -7865,12 +7865,12 @@ src/tflite.incn
 <li>Call-scoped foreign borrows are inferred from semantic parameter modes and recorded before backend emission.</li>
 <li><code>c.Out[T]</code> and <code>c.InOut[T]</code> describe declaration positions without enabling arbitrary dereference. Private bridge code creates compiler-managed slots with ordinary expressions such as <code>c.out[c.Owned[Database]]()</code> and <code>c.inout(value)</code>, then consumes them with <code>take()</code> only on the declared valid outcome or post-call path.</li>
 <li>Returned foreign views may be copied within the current unsafe region or declared static; owner-tied escaping views are excluded.</li>
-<li>Source declarations remain the semantic authority. Target-specific artifact choice, authored shim sources, and physical build settings may live in <code>incan.toml</code> when an author needs them; they do not replace the binding declaration.</li>
+<li>Source declarations remain the semantic authority. Target-specific artifact requirements, authored shim sources, and package-owned physical inputs may live under <code>[oven.interop]</code> in <code>incan.toml</code> when an author needs them; they do not replace the binding declaration or claim that Oven has already selected a local toolchain.</li>
 <li>Shims are first-class governed package assets.</li>
 <li>Verification requires a managed Clang-compatible target toolchain.</li>
-<li>Native deployment classes are static, bundled, and explicit system capability.</li>
-<li>Oven owns native resolution, verification, shim baking, locking, caching, staging, and the deployment plan. A Loaf carries enough semantic and physical metadata for directionally useful Gradle or Xcode handoff; those platform tools retain final app assembly and signing. The exact handoff schema remains an associated RFC concern.</li>
-<li>Native publication policy belongs to <code>incan.pub</code>: signing identity, license/provenance facts, artifact verification, and publication admission must be established before prebuilt native artifacts are accepted.</li>
+<li>Oven interop deployment classes are static, bundled, and explicit system capability.</li>
+<li>Oven owns interop resolution, verification, shim baking, locking, caching, staging, and the deployment plan. A Loaf carries enough semantic and physical metadata for directionally useful Gradle or Xcode handoff; those platform tools retain final app assembly and signing. The exact handoff schema remains an associated RFC concern.</li>
+<li>Interop publication policy belongs to <code>incan.pub</code>: signing identity, license/provenance facts, artifact verification, and publication admission must be established before prebuilt artifacts are accepted.</li>
 <li>The shared package envelope is binding-kind-neutral; C-specific type and safety facts remain inside the C binding kind.</li>
 </ul>
 

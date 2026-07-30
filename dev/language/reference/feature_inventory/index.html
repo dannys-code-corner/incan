@@ -2346,6 +2346,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#locked-oven-interop-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Locked Oven interop requirements
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#incan-libraries-and-pub-imports" class="md-nav__link">
     <span class="md-ellipsis">
       Incan libraries and pub:: imports
@@ -7271,6 +7280,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#locked-oven-interop-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Locked Oven interop requirements
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#incan-libraries-and-pub-imports" class="md-nav__link">
     <span class="md-ellipsis">
       Incan libraries and pub:: imports
@@ -7917,6 +7935,16 @@
 <td>Explicit C headers, scalar signatures, opaque resources, output positions, enum carriers, and plain layouts are verified before private generated C ABI calls.</td>
 <td>Unverified Rust wrappers, ambient header discovery, or string-based dynamic symbol lookup.</td>
 <td><a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/116_typed_c_abi_interop/">RFC 116</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></td>
+</tr>
+<tr>
+<td>Locked Oven interop requirements</td>
+<td>Interop</td>
+<td style="text-align: right;">0.5</td>
+<td>Declare target-specific <code>[oven.interop]</code> requirements in <code>incan.toml</code>, then run <code>incan lock</code>.</td>
+<td><code>[oven.interop]</code><br><code>[[oven.interop.targets]]</code><br><code>incan lock</code></td>
+<td>Package-owned headers, artifacts, system capabilities, and C/C++ shim sources are declared explicitly alongside toolchain and SDK compatibility requirements, then frozen in the semantic lock.</td>
+<td>Ambient host discovery, untracked interop source trees, or package manifests that claim a concrete local compiler or SDK has already been selected.</td>
+<td><a href="../../../tooling/reference/project_configuration/#oveninterop">Project configuration</a>, <a href="../../how-to/checked_c_bindings/">Checked C bindings</a>, <a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/116_typed_c_abi_interop/">RFC 116</a></td>
 </tr>
 <tr>
 <td>Incan libraries and <code>pub::</code> imports</td>
@@ -8605,6 +8633,24 @@
 <li><code>binding LibC:</code></li>
 <li><code>unsafe:
     LibC.absolute(-7)</code></li>
+</ul>
+<h3 id="locked-oven-interop-requirements">Locked Oven interop requirements<a class="headerlink" href="#locked-oven-interop-requirements" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Id:</strong> <code>OvenInteropRequirements</code></li>
+<li><strong>Category:</strong> <code>Interop</code></li>
+<li><strong>Since:</strong> <code>0.5</code></li>
+<li><strong>RFC:</strong> <code>RFC 116</code></li>
+<li><strong>Stability:</strong> <code>Experimental</code></li>
+<li><strong>Activation:</strong> Declare target-specific <code>[oven.interop]</code> requirements in <code>incan.toml</code>, then run <code>incan lock</code>.</li>
+<li><strong>Use instead of:</strong> Ambient host discovery, untracked interop source trees, or package manifests that claim a concrete local compiler or SDK has already been selected.</li>
+<li><strong>References:</strong> <a href="../../../tooling/reference/project_configuration/#oveninterop">Project configuration</a>, <a href="../../how-to/checked_c_bindings/">Checked C bindings</a>, <a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/116_typed_c_abi_interop/">RFC 116</a></li>
+</ul>
+<p>Package-owned headers, artifacts, system capabilities, and C/C++ shim sources are declared explicitly alongside toolchain and SDK compatibility requirements, then frozen in the semantic lock.</p>
+<p>Canonical forms:</p>
+<ul>
+<li><code>[oven.interop]</code></li>
+<li><code>[[oven.interop.targets]]</code></li>
+<li><code>incan lock</code></li>
 </ul>
 <h3 id="incan-libraries-and-pub-imports">Incan libraries and <code>pub::</code> imports<a class="headerlink" href="#incan-libraries-and-pub-imports" title="Permanent link">&para;</a></h3>
 <ul>
