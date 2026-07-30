@@ -3283,7 +3283,7 @@ pub(super) fn run_file_tests_batch(
         let semantic_sdk_paths = common::semantic_sdk_path_dependencies(&lock_project_requirements);
         let semantic = match semantic_lock_state(
             &project_root,
-            manifest.as_ref().and_then(ProjectManifest::native),
+            manifest.as_ref().and_then(ProjectManifest::oven_interop),
             compilation_session.sdk_inventory.as_deref(),
             compilation_session.sdk_components.as_ref(),
             compilation_session.package_feature_plan.as_ref(),

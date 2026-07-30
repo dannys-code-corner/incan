@@ -4,7 +4,7 @@ This is the reference for the `incan.toml` project manifest format. For a practi
 
 ## Overview
 
-`incan.toml` is an optional project manifest that lives at your project root. It declares project metadata, build configuration, Incan library dependencies, Rust crate dependencies, and optional vocab companion crate settings. Project-aware commands discover it by walking upward from the current working directory, and file-oriented commands may also resolve it from the provided source path.
+`incan.toml` is an optional project manifest that lives at your project root. It declares project metadata, build configuration, Incan library dependencies, Rust crate dependencies, optional Oven interop requirements, and optional vocab companion crate settings. Project-aware commands discover it by walking upward from the current working directory, and file-oriented commands may also resolve it from the provided source path.
 
 ```text
 my_project/
@@ -126,6 +126,82 @@ The directory where the compiler and test runner look for user modules. Resoluti
 3. **Fallback**: the project root itself (flat layout)
 
 Most projects use the conventional `src/` layout and don't need to set this field. It exists for projects that keep their source in a different directory (e.g. `lib/`).
+
+## `[oven.interop]`
+
+The Oven interop section declares package-owned build inputs and compatibility requirements for checked bindings. It describes what the package requires; it does not claim that Oven has already selected a compiler, SDK, sysroot, or installed library.
+
+```toml
+[oven.interop]
+schema = 1
+
+[[oven.interop.targets]]
+target = "aarch64-apple-ios"
+toolchain = { capability = "apple-clang", version = ">=17, <18" }
+sdk = { capability = "iphoneos", version = ">=18, <19" }
+headers = ["interop/include/bridge.h"]
+definitions = ["FEATURE_ENABLED=1"]
+
+[[oven.interop.targets.artifacts]]
+name = "bridge"
+kind = "static"
+path = "interop/lib/libbridge.a"
+
+[[oven.interop.targets.shims]]
+name = "bridge_shim"
+language = "cxx"
+sources = ["interop/src/bridge.cpp"]
+headers = ["interop/include/bridge.h"]
+output = "bridge_shim"
+```
+
+The section currently has one field:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `schema` | integer | Oven interop declaration schema. The current value is `1`. |
+
+Each `[[oven.interop.targets]]` entry accepts:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `target` | string | Unique non-empty compilation and deployment target triple requested by the package. |
+| `toolchain` | capability requirement | Optional compatible Clang-family toolchain capability. |
+| `sdk` | capability requirement | Optional compatible SDK capability. |
+| `headers` | list of paths | Package-relative headers used for verification or shim compilation. |
+| `definitions` | list of strings | Explicit preprocessor definitions. |
+
+A capability requirement is an inline table with a non-empty `capability` and an optional semantic-version requirement:
+
+```toml
+toolchain = { capability = "clang", version = ">=18, <19" }
+```
+
+Oven will record its eventual concrete compiler, executable, SDK, and sysroot selections in a build receipt or store. Those resolved machine and tool identities are not package-authored manifest facts.
+
+Each `[[oven.interop.targets.artifacts]]` entry has a package-local `name`, a `kind`, and optional `dependencies` naming other artifacts in the same target. The remaining fields depend on `kind`:
+
+| Kind | Required fields | Meaning |
+| --- | --- | --- |
+| `static` | `path` | A package-owned archive linked into the generated product. |
+| `bundled` | `path`, `runtime-name`, `placement`, `minimum-platform` | A package-owned dynamic library or framework staged by the platform packager. |
+| `system` | `capability` | A library or framework that Oven must obtain from the selected toolchain or SDK. |
+
+Each `[[oven.interop.targets.shims]]` entry accepts:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | Unique package-local shim name. |
+| `language` | `c` or `cxx` | Source language used when Oven builds the shim. |
+| `sources` | list of paths | One or more package-relative authored source files. |
+| `headers` | list of paths | Package-relative headers describing the bounded exported contract. |
+| `output` | string | Logical name of the artifact Oven will eventually produce. |
+
+All declared paths must be normalized relative paths to regular package files. Absolute paths, parent traversal, symlinks, directories, backslashes, and ambient search paths are rejected.
+
+`incan lock` writes the normalized requirements and content hashes for package-owned files under `semantic.oven.interop`. It does not resolve the requirements, compile shims, download artifacts, or emit a platform handover plan. Changing a declared file or requirement makes the lock stale; moving an unchanged package does not change its package-relative entries.
+
+For an end-to-end binding example, see [Checked C bindings](../../language/how-to/checked_c_bindings.md#freeze-oven-interop-requirements-for-a-target).
 
 ## `[tool.incan.envs]`
 

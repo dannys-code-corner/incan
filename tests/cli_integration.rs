@@ -5213,61 +5213,62 @@ fn lock_generates_lockfile_for_manifest_project() -> Result<(), Box<dyn std::err
 }
 
 #[test]
-fn lock_records_declared_native_input_receipts_and_detects_drift() -> Result<(), Box<dyn std::error::Error>> {
+fn lock_records_oven_interop_requirements_and_detects_input_drift() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(
         tmp.path(),
-        "native_input_lock",
+        "oven_interop_lock",
         r#"
 
-[native]
+[oven.interop]
 schema = 1
 
-[[native.targets]]
+[[oven.interop.targets]]
 target = "x86_64-unknown-linux-gnu"
-toolchain = "clang-18"
-headers = ["native/include/bridge.h"]
+toolchain = { capability = "clang", version = ">=18, <19" }
+headers = ["interop/include/bridge.h"]
 definitions = ["FIXTURE=1"]
 
-[[native.targets.artifacts]]
+[[oven.interop.targets.artifacts]]
 name = "fixture"
 kind = "static"
-path = "native/lib/libfixture.a"
+path = "interop/lib/libfixture.a"
 
-[[native.targets.shims]]
+[[oven.interop.targets.shims]]
 name = "fixture_bridge"
 language = "c"
-sources = ["native/src/bridge.c"]
-headers = ["native/include/bridge.h"]
+sources = ["interop/src/bridge.c"]
+headers = ["interop/include/bridge.h"]
 output = "fixture_bridge"
 "#,
     )?;
-    fs::create_dir_all(tmp.path().join("native/include"))?;
-    fs::create_dir_all(tmp.path().join("native/src"))?;
-    fs::create_dir_all(tmp.path().join("native/lib"))?;
-    fs::write(tmp.path().join("native/include/bridge.h"), "int bridge(void);\n")?;
+    fs::create_dir_all(tmp.path().join("interop/include"))?;
+    fs::create_dir_all(tmp.path().join("interop/src"))?;
+    fs::create_dir_all(tmp.path().join("interop/lib"))?;
+    fs::write(tmp.path().join("interop/include/bridge.h"), "int bridge(void);\n")?;
     fs::write(
-        tmp.path().join("native/src/bridge.c"),
+        tmp.path().join("interop/src/bridge.c"),
         "int bridge(void) { return 7; }\n",
     )?;
-    fs::write(tmp.path().join("native/lib/libfixture.a"), b"fixture archive")?;
+    fs::write(tmp.path().join("interop/lib/libfixture.a"), b"fixture archive")?;
     let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
 
     let lock_output = run_incan(tmp.path(), &["lock", main_arg])?;
-    assert_success(&lock_output, "incan lock with declared native inputs");
+    assert_success(&lock_output, "incan lock with declared Oven interop requirements");
     let lock: toml::Value = toml::from_str(&fs::read_to_string(tmp.path().join("incan.lock"))?)?;
-    let target = lock["semantic"]["native"]
+    let target = lock["semantic"]["oven"]["interop"]
         .as_array()
         .and_then(|targets| targets.first())
-        .ok_or("lock did not contain a native target receipt")?;
+        .ok_or("lock did not contain Oven interop requirements")?;
     assert_eq!(target["target"].as_str(), Some("x86_64-unknown-linux-gnu"));
-    assert_eq!(target["toolchain"].as_str(), Some("clang-18"));
+    assert_eq!(target["toolchain"]["capability"].as_str(), Some("clang"));
+    assert_eq!(target["toolchain"]["version"].as_str(), Some(">=18, <19"));
     assert_eq!(
         target["headers"]
             .as_array()
             .and_then(|headers| headers.first())
             .and_then(|header| header["path"].as_str()),
-        Some("native/include/bridge.h")
+        Some("interop/include/bridge.h")
     );
     assert_eq!(
         target["shims"]
@@ -5276,18 +5277,18 @@ output = "fixture_bridge"
             .and_then(|shim| shim["sources"].as_array())
             .and_then(|sources| sources.first())
             .and_then(|source| source["path"].as_str()),
-        Some("native/src/bridge.c")
+        Some("interop/src/bridge.c")
     );
 
     fs::write(
-        tmp.path().join("native/src/bridge.c"),
+        tmp.path().join("interop/src/bridge.c"),
         "int bridge(void) { return 8; }\n",
     )?;
     let stale = run_incan(tmp.path(), &["build", main_arg, "--locked"])?;
-    assert_failure(&stale, "locked build after declared native input drift");
+    assert_failure(&stale, "locked build after declared interop input drift");
     assert!(
         String::from_utf8_lossy(&stale.stderr).contains("incan.lock is out of date"),
-        "declared native input drift should invalidate the lock:\n{}",
+        "declared interop input drift should invalidate the lock:\n{}",
         String::from_utf8_lossy(&stale.stderr)
     );
     Ok(())

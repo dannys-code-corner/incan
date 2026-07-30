@@ -122,45 +122,44 @@ binding Fixture:
 
 Clang checks each requested field offset, size, and alignment for the selected host target. It does not infer omitted fields or discover a structure from the header. By-value structure and pointer calls are deliberately unavailable in this slice, so do not use a structure declaration as an assertion that you can already pass it across the boundary.
 
-## Freeze native inputs for a target
+## Freeze Oven interop requirements for a target
 
-The binding remains the authority for the Incan-facing ABI. When a package needs physical native inputs, declare their target-specific identities in the package's `incan.toml`. The native declaration names only package-owned files and selected toolchain or SDK capabilities; it never asks the compiler to search the host for headers, libraries, or a C++ installation.
+The binding remains the authority for the Incan-facing ABI. When a package needs physical interop inputs, declare its target-specific requirements under `[oven.interop]` in the package's `incan.toml`. The declaration names only package-owned files and compatible toolchain or SDK capabilities; it never claims that Oven has selected a local installation or asks the compiler to search the host for headers, libraries, or a C++ installation.
 
 ```toml title="incan.toml"
-[native]
+[oven.interop]
 schema = 1
 
-[[native.targets]]
+[[oven.interop.targets]]
 target = "aarch64-apple-ios"
-toolchain = "apple-clang-17"
-sdk = "iphoneos-18.0"
-headers = ["native/include/bridge.h"]
+toolchain = { capability = "apple-clang", version = ">=17, <18" }
+sdk = { capability = "iphoneos", version = ">=18, <19" }
+headers = ["interop/include/bridge.h"]
 definitions = ["FIXTURE=1"]
-provenance = "fixture-source"
 
-[[native.targets.artifacts]]
+[[oven.interop.targets.artifacts]]
 name = "fixture"
 kind = "static"
-path = "native/lib/libfixture.a"
+path = "interop/lib/libfixture.a"
 
-[[native.targets.artifacts]]
+[[oven.interop.targets.artifacts]]
 name = "foundation"
 kind = "system"
 capability = "apple.framework.Foundation"
 
-[[native.targets.shims]]
+[[oven.interop.targets.shims]]
 name = "fixture_bridge"
 language = "c"
-sources = ["native/src/bridge.c"]
-headers = ["native/include/bridge.h"]
+sources = ["interop/src/bridge.c"]
+headers = ["interop/include/bridge.h"]
 output = "fixture_bridge"
 ```
 
-`static` artifacts name a package-owned archive. `bundled` artifacts name a package-owned dynamic library or framework and must also specify its `runtime-name`, `placement`, and `minimum-platform`. `system` artifacts instead name one selected toolchain or SDK capability. Shims may be authored in C or C++, but a future shim baker will expose C++ only behind the shim's bounded C contract.
+`static` artifacts name a package-owned archive. `bundled` artifacts name a package-owned dynamic library or framework and must also specify its `runtime-name`, `placement`, and `minimum-platform`. `system` artifacts instead name a required toolchain or SDK capability. Shims may be authored in C or C++, but Oven will expose C++ only behind the shim's bounded C contract.
 
-Every declared package file must be a regular, normalized relative path. Running `incan lock` hashes the exact header, artifact, and shim-source bytes into the semantic lock state with the target, toolchain, SDK, definitions, and capability selections. Changing any declared input makes the lock stale; relocating an unchanged package does not change these package-relative receipt entries.
+Every declared package file must be a regular, normalized relative path. Running `incan lock` hashes the exact header, artifact, and shim-source bytes into the semantic lock state with the target, compatibility requirements, definitions, and capability requirements. Changing any declared input makes the lock stale; relocating an unchanged package does not change these package-relative entries.
 
-This declaration and lock slice deliberately does not download artifacts, discover a system library, compile a shim, or define a Gradle/Xcode handover format. Those are separate Oven and platform-tooling responsibilities. Do not put signing or license policy here: native publication policy belongs to `incan.pub`.
+This declaration and lock slice deliberately does not download artifacts, discover a system library, compile a shim, or define a Gradle/Xcode handover format. Oven will resolve the requirements, select concrete compiler and SDK installations, build shims, cache outputs, and record those choices in its own receipt or store. Do not put signing, provenance admission, or license policy here: publication policy belongs to `incan.pub`.
 
 ## Interpret common failures
 

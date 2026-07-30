@@ -12,7 +12,7 @@ use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use toml_edit::{Array as EditArray, Document, DocumentMut, Item, Table, Value as EditValue};
 
-use crate::native_artifact::NativeSection;
+use crate::oven_interop::{OvenInteropSection, OvenSection};
 
 /// The canonical manifest filename that the compiler searches for.
 pub const MANIFEST_FILENAME: &str = "incan.toml";
@@ -446,7 +446,7 @@ pub struct WritableManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sdk: Option<SdkSection>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub native: Option<NativeSection>,
+    pub oven: Option<OvenSection>,
 }
 
 impl WritableManifest {
@@ -471,8 +471,8 @@ pub struct ProjectManifest {
     pub tool: Option<ToolSection>,
     /// `[sdk]` profile and component selection (optional).
     pub sdk: Option<SdkSection>,
-    /// `[native]` package inputs selected for checked target-native interop.
-    pub native: Option<NativeSection>,
+    /// `[oven]` build-plan requirements interpreted by Oven.
+    pub oven: Option<OvenSection>,
     /// `[workspace]` topology metadata when this manifest is a workspace root.
     pub workspace: Option<WorkspaceSection>,
     /// `[dependencies]` (Incan library dependencies).
@@ -560,9 +560,9 @@ impl ProjectManifest {
         self.sdk.as_ref()
     }
 
-    /// Target-specific native package inputs, if the project declares them.
-    pub fn native(&self) -> Option<&NativeSection> {
-        self.native.as_ref()
+    /// Target-specific Oven interop requirements, if the project declares them.
+    pub fn oven_interop(&self) -> Option<&OvenInteropSection> {
+        self.oven.as_ref().and_then(|oven| oven.interop.as_ref())
     }
 
     /// Normal Rust dependencies from the manifest.
@@ -782,7 +782,7 @@ struct RawManifest {
     #[serde(default)]
     sdk: Option<SdkSection>,
     #[serde(default)]
-    native: Option<NativeSection>,
+    oven: Option<OvenSection>,
     #[serde(default)]
     workspace: Option<WorkspaceSection>,
     #[serde(default)]
@@ -1014,10 +1014,10 @@ fn parse_manifest_content(content: &str, path: &Path) -> Result<ProjectManifest,
 
     validate_package_collisions(&rust_dependencies, &rust_dev_dependencies, path)?;
     validate_requires_incan_constraints(&raw, &spans, path)?;
-    if let Some(native) = &raw.native {
-        native
+    if let Some(interop) = raw.oven.as_ref().and_then(|oven| oven.interop.as_ref()) {
+        interop
             .validate()
-            .map_err(|message| manifest_invalid(path, spans.table_location(&["native"]), message))?;
+            .map_err(|message| manifest_invalid(path, spans.table_location(&["oven", "interop"]), message))?;
     }
 
     if let Some(vocab) = &raw.vocab {
@@ -1045,7 +1045,7 @@ fn parse_manifest_content(content: &str, path: &Path) -> Result<ProjectManifest,
         vocab: raw.vocab,
         tool: raw.tool,
         sdk: raw.sdk,
-        native: raw.native,
+        oven: raw.oven,
         workspace: raw.workspace,
         library_dependencies: library_dependencies.specs,
         rust_dependencies: rust_dependencies.specs,

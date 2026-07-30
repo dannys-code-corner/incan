@@ -17,7 +17,7 @@ use crate::library_manifest::{
     digest_toolchain_source_tree_with_cache,
 };
 use crate::manifest::{DependencySource, DependencySpec, GitReference};
-use crate::native_artifact::{LockedNativeTarget, NativeSection, locked_native_targets_from_section};
+use crate::oven_interop::{LockedInteropTarget, OvenInteropSection, locked_oven_interop_targets_from_section};
 use crate::provider::{
     BackendImplementationRequirement, ComponentSelectionReason, PackageFeaturePlan, ProviderParticipation,
     ProviderPlan, ProviderProvenance, ProviderRecord, ResolvedSdkComponents, SdkInventory,
@@ -87,8 +87,8 @@ pub struct SemanticLockState {
     pub feature_edges: Vec<LockedFeatureEdge>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<LockedProvider>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub native: Vec<LockedNativeTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oven: Option<LockedOvenState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_members: Vec<LockedWorkspaceMember>,
 }
@@ -105,8 +105,16 @@ pub struct LockedWorkspaceMember {
     pub feature_edges: Vec<LockedFeatureEdge>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<LockedProvider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oven: Option<LockedOvenState>,
+}
+
+/// Oven requirements retained in the semantic lock without claiming that a build has resolved them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LockedOvenState {
+    /// Target-specific package inputs and compatibility requirements for checked interop.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub native: Vec<LockedNativeTarget>,
+    pub interop: Vec<LockedInteropTarget>,
 }
 
 /// Exact SDK inventory and expanded component selection recorded by the lock.
@@ -246,14 +254,15 @@ impl IncanLock {
 /// Snapshot the shared provider, SDK-component, and package-feature plans into portable canonical lock state.
 pub fn semantic_lock_state(
     project_root: &Path,
-    native: Option<&NativeSection>,
+    interop: Option<&OvenInteropSection>,
     sdk_inventory: Option<&SdkInventory>,
     sdk_components: Option<&ResolvedSdkComponents>,
     package_features: Option<&PackageFeaturePlan>,
     provider_plan: &ProviderPlan,
     sdk_path_dependencies: &[DependencySpec],
 ) -> Result<SemanticLockState, String> {
-    let native = locked_native_targets_from_section(project_root, native)?;
+    let interop = locked_oven_interop_targets_from_section(project_root, interop)?;
+    let oven = (!interop.is_empty()).then_some(LockedOvenState { interop });
     let semantic_toolchain_dependencies = semantic_toolchain_dependencies(sdk_path_dependencies)?;
     let dependency_semantic_digests =
         provider_dependency_semantic_digests(provider_plan, &semantic_toolchain_dependencies)?;
@@ -348,7 +357,7 @@ pub fn semantic_lock_state(
         packages,
         feature_edges,
         providers,
-        native,
+        oven,
         workspace_members: Vec::new(),
     })
 }
@@ -563,7 +572,7 @@ pub fn workspace_semantic_lock_state(
                 packages,
                 feature_edges,
                 providers: semantic.providers,
-                native: semantic.native,
+                oven: semantic.oven,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1995,41 +2004,46 @@ mod tests {
     }
 
     #[test]
-    fn semantic_lock_state_freezes_declared_native_inputs() -> TestResult {
+    fn semantic_lock_state_freezes_declared_oven_interop_requirements() -> TestResult {
         let project = tempfile::tempdir()?;
-        fs::create_dir_all(project.path().join("native/include"))?;
-        fs::create_dir_all(project.path().join("native/src"))?;
-        fs::create_dir_all(project.path().join("native/lib"))?;
-        fs::write(project.path().join("native/include/bridge.h"), "int bridge(void);\n")?;
+        fs::create_dir_all(project.path().join("interop/include"))?;
+        fs::create_dir_all(project.path().join("interop/src"))?;
+        fs::create_dir_all(project.path().join("interop/lib"))?;
+        fs::write(project.path().join("interop/include/bridge.h"), "int bridge(void);\n")?;
         fs::write(
-            project.path().join("native/src/bridge.c"),
+            project.path().join("interop/src/bridge.c"),
             "int bridge(void) { return 7; }\n",
         )?;
-        fs::write(project.path().join("native/lib/libfixture.a"), b"fixture archive")?;
-        let native = NativeSection {
-            schema: crate::native_artifact::NATIVE_MANIFEST_SCHEMA_VERSION,
-            targets: vec![crate::native_artifact::NativeTarget {
+        fs::write(project.path().join("interop/lib/libfixture.a"), b"fixture archive")?;
+        let interop = OvenInteropSection {
+            schema: crate::oven_interop::OVEN_INTEROP_SCHEMA_VERSION,
+            targets: vec![crate::oven_interop::OvenInteropTarget {
                 target: "aarch64-apple-ios".to_string(),
-                toolchain: "apple-clang-17".to_string(),
-                sdk: Some("iphoneos-18.0".to_string()),
-                headers: vec!["native/include/bridge.h".to_string()],
+                toolchain: Some(crate::oven_interop::CapabilityRequirement {
+                    capability: "apple-clang".to_string(),
+                    version: Some(">=17, <18".to_string()),
+                }),
+                sdk: Some(crate::oven_interop::CapabilityRequirement {
+                    capability: "iphoneos".to_string(),
+                    version: Some(">=18, <19".to_string()),
+                }),
+                headers: vec!["interop/include/bridge.h".to_string()],
                 definitions: vec!["FIXTURE=1".to_string()],
-                provenance: Some("fixture-source".to_string()),
-                artifacts: vec![crate::native_artifact::NativeArtifact {
+                artifacts: vec![crate::oven_interop::InteropArtifact {
                     name: "fixture".to_string(),
-                    kind: crate::native_artifact::NativeArtifactKind::Static,
-                    path: Some("native/lib/libfixture.a".to_string()),
+                    kind: crate::oven_interop::InteropArtifactKind::Static,
+                    path: Some("interop/lib/libfixture.a".to_string()),
                     capability: None,
                     runtime_name: None,
                     placement: None,
                     minimum_platform: None,
                     dependencies: Vec::new(),
                 }],
-                shims: vec![crate::native_artifact::NativeShim {
+                shims: vec![crate::oven_interop::InteropShim {
                     name: "fixture_bridge".to_string(),
-                    language: crate::native_artifact::NativeShimLanguage::C,
-                    sources: vec!["native/src/bridge.c".to_string()],
-                    headers: vec!["native/include/bridge.h".to_string()],
+                    language: crate::oven_interop::InteropShimLanguage::C,
+                    sources: vec!["interop/src/bridge.c".to_string()],
+                    headers: vec!["interop/include/bridge.h".to_string()],
                     output: "fixture_bridge".to_string(),
                 }],
             }],
@@ -2037,31 +2051,32 @@ mod tests {
         let cargo_features = CargoFeatureSelection::default();
         let first = semantic_lock_state(
             project.path(),
-            Some(&native),
+            Some(&interop),
             None,
             None,
             None,
             &ProviderPlan::default(),
             &[],
         )?;
-        assert_eq!(first.native.len(), 1);
-        assert_eq!(first.native[0].headers[0].path, "native/include/bridge.h");
+        let first_interop = first.oven.as_ref().ok_or("lock state omitted Oven requirements")?;
+        assert_eq!(first_interop.interop.len(), 1);
+        assert_eq!(first_interop.interop[0].headers[0].path, "interop/include/bridge.h");
         let first_fingerprint = compute_resolved_fingerprint(&[], &[], &cargo_features, Some(project.path()), &first);
 
         fs::write(
-            project.path().join("native/src/bridge.c"),
+            project.path().join("interop/src/bridge.c"),
             "int bridge(void) { return 8; }\n",
         )?;
         let second = semantic_lock_state(
             project.path(),
-            Some(&native),
+            Some(&interop),
             None,
             None,
             None,
             &ProviderPlan::default(),
             &[],
         )?;
-        assert_ne!(first.native, second.native);
+        assert_ne!(first.oven, second.oven);
         assert_ne!(
             first_fingerprint,
             compute_resolved_fingerprint(&[], &[], &cargo_features, Some(project.path()), &second)
@@ -2430,7 +2445,7 @@ lock = "payload"
                 implementation_facets: vec!["json-core".to_string()],
                 backend_requirements: BTreeSet::from(["cargo-dependency:serde_json".to_string()]),
             }],
-            native: Vec::new(),
+            oven: None,
             workspace_members: Vec::new(),
         }
     }
