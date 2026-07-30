@@ -39,6 +39,7 @@
 #![deny(clippy::expect_used)]
 
 // Public modules
+pub(crate) mod c_abi;
 pub mod ir;
 pub mod project;
 

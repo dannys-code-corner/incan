@@ -27,6 +27,7 @@ use crate::frontend::symbols::{
     NewtypePrimitiveConstraint, overload_emitted_name_prefix, overload_source_name_from_emitted,
 };
 use crate::provider::SDK_PROVIDER_BUILD_ENV;
+use incan_core::lang::c_abi::ScalarTypeId;
 use incan_core::lang::surface::result_methods::ResultMethodId;
 use incan_core::lang::types::numerics::{self, NumericFamily};
 use incan_core::lang::{conventions, magic_methods, stdlib as core_stdlib, trait_capabilities};
@@ -41,7 +42,9 @@ use super::super::expr::{
 };
 use super::super::stmt::AssignTarget;
 use super::super::types::{IR_UNION_TYPE_NAME, IrType};
-use super::super::{FunctionRegistry, FunctionSignature, IrDecl, IrProgram, IrStmt, IrStmtKind, TypedExpr};
+use super::super::{
+    FunctionRegistry, FunctionSignature, IrCheckedCFunction, IrDecl, IrProgram, IrStmt, IrStmtKind, TypedExpr,
+};
 use super::{CallableNameUseFacts, EmitError, GeneratedUseAnalysis, IrEmitter, SERDE_DESERIALIZE_DERIVE};
 
 struct OrdinalValueEnumBridgeSpec {
@@ -1329,6 +1332,130 @@ impl<'program> GeneratedUseAnalyzer<'program> {
 }
 
 impl<'a> IrEmitter<'a> {
+    /// Emit compiler-private FFI declarations and Incan-integer carrier wrappers for checked C calls.
+    ///
+    /// Lowering supplies these only from the typechecker's descriptor and recorded `unsafe:` call sites. The emitter
+    /// therefore receives exact native symbol names, scalar representations, and link capabilities rather than
+    /// looking at source classes or headers itself.
+    fn emit_checked_c_functions(functions: &[IrCheckedCFunction]) -> Vec<TokenStream> {
+        functions
+            .iter()
+            .map(|function| {
+                let wrapper = format_ident!("{}", function.rust_name());
+                let ffi = format_ident!("{}", function.ffi_rust_name());
+                let library = &function.system_library;
+                let native_symbol = &function.native_symbol;
+                let wrapper_params = function
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| {
+                        let name = format_ident!("__incan_arg_{index}");
+                        quote! { #name: i64 }
+                    })
+                    .collect::<Vec<_>>();
+                let ffi_params = function
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, scalar)| {
+                        let name = format_ident!("__incan_arg_{index}");
+                        let ty = Self::checked_c_scalar_rust_type(*scalar);
+                        quote! { #name: #ty }
+                    })
+                    .collect::<Vec<_>>();
+                let ffi_args = function
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, scalar)| {
+                        let name = format_ident!("__incan_arg_{index}");
+                        let ty = Self::checked_c_scalar_rust_type(*scalar);
+                        let message = format!(
+                            "checked C argument {index} for {}.{} is outside the declared {} range",
+                            function.binding,
+                            function.symbol,
+                            incan_core::lang::c_abi::scalar_type_as_str(*scalar),
+                        );
+                        quote! {
+                            match <#ty>::try_from(#name) {
+                                Ok(value) => value,
+                                Err(_) => panic!(#message),
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let foreign = match function.return_type {
+                    Some(scalar) => {
+                        let return_type = Self::checked_c_scalar_rust_type(scalar);
+                        quote! {
+                            #[link(name = #library)]
+                            unsafe extern "C" {
+                                #[link_name = #native_symbol]
+                                fn #ffi(#(#ffi_params),*) -> #return_type;
+                            }
+                        }
+                    }
+                    None => quote! {
+                        #[link(name = #library)]
+                        unsafe extern "C" {
+                            #[link_name = #native_symbol]
+                            fn #ffi(#(#ffi_params),*);
+                        }
+                    },
+                };
+                let wrapper_item = match function.return_type {
+                    Some(return_scalar) => {
+                        let message = format!(
+                            "checked C result for {}.{} cannot be represented by Incan `int` ({})",
+                            function.binding,
+                            function.symbol,
+                            incan_core::lang::c_abi::scalar_type_as_str(return_scalar),
+                        );
+                        quote! {
+                            #[inline]
+                            fn #wrapper(#(#wrapper_params),*) -> i64 {
+                                let __incan_result = unsafe { #ffi(#(#ffi_args),*) };
+                                match i64::try_from(__incan_result) {
+                                    Ok(value) => value,
+                                    Err(_) => panic!(#message),
+                                }
+                            }
+                        }
+                    }
+                    None => quote! {
+                        #[inline]
+                        fn #wrapper(#(#wrapper_params),*) {
+                            unsafe { #ffi(#(#ffi_args),*); }
+                        }
+                    },
+                };
+                quote! {
+                    #foreign
+
+                    #wrapper_item
+                }
+            })
+            .collect()
+    }
+
+    /// Return the Rust ABI carrier for one source-checked C scalar.
+    fn checked_c_scalar_rust_type(scalar: ScalarTypeId) -> TokenStream {
+        match scalar {
+            ScalarTypeId::I8 => quote! { i8 },
+            ScalarTypeId::U8 => quote! { u8 },
+            ScalarTypeId::I16 => quote! { i16 },
+            ScalarTypeId::U16 => quote! { u16 },
+            ScalarTypeId::I32 => quote! { i32 },
+            ScalarTypeId::U32 => quote! { u32 },
+            ScalarTypeId::I64 => quote! { i64 },
+            ScalarTypeId::U64 => quote! { u64 },
+            ScalarTypeId::Size => quote! { usize },
+            ScalarTypeId::CChar => quote! { ::std::os::raw::c_char },
+            ScalarTypeId::CInt => quote! { ::std::os::raw::c_int },
+        }
+    }
+
     /// Collect imported static bindings that need generated init calls.
     fn collect_imported_static_init_bindings(&self, declarations: &[&IrDecl]) -> (HashSet<String>, Vec<String>) {
         let mut access_bindings = HashSet::new();
@@ -3339,6 +3466,7 @@ impl<'a> IrEmitter<'a> {
 
         let compiler_version = crate::version::INCAN_VERSION;
         items.push(quote! { incan_stdlib::__incan_stdlib_version_check!(#compiler_version); });
+        items.extend(Self::emit_checked_c_functions(&program.checked_c_functions));
 
         let needs_json_serialize_trait_scope = emitted_declarations.iter().any(|decl| {
             matches!(
@@ -3591,6 +3719,8 @@ impl<'a> IrEmitter<'a> {
 mod tests {
     use super::IrEmitter;
     use crate::backend::ir::types::{IR_UNION_TYPE_NAME, IrType};
+    use crate::backend::ir::{IrCheckedCFunction, IrProgram};
+    use incan_core::lang::c_abi::ScalarTypeId;
     use std::collections::HashMap;
 
     fn union(members: Vec<IrType>) -> IrType {
@@ -3675,6 +3805,29 @@ mod tests {
             collected.contains_key(&local_name),
             "uncovered local union sibling should still be collected"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn checked_c_function_emits_exact_ffi_signature_and_private_wrapper() -> Result<(), String> {
+        let mut program = IrProgram::new();
+        program.checked_c_functions.push(IrCheckedCFunction {
+            binding: "Fixture".to_string(),
+            symbol: "absolute".to_string(),
+            native_symbol: "abs".to_string(),
+            system_library: "c".to_string(),
+            parameters: vec![ScalarTypeId::I32],
+            return_type: Some(ScalarTypeId::I32),
+        });
+        let mut emitter = IrEmitter::new(&program.function_registry);
+        let generated = emitter.emit_program(&program).map_err(|error| error.to_string())?;
+        let normalized = generated.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+        assert!(normalized.contains("#[link(name=\"c\")]unsafeextern\"C\""));
+        assert!(normalized.contains("#[link_name=\"abs\"]fn__incan_c_Fixture__absolute__ffi(__incan_arg_0:i32)->i32;"));
+        assert!(normalized.contains("fn__incan_c_Fixture__absolute(__incan_arg_0:i64)->i64"));
+        assert!(normalized.contains("match<i32>::try_from(__incan_arg_0)"));
+        assert!(normalized.contains("matchi64::try_from(__incan_result)"));
+        assert!(!normalized.contains(".expect("));
         Ok(())
     }
 }

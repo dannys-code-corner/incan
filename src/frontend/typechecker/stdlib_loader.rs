@@ -1551,6 +1551,7 @@ fn ast_type_to_resolved_with_rust_imports(
                 ResolvedType::Unknown
             }
         }
+        ast::Type::Dotted(_) => ResolvedType::Unknown,
         ast::Type::Simple(name) => {
             // Check if it's a type parameter first.
             if type_params.contains(name) {
@@ -1634,6 +1635,12 @@ fn ast_type_to_resolved_with_rust_imports(
                 _ => ResolvedType::Generic(name.clone(), resolved_args),
             }
         }
+        ast::Type::DottedGeneric(segments, args) => ResolvedType::Generic(
+            segments.join("."),
+            args.iter()
+                .map(|a| ast_type_to_resolved_with_rust_imports(&a.node, type_params, rust_imports))
+                .collect(),
+        ),
         ast::Type::Function(params, ret) => {
             let param_types: Vec<CallableParam> = params
                 .iter()

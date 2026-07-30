@@ -1259,6 +1259,7 @@ where
 {
     match ty {
         Type::Qualified(segments) => resolve_qualified_rust_type_path(segments, symbols),
+        Type::Dotted(_) => ResolvedType::Unknown,
         Type::Simple(name) => {
             if let Some(id) = numerics::from_str(name.as_str()) {
                 return match name.as_str() {
@@ -1373,6 +1374,19 @@ where
                 _ => ResolvedType::Generic(normalized_name, resolved_args),
             }
         }
+        Type::DottedGeneric(segments, args) => ResolvedType::Generic(
+            segments.join("."),
+            args.iter()
+                .map(|arg| {
+                    resolve_type_with_rust_arg_renderer(
+                        &arg.node,
+                        symbols,
+                        render_rust_arg,
+                        qualify_structured_rust_arg,
+                    )
+                })
+                .collect(),
+        ),
         Type::IntLiteral(value) => ResolvedType::TypeVar(value.repr.clone()),
         Type::Function(params, ret) => {
             let resolved_params: Vec<_> = params

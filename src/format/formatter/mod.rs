@@ -45,16 +45,28 @@ impl Formatter {
     }
 
     /// Write a vocab block keyword exactly as the parser resolved it, including compound keyword tokens such as
-    /// `GROUP BY` or `WINDOW BY`, followed by any header expressions.
+    /// `GROUP BY` or `WINDOW BY`, followed by the activated generic header shape.
     fn format_vocab_block_header(&mut self, block: &VocabBlockStmt) {
         self.writer.write(&block.keyword);
         for token in &block.keyword_binding.compound_tokens {
             self.writer.write(" ");
             self.writer.write(token);
         }
-        for arg in &block.header_args {
+        if let Some(signature) = &block.signature_head {
             self.writer.write(" ");
-            self.format_expr(&arg.node);
+            self.writer.write(&signature.name);
+            self.writer.write("(");
+            self.format_params(&signature.parameters);
+            self.writer.write(")");
+            if let Some(return_type) = &signature.return_type {
+                self.writer.write(" -> ");
+                self.format_type(&return_type.node);
+            }
+        } else {
+            for arg in &block.header_args {
+                self.writer.write(" ");
+                self.format_expr(&arg.node);
+            }
         }
     }
 
@@ -401,7 +413,8 @@ impl Formatter {
             | Declaration::Trait(_)
             | Declaration::Enum(_)
             | Declaration::Function(_)
-            | Declaration::TestModule(_) => DeclSpacingClass::BodyBearing,
+            | Declaration::TestModule(_)
+            | Declaration::VocabBlock(_) => DeclSpacingClass::BodyBearing,
         }
     }
 
@@ -417,6 +430,7 @@ impl Formatter {
                 | Declaration::Enum(_)
                 | Declaration::Function(_)
                 | Declaration::TestModule(_)
+                | Declaration::VocabBlock(_)
         )
     }
 }

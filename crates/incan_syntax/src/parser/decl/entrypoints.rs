@@ -194,6 +194,15 @@ impl<'a> Parser<'a> {
                 ));
             }
             Declaration::TestModule(self.test_module_decl()?)
+        } else if let Some(vocab_block) = self.try_vocab_block(decorators)? {
+            if visibility == Visibility::Public {
+                return Err(CompileError::syntax(
+                    "Vocabulary declarations cannot be prefixed with `pub`; their lowered declaration controls visibility"
+                        .to_string(),
+                    Span::new(start, self.current_span().end),
+                ));
+            }
+            Declaration::VocabBlock(vocab_block)
         } else {
             if let Some(err) = self.inactive_soft_keyword_error() {
                 return Err(err);

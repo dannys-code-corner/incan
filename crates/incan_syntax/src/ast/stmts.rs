@@ -2,7 +2,7 @@
 
 use incan_semantics_core::SurfaceFeatureKey;
 
-use super::{BinaryOp, Decorator, Expr, Ident, Pattern, Span, Spanned, Type};
+use super::{BinaryOp, Decorator, Expr, Ident, Param, Pattern, Span, Spanned, Type};
 
 // ============================================================================
 // Statements
@@ -26,6 +26,8 @@ pub enum Statement {
     While(WhileStmt),
     /// `for x in expr: ...`
     For(ForStmt),
+    /// `unsafe: ...`
+    Unsafe(UnsafeStmt),
     /// Expression statement
     Expr(Spanned<Expr>),
     /// DSL-owned expression-list item with declared trailing keyword metadata.
@@ -231,6 +233,14 @@ pub struct ForStmt {
     pub body: Vec<Spanned<Statement>>,
 }
 
+/// A scoped acknowledgement region for operations that require explicit authorization.
+///
+/// The block does not introduce a separate Incan scope; it records only the acknowledgement boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnsafeStmt {
+    pub body: Vec<Spanned<Statement>>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssertStmt {
     /// Structured assertion form selected by the parser.
@@ -303,9 +313,19 @@ pub struct VocabBlockStmt {
     pub keyword: String,
     pub keyword_binding: VocabKeywordBinding,
     pub decorators: Vec<Spanned<Decorator>>,
+    /// Function-like head facts when the activated declaration surface requests a signature head.
+    pub signature_head: Option<VocabSignatureHead>,
     pub header_args: Vec<Spanned<Expr>>,
     pub body: Vec<Spanned<Statement>>,
     pub body_item_trailing_commas: Vec<bool>,
+}
+
+/// Generic function-like vocabulary declaration head.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VocabSignatureHead {
+    pub name: Ident,
+    pub parameters: Vec<Spanned<Param>>,
+    pub return_type: Option<Spanned<Type>>,
 }
 
 /// Surface statement payload variants.

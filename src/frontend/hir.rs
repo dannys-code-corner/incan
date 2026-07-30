@@ -81,6 +81,7 @@ fn hir_decl_kind_and_name(decl: &Declaration) -> (HirDeclarationKind, Option<Str
         Declaration::Enum(decl) => (HirDeclarationKind::Enum, Some(decl.name.clone())),
         Declaration::Function(decl) => (HirDeclarationKind::Function, Some(decl.name.clone())),
         Declaration::TestModule(decl) => (HirDeclarationKind::TestModule, Some(decl.name.clone())),
+        Declaration::VocabBlock(_) => (HirDeclarationKind::Docstring, None),
         Declaration::Docstring(_) => (HirDeclarationKind::Docstring, None),
     }
 }

@@ -40,15 +40,16 @@ use super::decl::{FunctionParam, IrDecl, IrDeclKind, IrImportOrigin, IrImportQua
 use super::expr::{IrCallArg, IrCallArgKind, IrExprKind, MethodCallArgPolicy, VarAccess, VarRefKind};
 use super::stmt::{IrStmt, IrStmtKind};
 use super::types::IrType;
-use super::{FunctionReexport, FunctionSignature, IrProgram, Mutability};
+use super::{FunctionReexport, FunctionSignature, IrCheckedCFunction, IrProgram, Mutability};
 use crate::frontend::ast;
 use crate::frontend::decorator_resolution;
 use crate::frontend::symbols::ResolvedType;
 use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint};
-use crate::frontend::typechecker::TypeCheckInfo;
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
+use crate::frontend::typechecker::{CBindingType, TypeCheckInfo};
 use crate::provider::ProviderPlan;
 use decl::callable_docstring;
+use incan_core::lang::c_abi::ScalarTypeId;
 use incan_core::lang::conventions;
 use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::stdlib;
@@ -213,6 +214,39 @@ pub struct AstLowering {
 }
 
 impl AstLowering {
+    /// Return the compiler-owned C function selected for one checked source call.
+    ///
+    /// Raw-call entries are recorded only after the typechecker has validated the binding member, its signature,
+    /// and its enclosing `unsafe:` acknowledgement. This converts that checked fact into the deliberately bounded
+    /// scalar callable form understood by the current Rust backend.
+    pub(super) fn checked_c_function_for_call(&self, span: ast::Span) -> Option<IrCheckedCFunction> {
+        let info = self.type_info.as_ref()?;
+        let call = info.c_abi.raw_calls.iter().find(|call| call.span == span)?;
+        let descriptor = info.c_abi.bindings.get(&call.binding)?;
+        let symbol = descriptor.symbols.iter().find(|symbol| symbol.name == call.symbol)?;
+        let parameters = symbol
+            .parameters
+            .iter()
+            .map(|parameter| match parameter.ty {
+                CBindingType::Scalar(scalar) => Some(scalar),
+                CBindingType::Void | CBindingType::Pointer { .. } | CBindingType::Struct(_) => None,
+            })
+            .collect::<Option<Vec<ScalarTypeId>>>()?;
+        let return_type = match symbol.return_type {
+            CBindingType::Scalar(scalar) => Some(scalar),
+            CBindingType::Void => None,
+            CBindingType::Pointer { .. } | CBindingType::Struct(_) => return None,
+        };
+        Some(IrCheckedCFunction {
+            binding: descriptor.class_name.clone(),
+            symbol: symbol.name.clone(),
+            native_symbol: symbol.native.clone(),
+            system_library: descriptor.system_library.clone(),
+            parameters,
+            return_type,
+        })
+    }
+
     /// Convert a declared callable parameter element type into its runtime parameter type.
     pub(super) fn lower_param_container_type(kind: ast::ParamKind, base_ty: IrType) -> IrType {
         match kind {
@@ -2195,6 +2229,31 @@ impl AstLowering {
         // Propagate serde derives from structs to their field types (enums). This allows users to only annotate the
         // top-level model with @derive(json) and have it automatically apply to nested user-defined enums.
         Self::propagate_serde_derives(&mut ir_program);
+        let mut checked_c_functions = self
+            .type_info
+            .as_ref()
+            .map(|info| {
+                info.c_abi
+                    .raw_calls
+                    .iter()
+                    .filter_map(|call| self.checked_c_function_for_call(call.span))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        checked_c_functions.sort_by(|left, right| {
+            (&left.binding, &left.symbol, &left.native_symbol).cmp(&(
+                &right.binding,
+                &right.symbol,
+                &right.native_symbol,
+            ))
+        });
+        checked_c_functions.dedup_by(|left, right| {
+            left.binding == right.binding
+                && left.symbol == right.symbol
+                && left.native_symbol == right.native_symbol
+                && left.system_library == right.system_library
+        });
+        ir_program.checked_c_functions = checked_c_functions;
 
         if errors.is_empty() {
             Ok(ir_program)
@@ -3212,6 +3271,7 @@ def add(a: int, b: int) -> int:
                 clause_body_kind: None,
             },
             decorators: Vec::new(),
+            signature_head: None,
             header_args: Vec::new(),
             body: Vec::new(),
             body_item_trailing_commas: Vec::new(),

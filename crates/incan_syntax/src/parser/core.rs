@@ -29,6 +29,7 @@ struct ActiveImportedKeywordSpec {
     valid_decorators: Vec<String>,
     surface_kind: incan_vocab::KeywordSurfaceKind,
     placement: incan_vocab::KeywordPlacement,
+    declaration_head_kind: incan_vocab::DeclarationHeadKind,
     desugar_target: incan_vocab::DesugarTarget,
     is_declaration_owned_clause: bool,
     clause_body_kind: Option<incan_vocab::ClauseBodyKind>,
@@ -324,6 +325,7 @@ impl<'a> Parser<'a> {
                     for kw in incan_core::lang::stdlib::soft_keywords_for_import(&path.segments) {
                         self.active_soft_keywords.insert(kw);
                     }
+                    self.activate_imported_keywords_for_import_path(&path.segments);
                 }
                 ImportKind::From { module, .. } => {
                     if import_path_activates_std_async(&module.segments) {
@@ -332,28 +334,46 @@ impl<'a> Parser<'a> {
                     for kw in incan_core::lang::stdlib::soft_keywords_for_import(&module.segments) {
                         self.active_soft_keywords.insert(kw);
                     }
+                    self.activate_imported_keywords_for_import_path(&module.segments);
                 }
                 ImportKind::PubLibrary { library, .. } => {
-                    self.activate_imported_keywords_for_library(library);
+                    self.activate_imported_keywords_for_import_path(std::slice::from_ref(library));
                 }
                 ImportKind::PubFrom { library, .. } => {
-                    self.activate_imported_keywords_for_library(library);
+                    self.activate_imported_keywords_for_import_path(std::slice::from_ref(library));
                 }
                 _ => {}
             }
         }
     }
 
-    /// Activate keyword registrations contributed by a `pub::` library dependency.
+    /// Activate keyword registrations contributed by an imported namespace.
     ///
     /// This bridges serialized vocab metadata into parser state by:
     /// - recording compatible soft-keyword ids in `active_soft_keywords` (for existing parser flows), and
     /// - recording imported keyword surface specs in `active_imported_keyword_specs` (for surface-kind checks driven by
     ///   imported metadata).
-    fn activate_imported_keywords_for_library(&mut self, library: &str) {
-        if let Some(surfaces) = self.library_imported_dsl_surfaces.get(library) {
+    fn activate_imported_keywords_for_import_path(&mut self, import_path: &[String]) {
+        let mut provider_keys = self
+            .library_imported_vocab
+            .keys()
+            .chain(self.library_imported_dsl_surfaces.keys())
+            .filter(|key| import_path_activates_namespace(import_path, key))
+            .cloned()
+            .collect::<Vec<_>>();
+        provider_keys.sort();
+        provider_keys.dedup();
+
+        for provider_key in provider_keys {
+            self.activate_imported_keywords_for_provider(&provider_key, import_path);
+        }
+    }
+
+    /// Activate one provider's registered vocabulary after its import namespace matched.
+    fn activate_imported_keywords_for_provider(&mut self, provider_key: &str, import_path: &[String]) {
+        if let Some(surfaces) = self.library_imported_dsl_surfaces.get(provider_key) {
             for surface in surfaces {
-                if !dsl_surface_applies_to_pub_import(surface, library) {
+                if !dsl_surface_applies_to_import_path(surface, import_path) {
                     continue;
                 }
                 self.active_scoped_surface_descriptors
@@ -363,7 +383,7 @@ impl<'a> Parser<'a> {
                             .iter()
                             .cloned()
                             .map(|descriptor| ActiveScopedSurfaceDescriptor {
-                                dependency_key: library.to_string(),
+                                dependency_key: provider_key.to_string(),
                                 descriptor,
                             }),
                     );
@@ -374,28 +394,32 @@ impl<'a> Parser<'a> {
                             .iter()
                             .cloned()
                             .map(|descriptor| ActiveScopedSymbolDescriptor {
-                                dependency_key: library.to_string(),
+                                dependency_key: provider_key.to_string(),
                                 descriptor,
                             }),
                     );
             }
         }
 
-        let Some(registrations) = self.library_imported_vocab.get(library) else {
+        let Some(registrations) = self.library_imported_vocab.get(provider_key) else {
             return;
         };
 
         for registration in registrations {
-            if !registration_applies_to_pub_import(registration, library) {
+            if !registration_applies_to_import_path(registration, import_path) {
                 continue;
             }
 
             for keyword in &registration.keywords {
-                let declaration_surface = self.active_declaration_surface_for_keyword(library, keyword);
+                let declaration_surface =
+                    self.active_declaration_surface_for_keyword(provider_key, keyword, import_path);
                 let desugar_target = declaration_surface
                     .map(|declaration| declaration.desugars_to)
                     .unwrap_or(incan_vocab::DesugarTarget::Statements);
-                let clause_surface = self.active_clause_surface_for_keyword(library, keyword);
+                let declaration_head_kind = declaration_surface
+                    .map(|declaration| declaration.head_kind)
+                    .unwrap_or_default();
+                let clause_surface = self.active_clause_surface_for_keyword(provider_key, keyword, import_path);
                 let is_declaration_owned_clause = clause_surface.is_some();
                 let (clause_body_kind, expression_item_modifiers) = clause_surface
                     .map(|clause| (Some(clause.body_kind), clause.expression_item_modifiers.clone()))
@@ -407,14 +431,15 @@ impl<'a> Parser<'a> {
                 specs.push(ActiveImportedKeywordSpec {
                     keyword_name: keyword.name.clone(),
                     compound_tokens: keyword.compound_tokens.clone(),
-                    dependency_key: library.to_string(),
+                    dependency_key: provider_key.to_string(),
                     activation_namespace: match &registration.activation {
                         incan_vocab::KeywordActivation::OnImport { namespace } => namespace.clone(),
-                        _ => library.to_string(),
+                        _ => provider_key.to_string(),
                     },
                     valid_decorators: registration.valid_decorators.clone(),
                     surface_kind: keyword.surface_kind,
                     placement: keyword.placement.clone(),
+                    declaration_head_kind,
                     desugar_target,
                     is_declaration_owned_clause,
                     clause_body_kind,
@@ -436,21 +461,37 @@ impl<'a> Parser<'a> {
     /// metadata instead of keyword spellings.
     fn active_declaration_surface_for_keyword(
         &self,
-        library: &str,
+        provider_key: &str,
         keyword: &incan_vocab::KeywordSpec,
+        import_path: &[String],
     ) -> Option<&incan_vocab::DeclarationSurface> {
-        if !matches!(keyword.surface_kind, incan_vocab::KeywordSurfaceKind::BlockDeclaration) {
-            return None;
-        }
-        let surfaces = self.library_imported_dsl_surfaces.get(library)?;
-        for surface in surfaces {
-            if !dsl_surface_applies_to_pub_import(surface, library) {
-                continue;
-            }
-            for declaration in &surface.declarations {
-                if declaration.keyword == keyword.name && declaration.compound_tokens == keyword.compound_tokens {
+        let surfaces = self.library_imported_dsl_surfaces.get(provider_key)?;
+
+        /// Recursively locate a declaration surface matching the activated keyword registration.
+        fn find<'a>(
+            declarations: &'a [incan_vocab::DeclarationSurface],
+            keyword: &incan_vocab::KeywordSpec,
+        ) -> Option<&'a incan_vocab::DeclarationSurface> {
+            for declaration in declarations {
+                if declaration.keyword == keyword.name
+                    && declaration.compound_tokens == keyword.compound_tokens
+                    && declaration.placement == keyword.placement
+                {
                     return Some(declaration);
                 }
+                if let Some(declaration) = find(&declaration.declarations, keyword) {
+                    return Some(declaration);
+                }
+            }
+            None
+        }
+
+        for surface in surfaces {
+            if !dsl_surface_applies_to_import_path(surface, import_path) {
+                continue;
+            }
+            if let Some(declaration) = find(&surface.declarations, keyword) {
+                return Some(declaration);
             }
         }
         None
@@ -463,57 +504,73 @@ impl<'a> Parser<'a> {
     /// public contract instead of guessed later by the AST bridge.
     fn active_clause_surface_for_keyword(
         &self,
-        library: &str,
+        provider_key: &str,
         keyword: &incan_vocab::KeywordSpec,
+        import_path: &[String],
     ) -> Option<&incan_vocab::ClauseSurface> {
-        let surfaces = self.library_imported_dsl_surfaces.get(library)?;
+        let surfaces = self.library_imported_dsl_surfaces.get(provider_key)?;
+
+        /// Recursively locate the clause surface nested under the activated declaration.
+        fn find<'a>(
+            declarations: &'a [incan_vocab::DeclarationSurface],
+            keyword: &incan_vocab::KeywordSpec,
+        ) -> Option<&'a incan_vocab::ClauseSurface> {
+            let incan_vocab::KeywordPlacement::InBlock(parents) = &keyword.placement else {
+                return None;
+            };
+            for declaration in declarations {
+                if parents.iter().any(|parent| parent == &declaration.keyword)
+                    && let Some(clause) = declaration.clauses.iter().find(|clause| {
+                        clause.keyword == keyword.name && clause.compound_tokens == keyword.compound_tokens
+                    })
+                {
+                    return Some(clause);
+                }
+                if let Some(clause) = find(&declaration.declarations, keyword) {
+                    return Some(clause);
+                }
+            }
+            None
+        }
+
         for surface in surfaces {
-            if !dsl_surface_applies_to_pub_import(surface, library) {
+            if !dsl_surface_applies_to_import_path(surface, import_path) {
                 continue;
             }
-            for declaration in &surface.declarations {
-                let incan_vocab::KeywordPlacement::InBlock(parents) = &keyword.placement else {
-                    continue;
-                };
-                if !parents.iter().any(|parent| parent == &declaration.keyword) {
-                    continue;
-                }
-                for clause in &declaration.clauses {
-                    if clause.keyword == keyword.name && clause.compound_tokens == keyword.compound_tokens {
-                        return Some(clause);
-                    }
-                }
+            if let Some(clause) = find(&surface.declarations, keyword) {
+                return Some(clause);
             }
         }
         None
     }
 }
 
-/// Return `true` when a DSL surface should activate for a `pub::library` import.
-fn dsl_surface_applies_to_pub_import(surface: &incan_vocab::DslSurface, library: &str) -> bool {
+/// Return `true` when a DSL surface should activate for an imported namespace.
+fn dsl_surface_applies_to_import_path(surface: &incan_vocab::DslSurface, import_path: &[String]) -> bool {
     match &surface.activation {
         incan_vocab::KeywordActivation::Always => true,
-        incan_vocab::KeywordActivation::OnImport { namespace } => namespace_matches_pub_library(namespace, library),
+        incan_vocab::KeywordActivation::OnImport { namespace } => import_path_activates_namespace(import_path, namespace),
         _ => false,
     }
 }
 
-/// Return `true` when a registration should be activated for `pub::library` imports.
-///
-/// `OnImport` namespaces match either the library key exactly (`widgets`) or one of its child namespaces
-/// (`widgets.dsl`).
-fn registration_applies_to_pub_import(registration: &incan_vocab::KeywordRegistration, library: &str) -> bool {
+/// Return `true` when a registration should be activated for an imported namespace.
+fn registration_applies_to_import_path(
+    registration: &incan_vocab::KeywordRegistration,
+    import_path: &[String],
+) -> bool {
     match &registration.activation {
         incan_vocab::KeywordActivation::Always => true,
-        incan_vocab::KeywordActivation::OnImport { namespace } => namespace_matches_pub_library(namespace, library),
+        incan_vocab::KeywordActivation::OnImport { namespace } => import_path_activates_namespace(import_path, namespace),
         _ => false,
     }
 }
 
-/// Return whether an `OnImport` namespace activates for a `pub::library` import.
-fn namespace_matches_pub_library(namespace: &str, library: &str) -> bool {
+/// Return whether an `OnImport` namespace is activated by an import path.
+fn import_path_activates_namespace(import_path: &[String], namespace: &str) -> bool {
+    let imported = import_path.join(".");
     let trimmed = namespace.trim();
-    !trimmed.is_empty() && (trimmed == library || trimmed.starts_with(&format!("{library}.")))
+    !trimmed.is_empty() && (trimmed == imported || trimmed.starts_with(&format!("{imported}.")))
 }
 
 /// Return whether an import path activates `std.async` vocabulary in this file.

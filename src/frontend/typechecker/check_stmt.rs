@@ -97,6 +97,7 @@ impl TypeChecker {
             Statement::Loop(loop_stmt) => self.check_loop_stmt(loop_stmt),
             Statement::While(while_stmt) => self.check_while_stmt(while_stmt),
             Statement::For(for_stmt) => self.check_for_stmt(for_stmt),
+            Statement::Unsafe(unsafe_stmt) => self.check_unsafe_stmt(unsafe_stmt),
             Statement::VocabBlock(vocab_block) => {
                 self.errors.push(crate::frontend::diagnostics::CompileError::new(
                     format!(
@@ -981,6 +982,15 @@ impl TypeChecker {
         self.symbols.exit_scope();
 
         false_refinement
+    }
+
+    /// Check an acknowledgement body in its surrounding ordinary statement scope.
+    fn check_unsafe_stmt(&mut self, unsafe_stmt: &UnsafeStmt) {
+        self.unsafe_depth += 1;
+        for statement in &unsafe_stmt.body {
+            self.check_statement(statement);
+        }
+        self.unsafe_depth = self.unsafe_depth.saturating_sub(1);
     }
 
     /// Validate an `if` statement and apply branch-local narrowing where supported.

@@ -1044,6 +1044,9 @@ fn project_dependency_records(
             LibraryArtifactKind::ParserSource => {
                 format!("parser-source:{dependency_key}:{}@{}", manifest.name, manifest.version)
             }
+            LibraryArtifactKind::StandardVocab => {
+                format!("standard-vocab:{dependency_key}:{}@{}", manifest.name, manifest.version)
+            }
         };
         let identity = ProviderIdentity {
             name: manifest.name.clone(),

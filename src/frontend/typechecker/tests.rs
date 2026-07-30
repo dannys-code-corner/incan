@@ -1,5 +1,6 @@
 //! Typechecker unit tests.
 
+use super::type_info::{CBindingDescriptor, CBindingParameter, CBindingSymbol, CBindingType};
 use super::*;
 use crate::frontend::api_metadata::{
     ApiDeclaration, ApiFunction, CHECKED_API_METADATA_SCHEMA_VERSION, CheckedApiMetadata, CheckedApiMetadataPackage,
@@ -36,6 +37,7 @@ use incan_core::interop::{
     RustMethodSig, RustParam, RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeShape, RustVariantInfo,
     RustVisibility,
 };
+use incan_core::lang::c_abi::ScalarTypeId;
 use incan_core::lang::surface::constructors::{self as surface_constructors, ConstructorId};
 use incan_core::lang::traits::{self as builtin_traits, TraitId};
 use incan_core::lang::types::collections::{self as collection_types, CollectionTypeId};
@@ -20749,5 +20751,76 @@ def run() -> None:
         errs.iter()
             .any(|e| e.message.contains("`break` is only valid inside loops")),
         "expected break-outside-loop diagnostic, got {errs:?}"
+    );
+}
+
+fn scalar_c_binding_descriptor() -> CBindingDescriptor {
+    CBindingDescriptor {
+        span: Span::default(),
+        class_name: "Fixture".to_string(),
+        header: "fixture.h".to_string(),
+        system_library: "fixture".to_string(),
+        symbols: vec![CBindingSymbol {
+            name: "add".to_string(),
+            native: "fixture_add".to_string(),
+            parameters: vec![CBindingParameter {
+                name: "value".to_string(),
+                ty: CBindingType::Scalar(ScalarTypeId::I32),
+            }],
+            return_type: CBindingType::Scalar(ScalarTypeId::I32),
+        }],
+        enums: Vec::new(),
+        structs: Vec::new(),
+    }
+}
+
+fn scalar_c_binding_call(span: Span) -> Spanned<Expr> {
+    let binding = Spanned::new(Expr::Ident("Fixture".to_string()), span);
+    Spanned::new(
+        Expr::MethodCall(
+            Box::new(binding),
+            "add".to_string(),
+            Vec::new(),
+            vec![CallArg::Positional(Spanned::new(
+                Expr::Literal(Literal::Int(IntLiteral::synthetic(1))),
+                span,
+            ))],
+        ),
+        span,
+    )
+}
+
+#[test]
+fn checked_c_scalar_call_requires_unsafe_and_records_the_descriptor_call() {
+    let span = Span::new(1, 20);
+    let mut checker = TypeChecker::new();
+    let descriptor = scalar_c_binding_descriptor();
+    checker
+        .type_info
+        .c_abi
+        .bindings
+        .insert(descriptor.class_name.clone(), descriptor);
+
+    let result = checker.check_expr(&scalar_c_binding_call(span));
+    assert_eq!(result, ResolvedType::Unknown);
+    assert!(checker.errors.iter().any(|error| {
+        error
+            .message
+            .contains("requires an enclosing `unsafe:` acknowledgement")
+    }));
+    assert!(checker.type_info.c_abi.raw_calls.is_empty());
+
+    checker.errors.clear();
+    checker.unsafe_depth = 1;
+    let result = checker.check_expr(&scalar_c_binding_call(span));
+    assert_eq!(result, ResolvedType::Int);
+    assert!(checker.errors.is_empty(), "unexpected errors: {:?}", checker.errors);
+    assert_eq!(
+        checker.type_info.c_abi.raw_calls,
+        vec![super::type_info::CBindingRawCall {
+            span,
+            binding: "Fixture".to_string(),
+            symbol: "add".to_string(),
+        }]
     );
 }

@@ -1,6 +1,6 @@
 # RFC 116: Typed C ABI interop
 
-- **Status:** Draft
+- **Status:** In Progress
 - **Created:** 2026-07-23
 - **Author(s):** Danny Meijer (@dannymeijer)
 - **Related:**
@@ -23,12 +23,12 @@
 
 ## Summary
 
-This RFC defines a typed, explicit C ABI interop surface for Incan. Packages declare checked C binding modules whose raw symbols are imported through `c::` paths, isolated behind private bridge modules, and normally exposed through safe ordinary Incan APIs. Binding declarations preserve exact ABI types, symbols, layouts, ownership, nullability, output positions, buffers, headers, toolchain constraints, and target-native artifacts without assigning application meaning to foreign status values. The Incan toolchain verifies declarations with a managed Clang-compatible target toolchain, resolves and locks static, bundled, and system-native artifacts through the package graph, and lowers calls from compiler-owned semantic ownership facts rather than backend guesses. The same package, provenance, inspection, and façade boundaries remain extensible to future foreign runtimes without making C pointers or C ownership the universal interop model.
+This RFC defines a typed, explicit C ABI interop surface for Incan. `from std.interop import c` activates a local `binding` vocabulary whose declarations are ordinarily private and normally feed a safe Incan façade. Binding declarations preserve exact ABI types, symbols, layouts, ownership, nullability, output positions, buffers, headers, toolchain constraints, and target-native artifacts without assigning application meaning to foreign status values. The Incan toolchain verifies declarations with a Clang-compatible target toolchain, resolves and locks static, bundled, and system-native artifacts through the package graph, and lowers calls from compiler-owned semantic ownership facts rather than backend guesses. The same package, provenance, inspection, and façade boundaries remain extensible to future foreign runtimes without making C pointers or C ownership the universal interop model.
 
 ## Core model
 
-1. **`c::` imports checked bindings, not arbitrary headers:** a `c::` module is an Incan-owned semantic contract backed by declared C headers and target artifacts; it never means "find a matching header on this machine."
-2. **Bindings have three visible layers:** a declaration-only foreign contract feeds a private bridge containing the narrow unsafe boundary, and the bridge feeds an ordinary public Incan API.
+1. **Import activates the C binding vocabulary, not arbitrary headers:** `from std.interop import c` makes `binding` available only in that module. A binding is an Incan-owned semantic contract backed by declared C headers and target artifacts; it never means "find a matching header on this machine."
+2. **Bindings have three conceptual layers:** a declaration-only foreign contract feeds a narrow unsafe bridge and then an ordinary public Incan API. The declaration and bridge may share a module when that keeps the binding private and the façade clear.
 3. **The C ABI declaration stays exact:** raw signatures preserve C scalar identity, pointer shape, output positions, calling convention, symbol spelling, nullability, and by-value layout instead of presenting a prematurely safe projection.
 4. **Safe meaning belongs to Incan:** public wrappers own validation, domain errors, retries, cancellation, resource policy, buffer sizing, and conversion into `Result`, models, collections, strings, and bytes.
 5. **Ownership is declared and call-site borrowing is inferred:** resources declare one release operation, owned values are non-copyable, and the compiler derives call-scoped shared or mutable borrows from parameter facts without requiring Rust lifetime syntax or repetitive `.borrow()` calls.
@@ -54,8 +54,8 @@ Mobile inference makes this foundation commercially relevant and technically dem
 
 ## Goals
 
-- Add a distinct `c::` import namespace for checked C ABI binding modules.
-- Require an explicit `import std.c as c` for the compiler-known C vocabulary and safe conversion helpers.
+- Require `from std.interop import c` to activate the compiler-known C binding vocabulary in the importing module.
+- Define `binding Name:` as vocabulary that desugars to an ordinary decorated `BindingDeclaration` class rather than adding compiler-only class syntax.
 - Define a declaration-only Incan binding form mapping logical names to exact C types and symbols.
 - Define a clean declaration → private bridge → public façade package structure and make unsafe import edges inspectable.
 - Define exact-width and target-width C scalars, pointers, nullability, opaque resources, output positions, spans, and verified plain structures.
@@ -89,25 +89,19 @@ Mobile inference makes this foundation commercially relevant and technically dem
 
 ## Guide-level explanation
 
-### Importing the C vocabulary and a raw binding
+### Importing the C vocabulary and declaring a raw binding
 
-Code that authors a native bridge imports the C vocabulary explicitly and imports checked raw symbols through `c::`:
+Code that authors a native bridge imports the C vocabulary explicitly and declares its checked raw symbols in a local binding:
 
 ```incan
-import std.c as c
+from std.interop import c
 
-from c::tflite import (
-    Interpreter,
-    Model,
-    Status,
-    interpreter_create,
-    interpreter_delete,
-    model_create_from_file,
-    model_delete,
-)
+binding TFLite:
+    header = "tensorflow/lite/c/c_api.h"
+    link = c.system_library("tensorflowlite_c")
 ```
 
-This does not search the host for a header or library named `tflite`. The import resolves a checked logical binding from the package graph. Its target variant identifies the headers, definitions, Clang-compatible verifier, native artifacts, deployment class, and lock identities used by the current build.
+This does not search the host for a header or library named `tflite`. The declaration records the checked logical binding. Its later target variant identifies the headers, definitions, Clang-compatible verifier, native artifacts, deployment class, and lock identities used by the current build.
 
 Raw functions remain visibly foreign:
 
@@ -168,19 +162,20 @@ src/tflite/
 src/tflite.incn
 ```
 
-The binding declaration contains declarations and documentation only. The private bridge imports `c::tflite`, contains narrow unsafe regions, copies scoped foreign views, maps exact buffers, and returns private boundary values. The public API contains ordinary Incan models, errors, iterators, validation, retry or cancellation policy, and façade exports.
+The binding declaration contains declarations and documentation only. The private bridge uses the local binding in narrow unsafe regions, copies scoped foreign views, maps exact buffers, and returns private boundary values. The public API contains ordinary Incan models, errors, iterators, validation, retry or cancellation policy, and façade exports.
 
-Inspection must show which modules import `c::`, which bridge modules call each raw symbol, and which public declarations depend on those edges. Tooling should warn when a public module mixes raw binding imports with unrelated application logic. Packages may intentionally publish a low-level checked binding without a safe façade, but that choice must remain explicit in documentation and inspection.
+Inspection must show which modules declare or use bindings, which bridge modules call each raw symbol, and which public declarations depend on those edges. Tooling should warn when a public module mixes raw binding use with unrelated application logic. Packages may intentionally publish a low-level checked binding without a safe façade, but that choice must remain explicit in documentation and inspection.
 
 ### Declaring owned resources once
 
 A binding author associates the release function with the resource declaration instead of repeating it on every factory:
 
 ```incan
-import std.c as c
+from std.interop import c
 
-binding c tflite:
-    header "tensorflow/lite/c/c_api.h"
+binding TFLite:
+    header = "tensorflow/lite/c/c_api.h"
+    link = c.system_library("tensorflowlite_c")
 
     opaque Model = "TfLiteModel":
         release model_delete
@@ -188,32 +183,36 @@ binding c tflite:
     opaque Interpreter = "TfLiteInterpreter":
         release interpreter_delete
 
-    @c.symbol("TfLiteModelCreateFromFile")
-    unsafe def model_create_from_file(
-        path: c.ConstPtr[c.CChar],
-    ) -> Option[c.Owned[Model]]
+    symbol model_create_from_file(
+        path: c.ConstPtr[c.c_char],
+    ) -> Option[c.Owned[Model]]:
+        native = "TfLiteModelCreateFromFile"
 
-    @c.symbol("TfLiteModelDelete")
-    unsafe def model_delete(model: c.Owned[Model]) -> None
+    symbol model_delete(model: c.Owned[Model]) -> None:
+        native = "TfLiteModelDelete"
 
-    @c.symbol("TfLiteInterpreterDelete")
-    unsafe def interpreter_delete(
+    symbol interpreter_delete(
         interpreter: c.Owned[Interpreter],
-    ) -> None
+    ) -> None:
+        native = "TfLiteInterpreterDelete"
 ```
 
-The exact parser spelling may still be refined while this RFC is Draft. The semantic rule is settled: one nominal resource declaration owns one release association, and every function returning `c.Owned[Model]` inherits it.
+The resource member spelling lands with the ownership slice. The semantic rule is settled: one nominal resource declaration owns one release association, and every function returning `c.Owned[Model]` inherits it.
 
 ### Inferred call-scoped borrowing
 
 Binding signatures remain explicit about parameter ownership:
 
 ```incan
-@c.symbol("sqlite3_step")
-unsafe def step(statement: c.Borrowed[Statement]) -> c.CInt
+binding SQLite:
+    header = "sqlite3.h"
+    link = c.system_library("sqlite3")
 
-@c.symbol("sqlite3_finalize")
-unsafe def finalize(statement: c.Owned[Statement]) -> c.CInt
+    symbol step(statement: c.Borrowed[Statement]) -> c.c_int:
+        native = "sqlite3_step"
+
+    symbol finalize(statement: c.Owned[Statement]) -> c.c_int:
+        native = "sqlite3_finalize"
 ```
 
 The bridge does not need Rust-shaped borrow syntax:
@@ -231,14 +230,18 @@ The compiler records a shared call-scoped borrow for `step(statement)` and an ow
 Many C APIs return values through pointers. SQLite statement preparation, for example, writes both a statement handle and a tail pointer. The raw declaration represents those ABI positions directly:
 
 ```incan
-@c.symbol("sqlite3_prepare_v2")
-unsafe def prepare(
-    database: c.Borrowed[Database],
-    sql: c.ConstPtr[c.CChar],
-    byte_count: c.CInt,
-    statement: c.Out[Option[c.Owned[Statement]]],
-    tail: c.Out[Option[c.ConstPtr[c.CChar]]],
-) -> c.CInt
+binding SQLite:
+    header = "sqlite3.h"
+    link = c.system_library("sqlite3")
+
+    symbol prepare(
+        database: c.Borrowed[Database],
+        sql: c.ConstPtr[c.c_char],
+        byte_count: c.c_int,
+        statement: c.Out[Option[c.Owned[Statement]]],
+        tail: c.Out[Option[c.ConstPtr[c.c_char]]],
+    ) -> c.c_int:
+        native = "sqlite3_prepare_v2"
 ```
 
 `c.Out[T]` is compiler-managed storage for a value written by the foreign call. It is not an ordinary public container and cannot be returned from a safe façade. The declaration must state whether the position is always written or which raw outcome makes it initialized. Reading an output before the declared write condition is satisfied is rejected. `c.InOut[T]` begins with an initialized value and permits the foreign call to update it.
@@ -297,16 +300,14 @@ The compiler rejects returning, storing, capturing, or otherwise extending the l
 Raw status values remain raw:
 
 ```incan
-from c::sqlite import SQLITE_DONE, SQLITE_ROW, step
-
 def next_step(statement: Statement) -> Result[Step, DatabaseError]:
     unsafe:
-        status = step(statement)
+        status = SQLite.step(statement)
 
     match status:
-        SQLITE_ROW =>
+        SQLite.Status.ROW =>
             return Ok(Step.Row)
-        SQLITE_DONE =>
+        SQLite.Status.DONE =>
             return Ok(Step.Done)
         code =>
             return Err(DatabaseError.from_status(code))
@@ -346,26 +347,23 @@ The eventual user workflow must not require manual archive copying, ambient libr
 
 ### Import resolution
 
-The grammar gains a C binding import kind:
-
-```text
-c_import = "import" "c" "::" binding_path [ "as" IDENT ]
-         | "from" "c" "::" binding_path "import" import_list
-```
-
-The first identifier after `c::` names a logical checked binding visible through the current package graph. Following identifiers name logical submodules inside that binding and do not directly identify filesystem directories, headers, libraries, frameworks, or C namespaces.
-
-A `c::` import must resolve a binding declaration, selected target variant, verification record, and native artifact plan. The compiler must reject an unknown binding, unavailable target, stale verification record, unresolved artifact, unsupported toolchain, or symbol absent from the declaration.
-
-Ambient headers and libraries must not satisfy a binding merely because they have matching names. System bindings must be supplied by an explicit package or selected toolchain capability. `c::`, `rust::`, and future foreign namespaces remain distinct; the compiler must not silently route one binding kind through another.
-
-Code using compiler-known C types or conversion helpers must explicitly import `std.c`:
+Code using compiler-known C types or binding declarations must explicitly activate the vocabulary:
 
 ```incan
-import std.c as c
+from std.interop import c
 ```
 
-The `c::` namespace identifies foreign binding modules. The `c` alias identifies the C type and helper vocabulary. Neither introduces a general `feature` or `module` keyword.
+That import makes the `binding` declaration vocabulary available only in the importing module. It does not introduce a global keyword, discover a header, or select a library merely because one is installed on the host. Future binding kinds use their own activated namespace and vocabulary; C pointer and ownership rules do not become a universal foreign type system.
+
+The vocabulary surface desugars a binding into ordinary Incan declarations. The canonical source form:
+
+```incan
+binding SQLite:
+    header = "sqlite3.h"
+    link = c.system_library("sqlite3")
+```
+
+desugars to an ordinary private class decorated with `@c.binding(...)` and extending `BindingDeclaration`. This preserves normal class rules and makes the declaration inspectable without special compiler-only class semantics.
 
 ### Binding declarations
 
@@ -384,13 +382,13 @@ A C binding declaration must define:
 - explicit layouts for by-value C structures
 - target availability and required toolchain capabilities
 
-A binding declaration is data-shaped Incan source. It may contain binding declarations, binding constants, documentation, and the imports required to name binding vocabulary, but it must not contain executable application logic or arbitrary build commands.
+A binding declaration is data-shaped Incan source. It may contain header and link facts plus declaration-only `symbol`, `enum`, `struct`, and later resource members. It must not contain executable application logic or arbitrary build commands. A `symbol` has no executable body: it records the native name and exact ABI signature.
 
 Tools may generate a draft binding declaration from a header. Generated output must remain incomplete until ownership, nullability, output writes, bounds, validity, release, and target facts are explicit. Header generation is an authoring aid, not a safety proof.
 
 ### Private bridges and public façades
 
-A package may publish a raw checked binding intentionally, but a package claiming a safe high-level API must isolate `c::` imports and unsafe calls behind a private bridge. Its public façade must not expose raw pointers, output slots, foreign status integers, unbounded views, undeclared resources, or an unsafe call requirement.
+A package may publish a raw checked binding intentionally, but a package claiming a safe high-level API must isolate binding use and unsafe calls behind a private bridge. Its public façade must not expose raw pointers, output slots, foreign status integers, unbounded views, undeclared resources, or an unsafe call requirement.
 
 Tooling must be able to distinguish binding declarations, raw-binding-only packages, private bridge modules, and safe public façades. It should diagnose or lint public modules that mix raw foreign imports with unrelated application concerns. The required separation is semantic and inspectable; this RFC does not reserve one filesystem spelling for bridge modules.
 
@@ -417,18 +415,13 @@ The compiler-known `c` vocabulary must provide these target-checked scalar categ
 
 | Incan C type | C meaning |
 | --- | --- |
-| `c.Int8` / `c.UInt8` | exact-width 8-bit signed / unsigned integer |
-| `c.Int16` / `c.UInt16` | exact-width 16-bit signed / unsigned integer |
-| `c.Int32` / `c.UInt32` | exact-width 32-bit signed / unsigned integer |
-| `c.Int64` / `c.UInt64` | exact-width 64-bit signed / unsigned integer |
-| `c.CChar` / `c.CSChar` / `c.CUChar` | target C `char` categories without assumed signedness |
-| `c.CShort` / `c.CUShort` | target C `short` categories |
-| `c.CInt` / `c.CUInt` | target C `int` categories |
-| `c.CLong` / `c.CULong` | target C `long` categories |
-| `c.CLongLong` / `c.CULongLong` | target C `long long` categories |
-| `c.Size` / `c.SSize` | target `size_t` / signed size category where available |
-| `c.Float32` / `c.Float64` | C `float` / `double` |
-| `c.Bool` | C `_Bool` / `bool` when the selected header contract supports it |
+| `c.i8` / `c.u8` | exact-width 8-bit signed / unsigned integer |
+| `c.i16` / `c.u16` | exact-width 16-bit signed / unsigned integer |
+| `c.i32` / `c.u32` | exact-width 32-bit signed / unsigned integer |
+| `c.i64` / `c.u64` | exact-width 64-bit signed / unsigned integer |
+| `c.c_char` | target C `char` category without assumed signedness |
+| `c.c_int` | target C `int` category |
+| `c.Size` | target `size_t` category |
 
 <!-- markdownlint-enable MD060 -->
 
@@ -488,7 +481,7 @@ An output resource becomes `c.Owned[T]` only after the declared initialization a
 
 ### Strings, spans, and scoped foreign views
 
-`std.c` must provide checked helpers for NUL-terminated input, immutable and mutable spans, output buffers, scoped foreign views, encoding validation, and owning copies. These helpers must preserve the corresponding compiler-known C types rather than representing pointers as integers.
+`std.interop` must provide checked helpers for NUL-terminated input, immutable and mutable spans, output buffers, scoped foreign views, encoding validation, and owning copies. These helpers must preserve the corresponding compiler-known C types rather than representing pointers as integers.
 
 Converting `str` into a C string view must validate the declared encoding and reject interior terminators. Temporary encoded storage must remain live through the call.
 
@@ -627,7 +620,7 @@ This RFC does not reserve syntax or namespaces for those kinds. It requires only
 
 Binding declarations use Incan-shaped syntax and tooling but are declaration-only units. Keeping executable bridge logic out of the same unit makes generated documentation, compatibility comparison, static inspection, and package review deterministic.
 
-A distinct file extension is not required by the semantic model. Ordinary `.incn` files may be classified as binding declaration units by their top-level `binding c` declaration and package role. The formatter and LSP must treat the contained syntax as Incan rather than embedded C source.
+A distinct file extension is not required by the semantic model. Ordinary `.incn` files may be classified as binding declaration units by their top-level `binding Name` declaration and package role. The formatter and LSP must treat the contained syntax as Incan rather than embedded C source.
 
 ### Why exact raw signatures and safe wrappers are separate
 
@@ -711,7 +704,7 @@ This feature is additive. Existing `rust::` imports and Rust wrapper packages re
 
 Projects may migrate one native symbol group at a time while preserving their public Incan APIs. A package may initially publish only a raw checked binding, then add a private bridge and safe façade without changing the logical binding identity.
 
-The `c::` namespace remains reserved for checked C binding modules. Code must not rely on dot-form aliases, implicit header lookup, ambient linker flags, machine-local library discovery, or runtime string-based symbol resolution.
+The `std.interop` C vocabulary remains reserved for checked binding declarations. Code must not rely on implicit header lookup, ambient linker flags, machine-local library discovery, or runtime string-based symbol resolution.
 
 ## Alternatives considered
 
@@ -723,7 +716,7 @@ The `c::` namespace remains reserved for checked C binding modules. Code must no
 - **Require explicit `.borrow()` calls** — Rejected for call-scoped access because the binding parameter already declares the ownership mode and the compiler can record the borrow semantically. Explicit Rust-shaped syntax would add ceremony without adding information.
 - **Support returned owner-tied views immediately** — Rejected because truthful support requires invalidation and lifetime facts that the current language does not expose. Caller-owned spans and immediate bounded copies provide a safe foundation.
 - **Use runtime dynamic loading and string symbol lookup by default** — Rejected because it moves signature and symbol errors into production and weakens target identity, locking, packaging, and policy.
-- **Treat `c::name` as `#include <name.h>`** — Rejected because logical package identity, headers, definitions, linker artifacts, deployment layout, and target variants do not have a one-to-one relationship.
+- **Treat a binding name as `#include <name.h>`** — Rejected because logical package identity, headers, definitions, linker artifacts, deployment layout, and target variants do not have a one-to-one relationship.
 - **Expose raw addresses as integers** — Rejected because it destroys nominal typing, nullability, ownership, provenance, and inspectability.
 - **Support C++ directly** — Rejected because compiler-specific ABI, overloads, templates, exceptions, standard-library types, and object lifecycle multiply scope and reduce portability. An authored C shim is the stable boundary.
 - **Treat shims as an external escape hatch** — Rejected because important native APIs routinely require them. Shims must participate in the same verification, package, lock, provenance, and deployment contract.
@@ -750,12 +743,12 @@ RFC 114 provider planning should select binding packages and target variants. RF
 
 ## Layers affected
 
-- **Parser and formatter:** parse and format `binding c`, `c::` imports, explicit `unsafe:` regions, opaque resource declarations, C symbol annotations, output positions, and explicit C structures as Incan syntax.
-- **Name resolution and package graph:** resolve logical binding identities and bridge/façade relationships through the package graph while keeping binding kinds distinct.
+- **Parser and formatter:** parse and format import-activated `binding` declarations, explicit `unsafe:` regions, opaque resource declarations, C symbol facts, output positions, and explicit C structures as Incan syntax.
+- **Name resolution and package graph:** resolve local binding declarations and bridge/façade relationships through the package graph while keeping binding kinds distinct.
 - **Typechecker:** preserve exact C scalar, pointer, nullability, output, opaque resource, span, structure, unsafe-call, and scoped-view facts.
 - **Semantic ownership analysis and HIR:** record call-scoped shared or mutable borrows, ownership-consuming moves, close state, and scoped-view validity before lowering.
 - **Lowering and backend emission:** consume checked binding and ownership facts, lower calls through contained unsafe mechanics, preserve calling conventions, and emit output storage and release guards.
-- **Compiler C vocabulary and `std.c`:** provide checked C types, conversions, spans, output helpers, scoped foreign views, encoding validation, and redaction-safe diagnostics.
+- **Compiler C vocabulary and `std.interop`:** provide checked C types, conversions, spans, output helpers, scoped foreign views, encoding validation, and redaction-safe diagnostics.
 - **Target toolchains:** provision or select Clang-compatible target environments, sysroots, Android NDK profiles, Apple Xcode/SDK identities, and target verification inputs.
 - **C ABI verification:** compile signature and layout probes, key results by complete semantic and physical identity, and produce source-anchored diagnostics.
 - **Provider, package, and lock metadata:** resolve declarations, shims, native artifacts, deployment classes, features, capabilities, provenance, and offline identities through existing provider machinery.
@@ -764,29 +757,80 @@ RFC 114 provider planning should select binding packages and target variants. RF
 - **LSP, codegraph, and documentation:** expose raw declarations, safety requirements, ownership modes, target availability, bridge edges, safe façades, diagnostics, reference docs, and provenance.
 - **Governed runtime and receipts:** identify native binding and symbol use without exposing raw pointers, secrets, credentials, or machine-local paths.
 
+## Implementation Plan
+
+### Phase 1: Checked binding and verification foundation (#940)
+
+Deliver the import-activated `std.interop` vocabulary, exact scalar declarations, declaration-only symbols, enum and plain-structure facts, Clang verification, contained generated C calls, and the first consumer proof.
+
+### Phase 2: Owned resources and bounded bridge values (#941)
+
+Add resource release associations, inferred call-scoped borrowing, `Out` / `InOut` initialization rules, bounded strings and spans, scoped copies, and a SQLite proof.
+
+### Phase 3: Governed artifacts and shims (#942)
+
+Extend the package and lock graph with target-specific native artifacts, authored C/C++ shim inputs, provenance, verification, and offline behavior.
+
+### Phase 4: Tooling projection (#943)
+
+Project checked binding facts, bridge and façade edges, diagnostics, inspection, editor support, generated references, and compatibility documentation from the same descriptor.
+
+### Phase 5: Mobile inference proof (#944)
+
+Verify Android and iOS target paths with a real native inference binding and define the directional handoff from a Loaf to Gradle or Xcode without freezing their command protocol.
+
+## Progress Checklist
+
+### Spec / design
+
+- [x] Settle import-activated binding vocabulary and its ordinary-class desugaring.
+- [x] Settle declaration-only symbols, enum source shape, `Out` / `InOut` slot model, target-configuration boundary, packaging direction, and publication-policy ownership.
+
+### Checked binding foundation (#940)
+
+- [x] Activate `binding` through `from std.interop import c` and desugar it to a private `BindingDeclaration` class.
+- [x] Parse, type-check, format, lower, and emit supported scalar C free functions and enum constants.
+- [x] Verify declared function signatures, enum carriers and values, and plain layouts with Clang before code generation.
+- [x] Add positive consumer execution and declaration-mismatch diagnostics.
+- [x] Add reference documentation, release-note inventory, and generated capability inventory.
+- [ ] Complete the slice review and PR-readiness gate.
+
+### Owned resources and bounded bridge values (#941)
+
+- [ ] Define opaque resources, release associations, call-scoped borrows, and close semantics.
+- [ ] Implement `Out` / `InOut` slot construction, initialization conditions, and `take()` checks.
+- [ ] Add bounded string, span, and scoped-view bridge operations with SQLite acceptance evidence.
+
+### Governed artifacts and shims (#942)
+
+- [ ] Define target-specific native artifact and shim inputs, lock identity, provenance, and offline verification.
+- [ ] Define source versus `incan.toml` responsibilities for target-specific physical configuration.
+
+### Tooling projection (#943)
+
+- [ ] Expose checked binding, verification, bridge, and façade facts through diagnostics, inspection, editor, and generated documentation.
+
+### Mobile inference proof (#944)
+
+- [ ] Verify Android arm64 and iOS arm64 native inference paths.
+- [ ] Produce a directionally useful Loaf handoff to Gradle and Xcode while leaving final assembly and signing to those tools.
+
 ## Design Decisions
 
-- RFC 116 uses explicit `import std.c as c` and a distinct `c::` binding namespace.
-- C bindings use a declaration-only contract, private bridge, and ordinary public Incan façade.
+- RFC 116 uses `from std.interop import c` to activate C binding vocabulary in one module. It does not reserve a global `foreign` keyword or change ordinary class syntax.
+- `binding Name:` is vocabulary surface for an ordinary private `@c.binding(...)` class extending `BindingDeclaration`. Its body records declaration facts; `symbol` members are declaration-only and have no executable body.
+- C bindings use a declaration-only contract, private bridge, and ordinary public Incan façade. The contract and bridge may share a file when that keeps the raw binding private and the public API clear.
 - Raw declarations mirror exact C ABI signatures; safe grouping and domain semantics live in Incan wrappers.
+- C enum source keeps the ordinary enum shape: `enum ResultCode: OK: c.i32 = NATIVE_CODE`. The compiler, not the binding author, owns target-specific enum representation and verification.
 - Owned resources associate one release operation with the resource declaration.
 - Raw status values remain raw; nullability may map to `Option`, while application `Result` types are Incan-authored.
 - Call-scoped foreign borrows are inferred from semantic parameter modes and recorded before backend emission.
-- `c.Out[T]` and `c.InOut[T]` represent output positions without enabling arbitrary dereference.
+- `c.Out[T]` and `c.InOut[T]` describe declaration positions without enabling arbitrary dereference. Private bridge code creates compiler-managed slots with ordinary expressions such as `c.out[c.Owned[Database]]()` and `c.inout(value)`, then consumes them with `take()` only on the declared valid outcome or post-call path.
 - Returned foreign views may be copied within the current unsafe region or declared static; owner-tied escaping views are excluded.
+- Source declarations remain the semantic authority. Target-specific artifact choice, authored shim sources, and physical build settings may live in `incan.toml` when an author needs them; they do not replace the binding declaration.
 - Shims are first-class governed package assets.
 - Verification requires a managed Clang-compatible target toolchain.
 - Native deployment classes are static, bundled, and explicit system capability.
-- The package manager owns resolution, verification, locking, caching, and staging, while final platform packaging may own application assembly and signing.
+- Oven owns native resolution, verification, shim baking, locking, caching, staging, and the deployment plan. A Loaf carries enough semantic and physical metadata for directionally useful Gradle or Xcode handoff; those platform tools retain final app assembly and signing. The exact handoff schema remains an associated RFC concern.
+- Native publication policy belongs to `incan.pub`: signing identity, license/provenance facts, artifact verification, and publication admission must be established before prebuilt native artifacts are accepted.
 - The shared package envelope is binding-kind-neutral; C-specific type and safety facts remain inside the C binding kind.
-
-## Unresolved questions
-
-- What final parser spelling best associates an opaque resource with its release operation while keeping the declaration readable and extensible?
-- What final constructor and initialization-state surface should private bridge code use for `c.Out[T]` and `c.InOut[T]`?
-- How should platform-dependent C enum identity and width be represented before a broader representation contract exists?
-- What exact manifest schema should represent binding declarations, source-built shims, static artifacts, bundled libraries, system frameworks, and platform packaging outputs?
-- Which Android and Apple integration artifacts should `incan package` emit so Gradle and Xcode consume one complete native plan without duplicating source-of-truth configuration?
-- Which package signing and license-policy facts are mandatory before prebuilt native artifacts may be published through `incan.pub`?
-
-<!-- Rename this section to "Design Decisions" once all questions have been resolved. An RFC cannot move from Draft to Planned until no unresolved questions remain. -->

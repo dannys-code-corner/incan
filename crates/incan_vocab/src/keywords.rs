@@ -522,6 +522,14 @@ pub struct DeclarationSurface {
     /// Nested clauses owned by this declaration.
     #[cfg_attr(feature = "serde", serde(default))]
     pub clauses: Vec<ClauseSurface>,
+    /// Nested declarations owned by this declaration.
+    ///
+    /// A vocabulary can use this to describe a declaration-shaped member without
+    /// teaching the host parser a language-specific keyword.  The nested
+    /// declaration receives the enclosing declaration as its placement rule
+    /// when it is registered.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub declarations: Vec<DeclarationSurface>,
 }
 
 impl DeclarationSurface {
@@ -536,6 +544,7 @@ impl DeclarationSurface {
             body_kind: DeclarationBodyKind::Mixed,
             desugars_to: DesugarTarget::Statements,
             clauses: Vec::new(),
+            declarations: Vec::new(),
         }
     }
 
@@ -551,6 +560,7 @@ impl DeclarationSurface {
             body_kind: DeclarationBodyKind::Mixed,
             desugars_to: DesugarTarget::Statements,
             clauses: Vec::new(),
+            declarations: Vec::new(),
         }
     }
 
@@ -641,6 +651,13 @@ impl DeclarationSurface {
         self
     }
 
+    /// Mark this declaration as lowering to compilation-unit declarations.
+    #[must_use]
+    pub fn desugars_to_declarations(mut self) -> Self {
+        self.desugars_to = DesugarTarget::Declarations;
+        self
+    }
+
     /// Add one owned clause surface.
     #[must_use]
     pub fn with_clause(mut self, clause: ClauseSurface) -> Self {
@@ -655,6 +672,27 @@ impl DeclarationSurface {
         I: IntoIterator<Item = ClauseSurface>,
     {
         self.clauses.extend(clauses);
+        self
+    }
+
+    /// Add one declaration-shaped member owned by this declaration.
+    #[must_use]
+    pub fn with_declaration(mut self, declaration: DeclarationSurface) -> Self {
+        self.declarations.push(declaration.in_block(&self.keyword));
+        self
+    }
+
+    /// Add multiple declaration-shaped members owned by this declaration.
+    #[must_use]
+    pub fn with_declarations<I>(mut self, declarations: I) -> Self
+    where
+        I: IntoIterator<Item = DeclarationSurface>,
+    {
+        self.declarations.extend(
+            declarations
+                .into_iter()
+                .map(|declaration| declaration.in_block(&self.keyword)),
+        );
         self
     }
 }
@@ -1357,6 +1395,8 @@ impl ScopedSymbolDescriptor {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[non_exhaustive]
 pub enum DesugarTarget {
+    /// Lower into compilation-unit declarations.
+    Declarations,
     /// Lower into host statements.
     #[default]
     Statements,

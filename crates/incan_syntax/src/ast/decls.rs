@@ -65,6 +65,13 @@ pub struct ClassDecl {
     pub method_partials: Vec<Spanned<MethodPartialDecl>>,
     pub properties: Vec<Spanned<PropertyDecl>>,
     pub methods: Vec<Spanned<MethodDecl>>,
+    /// Non-executable vocabulary declarations retained for a semantic decorator.
+    ///
+    /// Ordinary classes leave this empty. A vocabulary desugarer may attach its
+    /// own declarative members to the ordinary class it emits, allowing the
+    /// decorator contract to validate them without a language-specific AST
+    /// variant.
+    pub declarative_members: Vec<incan_vocab::VocabDeclaration>,
 }
 
 // ============================================================================

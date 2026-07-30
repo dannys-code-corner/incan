@@ -6,7 +6,10 @@
 use crate::frontend::ast::{CallArg, Expr, ParamKind, Span, Spanned, Type};
 use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::resolved_type_subst::substitute_resolved_type;
-use crate::frontend::symbols::{FieldInfo, FunctionInfo, FunctionOverloadInfo, ResolvedType, SymbolKind, TypeInfo};
+use crate::frontend::symbols::{
+    CallableParam, FieldInfo, FunctionInfo, FunctionOverloadInfo, ResolvedType, SymbolKind, TypeInfo,
+};
+use crate::frontend::typechecker::type_info::{CBindingRawCall, CBindingSymbol, CBindingType};
 use crate::frontend::typechecker::{IdentKind, canonical_public_library_type_name};
 use incan_core::interop::{
     RustFieldInfo, RustFunctionSig, RustItemKind, RustTypeInfo, compiler_owned_function_signature,
@@ -75,6 +78,11 @@ impl TypeChecker {
         span: Span,
         expected_return_ty: Option<&ResolvedType>,
     ) -> ResolvedType {
+        if let Expr::Field(base, member) = &callee.node
+            && let Some(result) = self.check_c_binding_symbol_member_call(base, member, type_args, args, span)
+        {
+            return result;
+        }
         if let Expr::Field(base, member) = &callee.node
             && let Some((_, module_path)) = self.imported_module_for_expr(base)
             && module_path.len() >= 2
@@ -641,6 +649,100 @@ impl TypeChecker {
                 self.check_call_args(args);
                 ResolvedType::Unknown
             }
+        }
+    }
+
+    /// Resolve an ordinary `Binding.symbol(...)` expression through a checked C binding descriptor.
+    ///
+    /// This is deliberately an expression-level semantic hook: parser and class syntax remain ordinary Incan. The
+    /// initial executable subset admits scalar parameters/results and `void`; pointer, structure, and ownership
+    /// contracts remain declaration-checked until their runtime carriers are introduced by later slices.
+    pub(in crate::frontend::typechecker::check_expr) fn check_c_binding_symbol_member_call(
+        &mut self,
+        base: &Spanned<Expr>,
+        member: &str,
+        type_args: &[Spanned<Type>],
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<ResolvedType> {
+        let Expr::Ident(binding_name) = &base.node else {
+            return None;
+        };
+        let descriptor = self.type_info.c_abi.bindings.get(binding_name)?.clone();
+        let binding = descriptor.class_name.clone();
+        let Some(symbol) = descriptor.symbols.iter().find(|symbol| symbol.name == member).cloned() else {
+            self.errors.push(CompileError::type_error(
+                format!("C binding `{binding}` does not declare symbol `{member}`"),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        };
+
+        let callable = format!("{binding}.{member}");
+        if self.unsafe_depth == 0 {
+            self.errors.push(CompileError::type_error(
+                format!("C binding symbol `{callable}` requires an enclosing `unsafe:` acknowledgement"),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        if !type_args.is_empty() {
+            self.errors
+                .push(errors::explicit_call_site_type_args_not_supported(span));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        if !Self::c_raw_call_signature_is_executable(&symbol) {
+            self.errors.push(CompileError::type_error(
+                format!(
+                    "C binding symbol `{callable}` uses a pointer or structure contract that is not executable in the checked free-function subset"
+                ),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+
+        let parameters = symbol
+            .parameters
+            .iter()
+            .map(|parameter| {
+                CallableParam::named(
+                    parameter.name.clone(),
+                    Self::c_raw_call_type(&parameter.ty),
+                    ParamKind::Normal,
+                )
+            })
+            .collect::<Vec<_>>();
+        let arg_types = self.check_call_arg_types_for_params(args, &parameters);
+        let mut type_bindings = std::collections::HashMap::new();
+        self.validate_callable_arg_bindings(&callable, &parameters, args, &arg_types, &mut type_bindings, span);
+        self.type_info.record_call_site_callable_params(span, &parameters);
+        self.type_info.c_abi.raw_calls.push(CBindingRawCall {
+            span,
+            binding,
+            symbol: member.to_string(),
+        });
+        Some(Self::c_raw_call_type(&symbol.return_type))
+    }
+
+    /// Return whether a declared C signature is executable by the initial direct-call bridge.
+    fn c_raw_call_signature_is_executable(symbol: &CBindingSymbol) -> bool {
+        symbol
+            .parameters
+            .iter()
+            .all(|parameter| matches!(parameter.ty, CBindingType::Scalar(_)))
+            && matches!(symbol.return_type, CBindingType::Scalar(_) | CBindingType::Void)
+    }
+
+    /// Map exact C scalar categories to the current Incan integer carrier.
+    fn c_raw_call_type(ty: &CBindingType) -> ResolvedType {
+        match ty {
+            CBindingType::Scalar(_) => ResolvedType::Int,
+            CBindingType::Void => ResolvedType::Unit,
+            CBindingType::Pointer { .. } | CBindingType::Struct(_) => ResolvedType::Unknown,
         }
     }
 

@@ -1089,6 +1089,7 @@ impl CodegraphBuilder {
             | Declaration::Alias(_)
             | Declaration::Partial(_)
             | Declaration::TypeAlias(_)
+            | Declaration::VocabBlock(_)
             | Declaration::Docstring(_) => {}
         }
     }
@@ -1206,6 +1207,7 @@ impl CodegraphBuilder {
                 self.collect_expr(module, module_id, owner_id, &stmt.iter, degraded);
                 self.collect_statements(module, module_id, owner_id, &stmt.body, degraded);
             }
+            Statement::Unsafe(stmt) => self.collect_statements(module, module_id, owner_id, &stmt.body, degraded),
             Statement::VocabExpressionItem(item) => {
                 self.collect_expr(module, module_id, owner_id, &item.expr, degraded);
                 for modifier in &item.modifiers {
@@ -2155,7 +2157,7 @@ fn declaration_summary(declaration: &Declaration) -> Option<DeclarationSummary> 
             type_params: Vec::new(),
             signature: Some(format!("module {}", decl.name)),
         }),
-        Declaration::Import(_) | Declaration::Docstring(_) => None,
+        Declaration::Import(_) | Declaration::VocabBlock(_) | Declaration::Docstring(_) => None,
     }
 }
 

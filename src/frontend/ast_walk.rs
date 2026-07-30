@@ -66,6 +66,7 @@ where
         | Declaration::Partial(_)
         | Declaration::TypeAlias(_)
         | Declaration::Docstring(_) => false,
+        Declaration::VocabBlock(block) => any_expr_in_body_impl(&block.body, pred),
         Declaration::Const(c) => expr_has(&c.value.node, pred),
         Declaration::Static(s) => expr_has(&s.value.node, pred),
         Declaration::Model(m) => {
@@ -227,6 +228,7 @@ where
         Statement::Loop(s) => any_expr_in_body_impl(&s.body, pred),
         Statement::While(s) => condition_has_expr(&s.condition, pred) || any_expr_in_body_impl(&s.body, pred),
         Statement::For(s) => expr_has(&s.iter.node, pred) || any_expr_in_body_impl(&s.body, pred),
+        Statement::Unsafe(s) => any_expr_in_body_impl(&s.body, pred),
         Statement::Break(Some(expr)) => expr_has(&expr.node, pred),
         Statement::Return(None) | Statement::Break(None) | Statement::Pass | Statement::Continue => false,
     }

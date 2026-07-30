@@ -131,13 +131,19 @@ fn dependency_spec_to_toml(spec: &DependencySpec, output_dir: &Path) -> (String,
             }
         }
         DependencySource::Path { path } => {
-            // Resolve symlinked path aliases (e.g. `/var` -> `/private/var` on macOS) before computing a relative path.
-            // Without this, generated path dependencies can point at non-existent siblings like `/private/Users/...`
-            // in integration test temp dirs.
+            // Resolve symlinked path aliases before computing a relative path. When an ordinary generated workspace
+            // was reached through an alias (for example macOS `/var` -> `/private/var`), Cargo resolves a relative
+            // dependency from the original logical spelling rather than the canonical one. In that case an absolute
+            // canonical path keeps every edge in the graph on one physical root. SDK-provider artifacts are built in
+            // a staging directory and atomically published elsewhere, so they must retain relocatable paths.
             let from = output_dir.canonicalize().unwrap_or_else(|_| output_dir.to_path_buf());
             let to = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-            let rel = relative_path(&from, &to);
-            let path_str = rel.to_string_lossy().replace('\\', "/");
+            let rendered = if from != output_dir && !is_sdk_provider_build() {
+                to
+            } else {
+                relative_path(&from, &to)
+            };
+            let path_str = rendered.to_string_lossy().replace('\\', "/");
             table.insert("path".into(), path_str.into());
         }
     }
@@ -381,7 +387,7 @@ mod tests {
     use crate::backend::project::generator::ProjectGenerator;
     use crate::manifest::{DependencySource, DependencySpec};
 
-    use super::{INCAN_VERSION, path_dependency};
+    use super::{INCAN_VERSION, dependency_spec_to_toml, path_dependency};
 
     fn parsed_manifest(toml: &str) -> Result<toml::Value, Box<dyn std::error::Error>> {
         Ok(toml::from_str(toml)?)
@@ -581,6 +587,38 @@ mod tests {
             .and_then(toml::Value::as_str)
             .ok_or("toolchain support dependency missing path")?;
         assert!(!PathBuf::from(path).is_absolute(), "artifact support path was {path}");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_dependency_uses_a_canonical_absolute_path_from_a_symlinked_output_root()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let physical_output = temp.path().join("physical").join("output");
+        let target = temp.path().join("target");
+        std::fs::create_dir_all(&physical_output)?;
+        std::fs::create_dir_all(&target)?;
+        let logical_root = temp.path().join("logical");
+        std::os::unix::fs::symlink(temp.path().join("physical"), &logical_root)?;
+
+        let spec = DependencySpec {
+            crate_name: "aliased_path_dep".to_string(),
+            version: None,
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Path { path: target.clone() },
+            optional: false,
+            package: None,
+        };
+        let (_, dependency) = dependency_spec_to_toml(&spec, &logical_root.join("output"));
+        let rendered_path = dependency
+            .as_table()
+            .and_then(|table| table.get("path"))
+            .and_then(toml::Value::as_str)
+            .ok_or("path dependency missing rendered path")?;
+
+        assert_eq!(Path::new(rendered_path), target.canonicalize()?.as_path());
         Ok(())
     }
 

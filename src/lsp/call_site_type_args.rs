@@ -86,7 +86,7 @@ pub(crate) fn innermost_type_node_at_offset(ty: &Spanned<Type>, offset: usize) -
         return None;
     }
     match &ty.node {
-        Type::Generic(_, args) | Type::Tuple(args) => {
+        Type::Generic(_, args) | Type::DottedGeneric(_, args) | Type::Tuple(args) => {
             for a in args {
                 if let Some(hit) = innermost_type_node_at_offset(a, offset) {
                     return Some(hit);
@@ -107,6 +107,7 @@ pub(crate) fn innermost_type_node_at_offset(ty: &Spanned<Type>, offset: usize) -
         }
         Type::Ref(inner) | Type::RefMut(inner) => innermost_call_site_type_in_type(inner, offset).or(Some(ty)),
         Type::Qualified(_)
+        | Type::Dotted(_)
         | Type::Simple(_)
         | Type::ConstrainedPrimitive(_, _)
         | Type::IntLiteral(_)
@@ -337,6 +338,7 @@ fn call_site_type_in_stmt(stmt: &Statement, offset: usize) -> Option<&Spanned<Ty
         Statement::For(f) => {
             call_site_type_in_expr(&f.iter, offset).or_else(|| call_site_types_in_stmts(&f.body, offset))
         }
+        Statement::Unsafe(unsafe_stmt) => call_site_types_in_stmts(&unsafe_stmt.body, offset),
         Statement::Expr(e) => call_site_type_in_expr(e, offset),
         Statement::CompoundAssignment(c) => call_site_type_in_expr(&c.value, offset),
         Statement::TupleUnpack(t) => call_site_type_in_expr(&t.value, offset),
@@ -691,6 +693,7 @@ pub(crate) fn call_site_type_argument_completion_items(ast: Option<&Program>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::{lexer, parser};
 
     #[test]
     fn detects_call_site_brackets_with_nested_generics() -> Result<(), &'static str> {
@@ -717,5 +720,21 @@ mod tests {
         // Byte offset inside `int`; no `(` after `]` so this is not a call-site type-arg list
         let off = 4;
         assert!(!offset_in_call_site_type_argument_list(s, off));
+    }
+
+    #[test]
+    fn finds_innermost_dotted_type_inside_call_site_argument() -> Result<(), String> {
+        let source = "def consume[T](value: T) -> T:\n    return value\n\ndef main(value: int) -> int:\n    return consume[c.ConstPtr[c.i32]](value)\n";
+        let tokens = lexer::lex(source).map_err(|errors| format!("lexer failed: {errors:?}"))?;
+        let program = parser::parse(&tokens).map_err(|errors| format!("parser failed: {errors:?}"))?;
+        let offset = source
+            .find("c.i32")
+            .map(|start| start + 2)
+            .ok_or_else(|| "expected dotted type in fixture".to_string())?;
+        let ty = call_site_innermost_type_at_offset(&program, offset)
+            .ok_or_else(|| "expected dotted type under cursor".to_string())?;
+
+        assert!(matches!(&ty.node, Type::Dotted(segments) if segments == &["c", "i32"]));
+        Ok(())
     }
 }

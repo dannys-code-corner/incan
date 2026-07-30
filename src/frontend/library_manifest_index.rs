@@ -46,6 +46,14 @@ pub struct LibraryManifestLoadFailure {
     pub message: String,
 }
 
+impl std::fmt::Display for LibraryManifestLoadFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.path.display(), self.message)
+    }
+}
+
+impl std::error::Error for LibraryManifestLoadFailure {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Contract metadata for a successfully loaded generated library artifact.
 pub struct LibraryArtifactMetadata {
@@ -72,6 +80,11 @@ pub enum LibraryArtifactKind {
     Materialized,
     /// Only source-derived syntax metadata is available for parser-only tooling such as formatting.
     ParserSource,
+    /// An SDK-provided artifact used only to activate and desugar standard vocabulary.
+    ///
+    /// The SDK provider plan remains the authority for executable standard modules,
+    /// so this cannot become a package dependency or ordinary provider record.
+    StandardVocab,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +181,57 @@ impl LibraryManifestIndex {
         Self { entries }
     }
 
+    /// Add one SDK-provided import-activated standard-library vocabulary artifact.
+    pub fn add_standard_vocab_provider(
+        &mut self,
+        manifest_path: &Path,
+        crate_root: &Path,
+    ) -> Result<(), LibraryManifestLoadFailure> {
+        let manifest = LibraryManifest::read_from_path(manifest_path)
+            .map_err(|source| LibraryManifestLoadFailure::from_manifest_error(manifest_path.to_path_buf(), source))?;
+        let Some(vocab) = manifest.vocab.as_ref() else {
+            return Ok(());
+        };
+        let mut namespaces = vocab
+            .keyword_registrations
+            .iter()
+            .filter_map(|registration| match &registration.activation {
+                KeywordActivation::OnImport { namespace } => Some(namespace.trim()),
+                _ => None,
+            })
+            .filter(|namespace| namespace.starts_with("std."))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        namespaces.sort();
+        namespaces.dedup();
+
+        for namespace in namespaces {
+            if self.entries.contains_key(&namespace) {
+                return Err(LibraryManifestLoadFailure {
+                    path: manifest_path.to_path_buf(),
+                    kind: LibraryManifestFailureKind::ArtifactMismatch,
+                    message: format!("multiple standard vocabulary providers claim `{namespace}`"),
+                });
+            }
+            self.entries.insert(
+                namespace.clone(),
+                LibraryManifestIndexEntry::Loaded {
+                    manifest: Box::new(manifest.clone()),
+                    metadata: LibraryArtifactMetadata {
+                        dependency_key: namespace,
+                        manifest_name: manifest.name.clone(),
+                        manifest_path: manifest_path.to_path_buf(),
+                        cargo_toml_path: crate_root.join("Cargo.toml"),
+                        crate_lib_path: crate_root.join(LIBRARY_CRATE_LIB_RS),
+                        crate_root: crate_root.to_path_buf(),
+                        kind: LibraryArtifactKind::StandardVocab,
+                    },
+                },
+            );
+        }
+        Ok(())
+    }
+
     /// Return an indexed entry by dependency key.
     pub fn get(&self, library_name: &str) -> Option<&LibraryManifestIndexEntry> {
         self.entries.get(library_name)
@@ -190,9 +254,12 @@ impl LibraryManifestIndex {
             .entries
             .iter()
             .filter_map(|(dependency_key, entry)| match entry {
-                LibraryManifestIndexEntry::Loaded { manifest, metadata } => {
+                LibraryManifestIndexEntry::Loaded { manifest, metadata }
+                    if metadata.kind != LibraryArtifactKind::StandardVocab =>
+                {
                     Some((dependency_key.as_str(), manifest.as_ref(), metadata))
                 }
+                LibraryManifestIndexEntry::Loaded { .. } => None,
                 LibraryManifestIndexEntry::Failed(_) => None,
             })
             .collect::<Vec<_>>();

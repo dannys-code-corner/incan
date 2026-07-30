@@ -633,6 +633,7 @@ impl AstLowering {
         match ty {
             ast::Type::Simple(name) => name.clone(),
             ast::Type::Qualified(segments) => segments.join("::"),
+            ast::Type::Dotted(segments) => segments.join("."),
             ast::Type::Generic(name, args) => {
                 let inner = args
                     .iter()
@@ -640,6 +641,14 @@ impl AstLowering {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{name}<{inner}>")
+            }
+            ast::Type::DottedGeneric(segments, args) => {
+                let inner = args
+                    .iter()
+                    .map(|a| Self::serialize_type(&a.node))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}<{inner}>", segments.join("."))
             }
             ast::Type::ConstrainedPrimitive(_, _) => ty.to_string(),
             ast::Type::Function(_, _) => "fn".to_string(),

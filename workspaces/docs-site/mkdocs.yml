@@ -188,6 +188,7 @@ nav:
               - std.graph: language/reference/stdlib/graph.md
               - std.hash: language/reference/stdlib/hash.md
               - std.io: language/reference/stdlib/io.md
+              - std.interop: language/reference/stdlib/interop.md
               - std.json: language/reference/stdlib/json.md
               - std.logging: language/reference/stdlib/logging.md
               - std.telemetry: language/reference/stdlib/telemetry.md

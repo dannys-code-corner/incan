@@ -50,6 +50,7 @@ pub use stmt::{IrStmt, IrStmtKind};
 pub use types::{IrType, Mutability, Ownership};
 
 use crate::frontend::ast::Span;
+use incan_core::lang::c_abi::ScalarTypeId;
 use std::collections::HashMap;
 
 /// Function signature for call-site type checking
@@ -270,6 +271,52 @@ pub struct IrNewtypeConstructionPlan {
     pub supports_string_conversion: bool,
 }
 
+/// One source-checked C function that lowering has authorized for direct emission.
+///
+/// The typechecker owns the full binding descriptor. This IR record deliberately contains only the executable
+/// scalar subset selected at a checked call site, so the Rust emitter never rediscovers a C signature from source
+/// syntax or a header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrCheckedCFunction {
+    /// Source binding class that owns this function.
+    pub binding: String,
+    /// Source member name within the binding.
+    pub symbol: String,
+    /// Exact C linker symbol verified from the binding descriptor.
+    pub native_symbol: String,
+    /// Logical system library selected by the checked binding.
+    pub system_library: String,
+    /// Exact C scalar parameters in declaration order.
+    pub parameters: Vec<ScalarTypeId>,
+    /// Exact C scalar return, or `None` for `void`.
+    pub return_type: Option<ScalarTypeId>,
+}
+
+impl IrCheckedCFunction {
+    /// Deterministic compiler-private Rust wrapper name.
+    pub fn rust_name(&self) -> String {
+        /// Encode one source identifier component without allowing two spellings to collide.
+        fn component(value: &str) -> String {
+            value.bytes().fold(String::new(), |mut encoded, byte| {
+                if byte.is_ascii_alphanumeric() {
+                    encoded.push(byte.into());
+                } else {
+                    encoded.push('_');
+                    encoded.push_str(&format!("{byte:02x}"));
+                }
+                encoded
+            })
+        }
+
+        format!("__incan_c_{}__{}", component(&self.binding), component(&self.symbol))
+    }
+
+    /// Deterministic compiler-private FFI declaration name.
+    pub fn ffi_rust_name(&self) -> String {
+        format!("{}__ffi", self.rust_name())
+    }
+}
+
 /// A complete IR program
 #[derive(Debug, Clone)]
 pub struct IrProgram {
@@ -295,6 +342,8 @@ pub struct IrProgram {
     pub rust_module_path: Option<String>,
     /// Construction plans keyed by local newtype name; production entries come from checked frontend metadata.
     pub newtype_construction: std::collections::HashMap<String, IrNewtypeConstructionPlan>,
+    /// Checked C functions selected by source calls in this module.
+    pub checked_c_functions: Vec<IrCheckedCFunction>,
 }
 
 impl IrProgram {
@@ -309,6 +358,7 @@ impl IrProgram {
             function_reexports: Vec::new(),
             rust_module_path: None,
             newtype_construction: std::collections::HashMap::new(),
+            checked_c_functions: Vec::new(),
         }
     }
 }
@@ -332,5 +382,30 @@ impl From<Span> for IrSpan {
             start: span.start,
             end: span.end,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IrCheckedCFunction, ScalarTypeId};
+
+    fn checked_c_function(binding: &str, symbol: &str) -> IrCheckedCFunction {
+        IrCheckedCFunction {
+            binding: binding.to_string(),
+            symbol: symbol.to_string(),
+            native_symbol: "fixture".to_string(),
+            system_library: "fixture".to_string(),
+            parameters: vec![ScalarTypeId::I32],
+            return_type: Some(ScalarTypeId::I32),
+        }
+    }
+
+    #[test]
+    fn checked_c_wrapper_names_do_not_merge_component_boundaries() {
+        let left = checked_c_function("Fixture_", "symbol");
+        let right = checked_c_function("Fixture", "_symbol");
+
+        assert_ne!(left.rust_name(), right.rust_name());
+        assert_ne!(left.ffi_rust_name(), right.ffi_rust_name());
     }
 }

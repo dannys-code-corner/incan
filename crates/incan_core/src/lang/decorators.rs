@@ -9,6 +9,7 @@
 //!
 //! - `rust.*` — Rust interop decorators (`@rust.extern`, `@rust.allow`, future `@rust.function`, etc.)
 //! - `std.*` — Standard library decorators
+//! - `c.*` — C ABI binding decorators
 //! - Top-level — `@derive`, `@requires`
 //!
 //! Known namespace prefixes are registered in [`DECORATOR_NAMESPACES`] so that the validator can distinguish "unknown
@@ -22,6 +23,7 @@ pub enum DecoratorId {
     RustDerive,
     RustExtern,
     RustAllow,
+    CBinding,
     NoImplicitCoercion,
     StaticMethod,
     ClassMethod,
@@ -39,13 +41,16 @@ pub const RUST_NAMESPACE: &str = "rust";
 /// The `std` decorator namespace — covers all `@std.*` decorators.
 pub const STD_NAMESPACE: &str = "std";
 
+/// The `c` decorator namespace — checked C ABI binding declarations.
+pub const C_NAMESPACE: &str = "c";
+
 /// Known decorator namespace prefixes.
 ///
 /// The validator uses this list to give targeted errors when a user writes e.g. `@rust.blah` instead of "unknown
 /// decorator `rust.blah`", it says "unknown decorator `blah` in namespace `rust`".
 ///
 /// Each entry is a top-level namespace root; nested namespaces like `std.web` are handled by matching `std`.
-pub const DECORATOR_NAMESPACES: &[&str] = &[RUST_NAMESPACE, STD_NAMESPACE];
+pub const DECORATOR_NAMESPACES: &[&str] = &[RUST_NAMESPACE, STD_NAMESPACE, C_NAMESPACE];
 
 /// Check whether a leading segment is a known decorator namespace prefix.
 pub fn is_known_decorator_namespace(prefix: &str) -> bool {
@@ -100,6 +105,14 @@ pub const DECORATORS: &[DecoratorInfo] = &[
         "Emit targeted Rust #[allow(...)] lint suppressions on a generated item.",
         RFC::_057,
         Since(0, 3),
+    ),
+    info(
+        DecoratorId::CBinding,
+        "c.binding",
+        &["std.interop.c.binding"],
+        "Declare a checked C ABI binding class.",
+        RFC::_116,
+        Since(0, 5),
     ),
     info(
         DecoratorId::NoImplicitCoercion,

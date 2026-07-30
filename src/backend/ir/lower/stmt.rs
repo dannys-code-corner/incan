@@ -561,6 +561,11 @@ impl AstLowering {
                 }
 
                 let s = &stmts[index];
+                if let ast::Statement::Unsafe(unsafe_stmt) = &s.node {
+                    result.extend(self.lower_statements(&unsafe_stmt.body)?);
+                    index += 1;
+                    continue;
+                }
                 let stmt = self.lower_statement(&s.node, s.span)?;
                 result.push(stmt);
                 index += 1;
@@ -1413,6 +1418,12 @@ impl AstLowering {
             }
 
             ast::Statement::Surface(surface_stmt) => self.lower_surface_statement(surface_stmt)?,
+            ast::Statement::Unsafe(_) => {
+                return Err(LoweringError {
+                    message: "unsafe blocks must be flattened by statement-list lowering".to_string(),
+                    span: IrSpan::default(),
+                });
+            }
             ast::Statement::VocabExpressionItem(_item) => {
                 return Err(LoweringError {
                     message: "raw vocab expression-list item reached lowering before desugaring".to_string(),
@@ -2045,6 +2056,11 @@ impl AstLowering {
             }
             ast::Statement::Loop(l) => {
                 for stmt in &l.body {
+                    self.count_statement_ident_reads(&stmt.node, counts);
+                }
+            }
+            ast::Statement::Unsafe(unsafe_stmt) => {
+                for stmt in &unsafe_stmt.body {
                     self.count_statement_ident_reads(&stmt.node, counts);
                 }
             }

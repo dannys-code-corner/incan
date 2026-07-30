@@ -2,7 +2,8 @@ use crate::frontend::ast;
 use crate::frontend::diagnostics::CompileError;
 use crate::frontend::library_manifest_index::LibraryManifestIndex;
 use crate::frontend::vocab_ast_bridge::{
-    internal_vocab_block_to_public, public_expr_to_internal_with_anchor, public_statements_to_internal_with_anchor,
+    internal_vocab_block_to_public, public_declarations_to_internal_with_anchor, public_expr_to_internal_with_anchor,
+    public_statements_to_internal_with_anchor,
 };
 
 use super::helper_bindings::{
@@ -13,8 +14,8 @@ use super::{VocabDesugarPassError, WasmDesugarerRuntime};
 
 /// Rewrite all raw vocab blocks in a parsed program before typechecking/lowering.
 ///
-/// This pass is the hard boundary ensuring downstream phases operate only on ordinary compiler statements, never
-/// `Statement::VocabBlock`.
+/// This pass is the hard boundary ensuring downstream phases operate only on ordinary compiler declarations,
+/// statements, and expressions, never raw vocabulary blocks.
 ///
 /// # Errors
 ///
@@ -40,16 +41,14 @@ pub fn desugar_program_vocab_blocks(
     let mut errors = Vec::new();
     let mut helper_imports = HelperImportAccumulator::default();
 
-    for declaration in &mut program.declarations {
-        rewrite_declaration(
-            &mut declaration.node,
-            module_path,
-            library_manifest_index,
-            &mut runtime,
-            &mut helper_imports,
-            &mut errors,
-        );
-    }
+    rewrite_declaration_list(
+        &mut program.declarations,
+        module_path,
+        library_manifest_index,
+        &mut runtime,
+        &mut helper_imports,
+        &mut errors,
+    );
 
     if errors.is_empty() {
         inject_helper_imports(program, &helper_imports);
@@ -57,6 +56,109 @@ pub fn desugar_program_vocab_blocks(
     } else {
         Err(errors)
     }
+}
+
+/// Rewrite one declaration list, replacing top-level vocabulary declarations with ordinary lowered declarations.
+fn rewrite_declaration_list(
+    declarations: &mut Vec<ast::Spanned<ast::Declaration>>,
+    module_path: Option<&str>,
+    library_manifest_index: &LibraryManifestIndex,
+    runtime: &mut WasmDesugarerRuntime,
+    helper_imports: &mut HelperImportAccumulator,
+    errors: &mut Vec<CompileError>,
+) {
+    let mut rewritten = Vec::new();
+    for declaration in std::mem::take(declarations) {
+        let span = declaration.span;
+        let leading_blank_lines = declaration.leading_blank_lines;
+        let required_features = declaration.required_features.clone();
+        match declaration.node {
+            ast::Declaration::VocabBlock(block) => {
+                let mut lowered =
+                    match desugar_vocab_declaration(&block, span, module_path, library_manifest_index, runtime) {
+                        Ok(declarations) => declarations,
+                        Err(error) => {
+                            errors.push(error);
+                            continue;
+                        }
+                    };
+                for (index, declaration) in lowered.iter_mut().enumerate() {
+                    declaration.span = span;
+                    declaration.leading_blank_lines = if index == 0 { leading_blank_lines } else { 0 };
+                    declaration.required_features.clone_from(&required_features);
+                    rewrite_declaration(
+                        &mut declaration.node,
+                        module_path,
+                        library_manifest_index,
+                        runtime,
+                        helper_imports,
+                        errors,
+                    );
+                }
+                rewritten.extend(lowered);
+            }
+            mut declaration => {
+                rewrite_declaration(
+                    &mut declaration,
+                    module_path,
+                    library_manifest_index,
+                    runtime,
+                    helper_imports,
+                    errors,
+                );
+                rewritten.push(ast::Spanned {
+                    node: declaration,
+                    span,
+                    leading_blank_lines,
+                    required_features,
+                });
+            }
+        }
+    }
+    *declarations = rewritten;
+}
+
+/// Desugar one top-level vocabulary declaration into ordinary compiler declarations.
+fn desugar_vocab_declaration(
+    block: &ast::VocabBlockStmt,
+    span: ast::Span,
+    module_path: Option<&str>,
+    library_manifest_index: &LibraryManifestIndex,
+    runtime: &mut WasmDesugarerRuntime,
+) -> Result<Vec<ast::Spanned<ast::Declaration>>, CompileError> {
+    let bridged = internal_vocab_block_to_public(block, span).map_err(|source| {
+        error_from_pass_error(
+            VocabDesugarPassError::Bridge {
+                keyword: block.keyword.clone(),
+                source,
+            },
+            span,
+        )
+    })?;
+    let keyword = bridged.keyword.clone();
+    let desugared = runtime
+        .desugar_node(
+            library_manifest_index,
+            &incan_vocab::VocabSyntaxNode::Declaration(bridged),
+            module_path,
+        )
+        .map_err(|error| error_from_pass_error(error, span))?;
+    let incan_vocab::DesugarOutput::Declarations(declarations) = desugared.output else {
+        return Err(error_from_pass_error(
+            VocabDesugarPassError::UnsupportedOutput { keyword },
+            span,
+        ));
+    };
+
+    public_declarations_to_internal_with_anchor(&declarations, span).map_err(|source| {
+        error_from_pass_error(
+            VocabDesugarPassError::Bridge {
+                keyword: block.keyword.clone(),
+                source,
+            },
+            span,
+        )
+    })
 }
 
 /// Rewrite vocab blocks inside every expression-bearing surface of one declaration.
@@ -248,16 +350,14 @@ fn rewrite_declaration(
             }
         }
         ast::Declaration::TestModule(test_module) => {
-            for nested in &mut test_module.body {
-                rewrite_declaration(
-                    &mut nested.node,
-                    module_path,
-                    library_manifest_index,
-                    runtime,
-                    helper_imports,
-                    errors,
-                );
-            }
+            rewrite_declaration_list(
+                &mut test_module.body,
+                module_path,
+                library_manifest_index,
+                runtime,
+                helper_imports,
+                errors,
+            );
         }
         _ => {}
     }

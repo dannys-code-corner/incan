@@ -42,11 +42,12 @@ pub mod version;
 pub mod wasm_abi;
 
 pub use ast::{
-    Decorator, DecoratorArg, DecoratorArgValue, IncanBinaryOp, IncanExpr, IncanRaceForArm, IncanRaceForBody,
-    IncanRaceForExpr, IncanScopedSurfaceExpr, IncanScopedSurfaceOwner, IncanScopedSurfacePayload,
-    IncanScopedSymbolCall, IncanStatement, IncanUnaryOp, Span, VocabBodyItem, VocabClause, VocabClauseBody,
-    VocabDeclaration, VocabDeclarationHead, VocabExpressionItem, VocabExpressionItemModifier, VocabFieldSpec,
-    VocabKeywordMetadata, VocabParameter, VocabSyntaxNode, VocabTypeExpr,
+    Decorator, DecoratorArg, DecoratorArgValue, IncanBinaryOp, IncanClassDeclaration, IncanDeclaration, IncanExpr,
+    IncanFromImportDeclaration, IncanImportItem, IncanRaceForArm, IncanRaceForBody, IncanRaceForExpr,
+    IncanScopedSurfaceExpr, IncanScopedSurfaceOwner, IncanScopedSurfacePayload, IncanScopedSymbolCall, IncanStatement,
+    IncanUnaryOp, IncanVisibility, Span, VocabBodyItem, VocabClause, VocabClauseBody, VocabDeclaration,
+    VocabDeclarationHead, VocabExpressionItem, VocabExpressionItemModifier, VocabFieldSpec, VocabKeywordMetadata,
+    VocabParameter, VocabSyntaxNode, VocabTypeExpr,
 };
 #[cfg(feature = "serde")]
 pub use desugar::execute_desugar_request;
@@ -256,30 +257,39 @@ impl VocabRegistration {
     }
 }
 
+/// Derive parser keyword registrations for every declaration and nested clause in one DSL surface.
 fn keyword_registration_from_surface(surface: &DslSurface) -> KeywordRegistration {
+    /// Add one declaration and all of its nested declarations to the registration transport.
+    fn register_declaration(
+        registration: KeywordRegistration,
+        declaration: &DeclarationSurface,
+    ) -> KeywordRegistration {
+        let declaration_keyword = KeywordSpec::block(&declaration.keyword)
+            .with_compound_tokens(declaration.compound_tokens.clone())
+            .with_placement(declaration.placement.clone());
+
+        let clause_keywords = declaration.clauses.iter().map(|clause| {
+            let surface_kind = if matches!(clause.body_kind, ClauseBodyKind::NestedItems) {
+                KeywordSurfaceKind::SubBlock
+            } else {
+                KeywordSurfaceKind::BlockContextKeyword
+            };
+
+            KeywordSpec::new(&clause.keyword, surface_kind)
+                .with_compound_tokens(clause.compound_tokens.clone())
+                .in_block(&declaration.keyword)
+        });
+
+        let registration = registration
+            .with_keyword(declaration_keyword)
+            .with_keywords(clause_keywords);
+
+        declaration.declarations.iter().fold(registration, register_declaration)
+    }
+
     surface.declarations.iter().fold(
         KeywordRegistration::new(surface.activation.clone()),
-        |registration, declaration| {
-            let declaration_keyword = KeywordSpec::block(&declaration.keyword)
-                .with_compound_tokens(declaration.compound_tokens.clone())
-                .with_placement(declaration.placement.clone());
-
-            let clause_keywords = declaration.clauses.iter().map(|clause| {
-                let surface_kind = if matches!(clause.body_kind, ClauseBodyKind::NestedItems) {
-                    KeywordSurfaceKind::SubBlock
-                } else {
-                    KeywordSurfaceKind::BlockContextKeyword
-                };
-
-                KeywordSpec::new(&clause.keyword, surface_kind)
-                    .with_compound_tokens(clause.compound_tokens.clone())
-                    .in_block(&declaration.keyword)
-            });
-
-            registration
-                .with_keyword(declaration_keyword)
-                .with_keywords(clause_keywords)
-        },
+        register_declaration,
     )
 }
 

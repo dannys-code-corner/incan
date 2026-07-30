@@ -223,6 +223,9 @@ pub const RFC_107: RfcId = "RFC 107";
 /// RFC 114 — compiled providers, SDK components, and package features.
 pub const RFC_114: RfcId = "RFC 114";
 
+/// RFC 116 — typed C ABI interop.
+pub const RFC_116: RfcId = "RFC 116";
+
 /// Namespace-style access to RFC ids.
 ///
 /// This exists purely for ergonomics at call sites so individual registries don’t need to import
@@ -365,6 +368,8 @@ impl RFC {
     pub const _107: RfcId = RFC_107;
     /// RFC 114 — compiled providers, SDK components, and package features.
     pub const _114: RfcId = RFC_114;
+    /// RFC 116 — typed C ABI interop.
+    pub const _116: RfcId = RFC_116;
 }
 
 /// Identify the language/compiler version a vocabulary item is available since.

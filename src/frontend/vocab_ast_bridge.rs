@@ -61,6 +61,9 @@ impl SyntheticSpanAllocator {
 /// - whether the mismatch happened at statement or expression level.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum VocabAstBridgeError {
+    /// Public declaration shape cannot be represented in the current internal AST bridge mapping.
+    #[error("unsupported public declaration for vocab bridge: {0}")]
+    UnsupportedPublicDeclaration(&'static str),
     /// Internal statement shape cannot be represented in current public AST.
     #[error("unsupported internal statement for vocab bridge: {0}")]
     UnsupportedInternalStatement(&'static str),
@@ -103,22 +106,62 @@ pub fn internal_vocab_block_to_public(
         .iter()
         .map(public_decorator_from_internal)
         .collect::<Result<Vec<_>, _>>()?;
-    let mut header_args = block
-        .header_args
-        .iter()
-        .map(|arg| internal_expr_to_public(&arg.node))
-        .collect::<Result<Vec<_>, _>>()?;
-    let head_name = match block.header_args.first() {
-        Some(first_arg) => match &first_arg.node {
-            ast::Expr::Ident(name) => {
-                if !header_args.is_empty() {
-                    header_args.remove(0);
+    let head = if let Some(signature) = &block.signature_head {
+        incan_vocab::VocabDeclarationHead {
+            name: Some(signature.name.clone()),
+            header_args: Vec::new(),
+            parameters: signature
+                .parameters
+                .iter()
+                .map(|parameter| {
+                    Ok(incan_vocab::VocabParameter {
+                        name: parameter.node.name.clone(),
+                        param_type: Some(incan_vocab::VocabTypeExpr {
+                            source: parameter.node.ty.node.to_string(),
+                            span: public_span(parameter.node.ty.span),
+                        }),
+                        default_value: parameter
+                            .node
+                            .default
+                            .as_ref()
+                            .map(|value| internal_expr_to_public(&value.node))
+                            .transpose()?,
+                        span: public_span(parameter.span),
+                    })
+                })
+                .collect::<Result<Vec<_>, VocabAstBridgeError>>()?,
+            return_type: signature
+                .return_type
+                .as_ref()
+                .map(|return_type| incan_vocab::VocabTypeExpr {
+                    source: return_type.node.to_string(),
+                    span: public_span(return_type.span),
+                }),
+        }
+    } else {
+        let mut header_args = block
+            .header_args
+            .iter()
+            .map(|arg| internal_expr_to_public(&arg.node))
+            .collect::<Result<Vec<_>, _>>()?;
+        let name = match block.header_args.first() {
+            Some(first_arg) => match &first_arg.node {
+                ast::Expr::Ident(name) => {
+                    if !header_args.is_empty() {
+                        header_args.remove(0);
+                    }
+                    Some(name.clone())
                 }
-                Some(name.clone())
-            }
-            _ => None,
-        },
-        None => None,
+                _ => None,
+            },
+            None => None,
+        };
+        incan_vocab::VocabDeclarationHead {
+            name,
+            header_args,
+            parameters: Vec::new(),
+            return_type: None,
+        }
     };
 
     Ok(incan_vocab::VocabDeclaration {
@@ -130,12 +173,7 @@ pub fn internal_vocab_block_to_public(
             surface_kind: block.keyword_binding.surface_kind,
             placement: block.keyword_binding.placement.clone(),
         }),
-        head: incan_vocab::VocabDeclarationHead {
-            name: head_name,
-            header_args,
-            parameters: Vec::new(),
-            return_type: None,
-        },
+        head,
         decorators,
         body,
         span: public_span(span),
@@ -369,11 +407,24 @@ pub fn internal_statement_to_public(stmt: &ast::Statement) -> Result<incan_vocab
                 .map(|expr| internal_expr_to_public(&expr.node))
                 .transpose()?,
         )),
-        ast::Statement::Assignment(assign) => Ok(incan_vocab::IncanStatement::Let {
-            name: assign.name.clone(),
-            mutable: matches!(assign.binding, ast::BindingKind::Mutable),
-            value: internal_expr_to_public(&assign.value.node)?,
-        }),
+        ast::Statement::Assignment(assign) => {
+            let name = assign.name.clone();
+            let mutable = matches!(assign.binding, ast::BindingKind::Mutable);
+            let value = internal_expr_to_public(&assign.value.node)?;
+            if let Some(ty) = &assign.ty {
+                Ok(incan_vocab::IncanStatement::TypedLet {
+                    name,
+                    mutable,
+                    ty: incan_vocab::VocabTypeExpr {
+                        source: ty.node.to_string(),
+                        span: public_span(ty.span),
+                    },
+                    value,
+                })
+            } else {
+                Ok(incan_vocab::IncanStatement::Let { name, mutable, value })
+            }
+        }
         ast::Statement::CompoundAssignment(assign) => Ok(incan_vocab::IncanStatement::Assign {
             target: assign.name.clone(),
             value: internal_expr_to_public(&assign.value.node)?,
@@ -424,6 +475,144 @@ pub fn public_statements_to_internal(
     stmts: &[incan_vocab::IncanStatement],
 ) -> Result<Vec<ast::Spanned<ast::Statement>>, VocabAstBridgeError> {
     public_statements_to_internal_with_anchor(stmts, ast::Span::default())
+}
+
+/// Convert public vocabulary declarations into internal compilation-unit declarations under one source anchor.
+pub fn public_declarations_to_internal_with_anchor(
+    declarations: &[incan_vocab::IncanDeclaration],
+    anchor: ast::Span,
+) -> Result<Vec<ast::Spanned<ast::Declaration>>, VocabAstBridgeError> {
+    let mut spans = SyntheticSpanAllocator::new(anchor);
+    declarations
+        .iter()
+        .map(|declaration| {
+            let internal = public_declaration_to_internal_with_spans(declaration, &mut spans)?;
+            Ok(ast::Spanned::new(internal, spans.next()))
+        })
+        .collect()
+}
+
+/// Convert one public vocabulary declaration into the ordinary compiler declaration AST.
+fn public_declaration_to_internal_with_spans(
+    declaration: &incan_vocab::IncanDeclaration,
+    spans: &mut SyntheticSpanAllocator,
+) -> Result<ast::Declaration, VocabAstBridgeError> {
+    match declaration {
+        incan_vocab::IncanDeclaration::FromImport(import) => {
+            if import.module.is_empty() || import.module.iter().any(|segment| segment.is_empty()) {
+                return Err(VocabAstBridgeError::UnsupportedPublicDeclaration(
+                    "public vocabulary import must name a non-empty module path",
+                ));
+            }
+            if import.items.is_empty() || import.items.iter().any(|item| item.name.is_empty()) {
+                return Err(VocabAstBridgeError::UnsupportedPublicDeclaration(
+                    "public vocabulary import must name at least one non-empty item",
+                ));
+            }
+            Ok(ast::Declaration::Import(ast::ImportDecl {
+                visibility: public_visibility_to_internal(import.visibility),
+                kind: ast::ImportKind::From {
+                    module: ast::ImportPath::simple(import.module.clone()),
+                    items: import
+                        .items
+                        .iter()
+                        .map(|item| ast::ImportItem {
+                            name: item.name.clone(),
+                            alias: item.alias.clone(),
+                        })
+                        .collect(),
+                },
+                alias: None,
+            }))
+        }
+        incan_vocab::IncanDeclaration::Class(class) => {
+            if class.name.is_empty() {
+                return Err(VocabAstBridgeError::UnsupportedPublicDeclaration(
+                    "public vocabulary class must have a name",
+                ));
+            }
+            Ok(ast::Declaration::Class(ast::ClassDecl {
+                visibility: public_visibility_to_internal(class.visibility),
+                decorators: class
+                    .decorators
+                    .iter()
+                    .map(|decorator| public_decorator_to_internal_with_spans(decorator, spans))
+                    .collect::<Result<Vec<_>, _>>()?,
+                name: class.name.clone(),
+                type_params: Vec::new(),
+                extends: class.extends.clone(),
+                traits: Vec::new(),
+                docstring: None,
+                fields: Vec::new(),
+                method_aliases: Vec::new(),
+                method_partials: Vec::new(),
+                properties: Vec::new(),
+                methods: Vec::new(),
+                declarative_members: class.declarative_members.clone(),
+            }))
+        }
+        _ => Err(VocabAstBridgeError::UnsupportedPublicDeclaration(
+            "declaration form is not yet supported by the internal AST bridge",
+        )),
+    }
+}
+
+/// Convert public vocabulary visibility into the compiler's ordinary declaration visibility.
+fn public_visibility_to_internal(visibility: incan_vocab::IncanVisibility) -> ast::Visibility {
+    match visibility {
+        incan_vocab::IncanVisibility::Private => ast::Visibility::Private,
+        incan_vocab::IncanVisibility::Public => ast::Visibility::Public,
+        _ => ast::Visibility::Private,
+    }
+}
+
+/// Convert a public vocabulary decorator into the ordinary compiler decorator AST.
+fn public_decorator_to_internal_with_spans(
+    decorator: &incan_vocab::Decorator,
+    spans: &mut SyntheticSpanAllocator,
+) -> Result<ast::Spanned<ast::Decorator>, VocabAstBridgeError> {
+    let name = decorator
+        .path
+        .last()
+        .cloned()
+        .ok_or(VocabAstBridgeError::UnsupportedPublicDeclaration(
+            "decorator path must contain at least one segment",
+        ))?;
+    let args = decorator
+        .args
+        .iter()
+        .map(|arg| {
+            let value = match &arg.value {
+                incan_vocab::DecoratorArgValue::Str(value) => ast::Expr::Literal(ast::Literal::String(value.clone())),
+                incan_vocab::DecoratorArgValue::Int(value) => {
+                    ast::Expr::Literal(ast::Literal::Int(ast::IntLiteral::synthetic(*value)))
+                }
+                incan_vocab::DecoratorArgValue::Bool(value) => ast::Expr::Literal(ast::Literal::Bool(*value)),
+                incan_vocab::DecoratorArgValue::Expr(value) => public_expr_to_internal_with_spans(value, spans)?,
+                _ => {
+                    return Err(VocabAstBridgeError::UnsupportedPublicDeclaration(
+                        "decorator argument form is not yet supported by the internal AST bridge",
+                    ));
+                }
+            };
+            let value = ast::Spanned::new(value, spans.next());
+            Ok(match &arg.name {
+                Some(name) => ast::DecoratorArg::Named(name.clone(), ast::DecoratorArgValue::Expr(value)),
+                None => ast::DecoratorArg::Positional(value),
+            })
+        })
+        .collect::<Result<Vec<_>, VocabAstBridgeError>>()?;
+
+    Ok(ast::Spanned::new(
+        ast::Decorator {
+            path: ast::ImportPath::simple(decorator.path.clone()),
+            name,
+            type_args: Vec::new(),
+            is_call: !decorator.args.is_empty(),
+            args,
+        },
+        spans.next(),
+    ))
 }
 
 /// Convert public statements into internal statements while assigning unique synthetic spans under `anchor`.
@@ -1228,6 +1417,7 @@ mod tests {
             keyword: "FROM".to_string(),
             keyword_binding: default_keyword_binding(incan_vocab::KeywordSurfaceKind::BlockContextKeyword),
             decorators: Vec::new(),
+            signature_head: None,
             header_args: vec![ast::Spanned::new(
                 ast::Expr::Ident("orders".to_string()),
                 ast::Span::default(),
@@ -1239,6 +1429,7 @@ mod tests {
             keyword: "query".to_string(),
             keyword_binding: default_keyword_binding(incan_vocab::KeywordSurfaceKind::BlockDeclaration),
             decorators: Vec::new(),
+            signature_head: None,
             header_args: Vec::new(),
             body: vec![ast::Spanned::new(
                 ast::Statement::VocabBlock(clause_block),
@@ -1272,6 +1463,7 @@ mod tests {
                 ..default_keyword_binding(incan_vocab::KeywordSurfaceKind::BlockDeclaration)
             },
             decorators: Vec::new(),
+            signature_head: None,
             header_args: Vec::new(),
             body: vec![ast::Spanned::new(
                 ast::Statement::Expr(ast::Spanned::new(
@@ -1290,6 +1482,7 @@ mod tests {
                 ..default_keyword_binding(incan_vocab::KeywordSurfaceKind::BlockDeclaration)
             },
             decorators: Vec::new(),
+            signature_head: None,
             header_args: Vec::new(),
             body: Vec::new(),
             body_item_trailing_commas: Vec::new(),
@@ -1298,6 +1491,7 @@ mod tests {
             keyword: "query".to_string(),
             keyword_binding: default_keyword_binding(incan_vocab::KeywordSurfaceKind::BlockDeclaration),
             decorators: Vec::new(),
+            signature_head: None,
             header_args: Vec::new(),
             body: vec![
                 ast::Spanned::new(ast::Statement::VocabBlock(clause_block), ast::Span::default()),
@@ -1339,6 +1533,7 @@ mod tests {
             keyword: "MATCH".to_string(),
             keyword_binding,
             decorators: Vec::new(),
+            signature_head: None,
             header_args: Vec::new(),
             body: Vec::new(),
             body_item_trailing_commas: Vec::new(),
@@ -1406,6 +1601,7 @@ mod tests {
             keyword: "SELECT".to_string(),
             keyword_binding: expression_list_clause_binding(),
             decorators: Vec::new(),
+            signature_head: None,
             header_args: Vec::new(),
             body: vec![
                 ast::Spanned::new(
@@ -1456,6 +1652,7 @@ mod tests {
             keyword: "workflow".to_string(),
             keyword_binding: default_keyword_binding(incan_vocab::KeywordSurfaceKind::BlockDeclaration),
             decorators: Vec::new(),
+            signature_head: None,
             header_args: vec![
                 ast::Spanned::new(ast::Expr::Ident("daily".to_string()), ast::Span::default()),
                 ast::Spanned::new(

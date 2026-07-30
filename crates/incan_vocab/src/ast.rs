@@ -240,6 +240,77 @@ pub enum VocabSyntaxNode {
     Expression(IncanExpr),
 }
 
+/// A compilation-unit declaration emitted by a vocabulary desugarer.
+///
+/// A declaration vocabulary keeps its surface ownership in the companion crate while lowering into the ordinary
+/// compiler declaration pipeline. The contract intentionally describes syntax structure only; semantic meaning stays
+/// with the receiving language feature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
+pub enum IncanDeclaration {
+    /// An ordinary `from module import item` declaration.
+    FromImport(IncanFromImportDeclaration),
+    /// An ordinary class declaration.
+    Class(IncanClassDeclaration),
+}
+
+/// One ordinary `from module import item` declaration emitted by a vocabulary desugarer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct IncanFromImportDeclaration {
+    /// Visibility of the lowered import declaration.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub visibility: IncanVisibility,
+    /// Module path segments.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub module: Vec<String>,
+    /// Imported names and optional local aliases.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub items: Vec<IncanImportItem>,
+}
+
+/// One imported item emitted by a vocabulary desugarer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct IncanImportItem {
+    /// Exported name in the imported module.
+    pub name: String,
+    /// Optional local alias.
+    pub alias: Option<String>,
+}
+
+/// An ordinary class declaration emitted by a vocabulary desugarer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct IncanClassDeclaration {
+    /// Visibility of the lowered class declaration.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub visibility: IncanVisibility,
+    /// Class name in the consumer module.
+    pub name: String,
+    /// Ordinary decorators to apply after lowering.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub decorators: Vec<Decorator>,
+    /// Optional ordinary base-class name.
+    pub extends: Option<String>,
+    /// Declarative members retained in the ordinary class body for decorator-specific semantic checking.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub declarative_members: Vec<VocabDeclaration>,
+}
+
+/// Visibility of one ordinary declaration emitted by a vocabulary desugarer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
+pub enum IncanVisibility {
+    /// Module-private visibility.
+    #[default]
+    Private,
+    /// Public module visibility.
+    Public,
+}
+
 /// A minimal public statement surface for desugaring contracts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -259,6 +330,13 @@ pub enum IncanStatement {
         mutable: bool,
         value: IncanExpr,
     },
+    /// A new binding declaration with an explicit source type annotation.
+    TypedLet {
+        name: String,
+        mutable: bool,
+        ty: VocabTypeExpr,
+        value: IncanExpr,
+    },
     /// Conditional branch.
     If {
         condition: IncanExpr,
@@ -276,6 +354,8 @@ pub enum IncanStatement {
         iter: IncanExpr,
         body: Vec<IncanStatement>,
     },
+    /// Scoped acknowledgement whose authorized operations are defined by the receiving language feature.
+    Unsafe { body: Vec<IncanStatement> },
 }
 
 /// Binary expression operators.

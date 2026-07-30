@@ -1846,6 +1846,57 @@ def main() -> str:
         );
         Ok(())
     }
+
+    #[test]
+    fn local_signature_help_descends_into_unsafe_blocks() -> Result<(), String> {
+        let source = r#"
+def greet(name: str) -> str:
+    return name
+
+def main() -> str:
+    unsafe:
+        return greet("Grace")
+"#;
+        let ast = parse_source(source)?;
+        let call_offset = source
+            .rfind("greet(\"Grace\")")
+            .map(|start| start + "greet(\"".len())
+            .ok_or_else(|| "expected call expression in fixture".to_string())?;
+
+        let help = local_signature_help_at_offset(&ast, source, call_offset)
+            .ok_or_else(|| "expected signature help inside unsafe block".to_string())?;
+        let signature = help
+            .signatures
+            .first()
+            .ok_or_else(|| "expected one signature".to_string())?;
+        assert_eq!(signature.label, "def greet(name: str) -> str");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lsp_dotted_type_display_tests {
+    use super::format_type;
+    use crate::frontend::ast::Declaration;
+    use crate::frontend::{lexer, parser};
+
+    #[test]
+    fn type_display_preserves_dotted_c_type_spelling() -> Result<(), String> {
+        let source = "type Handle = c.ConstPtr[c.i32]\n";
+        let tokens = lexer::lex(source).map_err(|errors| format!("lexer failed: {errors:?}"))?;
+        let ast = parser::parse(&tokens).map_err(|errors| format!("parser failed: {errors:?}"))?;
+        let alias = ast
+            .declarations
+            .iter()
+            .find_map(|decl| match &decl.node {
+                Declaration::TypeAlias(alias) => Some(alias),
+                _ => None,
+            })
+            .ok_or_else(|| "expected type alias declaration".to_string())?;
+
+        assert_eq!(format_type(&alias.target.node), "c.ConstPtr[c.i32]");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -2122,6 +2173,7 @@ fn local_signature_in_statement(
             .or_else(|| local_signature_in_statements(&while_stmt.body, ast, source, offset)),
         Statement::For(for_stmt) => local_signature_in_expr(&for_stmt.iter, ast, source, offset)
             .or_else(|| local_signature_in_statements(&for_stmt.body, ast, source, offset)),
+        Statement::Unsafe(unsafe_stmt) => local_signature_in_statements(&unsafe_stmt.body, ast, source, offset),
         Statement::Expr(expr) => local_signature_in_expr(expr, ast, source, offset),
         Statement::Assert(assert_stmt) => local_signature_in_assert(assert_stmt, ast, source, offset),
         Statement::Break(Some(value)) => local_signature_in_expr(value, ast, source, offset),
@@ -2473,9 +2525,14 @@ fn format_type(ty: &Type) -> String {
     match ty {
         Type::Simple(name) => name.clone(),
         Type::Qualified(segments) => segments.join("::"),
+        Type::Dotted(segments) => segments.join("."),
         Type::Generic(name, params) => {
             let params_str: Vec<String> = params.iter().map(|p| format_type(&p.node)).collect();
             format!("{}[{}]", name, params_str.join(", "))
+        }
+        Type::DottedGeneric(segments, params) => {
+            let params_str: Vec<String> = params.iter().map(|p| format_type(&p.node)).collect();
+            format!("{}[{}]", segments.join("."), params_str.join(", "))
         }
         Type::ConstrainedPrimitive(_, _) => ty.to_string(),
         Type::Tuple(types) => {
@@ -4321,6 +4378,9 @@ fn scoped_symbol_in_statement<'a>(
             scoped_symbol_in_expr(&for_stmt.iter, ident, symbol_span, surfaces, found);
             scoped_symbol_in_statements(&for_stmt.body, ident, symbol_span, surfaces, found);
         }
+        Statement::Unsafe(unsafe_stmt) => {
+            scoped_symbol_in_statements(&unsafe_stmt.body, ident, symbol_span, surfaces, found);
+        }
         Statement::Expr(expr) => scoped_symbol_in_expr(expr, ident, symbol_span, surfaces, found),
         Statement::Assert(assert_stmt) => {
             match &assert_stmt.kind {
@@ -4868,6 +4928,9 @@ fn scoped_symbol_context_in_statement(stmt: &Spanned<Statement>, offset: usize, 
         Statement::For(for_stmt) => {
             scoped_symbol_context_in_expr(&for_stmt.iter, offset, context);
             scoped_symbol_context_in_statements(&for_stmt.body, offset, context);
+        }
+        Statement::Unsafe(unsafe_stmt) => {
+            scoped_symbol_context_in_statements(&unsafe_stmt.body, offset, context);
         }
         Statement::Expr(expr) => scoped_symbol_context_in_expr(expr, offset, context),
         Statement::Assert(assert_stmt) => {

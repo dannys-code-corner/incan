@@ -16,8 +16,14 @@ pub enum Type {
     ///
     /// At least two segments. Used with `rusttype` when the backing type lives under an imported Rust module binding.
     Qualified(Vec<Ident>),
+    /// Namespace-qualified Incan type path: `c.i32`, `json.Value`.
+    ///
+    /// Unlike [`Type::Qualified`], this preserves ordinary Incan namespace spelling rather than a Rust path.
+    Dotted(Vec<Ident>),
     /// Generic type: `List[T]`, `Result[T, E]`
     Generic(Ident, Vec<Spanned<Type>>),
+    /// Generic type whose constructor is namespace-qualified: `c.ConstPtr[c.i32]`.
+    DottedGeneric(Vec<Ident>, Vec<Spanned<Type>>),
     /// Primitive type with RFC 017 constraint predicates, such as `int[ge=0]`.
     ConstrainedPrimitive(Ident, Vec<Spanned<TypeConstraint>>),
     /// Integer literal in type-argument position, used by parameterized numeric types such as `decimal[10, 2]`.
@@ -104,8 +110,33 @@ impl fmt::Display for Type {
                 }
                 Ok(())
             }
+            Type::Dotted(segments) => {
+                for (i, seg) in segments.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ".")?;
+                    }
+                    write!(f, "{}", seg)?;
+                }
+                Ok(())
+            }
             Type::Generic(name, args) => {
                 write!(f, "{}[", name)?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", arg.node)?;
+                }
+                write!(f, "]")
+            }
+            Type::DottedGeneric(segments, args) => {
+                for (i, seg) in segments.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ".")?;
+                    }
+                    write!(f, "{}", seg)?;
+                }
+                write!(f, "[")?;
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

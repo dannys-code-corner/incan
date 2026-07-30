@@ -12197,6 +12197,27 @@ mod rfc031_pub_import_integration_tests {
         Ok(super::incan_command().arg("--check").arg(main_path).output()?)
     }
 
+    /// Check a consumer against this checkout's SDK rather than an ambient developer installation.
+    fn run_check_against_checkout_sdk(
+        main_path: &Path,
+        generated_cargo_target: &Path,
+    ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        Ok(super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", generated_cargo_target)
+            // Lock-workspace preheat is covered by its own integration suite. This C-binding consumer proof needs
+            // the generated program path, and its temporary project otherwise exposes macOS's `/tmp` alias as a
+            // duplicate Cargo package identity.
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .arg("check")
+            .arg(main_path)
+            .output()?)
+    }
+
     fn run_build(main_path: &Path, out_dir: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         Ok(super::incan_command()
             .args([
@@ -17615,6 +17636,87 @@ def main() -> Result[None, SessionError]:
             "expected consumer check to parse/typecheck assert keyword from serialized vocab metadata.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&check_output.stdout),
             String::from_utf8_lossy(&check_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_activates_standard_checked_c_vocab() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let fixture_header = tmp.path().join("fixture.h");
+        std::fs::write(
+            &fixture_header,
+            "typedef struct fixture_pair { int left; int right; } fixture_pair;\n#define FIXTURE_OK 0\nint abs(int value);\n",
+        )?;
+        let source = format!(
+            "from std.interop import c\n\nbinding Fixture:\n    header = \"{}\"\n    link = c.system_library(\"c\")\n\n    symbol absolute(value: c.i32) -> c.i32:\n        native = \"abs\"\n\n    enum Status:\n        OK: c.i32 = FIXTURE_OK\n\n    struct Pair:\n        native = \"fixture_pair\"\n        left: c.i32 = left\n        right: c.i32 = right\n\ndef absolute(value: int) -> int:\n    unsafe:\n        return Fixture.absolute(value)\n\ndef main() -> None:\n    assert Fixture.Status.OK == 0\n    assert absolute(-7) == 7\n",
+            fixture_header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"standard_interop_vocab_consumer\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected the standard C binding vocabulary to lower and typecheck.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let run_output = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["run", main_path.to_string_lossy().as_ref()])
+            .output()?;
+        assert!(
+            run_output.status.success(),
+            "expected a checked C call to compile and run.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_reports_checked_c_signature_mismatch_at_the_binding() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let fixture_header = tmp.path().join("fixture.h");
+        std::fs::write(&fixture_header, "long fixture_abs(int value);\n")?;
+        let source = format!(
+            "from std.interop import c\n\nbinding Fixture:\n    header = \"{}\"\n    link = c.system_library(\"c\")\n\n    symbol absolute(value: c.i32) -> c.i32:\n        native = \"fixture_abs\"\n\ndef main() -> None:\n    pass\n",
+            fixture_header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_signature_mismatch\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            !output.status.success(),
+            "expected a mismatched C signature to fail before code generation.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let diagnostics = strip_ansi_escapes(&String::from_utf8_lossy(&output.stderr));
+        assert!(
+            diagnostics.contains("C binding `Fixture` verification failed"),
+            "expected a binding-anchored verifier diagnostic, got:\n{diagnostics}"
+        );
+        assert!(
+            diagnostics.contains("Incan C signature mismatch"),
+            "expected the Clang signature assertion detail, got:\n{diagnostics}"
         );
         Ok(())
     }

@@ -323,7 +323,7 @@ fn collect_top_level_decl_names(program: &Program) -> TopLevelNames {
                     add_import_binding(local, names);
                 }
             },
-            Declaration::Partial(_) | Declaration::Docstring(_) => {}
+            Declaration::Partial(_) | Declaration::VocabBlock(_) | Declaration::Docstring(_) => {}
         }
     }
 
@@ -1162,6 +1162,7 @@ fn statement_references_name(stmt: &Statement, name: &str) -> bool {
         Statement::For(for_stmt) => {
             expr_references_name(&for_stmt.iter.node, name) || body_references_name(&for_stmt.body, name)
         }
+        Statement::Unsafe(unsafe_stmt) => body_references_name(&unsafe_stmt.body, name),
         Statement::Assert(assert_stmt) => match &assert_stmt.kind {
             AssertKind::Condition(expr) => expr_references_name(&expr.node, name),
             AssertKind::Raises { call, .. } => expr_references_name(&call.node, name),
