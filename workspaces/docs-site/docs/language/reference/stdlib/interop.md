@@ -1,13 +1,8 @@
 # `std.interop`: checked C bindings
 
-`std.interop` activates the first checked C binding vocabulary. This page is the exact contract: it lists accepted
-declaration forms, current execution limits, and verification behavior. Start with the [tutorial](../../tutorials/checked_c_binding.md),
-use the [how-to guide](../../how-to/checked_c_bindings.md) for modelling and diagnostics, and read the
-[architecture explanation](../../explanation/checked_c_interop.md) before choosing C over Rust interop.
+`std.interop` activates the first checked C binding vocabulary. This page is the exact contract: it lists accepted declaration forms, current execution limits, and verification behavior. Start with the [tutorial](../../tutorials/checked_c_binding.md), use the [how-to guide](../../how-to/checked_c_bindings.md) for modelling and diagnostics, and read the [architecture explanation](../../explanation/checked_c_interop.md) before choosing C over Rust interop.
 
-The surface lets a module declare a small, explicit C ABI contract and call its supported scalar free functions without
-writing a Rust wrapper first. The compiler verifies declared signatures, enum carriers, and listed plain-structure
-layouts with Clang before generating Rust.
+The surface lets a module declare a small, explicit C ABI contract and call its supported scalar free functions without writing a Rust wrapper first. The compiler verifies declared signatures, enum carriers, and listed plain-structure layouts with Clang before generating Rust.
 
 This is a deliberately narrow foundation. It is useful for direct scalar C functions and ABI verification; resource ownership, output positions, bundled artifacts, shims, and platform packaging have separate RFC 116 slices.
 

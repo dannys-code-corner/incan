@@ -1,12 +1,10 @@
 # Work with checked C bindings
 
-Use this guide when you already understand the first checked C binding tutorial and need to model a small C header,
-keep the raw boundary private, or diagnose a rejected declaration.
+Use this guide when you already understand the first checked C binding tutorial and need to model a small C header, keep the raw boundary private, or diagnose a rejected declaration.
 
 ## Keep the binding local and expose a façade
 
-Do not publish a raw binding merely because it has a useful native name. Leave the binding unexported and export only
-ordinary Incan functions or models that give the C API application meaning:
+Do not publish a raw binding merely because it has a useful native name. Leave the binding unexported and export only ordinary Incan functions or models that give the C API application meaning:
 
 ```incan
 from std.interop import c
@@ -23,9 +21,7 @@ pub def magnitude(value: int) -> int:
         return LibC.absolute(value)
 ```
 
-The `binding` vocabulary desugars to a `@c.binding(...)` declaration class extending `BindingDeclaration`. That is an
-implementation detail with a useful consequence: normal module visibility rules still apply, and no special compiler
-rule turns every native name into public API.
+The `binding` vocabulary desugars to a `@c.binding(...)` declaration class extending `BindingDeclaration`. That is an implementation detail with a useful consequence: normal module visibility rules still apply, and no special compiler rule turns every native name into public API.
 
 ## Choose exact C types
 
@@ -40,8 +36,7 @@ Use the C namespace in the raw declaration, even when a type looks similar to In
 | Required immutable or mutable pointer | `c.ConstPtr[T]` or `c.MutPtr[T]` |
 | Nullable pointer | `Option[c.ConstPtr[T]]` or `Option[c.MutPtr[T]]` |
 
-The executable subset currently admits scalar free functions only. Pointer and structure declarations are still useful:
-the compiler verifies their declared shape, but rejects a call that would require unimplemented ownership or view rules.
+The executable subset currently admits scalar free functions only. Pointer and structure declarations are still useful: the compiler verifies their declared shape, but rejects a call that would require unimplemented ownership or view rules.
 
 ## Declare constants and a plain layout
 
@@ -70,9 +65,7 @@ binding Fixture:
         right: c.i32 = right
 ```
 
-Clang checks each requested field offset, size, and alignment for the selected host target. It does not infer omitted
-fields or discover a structure from the header. By-value structure and pointer calls are deliberately unavailable in
-this slice, so do not use a structure declaration as an assertion that you can already pass it across the boundary.
+Clang checks each requested field offset, size, and alignment for the selected host target. It does not infer omitted fields or discover a structure from the header. By-value structure and pointer calls are deliberately unavailable in this slice, so do not use a structure declaration as an assertion that you can already pass it across the boundary.
 
 ## Interpret common failures
 
@@ -86,14 +79,8 @@ this slice, so do not use a structure declaration as an assertion that you can a
 
 ## Decide whether C is the right boundary
 
-Choose this surface when the library's supported boundary is a compact C ABI and the part you need fits the verified
-scalar subset. Prefer [Rust interop](rust_interop.md) when a maintained Rust crate already offers the safe, resource,
-callback, or asynchronous API you need. A C ABI may still be the right eventual boundary for a library implemented in
-another language; the implementation language is not the deciding factor.
+Choose this surface when the library's supported boundary is a compact C ABI and the part you need fits the verified scalar subset. Prefer [Rust interop](rust_interop.md) when a maintained Rust crate already offers the safe, resource, callback, or asynchronous API you need. A C ABI may still be the right eventual boundary for a library implemented in another language; the implementation language is not the deciding factor.
 
-If the header depends on callbacks, variadics, unions, bitfields, macros that cannot be represented as constants, or
-nontrivial lifetime rules, do not fake a scalar declaration. A checked C or C++ shim is the intended later adapter;
-it is not available in this first release slice.
+If the header depends on callbacks, variadics, unions, bitfields, macros that cannot be represented as constants, or nontrivial lifetime rules, do not fake a scalar declaration. A checked C or C++ shim is the intended later adapter; it is not available in this first release slice.
 
-See [how checked C interop is structured](../explanation/checked_c_interop.md) for the source-of-truth and toolchain
-boundary, and the [`std.interop` reference](../reference/stdlib/interop.md) for precise accepted syntax.
+See [how checked C interop is structured](../explanation/checked_c_interop.md) for the source-of-truth and toolchain boundary, and the [`std.interop` reference](../reference/stdlib/interop.md) for precise accepted syntax.

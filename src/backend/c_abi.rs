@@ -115,8 +115,8 @@ pub(crate) struct CAbiVerificationError {
 
 /// Target-verified C enum values consumed by the ordinary Incan lowering path.
 ///
-/// The C probe is the authority for these values. Generated Rust receives only
-/// the resulting scalar, never a guessed header spelling or macro expansion.
+/// The C probe is authoritative: generated Rust receives only the folded scalar after target verification, never a
+/// guessed header spelling or macro expansion from the binding source.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct CAbiVerificationReceipt {
     enum_values: BTreeMap<(String, String), i64>,
