@@ -3887,6 +3887,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#inspection-is-a-projection-not-another-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      Inspection is a projection, not another authority
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#why-the-boundary-begins-with-c-declarations" class="md-nav__link">
     <span class="md-ellipsis">
       Why the boundary begins with C declarations
@@ -4650,6 +4659,8 @@
       
         
       
+        
+      
     
     
       
@@ -4856,6 +4867,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../tooling/how-to/inspect_checked_c_bindings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inspect checked C bindings
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../tooling/how-to/testing/" class="md-nav__link">
         
   
@@ -5043,6 +5075,8 @@
       
         
       
+        
+      
     
     
       
@@ -5086,6 +5120,27 @@
   
   <span class="md-ellipsis">
     CLI reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tooling/reference/binding_inspection_schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Binding inspection JSON schema
   </span>
   
 
@@ -6634,6 +6689,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#inspection-is-a-projection-not-another-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      Inspection is a projection, not another authority
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#why-the-boundary-begins-with-c-declarations" class="md-nav__link">
     <span class="md-ellipsis">
       Why the boundary begins with C declarations
@@ -6681,7 +6745,7 @@
 <h1 id="how-checked-c-interop-is-structured">How checked C interop is structured<a class="headerlink" href="#how-checked-c-interop-is-structured" title="Permanent link">&para;</a></h1>
 <p>Checked C interop is a language-owned contract for a deliberately small foreign boundary. It is not a header importer, an ambient linker search, or a claim that C pointers already have Incan ownership semantics.</p>
 <h2 id="one-declaration-authority">One declaration authority<a class="headerlink" href="#one-declaration-authority" title="Permanent link">&para;</a></h2>
-<p>The binding source is the authority for the Incan-facing names, C scalar categories, native spellings, and supported plain layouts. The compiler uses the declaration to construct a target-specific C probe; it does not scrape a header to invent a public API or infer safety from generated Rust.</p>
+<p>The binding source is the authority for the Incan-facing names, C scalar categories, native spellings, ownership and output contracts, and supported plain layouts. The compiler uses the declaration to construct a target-specific C probe; it does not scrape a header to invent a public API or infer safety from generated Rust.</p>
 <pre class="mermaid"><code>flowchart LR
   S["Incan binding declaration"] --&gt; T["Typechecked C descriptor"]
   T --&gt; V["Clang target probe"]
@@ -6690,6 +6754,36 @@
   L --&gt; F["Ordinary Incan facade"]
   F --&gt; A["Application API"]</code></pre>
 <p>The probe is syntax-only. It checks free-function signatures, folds declared enum constants, and checks requested plain-structure size, alignment, and field offsets for the selected host ABI. It neither links the native library nor executes its code. The later generated build still links the system library named by <code>c.system_library("name")</code>.</p>
+<h2 id="inspection-is-a-projection-not-another-authority">Inspection is a projection, not another authority<a class="headerlink" href="#inspection-is-a-projection-not-another-authority" title="Permanent link">&para;</a></h2>
+<p><a href="../../../tooling/how-to/inspect_checked_c_bindings/"><code>incan inspect bindings</code></a> runs the ordinary checked compilation analysis and projects its binding descriptors for people and tools. It does not reparse vocabulary syntax, scrape headers, or interpret generated Rust. An invalid declaration therefore produces the normal compiler diagnostic instead of a plausible-looking partial report.</p>
+<p>The declaration projection deliberately does not absorb facts with different lifecycles:</p>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Question it answers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Binding inspection</td>
+<td>What ABI, ownership, output, enum, and layout contract did the compiler accept from this source graph?</td>
+</tr>
+<tr>
+<td><code>[oven.interop]</code> and <code>incan.lock</code></td>
+<td>What target requirements and package-owned physical inputs did the author declare and lock?</td>
+</tr>
+<tr>
+<td>Future Oven receipt and store</td>
+<td>Which concrete toolchain, SDK, artifacts, commands, and shim outputs satisfied those requirements?</td>
+</tr>
+<tr>
+<td>Future editor and codegraph projections</td>
+<td>Where are raw declarations, private bridges, and public façades related in source?</td>
+</tr>
+</tbody>
+</table>
+<p>Keeping these projections separate prevents a source inspection from being mistaken for evidence that an artifact was resolved, a shim was built, or a mobile package is ready. They can still share stable binding identities as the tooling vertical grows.</p>
 <h2 id="why-the-boundary-begins-with-c-declarations">Why the boundary begins with C declarations<a class="headerlink" href="#why-the-boundary-begins-with-c-declarations" title="Permanent link">&para;</a></h2>
 <p>C is an ABI, not a complete ownership model. A header can expose an integer function accurately while saying little about which pointer owns a resource, when a callback expires, or how a caller must size an output buffer. Pretending that a foreign declaration is already a safe Incan API would hide those decisions at exactly the wrong boundary.</p>
 <p>The current surface adds one narrow ownership model without widening into general pointers. A binding may declare an opaque resource, one matching release operation, and whether each call consumes, shares, or mutably borrows that resource. It may also declare scalar and owned-resource output positions. These are compiler-owned call facts: the source does not expose raw addresses, and generated Rust does not infer ownership from its own requirements. The façade above the binding remains responsible for input validation, native status interpretation, error models, retries, and cancellation.</p>
@@ -6723,7 +6817,7 @@
 <p>A package can declare target-specific, package-relative headers, static or bundled artifacts, system capabilities, C/C++ shim sources, and compatible toolchain or SDK capabilities under <code>[oven.interop]</code> in <code>incan.toml</code>; <code>incan lock</code> then records those normalized requirements and the content-derived identities of package-owned files. The declaration is intentionally binding-kind-neutral, so a future JNI, Python-extension, or other interop entry point can consume the same package-level evidence without replacing the language binding as ABI authority.</p>
 <p>That is an Oven requirement and locking boundary, not a claim that a build has already selected or produced anything. This slice does not perform host discovery, download inputs, compile a shim, select a concrete compiler or SDK, choose a final Android/iOS deployment layout, or interpret publication signing and licence policy. Oven will own managed resolution, verification, baking, caching, staging, its concrete build receipt, and a directionally useful deployment plan; Gradle and Xcode remain final application assembly and signing consumers. The exact handover interface remains an associated RFC concern rather than a promise frozen into this experimental surface.</p>
 <p>The same restraint still applies to views and general pointers. C strings, spans, caller-owned buffers, scoped foreign views, arbitrary pointer operations, and context-manager syntax need additional lifetime and bounds contracts. The current guarantee is deliberately smaller: opaque resources and output storage remain private compiler-managed carriers, while public APIs use ordinary Incan values.</p>
-<p>For a working first binding, start with the <a href="../../tutorials/checked_c_binding/">tutorial</a>. For declaration recipes and diagnostics, use the <a href="../../how-to/checked_c_bindings/">how-to guide</a>. The <a href="../../reference/stdlib/interop/"><code>std.interop</code> reference</a> is the exact syntax and capability contract.</p>
+<p>For a working first binding, start with the <a href="../../tutorials/checked_c_binding/">tutorial</a>. For declaration recipes and diagnostics, use the <a href="../../how-to/checked_c_bindings/">binding how-to</a>. To review what the compiler accepted, use the <a href="../../../tooling/how-to/inspect_checked_c_bindings/">inspection how-to</a>. The <a href="../../reference/stdlib/interop/"><code>std.interop</code> reference</a> is the exact syntax and capability contract.</p>
 
 
 

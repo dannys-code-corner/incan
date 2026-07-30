@@ -14,7 +14,7 @@
         <link rel="prev" href="../../explanation/lsp_architecture/">
       
       
-        <link rel="next" href="../codegraph_inspection/">
+        <link rel="next" href="../binding_inspection_schema/">
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
@@ -4572,6 +4572,8 @@
       
         
       
+        
+      
     
     
       
@@ -4778,6 +4780,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../how-to/inspect_checked_c_bindings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inspect checked C bindings
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../how-to/testing/" class="md-nav__link">
         
   
@@ -4950,6 +4973,8 @@
   
     
     
+      
+        
       
         
       
@@ -5187,6 +5212,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#incan-inspect-bindings" class="md-nav__link">
+    <span class="md-ellipsis">
+      incan inspect bindings
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#incan-run" class="md-nav__link">
     <span class="md-ellipsis">
       incan run
@@ -5339,6 +5373,27 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../binding_inspection_schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Binding inspection JSON schema
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -7010,6 +7065,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#incan-inspect-bindings" class="md-nav__link">
+    <span class="md-ellipsis">
+      incan inspect bindings
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#incan-run" class="md-nav__link">
     <span class="md-ellipsis">
       incan run
@@ -7217,7 +7281,7 @@
 <li><code>tools</code> - Inspect local toolchain, editor integration state, and checked metadata</li>
 </ul>
 <h2 id="semantic-inspection-surfaces">Semantic inspection surfaces<a class="headerlink" href="#semantic-inspection-surfaces" title="Permanent link">&para;</a></h2>
-<p>Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use <code>incan check --format json</code> for the stable diagnostic plane, <code>incan build --report json</code> for successful build and artifact metadata, <code>incan inspect rust --format json</code> for current generated Rust output, <code>incan inspect codegraph --format jsonl</code> for source-structure graph facts, <code>incan inspect providers --format json</code> for SDK component and provider participation, and <code>incan inspect features --format json</code> for the additive package-feature graph.</p>
+<p>Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use <code>incan check --format json</code> for the stable diagnostic plane, <code>incan build --report json</code> for successful build and artifact metadata, <code>incan inspect rust --format json</code> for current generated Rust output, <code>incan inspect codegraph --format jsonl</code> for source-structure graph facts, <code>incan inspect providers --format json</code> for SDK component and provider participation, <code>incan inspect features --format json</code> for the additive package-feature graph, and <code>incan inspect bindings --format json</code> for checked C declaration facts.</p>
 <p>These commands are intentionally not a single full semantic database. They are stable public surfaces that tools can join without scraping terminal prose, generated Rust, or source text independently. When a fact appears in more than one surface, consumers should prefer compiler-owned identity fields, source paths, schema versions, and explicit degraded-state or diagnostic records over human output.</p>
 <h2 id="global-options">Global options<a class="headerlink" href="#global-options" title="Permanent link">&para;</a></h2>
 <ul>
@@ -7237,7 +7301,7 @@
 <li><code>--all-features</code>: Select every public feature declared by the root package.</li>
 <li><code>--sdk-profile &lt;PROFILE&gt;</code>: Replace the project's base SDK profile for this invocation while preserving explicit component additions and exclusions from <code>[sdk]</code>.</li>
 </ul>
-<p>They are supported by <code>build</code>, <code>check</code>, <code>run</code>, <code>test</code>, and <code>lock</code>, plus the <code>inspect codegraph</code>, <code>inspect providers</code>, and <code>inspect features</code> projections. The package-feature flags do not forward names to Cargo. Backend pass-through remains explicitly prefixed as <code>--cargo-features</code>, <code>--cargo-no-default-features</code>, and <code>--cargo-all-features</code> where supported.</p>
+<p>They are supported by <code>build</code>, <code>check</code>, <code>run</code>, <code>test</code>, and <code>lock</code>, plus the <code>inspect codegraph</code>, <code>inspect providers</code>, <code>inspect features</code>, and <code>inspect bindings</code> projections. The package-feature flags do not forward names to Cargo. Backend pass-through remains explicitly prefixed as <code>--cargo-features</code>, <code>--cargo-no-default-features</code>, and <code>--cargo-all-features</code> where supported.</p>
 <p><code>incan test --feature &lt;NAME&gt;</code> is a separate test-runner option for <code>std.testing.feature("NAME")</code> collection probes. Use plural <code>--features</code> for public package features.</p>
 <h2 id="global-options-debug">Global options (debug)<a class="headerlink" href="#global-options-debug" title="Permanent link">&para;</a></h2>
 <p>These flags take a file and run a debug pipeline stage:</p>
@@ -7434,6 +7498,23 @@ incan<span class="w"> </span>inspect<span class="w"> </span>features<span class=
 incan<span class="w"> </span>inspect<span class="w"> </span>features<span class="w"> </span>.<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>--no-default-features<span class="w"> </span>--features<span class="w"> </span>json
 </code></pre></div>
 <p>See <a href="../sdk_components_and_package_features/">SDK components and package features</a> for the state and resolution model.</p>
+<h3 id="incan-inspect-bindings"><code>incan inspect bindings</code><a class="headerlink" href="#incan-inspect-bindings" title="Permanent link">&para;</a></h3>
+<p>Usage:</p>
+<div class="language-text highlight"><pre><span></span><code>incan inspect bindings [PATH] [OPTIONS]
+</code></pre></div>
+<p>Reports compiler-checked C binding declaration facts for a source file or project directory. The JSON report is deterministic and source-anchored: it includes bindings, headers, logical system-library capabilities, symbols, exact C type contracts, enum constants, and plain structures. <code>PATH</code> defaults to the current project.</p>
+<p>Options:</p>
+<ul>
+<li><code>--format text|json</code>: Output a concise terminal summary or the schema-versioned JSON report (default: <code>text</code>).</li>
+<li><code>--features</code>, <code>--no-default-features</code>, <code>--all-features</code>: Select which feature-conditioned declarations are checked and projected.</li>
+<li><code>--sdk-profile &lt;PROFILE&gt;</code>: Select the SDK profile used to resolve the checked source graph.</li>
+</ul>
+<p>The command is strict: it emits ordinary compiler diagnostics rather than partial data when the source graph is not valid. Its checked compilation path runs the normal host-target C probe, but the report remains a declaration projection rather than a reusable verification receipt. It does not resolve native artifacts, compile shims, read native lock receipts, classify a bridge or façade, or expose LSP data. Use the <a href="../../how-to/inspect_checked_c_bindings/">inspection how-to</a> for the review workflow and the <a href="../binding_inspection_schema/">binding inspection JSON schema</a> for the machine contract.</p>
+<p>Examples:</p>
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>bindings
+incan<span class="w"> </span>inspect<span class="w"> </span>bindings<span class="w"> </span>src/main.incn<span class="w"> </span>--format<span class="w"> </span>json
+incan<span class="w"> </span>inspect<span class="w"> </span>bindings<span class="w"> </span>.<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>--features<span class="w"> </span>sqlite<span class="w"> </span>--sdk-profile<span class="w"> </span>minimal
+</code></pre></div>
 <h3 id="incan-run"><code>incan run</code><a class="headerlink" href="#incan-run" title="Permanent link">&para;</a></h3>
 <p>Usage:</p>
 <div class="language-text highlight"><pre><span></span><code>incan run [OPTIONS] [FILE] [-- &lt;CARGO_PASSTHROUGH&gt;...]

@@ -2203,6 +2203,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#review-the-checked-declaration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Review the checked declaration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#decide-whether-c-is-the-right-boundary" class="md-nav__link">
     <span class="md-ellipsis">
       Decide whether C is the right boundary
@@ -4686,6 +4695,8 @@
       
         
       
+        
+      
     
     
       
@@ -4892,6 +4903,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../tooling/how-to/inspect_checked_c_bindings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inspect checked C bindings
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../tooling/how-to/testing/" class="md-nav__link">
         
   
@@ -5079,6 +5111,8 @@
       
         
       
+        
+      
     
     
       
@@ -5122,6 +5156,27 @@
   
   <span class="md-ellipsis">
     CLI reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tooling/reference/binding_inspection_schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Binding inspection JSON schema
   </span>
   
 
@@ -6724,6 +6779,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#review-the-checked-declaration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Review the checked declaration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#decide-whether-c-is-the-right-boundary" class="md-nav__link">
     <span class="md-ellipsis">
       Decide whether C is the right boundary
@@ -6949,10 +7013,13 @@
 </tr>
 </tbody>
 </table>
+<h2 id="review-the-checked-declaration">Review the checked declaration<a class="headerlink" href="#review-the-checked-declaration" title="Permanent link">&para;</a></h2>
+<p>Run <code>incan inspect bindings</code> after the declaration checks successfully to review the compiler-owned binding contract without reading generated Rust. The text report is suitable for a human review; <code>--format json</code> emits a schema-versioned projection for tools.</p>
+<p>The command inspects the selected source graph, so pass the same feature and SDK-profile options used by the build when declarations are conditional. Follow the <a href="../../../tooling/how-to/inspect_checked_c_bindings/">binding inspection how-to</a> for entrypoint selection, JSON use, and failure handling.</p>
 <h2 id="decide-whether-c-is-the-right-boundary">Decide whether C is the right boundary<a class="headerlink" href="#decide-whether-c-is-the-right-boundary" title="Permanent link">&para;</a></h2>
 <p>Choose this surface when the library's supported boundary is a compact C ABI and the part you need fits the verified scalar and opaque-resource subset. Prefer <a href="../rust_interop/">Rust interop</a> when a maintained Rust crate already offers the safe, resource, callback, or asynchronous API you need. A C ABI may still be the right eventual boundary for a library implemented in another language; the implementation language is not the deciding factor.</p>
 <p>If the header depends on callbacks, variadics, unions, bitfields, macros that cannot be represented as constants, or nontrivial lifetime rules, do not fake a scalar declaration. A checked C or C++ shim is the intended later adapter; it is not available in this first release slice.</p>
-<p>See <a href="../../explanation/checked_c_interop/">how checked C interop is structured</a> for the source-of-truth and toolchain boundary, and the <a href="../../reference/stdlib/interop/"><code>std.interop</code> reference</a> for precise accepted syntax.</p>
+<p>See <a href="../../explanation/checked_c_interop/">how checked C interop is structured</a> for the source-of-truth and toolchain boundary, the <a href="../../../tooling/reference/binding_inspection_schema/">binding inspection JSON schema</a> for tool integration, and the <a href="../../reference/stdlib/interop/"><code>std.interop</code> reference</a> for precise accepted syntax.</p>
 
 
 
