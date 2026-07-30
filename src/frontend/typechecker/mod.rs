@@ -56,13 +56,14 @@ mod validate_rust_module;
 pub use const_eval::ConstValue;
 pub(crate) use type_info::ClassFieldDefaultInfo;
 pub use type_info::{
-    CAbiInteropArtifacts, CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingParameter, CBindingStruct,
-    CBindingStructField, CBindingSymbol, CBindingType, ComputedPropertyAccessInfo, DecoratedFunctionBindingInfo,
-    DecoratedMethodBindingInfo, FixedUnpackPlan, FunctionBindingInfo, IdentKind, PartialProjectionInfo,
-    PartialProjectionPreset, PartialProjectionTargetKind, ProtocolIterationInfo, RegistryArtifacts,
-    RegistryExplicitEntryInfo, ResolvedMethodCall, ResolvedMethodDispatch, ResolvedOperatorCall, ResolvedOperatorKind,
-    RustArgCoercionInfo, RustArgCoercionKind, SourceTargetInfo, StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo,
-    ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode, ValidatedNewtypeCoercionStep,
+    CAbiInteropArtifacts, CAbiOutputSlot, CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingParameter,
+    CBindingResource, CBindingStruct, CBindingStructField, CBindingSymbol, CBindingType, COutputMode, CResourceAccess,
+    ComputedPropertyAccessInfo, DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FixedUnpackPlan,
+    FunctionBindingInfo, IdentKind, PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind,
+    ProtocolIterationInfo, RegistryArtifacts, RegistryExplicitEntryInfo, ResolvedMethodCall, ResolvedMethodDispatch,
+    ResolvedOperatorCall, ResolvedOperatorKind, RustArgCoercionInfo, RustArgCoercionKind, SourceTargetInfo,
+    StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo, ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode,
+    ValidatedNewtypeCoercionStep,
 };
 #[cfg(test)]
 mod tests;
@@ -193,6 +194,34 @@ struct TypeCompatibilityDepthGuard<'a> {
     depth: &'a Cell<usize>,
 }
 
+/// Source-local slot state before a checked C call establishes the exact native storage contract.
+///
+/// This state never reaches lowering. Once a raw symbol accepts the slot, a typed [`CAbiOutputSlot`] fact replaces it
+/// in [`TypeCheckInfo`].
+#[derive(Debug, Clone)]
+pub(crate) struct PendingCAbiOutputSlot {
+    pub constructor_span: Span,
+    pub mode: COutputMode,
+    pub declared_type: Option<String>,
+    pub initial_type: Option<ResolvedType>,
+    pub bound: bool,
+}
+
+/// Result-local relationship between one raw C call and the slots it may initialize or invalidate.
+#[derive(Debug, Clone)]
+pub(crate) struct CAbiRawCallResult {
+    pub binding: String,
+    pub symbol: String,
+    /// Ordinary local name that received this raw call result.
+    pub local_name: Option<String>,
+    /// Source span of the ordinary local that received this raw-call result.
+    ///
+    /// Keeping the declaration span makes outcome facts follow regular lexical shadowing rather than a bare local
+    /// spelling.
+    pub local_symbol_span: Option<Span>,
+    pub slots_by_parameter: HashMap<String, String>,
+}
+
 impl Drop for TypeCompatibilityDepthGuard<'_> {
     fn drop(&mut self) {
         self.depth.set(self.depth.get().saturating_sub(1));
@@ -212,6 +241,20 @@ pub struct TypeChecker {
     pub(crate) mutable_bindings: HashSet<String>,
     /// Iterator bindings consumed by terminal RFC 088 methods in the current local checking flow.
     pub(crate) consumed_iterator_bindings: HashMap<String, Span>,
+    /// Resource bindings transferred to an owning C ABI parameter in the current local checking flow.
+    pub(crate) transferred_c_resource_bindings: HashMap<String, Span>,
+    /// Local output handles created by `c.out[...]()` or `c.inout(...)` before a raw symbol binds them.
+    pub(crate) pending_c_abi_output_slots: HashMap<String, PendingCAbiOutputSlot>,
+    /// Constructor facts waiting for their enclosing ordinary assignment to supply a local slot name.
+    pub(crate) unbound_c_abi_output_slot_constructors: HashMap<(usize, usize), PendingCAbiOutputSlot>,
+    /// Checked raw-call output relationships waiting for their enclosing ordinary assignment to supply a result name.
+    pub(crate) unbound_c_abi_raw_call_results: HashMap<(usize, usize), CAbiRawCallResult>,
+    /// Raw C result bindings whose enum outcome may establish branch-local output validity.
+    pub(crate) c_abi_raw_call_results: Vec<CAbiRawCallResult>,
+    /// Slot identities currently readable in the active control-flow path.
+    pub(crate) available_c_abi_output_slots: HashSet<String>,
+    /// Slot identities already consumed by `take()` in the active checking flow.
+    pub(crate) consumed_c_abi_output_slots: HashMap<String, Span>,
     /// Current function's error type for `?` operator compatibility.
     pub(crate) current_return_error_type: Option<ResolvedType>,
     /// Active declaration-level interpretation for `yield` expressions.
@@ -415,6 +458,13 @@ impl TypeChecker {
             warnings: Vec::new(),
             mutable_bindings: HashSet::new(),
             consumed_iterator_bindings: HashMap::new(),
+            transferred_c_resource_bindings: HashMap::new(),
+            pending_c_abi_output_slots: HashMap::new(),
+            unbound_c_abi_output_slot_constructors: HashMap::new(),
+            unbound_c_abi_raw_call_results: HashMap::new(),
+            c_abi_raw_call_results: Vec::new(),
+            available_c_abi_output_slots: HashSet::new(),
+            consumed_c_abi_output_slots: HashMap::new(),
             current_return_error_type: None,
             current_yield_context: YieldContext::Disallowed,
             in_async_body: false,

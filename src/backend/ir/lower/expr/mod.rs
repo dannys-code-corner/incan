@@ -13,18 +13,19 @@ mod patterns;
 
 use std::collections::HashMap;
 
-use super::super::TypedExpr;
 use super::super::expr::{
     BuiltinFn, CollectionMethodKind, IrCallArg, IrCallArgKind, IrDictEntry, IrExpr, IrExprKind, IrListEntry,
     IrMethodDispatch, Literal as IrLiteral, MethodCallArgPolicy, MethodKind, NumericResizePolicy, RaceArm, UnaryOp,
     VarAccess, VarRefKind,
 };
 use super::super::types::IrType;
+use super::super::{IrCheckedCFunction, IrCheckedCType, TypedExpr};
 use super::AstLowering;
 use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
 use crate::frontend::library_manifest_index::LibraryManifestIndexEntry;
 use crate::frontend::partial_projection::{PartialPresetRef, merge_named_partial_args};
+use crate::frontend::symbols::ResolvedType;
 use crate::frontend::typechecker::{
     IdentKind, PartialProjectionTargetKind, ResolvedMethodDispatch, ResolvedOperatorKind, RustArgCoercionKind,
 };
@@ -39,6 +40,205 @@ use incan_core::lang::{stdlib, trait_bounds};
 use incan_semantics_core::SurfaceExprLoweringAction;
 
 impl AstLowering {
+    /// Convert a contained checked-C value contract into its private generated-Rust carrier.
+    fn checked_c_value_ir_type(binding: &str, ty: &IrCheckedCType) -> IrType {
+        match ty {
+            IrCheckedCType::Scalar(_) => IrType::Int,
+            IrCheckedCType::Resource { resource, .. } => {
+                IrType::Struct(IrCheckedCFunction::resource_rust_type_name(binding, resource))
+            }
+            IrCheckedCType::Nullable(value) => IrType::Option(Box::new(Self::checked_c_value_ir_type(binding, value))),
+            IrCheckedCType::Void => IrType::Unit,
+            IrCheckedCType::Output { .. } => IrType::Unknown,
+        }
+    }
+
+    /// Convert one checked-C parameter to its call-site carrier, preserving compiler-managed output storage.
+    fn checked_c_parameter_ir_type(function: &IrCheckedCFunction, index: usize, parameter: &IrCheckedCType) -> IrType {
+        match parameter {
+            IrCheckedCType::Output { .. } => IrType::RefMut(Box::new(IrType::Struct(
+                IrCheckedCFunction::output_slot_rust_type_name(
+                    &function.binding,
+                    &function.symbol,
+                    function.parameter_names.get(index).map(String::as_str).unwrap_or("arg"),
+                ),
+            ))),
+            _ => Self::checked_c_value_ir_type(&function.binding, parameter),
+        }
+    }
+
+    /// Keep the IR ownership operation aligned with the source-checked C parameter mode.
+    fn order_checked_c_call_args(function: &IrCheckedCFunction, args: Vec<IrCallArg>) -> Vec<IrCallArg> {
+        if !args.iter().any(|argument| argument.name.is_some()) {
+            return args;
+        }
+
+        let mut positional = args.iter().filter(|argument| argument.name.is_none()).cloned();
+        function
+            .parameter_names
+            .iter()
+            .filter_map(|parameter_name| {
+                args.iter()
+                    .find(|argument| argument.name.as_deref() == Some(parameter_name))
+                    .cloned()
+                    .or_else(|| positional.next())
+            })
+            .collect()
+    }
+
+    /// Apply the binding's ownership and output-storage access modes to each lowered raw-call argument.
+    fn apply_checked_c_argument_accesses(function: &IrCheckedCFunction, args: &mut [IrCallArg]) {
+        for (index, argument) in args.iter_mut().enumerate() {
+            let Some(parameter) = function.parameters.get(index) else {
+                continue;
+            };
+            let access = match parameter {
+                IrCheckedCType::Resource { access, .. } => Some(*access),
+                IrCheckedCType::Output { .. } => {
+                    Self::set_checked_c_argument_access(&mut argument.expr, VarAccess::BorrowMut);
+                    None
+                }
+                _ => None,
+            };
+            let Some(access) = access else {
+                continue;
+            };
+            let variable_access = match access {
+                crate::frontend::typechecker::CResourceAccess::Owned => VarAccess::Move,
+                crate::frontend::typechecker::CResourceAccess::Borrowed => VarAccess::Borrow,
+                crate::frontend::typechecker::CResourceAccess::BorrowedMut => VarAccess::BorrowMut,
+            };
+            Self::set_checked_c_argument_access(&mut argument.expr, variable_access);
+        }
+    }
+
+    /// Set an ownership access through the narrow coercion wrappers used by ordinary expression lowering.
+    fn set_checked_c_argument_access(expr: &mut TypedExpr, access: VarAccess) {
+        match &mut expr.kind {
+            IrExprKind::Var { access: current, .. } => *current = access,
+            IrExprKind::InteropCoerce { expr, .. } => Self::set_checked_c_argument_access(expr, access),
+            _ => {}
+        }
+    }
+
+    /// Lower one source `slot.take()` as a consuming read from compiler-managed checked-C output storage.
+    fn lower_checked_c_output_slot_take(
+        &mut self,
+        call_span: ast::Span,
+        receiver: &ast::Spanned<ast::Expr>,
+        method: &str,
+        type_args: &[ast::Spanned<ast::Type>],
+        args: &[ast::CallArg],
+    ) -> Result<Option<TypedExpr>, LoweringError> {
+        if method != "take" || !type_args.is_empty() || !args.is_empty() {
+            return Ok(None);
+        }
+        let Some(ResolvedType::Named(identity)) = self
+            .type_info
+            .as_ref()
+            .and_then(|info| info.expr_type(receiver.span))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let Some((binding, symbol, parameter)) = incan_core::lang::c_abi::parse_output_slot_type_identity(&identity)
+        else {
+            return Ok(None);
+        };
+        let slot = self
+            .type_info
+            .as_ref()
+            .and_then(|info| info.c_abi.output_slots.iter().find(|slot| slot.identity == identity))
+            .cloned()
+            .ok_or_else(|| LoweringError {
+                message: format!(
+                    "checked C output slot `{binding}.{symbol}.{parameter}` is absent from lowering facts"
+                ),
+                span: call_span.into(),
+            })?;
+        let value = Self::checked_c_ir_type(&slot.value).ok_or_else(|| LoweringError {
+            message: format!("checked C output slot `{binding}.{symbol}.{parameter}` has an unsupported value carrier"),
+            span: call_span.into(),
+        })?;
+        let return_type = Self::checked_c_value_ir_type(binding, &value);
+        let mut receiver = self.lower_expr_spanned(receiver)?;
+        Self::set_checked_c_argument_access(&mut receiver, VarAccess::Move);
+        let slot_type = IrCheckedCFunction::output_slot_rust_type_name(binding, symbol, parameter);
+        Ok(Some(TypedExpr::new(
+            IrExprKind::Call {
+                func: Box::new(TypedExpr::new(
+                    IrExprKind::AssociatedFunction {
+                        type_name: slot_type,
+                        function_name: "take".to_string(),
+                    },
+                    IrType::Unknown,
+                )),
+                type_args: Vec::new(),
+                args: vec![IrCallArg {
+                    name: None,
+                    kind: IrCallArgKind::Positional,
+                    expr: receiver,
+                }],
+                callable_signature: None,
+                canonical_path: None,
+            },
+            return_type,
+        )))
+    }
+
+    /// Lower compiler-managed output storage and direct checked C symbols outside the recursive expression frame.
+    ///
+    /// Large ordinary source expressions lower recursively. Keeping this bounded checked-C plan in a separate frame
+    /// prevents descriptor and argument-plan locals from increasing the stack required by unrelated source programs.
+    #[inline(never)]
+    fn lower_checked_c_method_call(
+        &mut self,
+        call_span: ast::Span,
+        receiver: &ast::Spanned<ast::Expr>,
+        method: &str,
+        type_args: &[ast::Spanned<ast::Type>],
+        args: &[ast::CallArg],
+    ) -> Result<Option<TypedExpr>, LoweringError> {
+        if let Some((kind, ty)) = self.lower_checked_c_output_slot_constructor(call_span, args)? {
+            return Ok(Some(TypedExpr::new(kind, ty)));
+        }
+        if let Some(lowered) = self.lower_checked_c_output_slot_take(call_span, receiver, method, type_args, args)? {
+            return Ok(Some(lowered));
+        }
+        let Some(c_function) = self.checked_c_function_for_call(call_span) else {
+            return Ok(None);
+        };
+        let mut args = Self::order_checked_c_call_args(&c_function, self.lower_call_args(args)?);
+        Self::apply_checked_c_argument_accesses(&c_function, &mut args);
+        let parameter_types = c_function
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| Self::checked_c_parameter_ir_type(&c_function, index, parameter))
+            .collect::<Vec<_>>();
+        let return_type = Self::checked_c_value_ir_type(&c_function.binding, &c_function.return_type);
+        Ok(Some(TypedExpr::new(
+            IrExprKind::Call {
+                func: Box::new(TypedExpr::new(
+                    IrExprKind::Var {
+                        name: c_function.rust_name(),
+                        access: VarAccess::Copy,
+                        ref_kind: VarRefKind::Value,
+                    },
+                    IrType::Function {
+                        params: parameter_types,
+                        ret: Box::new(return_type.clone()),
+                    },
+                )),
+                type_args: self.lower_call_site_type_args(call_span, type_args),
+                args,
+                callable_signature: None,
+                canonical_path: None,
+            },
+            return_type,
+        )))
+    }
+
     /// Lower backend-neutral trait ownership into the Rust-visible dispatch path used by the current backend.
     pub(super) fn lower_resolved_method_dispatch(
         &self,
@@ -1056,30 +1256,8 @@ impl AstLowering {
 
             // ---- Method calls ----
             ast::Expr::MethodCall(o, m, type_args, args) => {
-                if let Some(c_function) = self.checked_c_function_for_call(expr_span) {
-                    let args = self.lower_call_args(args)?;
-                    let return_type = if c_function.return_type.is_some() {
-                        IrType::Int
-                    } else {
-                        IrType::Unit
-                    };
-                    return Ok(TypedExpr::new(
-                        IrExprKind::Call {
-                            func: Box::new(TypedExpr::new(
-                                IrExprKind::Var {
-                                    name: c_function.rust_name(),
-                                    access: VarAccess::Copy,
-                                    ref_kind: VarRefKind::Value,
-                                },
-                                IrType::Unknown,
-                            )),
-                            type_args: self.lower_call_site_type_args(expr_span, type_args),
-                            args,
-                            callable_signature: None,
-                            canonical_path: None,
-                        },
-                        return_type,
-                    ));
+                if let Some(lowered) = self.lower_checked_c_method_call(expr_span, o, m, type_args, args)? {
+                    return Ok(lowered);
                 }
                 let is_public_module_constructor = self
                     .type_info

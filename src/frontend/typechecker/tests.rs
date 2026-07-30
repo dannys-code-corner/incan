@@ -1,6 +1,8 @@
 //! Typechecker unit tests.
 
-use super::type_info::{CBindingDescriptor, CBindingParameter, CBindingSymbol, CBindingType};
+use super::type_info::{
+    CBindingDescriptor, CBindingParameter, CBindingResource, CBindingSymbol, CBindingType, CResourceAccess,
+};
 use super::*;
 use crate::frontend::api_metadata::{
     ApiDeclaration, ApiFunction, CHECKED_API_METADATA_SCHEMA_VERSION, CheckedApiMetadata, CheckedApiMetadataPackage,
@@ -20825,6 +20827,7 @@ fn scalar_c_binding_descriptor() -> CBindingDescriptor {
         class_name: "Fixture".to_string(),
         header: "fixture.h".to_string(),
         system_library: "fixture".to_string(),
+        resources: Vec::new(),
         symbols: vec![CBindingSymbol {
             name: "add".to_string(),
             native: "fixture_add".to_string(),
@@ -20833,6 +20836,7 @@ fn scalar_c_binding_descriptor() -> CBindingDescriptor {
                 ty: CBindingType::Scalar(ScalarTypeId::I32),
             }],
             return_type: CBindingType::Scalar(ScalarTypeId::I32),
+            outcomes: Vec::new(),
         }],
         enums: Vec::new(),
         structs: Vec::new(),
@@ -20887,5 +20891,133 @@ fn checked_c_scalar_call_requires_unsafe_and_records_the_descriptor_call() {
             binding: "Fixture".to_string(),
             symbol: "add".to_string(),
         }]
+    );
+}
+
+fn resource_c_binding_descriptor() -> CBindingDescriptor {
+    CBindingDescriptor {
+        span: Span::default(),
+        class_name: "Fixture".to_string(),
+        header: "fixture.h".to_string(),
+        system_library: "fixture".to_string(),
+        resources: vec![CBindingResource {
+            span: Span::default(),
+            name: "Handle".to_string(),
+            native: "fixture_handle".to_string(),
+            release: "close".to_string(),
+        }],
+        symbols: vec![
+            CBindingSymbol {
+                name: "close".to_string(),
+                native: "fixture_close".to_string(),
+                parameters: vec![CBindingParameter {
+                    name: "handle".to_string(),
+                    ty: CBindingType::Resource {
+                        access: CResourceAccess::Owned,
+                        resource: "Handle".to_string(),
+                    },
+                }],
+                return_type: CBindingType::Void,
+                outcomes: Vec::new(),
+            },
+            CBindingSymbol {
+                name: "mutate".to_string(),
+                native: "fixture_mutate".to_string(),
+                parameters: vec![CBindingParameter {
+                    name: "handle".to_string(),
+                    ty: CBindingType::Resource {
+                        access: CResourceAccess::BorrowedMut,
+                        resource: "Handle".to_string(),
+                    },
+                }],
+                return_type: CBindingType::Void,
+                outcomes: Vec::new(),
+            },
+        ],
+        enums: Vec::new(),
+        structs: Vec::new(),
+    }
+}
+
+fn resource_c_binding_call(member: &str, span: Span) -> Spanned<Expr> {
+    let binding = Spanned::new(Expr::Ident("Fixture".to_string()), span);
+    Spanned::new(
+        Expr::MethodCall(
+            Box::new(binding),
+            member.to_string(),
+            Vec::new(),
+            vec![CallArg::Positional(Spanned::new(
+                Expr::Ident("handle".to_string()),
+                span,
+            ))],
+        ),
+        span,
+    )
+}
+
+fn resource_c_binding_checker(is_mutable: bool) -> TypeChecker {
+    let span = Span::new(1, 20);
+    let mut checker = TypeChecker::new();
+    let descriptor = resource_c_binding_descriptor();
+    checker
+        .type_info
+        .c_abi
+        .bindings
+        .insert(descriptor.class_name.clone(), descriptor);
+    checker.symbols.define(crate::frontend::symbols::Symbol {
+        name: "handle".to_string(),
+        kind: crate::frontend::symbols::SymbolKind::Variable(crate::frontend::symbols::VariableInfo {
+            ty: ResolvedType::Named("__incan_c_resource::Fixture::Handle".to_string()),
+            is_mutable,
+            is_used: false,
+        }),
+        span,
+        scope: 0,
+    });
+    if is_mutable {
+        checker.mutable_bindings.insert("handle".to_string());
+    }
+    checker.unsafe_depth = 1;
+    checker
+}
+
+#[test]
+fn checked_c_resources_record_ownership_transfers_and_require_mutable_borrows() {
+    let span = Span::new(1, 20);
+    let mut moved = resource_c_binding_checker(false);
+    assert_eq!(
+        moved.check_expr(&resource_c_binding_call("close", span)),
+        ResolvedType::Unit
+    );
+    assert!(moved.errors.is_empty(), "unexpected close errors: {:?}", moved.errors);
+    let _ = moved.check_expr(&Spanned::new(Expr::Ident("handle".to_string()), span));
+    assert!(
+        moved
+            .errors
+            .iter()
+            .any(|error| error.message.contains("was transferred to native code"))
+    );
+
+    let mut immutable_borrow = resource_c_binding_checker(false);
+    assert_eq!(
+        immutable_borrow.check_expr(&resource_c_binding_call("mutate", span)),
+        ResolvedType::Unit
+    );
+    assert!(
+        immutable_borrow
+            .errors
+            .iter()
+            .any(|error| error.message.contains("requires a mutable borrow"))
+    );
+
+    let mut mutable_borrow = resource_c_binding_checker(true);
+    assert_eq!(
+        mutable_borrow.check_expr(&resource_c_binding_call("mutate", span)),
+        ResolvedType::Unit
+    );
+    assert!(
+        mutable_borrow.errors.is_empty(),
+        "unexpected mutable-borrow errors: {:?}",
+        mutable_borrow.errors
     );
 }

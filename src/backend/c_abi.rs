@@ -479,6 +479,21 @@ fn c_type_spelling(
             let qualifier = if *mutable { "" } else { "const " };
             Ok(format!("{qualifier}{pointee} *"))
         }
+        CBindingType::Resource { resource, .. } => {
+            let Some(resource) = binding.resources.iter().find(|candidate| candidate.name == *resource) else {
+                return Err(CAbiVerificationError::binding(
+                    binding,
+                    format!("C resource `{resource}` is not declared by this binding"),
+                ));
+            };
+            let native = checked_c_type_name(binding, &resource.native, "opaque resource native type")?;
+            Ok(format!("{native} *"))
+        }
+        CBindingType::Output { value, .. } => {
+            let value = c_type_spelling(binding, value, false)?;
+            Ok(format!("{value} *"))
+        }
+        CBindingType::Nullable(value) => c_type_spelling(binding, value, allow_void),
         CBindingType::Struct(name) => {
             let Some(structure) = binding.structs.iter().find(|structure| structure.name == *name) else {
                 return Err(CAbiVerificationError::binding(
@@ -580,6 +595,7 @@ mod tests {
             class_name: "Fixture".to_string(),
             header,
             system_library: "fixture".to_string(),
+            resources: Vec::new(),
             symbols: vec![CBindingSymbol {
                 name: "absolute".to_string(),
                 native: "fixture_abs".to_string(),
@@ -588,6 +604,7 @@ mod tests {
                     ty: CBindingType::Scalar(ScalarTypeId::I32),
                 }],
                 return_type: CBindingType::Scalar(ScalarTypeId::I32),
+                outcomes: Vec::new(),
             }],
             enums: vec![CBindingEnum {
                 name: "Status".to_string(),

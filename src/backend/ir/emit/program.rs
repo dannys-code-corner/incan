@@ -43,7 +43,8 @@ use super::super::expr::{
 use super::super::stmt::AssignTarget;
 use super::super::types::{IR_UNION_TYPE_NAME, IrType};
 use super::super::{
-    FunctionRegistry, FunctionSignature, IrCheckedCFunction, IrDecl, IrProgram, IrStmt, IrStmtKind, TypedExpr,
+    FunctionRegistry, FunctionSignature, IrCheckedCFunction, IrCheckedCResource, IrCheckedCType, IrDecl, IrProgram,
+    IrStmt, IrStmtKind, TypedExpr,
 };
 use super::{CallableNameUseFacts, EmitError, GeneratedUseAnalysis, IrEmitter, SERDE_DESERIALIZE_DERIVE};
 
@@ -1332,111 +1333,365 @@ impl<'program> GeneratedUseAnalyzer<'program> {
 }
 
 impl<'a> IrEmitter<'a> {
-    /// Emit compiler-private FFI declarations and Incan-integer carrier wrappers for checked C calls.
+    /// Emit compiler-private FFI declarations and checked scalar, resource, and output wrappers for direct C calls.
     ///
-    /// Lowering supplies these only from the typechecker's descriptor and recorded `unsafe:` call sites. The emitter
-    /// therefore receives exact native symbol names, scalar representations, and link capabilities rather than
-    /// looking at source classes or headers itself.
+    /// Lowering supplies these only from the descriptor and recorded `unsafe:` call sites. The emitter therefore
+    /// receives exact native symbol names, ownership modes, output contracts, and link capabilities rather than
+    /// rediscovering a C signature from source syntax or a header.
     fn emit_checked_c_functions(functions: &[IrCheckedCFunction]) -> Vec<TokenStream> {
-        functions
-            .iter()
-            .map(|function| {
-                let wrapper = format_ident!("{}", function.rust_name());
-                let ffi = format_ident!("{}", function.ffi_rust_name());
-                let library = &function.system_library;
-                let native_symbol = &function.native_symbol;
-                let wrapper_params = function
-                    .parameters
-                    .iter()
-                    .enumerate()
-                    .map(|(index, _)| {
-                        let name = format_ident!("__incan_arg_{index}");
-                        quote! { #name: i64 }
-                    })
-                    .collect::<Vec<_>>();
-                let ffi_params = function
-                    .parameters
-                    .iter()
-                    .enumerate()
-                    .map(|(index, scalar)| {
-                        let name = format_ident!("__incan_arg_{index}");
-                        let ty = Self::checked_c_scalar_rust_type(*scalar);
-                        quote! { #name: #ty }
-                    })
-                    .collect::<Vec<_>>();
-                let ffi_args = function
-                    .parameters
-                    .iter()
-                    .enumerate()
-                    .map(|(index, scalar)| {
-                        let name = format_ident!("__incan_arg_{index}");
-                        let ty = Self::checked_c_scalar_rust_type(*scalar);
-                        let message = format!(
-                            "checked C argument {index} for {}.{} is outside the declared {} range",
-                            function.binding,
-                            function.symbol,
-                            incan_core::lang::c_abi::scalar_type_as_str(*scalar),
-                        );
-                        quote! {
-                            match <#ty>::try_from(#name) {
-                                Ok(value) => value,
-                                Err(_) => panic!(#message),
-                            }
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let foreign = match function.return_type {
-                    Some(scalar) => {
-                        let return_type = Self::checked_c_scalar_rust_type(scalar);
-                        quote! {
-                            #[link(name = #library)]
-                            unsafe extern "C" {
-                                #[link_name = #native_symbol]
-                                fn #ffi(#(#ffi_params),*) -> #return_type;
-                            }
-                        }
+        let mut items = Self::emit_checked_c_resources(functions);
+        items.extend(Self::emit_checked_c_output_slots(functions));
+        items.extend(functions.iter().map(|function| {
+            let wrapper = format_ident!("{}", function.rust_name());
+            let ffi = format_ident!("{}", function.ffi_rust_name());
+            let library = &function.system_library;
+            let native_symbol = &function.native_symbol;
+            let wrapper_params = function
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, parameter)| {
+                    let name = format_ident!("__incan_arg_{index}");
+                    let ty = Self::checked_c_wrapper_parameter_type(function, index, parameter);
+                    quote! { #name: #ty }
+                })
+                .collect::<Vec<_>>();
+            let ffi_params = function
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, parameter)| {
+                    let name = format_ident!("__incan_arg_{index}");
+                    let ty = Self::checked_c_ffi_type(parameter);
+                    quote! { #name: #ty }
+                })
+                .collect::<Vec<_>>();
+            let ffi_args = function
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, parameter)| {
+                    let name = format_ident!("__incan_arg_{index}");
+                    Self::checked_c_ffi_argument(function, index, parameter, &name)
+                })
+                .collect::<Vec<_>>();
+            let foreign = match &function.return_type {
+                IrCheckedCType::Void => quote! {
+                    #[link(name = #library)]
+                    unsafe extern "C" {
+                        #[link_name = #native_symbol]
+                        fn #ffi(#(#ffi_params),*);
                     }
-                    None => quote! {
+                },
+                return_type => {
+                    let return_type = Self::checked_c_ffi_type(return_type);
+                    quote! {
                         #[link(name = #library)]
                         unsafe extern "C" {
                             #[link_name = #native_symbol]
-                            fn #ffi(#(#ffi_params),*);
+                            fn #ffi(#(#ffi_params),*) -> #return_type;
                         }
-                    },
-                };
-                let wrapper_item = match function.return_type {
-                    Some(return_scalar) => {
-                        let message = format!(
-                            "checked C result for {}.{} cannot be represented by Incan `int` ({})",
-                            function.binding,
-                            function.symbol,
-                            incan_core::lang::c_abi::scalar_type_as_str(return_scalar),
-                        );
-                        quote! {
-                            #[inline]
-                            fn #wrapper(#(#wrapper_params),*) -> i64 {
-                                let __incan_result = unsafe { #ffi(#(#ffi_args),*) };
-                                match i64::try_from(__incan_result) {
-                                    Ok(value) => value,
-                                    Err(_) => panic!(#message),
-                                }
+                    }
+                }
+            };
+            let wrapper_return = Self::checked_c_value_rust_type(&function.binding, &function.return_type);
+            let wrapper_item = match &function.return_type {
+                IrCheckedCType::Void => quote! {
+                    #[inline]
+                    fn #wrapper(#(#wrapper_params),*) {
+                        unsafe { #ffi(#(#ffi_args),*); }
+                    }
+                },
+                return_type => {
+                    let conversion = Self::checked_c_wrapper_return(function, return_type);
+                    quote! {
+                        #[inline]
+                        fn #wrapper(#(#wrapper_params),*) -> #wrapper_return {
+                            let __incan_result = unsafe { #ffi(#(#ffi_args),*) };
+                            #conversion
+                        }
+                    }
+                }
+            };
+            quote! {
+                #foreign
+
+                #wrapper_item
+            }
+        }));
+        items
+    }
+
+    /// Emit one non-cloneable release-guard wrapper for each opaque C resource used by emitted calls.
+    fn emit_checked_c_resources(functions: &[IrCheckedCFunction]) -> Vec<TokenStream> {
+        let mut resources = BTreeMap::<String, IrCheckedCResource>::new();
+        for resource in functions.iter().flat_map(|function| function.resources.iter()) {
+            resources
+                .entry(IrCheckedCFunction::resource_rust_type_name(
+                    &resource.binding,
+                    &resource.resource,
+                ))
+                .or_insert_with(|| resource.clone());
+        }
+        resources
+            .into_iter()
+            .map(|(name, resource)| {
+                let wrapper = format_ident!("{name}");
+                let release = format_ident!("{name}__release");
+                let library = resource.system_library;
+                let native = resource.release_native_symbol;
+                let release_return = Self::checked_c_ffi_type(&resource.release_return_type);
+                quote! {
+                    #[repr(transparent)]
+                    struct #wrapper {
+                        ptr: *mut ::core::ffi::c_void,
+                    }
+
+                    #[link(name = #library)]
+                    unsafe extern "C" {
+                        #[link_name = #native]
+                        fn #release(ptr: *mut ::core::ffi::c_void) -> #release_return;
+                    }
+
+                    impl #wrapper {
+                        #[inline]
+                        fn from_raw(ptr: *mut ::core::ffi::c_void) -> Self {
+                            if ptr.is_null() {
+                                panic!("checked C resource constructor returned a null owned pointer");
+                            }
+                            Self { ptr }
+                        }
+
+                        #[inline]
+                        fn as_raw(&self) -> *mut ::core::ffi::c_void {
+                            self.ptr
+                        }
+
+                        #[inline]
+                        fn into_raw(self) -> *mut ::core::ffi::c_void {
+                            let resource = ::core::mem::ManuallyDrop::new(self);
+                            resource.ptr
+                        }
+                    }
+
+                    impl ::core::ops::Drop for #wrapper {
+                        fn drop(&mut self) {
+                            if !self.ptr.is_null() {
+                                unsafe { #release(self.ptr); }
+                                self.ptr = ::core::ptr::null_mut();
                             }
                         }
                     }
-                    None => quote! {
-                        #[inline]
-                        fn #wrapper(#(#wrapper_params),*) {
-                            unsafe { #ffi(#(#ffi_args),*); }
-                        }
-                    },
-                };
-                quote! {
-                    #foreign
-
-                    #wrapper_item
                 }
             })
             .collect()
+    }
+
+    /// Emit the private storage wrapper for every raw C output parameter selected by lowering.
+    fn emit_checked_c_output_slots(functions: &[IrCheckedCFunction]) -> Vec<TokenStream> {
+        functions
+            .iter()
+            .flat_map(|function| {
+                function.parameters.iter().enumerate().filter_map(move |(index, parameter)| {
+                    let IrCheckedCType::Output { value, .. } = parameter else {
+                        return None;
+                    };
+                    let parameter = function.parameter_names.get(index)?;
+                    let slot = format_ident!(
+                        "{}",
+                        IrCheckedCFunction::output_slot_rust_type_name(&function.binding, &function.symbol, parameter)
+                    );
+                    match value.as_ref() {
+                        IrCheckedCType::Scalar(scalar) => {
+                            let carrier = Self::checked_c_scalar_rust_type(*scalar);
+                            let argument_message = format!(
+                                "checked C in/out value for {}.{}.{parameter} is outside the declared {} range",
+                                function.binding,
+                                function.symbol,
+                                incan_core::lang::c_abi::scalar_type_as_str(*scalar)
+                            );
+                            let result_message = format!(
+                                "checked C output value for {}.{}.{parameter} cannot be represented by Incan int",
+                                function.binding, function.symbol
+                            );
+                            Some(quote! {
+                                struct #slot { value: ::core::mem::MaybeUninit<#carrier> }
+
+                                impl #slot {
+                                    #[inline]
+                                    fn uninit() -> Self { Self { value: ::core::mem::MaybeUninit::uninit() } }
+
+                                    #[inline]
+                                    fn from_incan_value(value: i64) -> Self {
+                                        let value = match <#carrier>::try_from(value) {
+                                            Ok(value) => value,
+                                            Err(_) => panic!(#argument_message),
+                                        };
+                                        Self { value: ::core::mem::MaybeUninit::new(value) }
+                                    }
+
+                                    #[inline]
+                                    fn as_mut_ptr(&mut self) -> *mut #carrier { self.value.as_mut_ptr() }
+
+                                    #[inline]
+                                    fn take(self) -> i64 {
+                                        let value = unsafe { self.value.assume_init() };
+                                        match i64::try_from(value) {
+                                            Ok(value) => value,
+                                            Err(_) => panic!(#result_message),
+                                        }
+                                    }
+                                }
+                            })
+                        }
+                        IrCheckedCType::Resource { resource, .. } => {
+                            let resource = format_ident!("{}", IrCheckedCFunction::resource_rust_type_name(&function.binding, resource));
+                            Some(quote! {
+                                struct #slot { value: ::core::mem::MaybeUninit<*mut ::core::ffi::c_void> }
+
+                                impl #slot {
+                                    #[inline]
+                                    fn uninit() -> Self { Self { value: ::core::mem::MaybeUninit::uninit() } }
+
+                                    #[inline]
+                                    fn as_mut_ptr(&mut self) -> *mut *mut ::core::ffi::c_void { self.value.as_mut_ptr() }
+
+                                    #[inline]
+                                    fn take(self) -> #resource {
+                                        #resource::from_raw(unsafe { self.value.assume_init() })
+                                    }
+                                }
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Return the generated wrapper parameter type for one bounded C ABI contract.
+    fn checked_c_wrapper_parameter_type(
+        function: &IrCheckedCFunction,
+        index: usize,
+        ty: &IrCheckedCType,
+    ) -> TokenStream {
+        match ty {
+            IrCheckedCType::Scalar(_) => quote! { i64 },
+            IrCheckedCType::Resource { access, resource } => {
+                let resource = format_ident!(
+                    "{}",
+                    IrCheckedCFunction::resource_rust_type_name(&function.binding, resource)
+                );
+                match access {
+                    crate::frontend::typechecker::CResourceAccess::Owned => quote! { #resource },
+                    crate::frontend::typechecker::CResourceAccess::Borrowed => quote! { &#resource },
+                    crate::frontend::typechecker::CResourceAccess::BorrowedMut => quote! { &mut #resource },
+                }
+            }
+            IrCheckedCType::Output { .. } => {
+                let parameter = function.parameter_names.get(index).map(String::as_str).unwrap_or("arg");
+                let slot = format_ident!(
+                    "{}",
+                    IrCheckedCFunction::output_slot_rust_type_name(&function.binding, &function.symbol, parameter)
+                );
+                quote! { &mut #slot }
+            }
+            IrCheckedCType::Nullable(_) | IrCheckedCType::Void => quote! { () },
+        }
+    }
+
+    /// Return the exact Rust ABI type for one bounded checked-C contract.
+    fn checked_c_ffi_type(ty: &IrCheckedCType) -> TokenStream {
+        match ty {
+            IrCheckedCType::Scalar(scalar) => Self::checked_c_scalar_rust_type(*scalar),
+            IrCheckedCType::Resource { .. } => quote! { *mut ::core::ffi::c_void },
+            IrCheckedCType::Output { value, .. } => {
+                let value = Self::checked_c_ffi_type(value);
+                quote! { *mut #value }
+            }
+            IrCheckedCType::Nullable(value) => Self::checked_c_ffi_type(value),
+            IrCheckedCType::Void => quote! { () },
+        }
+    }
+
+    /// Convert one generated wrapper argument into its exact foreign ABI carrier.
+    fn checked_c_ffi_argument(
+        function: &IrCheckedCFunction,
+        index: usize,
+        ty: &IrCheckedCType,
+        name: &proc_macro2::Ident,
+    ) -> TokenStream {
+        match ty {
+            IrCheckedCType::Scalar(scalar) => {
+                let carrier = Self::checked_c_scalar_rust_type(*scalar);
+                let message = format!(
+                    "checked C argument {index} for {}.{} is outside the declared {} range",
+                    function.binding,
+                    function.symbol,
+                    incan_core::lang::c_abi::scalar_type_as_str(*scalar),
+                );
+                quote! { match <#carrier>::try_from(#name) { Ok(value) => value, Err(_) => panic!(#message) } }
+            }
+            IrCheckedCType::Resource { access, .. } => match access {
+                crate::frontend::typechecker::CResourceAccess::Owned => quote! { #name.into_raw() },
+                crate::frontend::typechecker::CResourceAccess::Borrowed
+                | crate::frontend::typechecker::CResourceAccess::BorrowedMut => quote! { #name.as_raw() },
+            },
+            IrCheckedCType::Output { .. } => quote! { #name.as_mut_ptr() },
+            IrCheckedCType::Nullable(_) | IrCheckedCType::Void => quote! { () },
+        }
+    }
+
+    /// Return the generated ordinary-Rust result carrier for one bounded checked-C value contract.
+    fn checked_c_value_rust_type(binding: &str, ty: &IrCheckedCType) -> TokenStream {
+        match ty {
+            IrCheckedCType::Scalar(_) => quote! { i64 },
+            IrCheckedCType::Resource { resource, .. } => {
+                let resource = format_ident!("{}", IrCheckedCFunction::resource_rust_type_name(binding, resource));
+                quote! { #resource }
+            }
+            IrCheckedCType::Nullable(value) => {
+                let value = Self::checked_c_value_rust_type(binding, value);
+                quote! { Option<#value> }
+            }
+            IrCheckedCType::Void | IrCheckedCType::Output { .. } => quote! { () },
+        }
+    }
+
+    /// Convert an exact foreign return value into the ordinary checked Incan carrier.
+    fn checked_c_wrapper_return(function: &IrCheckedCFunction, ty: &IrCheckedCType) -> TokenStream {
+        match ty {
+            IrCheckedCType::Scalar(scalar) => {
+                let message = format!(
+                    "checked C result for {}.{} cannot be represented by Incan int ({})",
+                    function.binding,
+                    function.symbol,
+                    incan_core::lang::c_abi::scalar_type_as_str(*scalar),
+                );
+                quote! { match i64::try_from(__incan_result) { Ok(value) => value, Err(_) => panic!(#message) } }
+            }
+            IrCheckedCType::Resource { resource, .. } => {
+                let resource = format_ident!(
+                    "{}",
+                    IrCheckedCFunction::resource_rust_type_name(&function.binding, resource)
+                );
+                quote! { #resource::from_raw(__incan_result) }
+            }
+            IrCheckedCType::Nullable(value) => match value.as_ref() {
+                IrCheckedCType::Resource { resource, .. } => {
+                    let resource = format_ident!(
+                        "{}",
+                        IrCheckedCFunction::resource_rust_type_name(&function.binding, resource)
+                    );
+                    quote! {
+                        if __incan_result.is_null() { None } else { Some(#resource::from_raw(__incan_result)) }
+                    }
+                }
+                _ => quote! { () },
+            },
+            IrCheckedCType::Void | IrCheckedCType::Output { .. } => quote! { () },
+        }
     }
 
     /// Return the Rust ABI carrier for one source-checked C scalar.
@@ -3719,7 +3974,7 @@ impl<'a> IrEmitter<'a> {
 mod tests {
     use super::IrEmitter;
     use crate::backend::ir::types::{IR_UNION_TYPE_NAME, IrType};
-    use crate::backend::ir::{IrCheckedCFunction, IrProgram};
+    use crate::backend::ir::{IrCheckedCFunction, IrCheckedCType, IrProgram};
     use incan_core::lang::c_abi::ScalarTypeId;
     use std::collections::HashMap;
 
@@ -3816,8 +4071,10 @@ mod tests {
             symbol: "absolute".to_string(),
             native_symbol: "abs".to_string(),
             system_library: "c".to_string(),
-            parameters: vec![ScalarTypeId::I32],
-            return_type: Some(ScalarTypeId::I32),
+            parameters: vec![IrCheckedCType::Scalar(ScalarTypeId::I32)],
+            parameter_names: vec!["value".to_string()],
+            return_type: IrCheckedCType::Scalar(ScalarTypeId::I32),
+            resources: Vec::new(),
         });
         let mut emitter = IrEmitter::new(&program.function_registry);
         let generated = emitter.emit_program(&program).map_err(|error| error.to_string())?;

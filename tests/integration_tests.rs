@@ -17832,6 +17832,52 @@ def main() -> Result[None, SessionError]:
     }
 
     #[test]
+    fn consumer_check_verifies_checked_c_resource_and_output_contracts() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let fixture_header = tmp.path().join("fixture.h");
+        std::fs::write(
+            &fixture_header,
+            "typedef unsigned long size_t;\nvoid free(void *);\nint posix_memalign(void **, size_t, size_t);\nunsigned int rand_r(unsigned int *);\n#define FIXTURE_OK 0\n",
+        )?;
+        let source = format!(
+            "from std.interop import c\n\nbinding Fixture:\n    header = \"{}\"\n    link = c.system_library(\"c\")\n\n    resource Memory:\n        native = \"void\"\n        release = close\n\n    symbol close(handle: c.Owned[Memory]) -> None:\n        native = \"free\"\n\n    enum Status:\n        OK: c.i32 = FIXTURE_OK\n\n    symbol open(output: c.Out[c.Owned[Memory]], alignment: c.Size, size: c.Size) -> c.i32:\n        native = \"posix_memalign\"\n\n        outcome Status.OK:\n            initializes = [output]\n\n    symbol random(seed: c.InOut[c.u32]) -> c.u32:\n        native = \"rand_r\"\n\ndef main() -> None:\n    unsafe:\n        handle = c.out[c.Owned[Memory]]()\n        status = Fixture.open(handle, 8, 8)\n        if status == Fixture.Status.OK:\n            resource = handle.take()\n            Fixture.close(resource)\n\n        seed = c.inout(7)\n        Fixture.random(seed)\n        seed.take()\n",
+            fixture_header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_resource_contracts\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected checked C resource and output contracts to lower and verify.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let run_output = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["run", main_path.to_string_lossy().as_ref()])
+            .output()?;
+        assert!(
+            run_output.status.success(),
+            "expected checked C resources and output slots to compile, run, and release.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn consumer_check_reports_checked_c_signature_mismatch_at_the_binding() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
         let fixture_header = tmp.path().join("fixture.h");

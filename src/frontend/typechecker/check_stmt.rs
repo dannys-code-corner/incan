@@ -1,5 +1,7 @@
 //! Statement checking: assignments, returns, control flow.
 
+use std::collections::HashSet;
+
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
@@ -12,7 +14,7 @@ use incan_core::lang::types::collections::CollectionTypeId;
 use incan_core::{NumericTy, result_numeric_type};
 use incan_semantics_core::SurfaceStmtTypeCheck;
 
-use super::{LoopContextKind, TypeChecker};
+use super::{CBindingType, COutputMode, LoopContextKind, TypeChecker};
 use crate::frontend::typechecker::helpers::{collection_type_id, ensure_bool_condition, option_ty};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -650,6 +652,7 @@ impl TypeChecker {
                 ));
             }
             self.consumed_iterator_bindings.remove(&assign.name);
+            self.transferred_c_resource_bindings.remove(&assign.name);
             return;
         }
 
@@ -724,7 +727,38 @@ impl TypeChecker {
             span,
             scope: 0,
         });
+        self.bind_c_abi_output_slot_assignment(&assign.name, assign.value.span);
+        self.bind_c_abi_raw_result_assignment(&assign.name, assign.value.span);
         self.consumed_iterator_bindings.remove(&assign.name);
+        self.transferred_c_resource_bindings.remove(&assign.name);
+    }
+
+    /// Give a compiler-managed C output constructor the ordinary local name supplied by its enclosing assignment.
+    fn bind_c_abi_output_slot_assignment(&mut self, name: &str, value_span: Span) {
+        let Some(slot) = self
+            .unbound_c_abi_output_slot_constructors
+            .remove(&(value_span.start, value_span.end))
+        else {
+            return;
+        };
+        self.pending_c_abi_output_slots.insert(name.to_string(), slot);
+    }
+
+    /// Give a checked C raw call result the ordinary local name supplied by its enclosing assignment.
+    fn bind_c_abi_raw_result_assignment(&mut self, name: &str, value_span: Span) {
+        let Some(mut result) = self
+            .unbound_c_abi_raw_call_results
+            .remove(&(value_span.start, value_span.end))
+        else {
+            return;
+        };
+        result.local_symbol_span = self
+            .symbols
+            .lookup(name)
+            .and_then(|symbol_id| self.symbols.get(symbol_id))
+            .map(|symbol| symbol.span);
+        result.local_name = Some(name.to_string());
+        self.c_abi_raw_call_results.push(result);
     }
 
     /// Check a return statement against the active function context.
@@ -958,6 +992,86 @@ impl TypeChecker {
         }
     }
 
+    /// Return the slot handles made readable by one explicit raw-result outcome comparison.
+    fn c_abi_output_slots_available_for_condition(&self, expr: &Spanned<Expr>) -> HashSet<String> {
+        let Expr::Binary(left, BinaryOp::Eq, right) = &expr.node else {
+            return HashSet::new();
+        };
+        let Some((status, outcome)) =
+            [(&**left, &**right), (&**right, &**left)]
+                .into_iter()
+                .find(|(status, outcome)| {
+                    let Expr::Ident(result_name) = &status.node else {
+                        return false;
+                    };
+                    self.c_abi_raw_call_result_for_local(result_name).is_some()
+                        && Self::c_abi_qualified_expr_name(outcome).is_some()
+                })
+        else {
+            return HashSet::new();
+        };
+        let (Expr::Ident(result_name), Some(outcome_name)) = (&status.node, Self::c_abi_qualified_expr_name(outcome))
+        else {
+            return HashSet::new();
+        };
+        let Some(raw_result) = self.c_abi_raw_call_result_for_local(result_name) else {
+            return HashSet::new();
+        };
+        let Some(binding) = self.type_info.c_abi.bindings.get(&raw_result.binding) else {
+            return HashSet::new();
+        };
+        let Some(symbol) = binding.symbols.iter().find(|symbol| symbol.name == raw_result.symbol) else {
+            return HashSet::new();
+        };
+        // Binding declarations store outcome names relative to their binding (`Status.OK`), while ordinary source
+        // compares the emitted class-qualified enum value (`Fixture.Status.OK`). Preserve that declaration-local
+        // spelling rather than leaking a second outcome representation into the binding descriptor.
+        let binding_prefix = format!("{}.", raw_result.binding);
+        let outcome_name = outcome_name.strip_prefix(&binding_prefix).unwrap_or(&outcome_name);
+        let Some(declared) = symbol.outcomes.iter().find(|declared| declared.result == outcome_name) else {
+            return HashSet::new();
+        };
+
+        symbol
+            .parameters
+            .iter()
+            .filter_map(|parameter| {
+                let CBindingType::Output { mode, .. } = &parameter.ty else {
+                    return None;
+                };
+                let slot_identity = raw_result.slots_by_parameter.get(&parameter.name)?;
+                let readable = match mode {
+                    COutputMode::Out => declared.initializes.contains(&parameter.name),
+                    COutputMode::InOut => !declared.invalidates.contains(&parameter.name),
+                };
+                readable.then(|| slot_identity.clone())
+            })
+            .collect()
+    }
+
+    /// Resolve one raw C call outcome relation through the same lexical binding currently selected for a local name.
+    fn c_abi_raw_call_result_for_local(&self, name: &str) -> Option<&super::CAbiRawCallResult> {
+        let symbol_span = self
+            .symbols
+            .lookup(name)
+            .and_then(|symbol_id| self.symbols.get(symbol_id))
+            .map(|symbol| symbol.span)?;
+        self.c_abi_raw_call_results
+            .iter()
+            .rev()
+            .find(|result| result.local_name.as_deref() == Some(name) && result.local_symbol_span == Some(symbol_span))
+    }
+
+    /// Render one ordinary source enum/namespace reference into the descriptor outcome spelling.
+    fn c_abi_qualified_expr_name(expr: &Spanned<Expr>) -> Option<String> {
+        match &expr.node {
+            Expr::Ident(name) => Some(name.clone()),
+            Expr::Field(base, member) => Some(format!("{}.{}", Self::c_abi_qualified_expr_name(base)?, member)),
+            Expr::Paren(inner) => Self::c_abi_qualified_expr_name(inner),
+            _ => None,
+        }
+    }
+
     /// Check one expression-conditioned branch under incoming false-branch refinements.
     fn check_expr_condition_body(
         &mut self,
@@ -965,11 +1079,14 @@ impl TypeChecker {
         body: &[Spanned<Statement>],
         incoming_refinements: &[BranchRefinement],
     ) -> Option<BranchRefinement> {
+        let available_before = self.available_c_abi_output_slots.clone();
         self.symbols.enter_scope(ScopeKind::Block);
         self.apply_branch_refinements(incoming_refinements);
 
         let cond_ty = self.check_expr(expr);
         self.validate_truthiness_condition(&cond_ty, expr.span);
+        self.available_c_abi_output_slots
+            .extend(self.c_abi_output_slots_available_for_condition(expr));
         let true_narrowing = self.condition_branch_narrowing(expr);
         let false_refinement = true_narrowing.as_ref().cloned().and_then(Self::branch_false_refinement);
 
@@ -980,6 +1097,7 @@ impl TypeChecker {
             self.check_statement(stmt);
         }
         self.symbols.exit_scope();
+        self.available_c_abi_output_slots = available_before;
 
         false_refinement
     }

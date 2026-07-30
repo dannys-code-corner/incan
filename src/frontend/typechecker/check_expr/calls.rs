@@ -9,12 +9,17 @@ use crate::frontend::resolved_type_subst::substitute_resolved_type;
 use crate::frontend::symbols::{
     CallableParam, FieldInfo, FunctionInfo, FunctionOverloadInfo, ResolvedType, SymbolKind, TypeInfo,
 };
-use crate::frontend::typechecker::type_info::{CBindingRawCall, CBindingSymbol, CBindingType};
-use crate::frontend::typechecker::{IdentKind, canonical_public_library_type_name};
+use crate::frontend::typechecker::type_info::{
+    CAbiOutputSlot, CBindingRawCall, CBindingSymbol, CBindingType, COutputMode, CResourceAccess,
+};
+use crate::frontend::typechecker::{
+    CAbiRawCallResult, IdentKind, PendingCAbiOutputSlot, canonical_public_library_type_name,
+};
 use incan_core::interop::{
     RustFieldInfo, RustFunctionSig, RustItemKind, RustTypeInfo, compiler_owned_function_signature,
     metadata_free_function_signature,
 };
+use incan_core::lang::c_abi;
 use incan_core::lang::derives::{self, DeriveId};
 use incan_core::lang::keywords::{self, KeywordId};
 use incan_core::lang::stdlib;
@@ -78,6 +83,11 @@ impl TypeChecker {
         span: Span,
         expected_return_ty: Option<&ResolvedType>,
     ) -> ResolvedType {
+        if let Expr::Field(base, member) = &callee.node
+            && let Some(result) = self.check_c_abi_output_slot_constructor(base, member, type_args, args, span)
+        {
+            return result;
+        }
         if let Expr::Field(base, member) = &callee.node
             && let Some(result) = self.check_c_binding_symbol_member_call(base, member, type_args, args, span)
         {
@@ -694,10 +704,10 @@ impl TypeChecker {
             self.check_call_args(args);
             return Some(ResolvedType::Unknown);
         }
-        if !Self::c_raw_call_signature_is_executable(&symbol) {
+        if !Self::c_raw_call_signature_is_currently_supported(&symbol) {
             self.errors.push(CompileError::type_error(
                 format!(
-                    "C binding symbol `{callable}` uses a pointer or structure contract that is not executable in the checked free-function subset"
+                    "C binding symbol `{callable}` requires native ownership or ABI emission that is not implemented yet"
                 ),
                 span,
             ));
@@ -705,13 +715,14 @@ impl TypeChecker {
             return Some(ResolvedType::Unknown);
         }
 
+        let output_slots = self.validate_c_raw_output_slots(&binding, &symbol, &descriptor.resources, args);
         let parameters = symbol
             .parameters
             .iter()
             .map(|parameter| {
                 CallableParam::named(
                     parameter.name.clone(),
-                    Self::c_raw_call_type(&parameter.ty),
+                    Self::c_raw_call_type(&binding, &parameter.ty),
                     ParamKind::Normal,
                 )
             })
@@ -719,30 +730,366 @@ impl TypeChecker {
         let arg_types = self.check_call_arg_types_for_params(args, &parameters);
         let mut type_bindings = std::collections::HashMap::new();
         self.validate_callable_arg_bindings(&callable, &parameters, args, &arg_types, &mut type_bindings, span);
+        self.validate_c_raw_mutable_resource_borrows(&symbol, args);
+        self.record_c_raw_owned_resource_transfers(&symbol, args);
         self.type_info.record_call_site_callable_params(span, &parameters);
+        let return_type = Self::c_raw_call_type(&binding, &symbol.return_type);
         self.type_info.c_abi.raw_calls.push(CBindingRawCall {
             span,
-            binding,
+            binding: binding.clone(),
             symbol: member.to_string(),
         });
-        Some(Self::c_raw_call_type(&symbol.return_type))
+        if !output_slots.is_empty() {
+            self.unbound_c_abi_raw_call_results.insert(
+                (span.start, span.end),
+                CAbiRawCallResult {
+                    binding,
+                    symbol: member.to_string(),
+                    local_name: None,
+                    local_symbol_span: None,
+                    slots_by_parameter: output_slots,
+                },
+            );
+        }
+        Some(return_type)
     }
 
-    /// Return whether a declared C signature is executable by the initial direct-call bridge.
-    fn c_raw_call_signature_is_executable(symbol: &CBindingSymbol) -> bool {
-        symbol
-            .parameters
-            .iter()
-            .all(|parameter| matches!(parameter.ty, CBindingType::Scalar(_)))
-            && matches!(symbol.return_type, CBindingType::Scalar(_) | CBindingType::Void)
+    /// Return whether the contained direct-call bridge can preserve every argument and result contract faithfully.
+    fn c_raw_call_signature_is_currently_supported(symbol: &CBindingSymbol) -> bool {
+        symbol.parameters.iter().all(|parameter| {
+            matches!(parameter.ty, CBindingType::Scalar(_) | CBindingType::Resource { .. })
+                || matches!(
+                    &parameter.ty,
+                    CBindingType::Output { value, .. }
+                        if matches!(value.as_ref(), CBindingType::Scalar(_)
+                            | CBindingType::Resource { access: CResourceAccess::Owned, .. })
+                )
+        }) && (matches!(
+            symbol.return_type,
+            CBindingType::Scalar(_)
+                | CBindingType::Void
+                | CBindingType::Resource {
+                    access: CResourceAccess::Owned,
+                    ..
+                }
+        ) || matches!(
+            &symbol.return_type,
+            CBindingType::Nullable(value)
+                if matches!(value.as_ref(), CBindingType::Resource {
+                    access: CResourceAccess::Owned,
+                    ..
+                })
+        ))
     }
 
-    /// Map exact C scalar categories to the current Incan integer carrier.
-    fn c_raw_call_type(ty: &CBindingType) -> ResolvedType {
+    /// Map the contained C call surface to the semantic carrier used for argument checking and local values.
+    pub(in crate::frontend::typechecker::check_expr) fn c_raw_call_type(
+        binding: &str,
+        ty: &CBindingType,
+    ) -> ResolvedType {
         match ty {
             CBindingType::Scalar(_) => ResolvedType::Int,
             CBindingType::Void => ResolvedType::Unit,
-            CBindingType::Pointer { .. } | CBindingType::Struct(_) => ResolvedType::Unknown,
+            CBindingType::Resource { resource, .. } => {
+                ResolvedType::Named(Self::c_resource_type_identity(binding, resource))
+            }
+            CBindingType::Nullable(value) => {
+                ResolvedType::Generic("Option".to_string(), vec![Self::c_raw_call_type(binding, value)])
+            }
+            CBindingType::Pointer { .. } | CBindingType::Struct(_) | CBindingType::Output { .. } => {
+                ResolvedType::Unknown
+            }
+        }
+    }
+
+    /// Return one compiler-internal nominal identity for a resource scoped by its binding declaration.
+    fn c_resource_type_identity(binding: &str, resource: &str) -> String {
+        format!("__incan_c_resource::{binding}::{resource}")
+    }
+
+    /// Recognize ordinary `c.out[...]()` and `c.inout(...)` calls without adding parser grammar.
+    ///
+    /// The local name is supplied by the enclosing assignment, after which a checked raw symbol binds the temporary
+    /// handle to one exact output parameter. The temporary itself has no user-visible runtime representation.
+    pub(super) fn check_c_abi_output_slot_constructor(
+        &mut self,
+        base: &Spanned<Expr>,
+        member: &str,
+        type_args: &[Spanned<Type>],
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<ResolvedType> {
+        let Expr::Ident(namespace) = &base.node else {
+            return None;
+        };
+        if !self
+            .import_aliases
+            .get(namespace)
+            .is_some_and(|segments| c_abi::is_interop_namespace_path(segments.iter().map(String::as_str)))
+        {
+            return None;
+        }
+
+        let slot = match member {
+            "out" => {
+                if type_args.len() != 1 || !args.is_empty() {
+                    self.errors.push(CompileError::type_error(
+                        "c.out[...] requires exactly one C value type and no value arguments".to_string(),
+                        span,
+                    ));
+                    self.check_call_args(args);
+                    return Some(ResolvedType::Unknown);
+                }
+                PendingCAbiOutputSlot {
+                    constructor_span: span,
+                    mode: COutputMode::Out,
+                    declared_type: Some(type_args[0].node.to_string()),
+                    initial_type: None,
+                    bound: false,
+                }
+            }
+            "inout" => {
+                if !type_args.is_empty() || args.len() != 1 {
+                    self.errors.push(CompileError::type_error(
+                        "c.inout(value) requires exactly one ordinary value argument and no type arguments".to_string(),
+                        span,
+                    ));
+                    self.check_call_args(args);
+                    return Some(ResolvedType::Unknown);
+                }
+                let CallArg::Positional(value) = &args[0] else {
+                    self.errors.push(CompileError::type_error(
+                        "c.inout(value) accepts one positional value argument".to_string(),
+                        span,
+                    ));
+                    self.check_call_args(args);
+                    return Some(ResolvedType::Unknown);
+                };
+                PendingCAbiOutputSlot {
+                    constructor_span: span,
+                    mode: COutputMode::InOut,
+                    declared_type: None,
+                    initial_type: Some(self.check_expr(value)),
+                    bound: false,
+                }
+            }
+            _ => return None,
+        };
+
+        self.unbound_c_abi_output_slot_constructors
+            .insert((span.start, span.end), slot);
+        Some(ResolvedType::Unknown)
+    }
+
+    /// Bind ordinary local output handles to exact checked C output parameters.
+    fn validate_c_raw_output_slots(
+        &mut self,
+        binding: &str,
+        symbol: &CBindingSymbol,
+        resources: &[crate::frontend::typechecker::CBindingResource],
+        args: &[CallArg],
+    ) -> std::collections::HashMap<String, String> {
+        let resource_names = resources
+            .iter()
+            .map(|resource| resource.name.clone())
+            .collect::<HashSet<_>>();
+        let struct_names = HashSet::new();
+        let mut next_positional = 0usize;
+        let mut slots_by_parameter = std::collections::HashMap::new();
+        let mut seen_slots = HashSet::new();
+
+        for arg in args {
+            let (parameter, expr) = match arg {
+                CallArg::Positional(expr) => {
+                    let parameter = symbol.parameters.get(next_positional);
+                    next_positional += 1;
+                    (parameter, expr)
+                }
+                CallArg::Named(name, expr) => {
+                    (symbol.parameters.iter().find(|parameter| parameter.name == *name), expr)
+                }
+                CallArg::PositionalUnpack(_) | CallArg::KeywordUnpack(_) => continue,
+            };
+            let Some(parameter) = parameter else {
+                continue;
+            };
+            let CBindingType::Output { mode, value } = &parameter.ty else {
+                continue;
+            };
+            let Expr::Ident(local_name) = &expr.node else {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C output parameter `{binding}.{}.{}` requires a local c.out[...]() or c.inout(...) slot",
+                        symbol.name, parameter.name
+                    ),
+                    expr.span,
+                ));
+                continue;
+            };
+            let Some(slot) = self.pending_c_abi_output_slots.get(local_name).cloned() else {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C output parameter `{binding}.{}.{}` requires local `{local_name}` to be initialized by c.out[...]() or c.inout(...)",
+                        symbol.name, parameter.name
+                    ),
+                    expr.span,
+                ));
+                continue;
+            };
+            if slot.bound {
+                self.errors.push(CompileError::type_error(
+                    format!("C output slot `{local_name}` is already bound to an earlier raw call"),
+                    expr.span,
+                ));
+                continue;
+            }
+            if slot.mode != *mode {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C output parameter `{binding}.{}.{}` requires {}, but `{local_name}` was created as {}",
+                        symbol.name,
+                        parameter.name,
+                        if matches!(mode, COutputMode::Out) {
+                            "c.out[...]()"
+                        } else {
+                            "c.inout(...)"
+                        },
+                        if matches!(slot.mode, COutputMode::Out) {
+                            "c.out[...]()"
+                        } else {
+                            "c.inout(...)"
+                        },
+                    ),
+                    expr.span,
+                ));
+                continue;
+            }
+            if !seen_slots.insert(local_name.clone()) {
+                self.errors.push(CompileError::type_error(
+                    format!("C output slot `{local_name}` may be passed to only one output parameter per call"),
+                    expr.span,
+                ));
+                continue;
+            }
+
+            let value_is_valid = match mode {
+                COutputMode::Out => {
+                    slot.declared_type
+                        .as_deref()
+                        .and_then(|source| Self::c_binding_type(source, &resource_names, &struct_names, false))
+                        == Some((**value).clone())
+                }
+                COutputMode::InOut => slot
+                    .initial_type
+                    .as_ref()
+                    .is_some_and(|initial| self.types_compatible(initial, &Self::c_raw_call_type(binding, value))),
+            };
+            if !value_is_valid {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C output slot `{local_name}` does not match `{binding}.{}.{}`'s checked value contract",
+                        symbol.name, parameter.name
+                    ),
+                    expr.span,
+                ));
+                continue;
+            }
+
+            let slot_identity = c_abi::output_slot_type_identity(
+                binding,
+                &symbol.name,
+                &parameter.name,
+                slot.constructor_span.start,
+                slot.constructor_span.end,
+            );
+            if let Some(symbol_id) = self.symbols.lookup(local_name)
+                && let Some(symbol) = self.symbols.get_mut(symbol_id)
+                && let SymbolKind::Variable(variable) = &mut symbol.kind
+            {
+                variable.ty = ResolvedType::Named(slot_identity.clone());
+            }
+            if let Some(pending) = self.pending_c_abi_output_slots.get_mut(local_name) {
+                pending.bound = true;
+            }
+            if matches!(mode, COutputMode::InOut)
+                && symbol
+                    .outcomes
+                    .iter()
+                    .all(|outcome| !outcome.invalidates.contains(&parameter.name))
+            {
+                self.available_c_abi_output_slots.insert(slot_identity.clone());
+            }
+            self.type_info.c_abi.output_slots.push(CAbiOutputSlot {
+                constructor_span: slot.constructor_span,
+                identity: slot_identity.clone(),
+                local_name: local_name.clone(),
+                binding: binding.to_string(),
+                symbol: symbol.name.clone(),
+                parameter: parameter.name.clone(),
+                mode: *mode,
+                value: (**value).clone(),
+            });
+            slots_by_parameter.insert(parameter.name.clone(), slot_identity);
+        }
+        slots_by_parameter
+    }
+
+    /// Record local handle transfers for direct raw C calls.
+    fn record_c_raw_owned_resource_transfers(&mut self, symbol: &CBindingSymbol, args: &[CallArg]) {
+        self.for_each_c_raw_resource_argument(symbol, args, CResourceAccess::Owned, |this, name, span| {
+            this.transferred_c_resource_bindings.insert(name.to_string(), span);
+        });
+    }
+
+    /// Reject an immutable local binding when a direct C call requires exclusive access to its resource wrapper.
+    fn validate_c_raw_mutable_resource_borrows(&mut self, symbol: &CBindingSymbol, args: &[CallArg]) {
+        self.for_each_c_raw_resource_argument(symbol, args, CResourceAccess::BorrowedMut, |this, name, span| {
+            if !this.mutable_bindings.contains(name) {
+                this.errors.push(errors::mutable_c_borrow_requires_mut(name, span));
+            }
+        });
+    }
+
+    /// Apply one ownership-mode check to each direct local resource argument in a fixed C call signature.
+    fn for_each_c_raw_resource_argument(
+        &mut self,
+        symbol: &CBindingSymbol,
+        args: &[CallArg],
+        expected_access: CResourceAccess,
+        mut apply: impl FnMut(&mut Self, &str, Span),
+    ) {
+        let mut next_positional = 0usize;
+        for arg in args {
+            let (parameter, expr) = match arg {
+                CallArg::Positional(expr) => {
+                    let parameter = symbol.parameters.get(next_positional);
+                    next_positional += 1;
+                    (parameter, expr)
+                }
+                CallArg::Named(name, expr) => {
+                    (symbol.parameters.iter().find(|parameter| parameter.name == *name), expr)
+                }
+                CallArg::PositionalUnpack(_) | CallArg::KeywordUnpack(_) => continue,
+            };
+            let Some(CBindingType::Resource { access, .. }) = parameter.map(|parameter| &parameter.ty) else {
+                continue;
+            };
+            if *access != expected_access {
+                continue;
+            }
+            let Some((name, resource_span)) = Self::c_raw_resource_ident(expr) else {
+                continue;
+            };
+            apply(self, name, resource_span);
+        }
+    }
+
+    /// Return the source binding named by a transparent parenthesized resource expression.
+    fn c_raw_resource_ident(expr: &Spanned<Expr>) -> Option<(&str, Span)> {
+        match &expr.node {
+            Expr::Ident(name) => Some((name, expr.span)),
+            Expr::Paren(inner) => Self::c_raw_resource_ident(inner),
+            _ => None,
         }
     }
 
