@@ -165,6 +165,19 @@ The target triple still names the CPU and operating-system identity. A mobile `p
 
 Every declared package file must be a regular, normalized relative path. Running `incan lock` hashes the exact header, artifact, and shim-source bytes into the semantic lock state with the target, compatibility requirements, definitions, and capability requirements. Changing any declared input makes the lock stale; relocating an unchanged package does not change these package-relative entries.
 
+The locked mobile profile records a package target constraint, not a local-toolchain selection. It preserves the Android API level or iOS deployment target that a future managed toolchain must use without embedding an NDK directory, Xcode path, Gradle configuration, or signing credential in the package.
+
+## Check a declared mobile ABI target
+
+`incan check` verifies checked C declarations against the compiler host by default. Pass `--interop-target` to select exactly one target declared by the current package instead:
+
+```sh
+INCAN_C_ABI_CLANG=/path/to/aarch64-linux-android34-clang \
+  incan check --interop-target aarch64-linux-android .
+```
+
+The selected target's `definitions` are passed to both the signature/layout probe and the enum-value probe. The command rejects a target that is not declared by the package. It also keeps the boundary narrow: this checks the source-owned C ABI against that target profile, but it does not cross-compile generated Rust, link declared artifacts, build shims, stage a mobile package, or attest that a compatible `toolchain` or `sdk` requirement matches an installed binary. `INCAN_C_ABI_CLANG` provisions the executable for this invocation; it does not replace the manifest as ABI or target authority.
+
 This declaration and lock slice deliberately does not download artifacts, discover a system library, compile a shim, or define a Gradle/Xcode handover format. Oven will resolve the requirements, select concrete compiler and SDK installations, build shims, cache outputs, and record those choices in its own receipt or store. Do not put signing, provenance admission, or license policy here: publication policy belongs to `incan.pub`.
 
 ## Interpret common failures

@@ -5540,6 +5540,126 @@ api-level = 34
 }
 
 #[test]
+fn check_verifies_c_bindings_against_a_declared_android_interop_target() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(clang) = c_abi_test_clang() else {
+        return Ok(());
+    };
+    let tmp = tempfile::tempdir()?;
+    let main_path = write_minimal_project(
+        tmp.path(),
+        "declared_android_c_abi_check",
+        r#"
+
+[sdk]
+profile = "minimal"
+
+[oven.interop]
+schema = 1
+
+[[oven.interop.targets]]
+target = "aarch64-linux-android"
+toolchain = { capability = "android-ndk", version = ">=29, <30" }
+sdk = { capability = "android", version = ">=36, <37" }
+definitions = ["INCAN_ANDROID_FIXTURE=1"]
+
+[oven.interop.targets.platform]
+kind = "android"
+api-level = 34
+"#,
+    )?;
+    let header = tmp.path().join("android_fixture.h");
+    fs::write(
+        &header,
+        "#ifndef INCAN_ANDROID_FIXTURE\n#error expected Android target definition\n#endif\ntypedef struct fixture_pair { int left; int right; } fixture_pair;\n#define FIXTURE_OK 0\nint fixture_abs(int value);\n",
+    )?;
+    fs::write(
+        &main_path,
+        format!(
+            "from std.interop import c\n\nbinding Fixture:\n    header = \"{}\"\n    link = c.system_library(\"c\")\n\n    symbol absolute(value: c.i32) -> c.i32:\n        native = \"fixture_abs\"\n\n    enum Status:\n        OK: c.i32 = FIXTURE_OK\n\n    struct Pair:\n        native = \"fixture_pair\"\n        left: c.i32 = left\n        right: c.i32 = right\n\ndef main() -> None:\n    assert Fixture.Status.OK == 0\n",
+            header.display()
+        ),
+    )?;
+    let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
+
+    let output = run_incan_with_env(
+        tmp.path(),
+        &["check", "--interop-target", "aarch64-linux-android", main_arg],
+        &[("INCAN_C_ABI_CLANG", clang.as_str())],
+    )?;
+    assert_success(&output, "declared Android C ABI verification");
+    Ok(())
+}
+
+#[test]
+fn check_rejects_an_undeclared_interop_target() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let main_path = write_minimal_project(tmp.path(), "undeclared_interop_target", "")?;
+    let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
+
+    let output = run_incan(
+        tmp.path(),
+        &["check", "--interop-target", "aarch64-linux-android", main_arg],
+    )?;
+    assert_failure(&output, "undeclared Oven interop target selection");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires an [oven.interop] declaration in incan.toml"),
+        "unexpected undeclared-target diagnostic:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn check_verifies_c_bindings_against_a_declared_ios_interop_target() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let main_path = write_minimal_project(
+        tmp.path(),
+        "declared_ios_c_abi_check",
+        r#"
+
+[sdk]
+profile = "minimal"
+
+[oven.interop]
+schema = 1
+
+[[oven.interop.targets]]
+target = "aarch64-apple-ios"
+toolchain = { capability = "apple-clang", version = ">=17, <18" }
+sdk = { capability = "iphoneos", version = ">=18, <19" }
+definitions = ["INCAN_IOS_FIXTURE=1"]
+
+[oven.interop.targets.platform]
+kind = "ios"
+deployment-target = "13.0"
+"#,
+    )?;
+    let header = tmp.path().join("ios_fixture.h");
+    fs::write(
+        &header,
+        "#include <stdint.h>\n#ifndef INCAN_IOS_FIXTURE\n#error expected iOS target definition\n#endif\ntypedef struct fixture_pair { int32_t left; int32_t right; } fixture_pair;\n#define FIXTURE_OK 0\nint32_t fixture_abs(int32_t value);\n",
+    )?;
+    fs::write(
+        &main_path,
+        format!(
+            "from std.interop import c\n\nbinding Fixture:\n    header = \"{}\"\n    link = c.system_library(\"c\")\n\n    symbol absolute(value: c.i32) -> c.i32:\n        native = \"fixture_abs\"\n\n    enum Status:\n        OK: c.i32 = FIXTURE_OK\n\n    struct Pair:\n        native = \"fixture_pair\"\n        left: c.i32 = left\n        right: c.i32 = right\n\ndef main() -> None:\n    assert Fixture.Status.OK == 0\n",
+            header.display()
+        ),
+    )?;
+    let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
+
+    let output = run_incan_with_env_and_removed(
+        tmp.path(),
+        &["check", "--interop-target", "aarch64-apple-ios", main_arg],
+        &[],
+        &["INCAN_C_ABI_CLANG"],
+    )?;
+    assert_success(&output, "declared iOS C ABI verification");
+    Ok(())
+}
+
+#[test]
 fn canonical_lock_records_exact_registry_resolution_changes() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(
