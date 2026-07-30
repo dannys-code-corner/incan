@@ -105,6 +105,7 @@ Soft keywords are only reserved when their activating `std.*` namespace is impor
 | `std.telemetry` | - | `std.telemetry.core` | - |
 | `std.environ` | - | - | - |
 | `std.async` | `async` | `std.async.time`, `std.async.task`, `std.async.channel`, `std.async.race`, `std.async.sync`, `std.async.prelude` | `async`, `await` |
+| `std.interop` | - | - | - |
 | `std.serde` | `json` | `std.serde.json` | - |
 | `std.json` | `json` | - | - |
 | `std.reflection` | - | - | - |
@@ -361,6 +362,7 @@ Class, model, trait, enum, newtype, field, alias, and module decorators remain l
 | RustDerive | `@rust.derive` |  | Declare a Rust derive path required by a derivable Incan trait. | RFC 024 | 0.3 | Stable |
 | RustExtern | `@rust.extern` |  | Mark functions whose body is provided by a Rust module. | RFC 022 | 0.2 | Stable |
 | RustAllow | `@rust.allow` |  | Emit targeted Rust #[allow(...)] lint suppressions on a generated item. | RFC 057 | 0.3 | Stable |
+| CBinding | `@c.binding` | `@std.interop.c.binding` | Declare a checked C ABI binding class. | RFC 116 | 0.5 | Stable |
 | NoImplicitCoercion | `@no_implicit_coercion` |  | Disable RFC 017 implicit newtype coercion for this type. | RFC 017 | 0.3 | Stable |
 | StaticMethod | `@staticmethod` |  | Mark a method as static (no self receiver). | RFC 000 | 0.1 | Stable |
 | ClassMethod | `@classmethod` |  | Mark a method as a class method (no implicit self receiver). | RFC 000 | 0.2 | Stable |
