@@ -6717,9 +6717,9 @@
 
 
 <h1 id="stdinterop-checked-c-bindings"><code>std.interop</code>: checked C bindings<a class="headerlink" href="#stdinterop-checked-c-bindings" title="Permanent link">&para;</a></h1>
-<p><code>std.interop</code> activates the first checked C binding vocabulary. This page is the exact contract: it lists accepted declaration forms, current execution limits, and verification behavior. Start with the <a href="../../../tutorials/checked_c_binding/">tutorial</a>, use the <a href="../../../how-to/checked_c_bindings/">how-to guide</a> for modelling and diagnostics, and read the <a href="../../../explanation/checked_c_interop/">architecture explanation</a> before choosing C over Rust interop.</p>
-<p>The surface lets a module declare a small, explicit C ABI contract and call its supported scalar free functions without writing a Rust wrapper first. The compiler verifies declared signatures, enum carriers, and listed plain-structure layouts with Clang before generating Rust.</p>
-<p>This is a deliberately narrow foundation. It is useful for direct scalar C functions and ABI verification; resource ownership, output positions, bundled artifacts, shims, and platform packaging have separate RFC 116 slices.</p>
+<p><code>std.interop</code> activates the checked C binding vocabulary. This page is the exact contract: it lists accepted declaration forms, current execution limits, and verification behavior. Start with the <a href="../../../tutorials/checked_c_binding/">tutorial</a>, use the <a href="../../../how-to/checked_c_bindings/">how-to guide</a> for modelling and diagnostics, and read the <a href="../../../explanation/checked_c_interop/">architecture explanation</a> before choosing C over Rust interop.</p>
+<p>The surface lets a module declare a small, explicit C ABI contract and call supported scalar functions, opaque resources, and output positions without writing a Rust wrapper first. The compiler verifies declared signatures, enum carriers, and listed plain-structure layouts with Clang before generating Rust.</p>
+<p>This is a deliberately narrow foundation. It is useful for direct scalar C functions, opaque resource ownership, output positions, and ABI verification; bounded C strings and views, native artifact resolution, shims, and platform packaging have separate RFC 116 slices.</p>
 <h2 id="activate-the-vocabulary">Activate the vocabulary<a class="headerlink" href="#activate-the-vocabulary" title="Permanent link">&para;</a></h2>
 <p>Import the C namespace explicitly. The import activates <code>binding</code> only in that module; it does not make C syntax a global language keyword.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">std.interop</span><span class="w"> </span><span class="kn">import</span> <span class="n">c</span>
@@ -6730,18 +6730,33 @@
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">std.interop</span><span class="w"> </span><span class="kn">import</span> <span class="n">c</span>
 
 <span class="n">binding</span> <span class="nc">LibC</span><span class="p">:</span>
-    <span class="n">header</span> <span class="o">=</span> <span class="s2">&quot;stdlib.h&quot;</span>
-    <span class="n">link</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">system_library</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">)</span>
+    <span class="n">header</span> <span class="o">=</span> <span class="s2">&quot;fixture.h&quot;</span>
+    <span class="n">link</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">system_library</span><span class="p">(</span><span class="s2">&quot;fixture&quot;</span><span class="p">)</span>
 
-    <span class="n">symbol</span> <span class="n">absolute</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span><span class="p">:</span>
-        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;abs&quot;</span>
+    <span class="n">resource</span> <span class="nc">Handle</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_handle&quot;</span>
+        <span class="n">release</span> <span class="o">=</span> <span class="n">close</span>
+
+    <span class="n">symbol</span> <span class="n">close</span><span class="p">(</span><span class="n">handle</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">Owned</span><span class="p">[</span><span class="nc">Handle</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_close&quot;</span>
+
+    <span class="n">symbol</span> <span class="nb">open</span><span class="p">(</span><span class="n">output</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">Out</span><span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="nc">Owned</span><span class="p">[</span><span class="nc">Handle</span><span class="p">]])</span> <span class="o">-&gt;</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_open&quot;</span>
+
+        <span class="n">outcome</span> <span class="nc">Status</span><span class="o">.</span><span class="nc">OK</span><span class="p">:</span>
+            <span class="n">initializes</span> <span class="o">=</span> <span class="p">[</span><span class="n">output</span><span class="p">]</span>
 
     <span class="k">enum</span> <span class="nc">Status</span><span class="p">:</span>
-        <span class="nc">OK</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span> <span class="o">=</span> <span class="nc">EXIT_SUCCESS</span>
+        <span class="nc">OK</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span> <span class="o">=</span> <span class="nc">FIXTURE_OK</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">absolute</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">open_handle</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="n">unsafe</span><span class="p">:</span>
-        <span class="k">return</span> <span class="nc">LibC</span><span class="o">.</span><span class="n">absolute</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">out</span><span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="nc">Owned</span><span class="p">[</span><span class="nc">Handle</span><span class="p">]]()</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="nc">LibC</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">status</span> <span class="o">==</span> <span class="nc">LibC</span><span class="o">.</span><span class="nc">Status</span><span class="o">.</span><span class="nc">OK</span><span class="p">:</span>
+            <span class="n">handle</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="nb">take</span><span class="p">()</span>
+            <span class="nc">LibC</span><span class="o">.</span><span class="n">close</span><span class="p">(</span><span class="n">handle</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">status</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">is_success</span><span class="p">(</span><span class="n">status</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">status</span> <span class="o">==</span> <span class="nc">LibC</span><span class="o">.</span><span class="nc">Status</span><span class="o">.</span><span class="nc">OK</span>
@@ -6749,14 +6764,17 @@
 <p>The raw call remains inside <code>unsafe:</code>. A public façade can live in the same module and call the private binding; the façade is where an API gives native failure codes, argument validity, and domain meanings their ordinary Incan shape.</p>
 <p>The compiler emits the private <code>extern "C"</code> declaration from the checked binding descriptor. It does not rediscover the function signature from generated Rust.</p>
 <h2 id="checked-declaration-facts">Checked declaration facts<a class="headerlink" href="#checked-declaration-facts" title="Permanent link">&para;</a></h2>
-<p>The foundation accepts these declaration forms:</p>
+<p>The current surface accepts these declaration forms:</p>
 <ul>
 <li>Exact C scalar spellings: <code>c.i8</code>, <code>c.u8</code>, <code>c.i16</code>, <code>c.u16</code>, <code>c.i32</code>, <code>c.u32</code>, <code>c.i64</code>, <code>c.u64</code>, <code>c.Size</code>, <code>c.c_char</code>, and <code>c.c_int</code>.</li>
 <li>Read-only and mutable pointer descriptions: <code>c.ConstPtr[T]</code> and <code>c.MutPtr[T]</code>.</li>
 <li><code>enum</code> variants with one explicit scalar carrier and a native constant name.</li>
 <li>Plain <code>struct</code> declarations with an explicit native C type name and listed fields.</li>
+<li><code>resource</code> declarations that associate an opaque native type with one <code>c.Owned[...]</code> release symbol.</li>
+<li><code>c.Owned[T]</code>, <code>c.Borrowed[T]</code>, and <code>c.BorrowedMut[T]</code> resource parameters and owned or nullable-owned resource results.</li>
+<li><code>c.Out[T]</code> and <code>c.InOut[T]</code> parameters for scalar values and owned resources, plus an <code>outcome</code> declaration that makes output initialization explicit.</li>
 </ul>
-<p>For the executable subset, Incan currently carries scalar values as <code>int</code>. Generated wrappers range-check every conversion to and from the exact C scalar type; a value that cannot be represented by Incan <code>int</code> is not silently truncated. A verified enum constant is available as an ordinary integer expression such as <code>LibC.Status.OK</code>. Pointer and by-value structure contracts are verified declarations in this slice, but calls using them stay rejected until the later ownership and view design is implemented.</p>
+<p>For the executable subset, Incan carries scalar values as <code>int</code>, releases owned resources through their declared native operation, and keeps output storage in compiler-generated private slots. Generated wrappers range-check every scalar conversion; a value that cannot be represented by Incan <code>int</code> is not silently truncated. A verified enum constant is available as an ordinary integer expression such as <code>LibC.Status.OK</code>. <code>c.Out[...]</code> is readable only after its declared outcome, while a consumed <code>c.Owned[...]</code> resource cannot be used again. Pointer and by-value structure contracts are verified declarations in this slice, but calls using them stay rejected until the later view design is implemented.</p>
 <h2 id="verification-and-diagnostics">Verification and diagnostics<a class="headerlink" href="#verification-and-diagnostics" title="Permanent link">&para;</a></h2>
 <p>Before code generation, the compiler renders a non-executable C probe from the binding descriptor and invokes a Clang-compatible toolchain for the selected host ABI. The probe checks the exact free-function signature, every enum constant's declared carrier, and the size, alignment, and field offsets of every listed plain structure. A mismatch is reported at the binding declaration before native execution.</p>
 <p>Headers and native names are explicit in source. The verifier neither scans arbitrary headers to infer an API nor searches for a library that happens to provide a symbol. The logical library name records the link capability; target artifact selection and locking are intentionally deferred to the native-artifact slice.</p>
@@ -6764,8 +6782,8 @@
 <h2 id="not-included-yet">Not included yet<a class="headerlink" href="#not-included-yet" title="Permanent link">&para;</a></h2>
 <p>Do not use this surface for:</p>
 <ul>
-<li>owned C resources, <code>Out</code> / <code>InOut</code> parameters, release rules, or borrowed views;</li>
-<li>callbacks, variadics, unions, bitfields, pointer arithmetic, casts, dereferences, or dynamic symbol lookup;</li>
+<li>C strings, spans, caller-owned buffers, scoped foreign views, pointer arithmetic, casts, dereferences, or dynamic symbol lookup;</li>
+<li>callbacks, variadics, unions, and bitfields;</li>
 <li>native artifact downloads, vendored libraries, C/C++ shim compilation, or <code>incan.pub</code> publication;</li>
 <li>Android, Xcode, Gradle, or signing handoff artifacts.</li>
 </ul>

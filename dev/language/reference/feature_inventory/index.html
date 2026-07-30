@@ -7914,7 +7914,7 @@
 <td style="text-align: right;">0.5</td>
 <td>Import <code>c</code> from <code>std.interop</code>, then declare a <code>binding</code> in the importing module.</td>
 <td><code>from std.interop import c</code><br><code>binding LibC:</code><br><code>unsafe:     LibC.absolute(-7)</code></td>
-<td>Explicit C headers, scalar free-function signatures, enum carriers, and plain layouts are verified before private generated C ABI calls.</td>
+<td>Explicit C headers, scalar signatures, opaque resources, output positions, enum carriers, and plain layouts are verified before private generated C ABI calls.</td>
 <td>Unverified Rust wrappers, ambient header discovery, or string-based dynamic symbol lookup.</td>
 <td><a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/116_typed_c_abi_interop/">RFC 116</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></td>
 </tr>
@@ -8598,7 +8598,7 @@
 <li><strong>Use instead of:</strong> Unverified Rust wrappers, ambient header discovery, or string-based dynamic symbol lookup.</li>
 <li><strong>References:</strong> <a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/116_typed_c_abi_interop/">RFC 116</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></li>
 </ul>
-<p>Explicit C headers, scalar free-function signatures, enum carriers, and plain layouts are verified before private generated C ABI calls.</p>
+<p>Explicit C headers, scalar signatures, opaque resources, output positions, enum carriers, and plain layouts are verified before private generated C ABI calls.</p>
 <p>Canonical forms:</p>
 <ul>
 <li><code>from std.interop import c</code></li>

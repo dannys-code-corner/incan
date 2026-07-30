@@ -1431,9 +1431,18 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-this-first-slice-supports" class="md-nav__link">
+  <a href="#model-an-owned-handle-and-an-output-position" class="md-nav__link">
     <span class="md-ellipsis">
-      What this first slice supports
+      Model an owned handle and an output position
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-this-slice-supports" class="md-nav__link">
+    <span class="md-ellipsis">
+      What this slice supports
     </span>
   </a>
   
@@ -6652,9 +6661,18 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-this-first-slice-supports" class="md-nav__link">
+  <a href="#model-an-owned-handle-and-an-output-position" class="md-nav__link">
     <span class="md-ellipsis">
-      What this first slice supports
+      Model an owned handle and an output position
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-this-slice-supports" class="md-nav__link">
+    <span class="md-ellipsis">
+      What this slice supports
     </span>
   </a>
   
@@ -6679,7 +6697,7 @@
 
 
 <h1 id="write-your-first-checked-c-binding">Write your first checked C binding<a class="headerlink" href="#write-your-first-checked-c-binding" title="Permanent link">&para;</a></h1>
-<p>This tutorial calls C's <code>abs</code> function through a small Incan façade. It shows the complete current path: describe an exact scalar C signature, let the compiler verify it against a header, and keep the raw call inside a narrow <code>unsafe:</code> block.</p>
+<p>This tutorial calls C's <code>abs</code> function through a small Incan façade. It shows the complete current path: describe an exact scalar C signature, let the compiler verify it against a header, and keep the raw call inside a narrow <code>unsafe:</code> block. The same binding surface also supports declared opaque resources and compiler-managed output positions; a later section shows how those contracts work.</p>
 <p>The checked C surface is experimental and intentionally small. Use this tutorial on a Linux x86-64 or Apple arm64 host with a Clang-compatible C toolchain and the standard C headers installed. It does not yet provision cross-target toolchains or native artifacts for you.</p>
 <h2 id="declare-the-raw-contract">Declare the raw contract<a class="headerlink" href="#declare-the-raw-contract" title="Permanent link">&para;</a></h2>
 <p>Create <code>src/main.incn</code>:</p>
@@ -6724,8 +6742,41 @@
     <span class="k">assert</span> <span class="nc">LibC</span><span class="o">.</span><span class="nc">ExitStatus</span><span class="o">.</span><span class="nc">Success</span> <span class="o">==</span> <span class="mi">0</span>
     <span class="k">assert</span> <span class="n">absolute</span><span class="p">(</span><span class="o">-</span><span class="mi">7</span><span class="p">)</span> <span class="o">==</span> <span class="mi">7</span>
 </code></pre></div>
-<h2 id="what-this-first-slice-supports">What this first slice supports<a class="headerlink" href="#what-this-first-slice-supports" title="Permanent link">&para;</a></h2>
-<p>You can use checked bindings today for scalar free functions, native integer constants, and plain-structure layout declarations. Pointer and plain-structure types can be declared and verified, but calls using them remain rejected until the ownership and view work lands. Resources, <code>Out</code>/<code>InOut</code>, callbacks, variadics, shims, bundled artifacts, and mobile packaging are not part of this first surface.</p>
+<h2 id="model-an-owned-handle-and-an-output-position">Model an owned handle and an output position<a class="headerlink" href="#model-an-owned-handle-and-an-output-position" title="Permanent link">&para;</a></h2>
+<p>Many native APIs create a handle through an output pointer and require one matching release function. Keep both facts in the binding instead of modelling the pointer as an <code>int</code> or exposing it from a public façade:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">binding</span> <span class="nc">Fixture</span><span class="p">:</span>
+    <span class="n">header</span> <span class="o">=</span> <span class="s2">&quot;fixture.h&quot;</span>
+    <span class="n">link</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">system_library</span><span class="p">(</span><span class="s2">&quot;fixture&quot;</span><span class="p">)</span>
+
+    <span class="n">resource</span> <span class="nc">Handle</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_handle&quot;</span>
+        <span class="n">release</span> <span class="o">=</span> <span class="n">close</span>
+
+    <span class="n">symbol</span> <span class="n">close</span><span class="p">(</span><span class="n">handle</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">Owned</span><span class="p">[</span><span class="nc">Handle</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_close&quot;</span>
+
+    <span class="k">enum</span> <span class="nc">Status</span><span class="p">:</span>
+        <span class="nc">OK</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span> <span class="o">=</span> <span class="nc">FIXTURE_OK</span>
+
+    <span class="n">symbol</span> <span class="nb">open</span><span class="p">(</span><span class="n">output</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">Out</span><span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="nc">Owned</span><span class="p">[</span><span class="nc">Handle</span><span class="p">]])</span> <span class="o">-&gt;</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_open&quot;</span>
+
+        <span class="n">outcome</span> <span class="nc">Status</span><span class="o">.</span><span class="nc">OK</span><span class="p">:</span>
+            <span class="n">initializes</span> <span class="o">=</span> <span class="p">[</span><span class="n">output</span><span class="p">]</span>
+</code></pre></div>
+<p><code>c.Owned[Handle]</code> is a non-copyable private bridge value. Passing it to <code>close</code> transfers the resource to the declared release operation. If ordinary control flow leaves a still-owned handle unconsumed, the generated release guard performs the same release once. <code>c.Out[...]</code> is compiler-managed storage, not a general-purpose container: call it with <code>c.out[...]()</code>, and call <code>take()</code> only on the outcome path that declares the slot initialized.</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">open_handle</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="n">unsafe</span><span class="p">:</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">out</span><span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="nc">Owned</span><span class="p">[</span><span class="nc">Handle</span><span class="p">]]()</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="nc">Fixture</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">status</span> <span class="o">==</span> <span class="nc">Fixture</span><span class="o">.</span><span class="nc">Status</span><span class="o">.</span><span class="nc">OK</span><span class="p">:</span>
+            <span class="n">handle</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="nb">take</span><span class="p">()</span>
+            <span class="nc">Fixture</span><span class="o">.</span><span class="n">close</span><span class="p">(</span><span class="n">handle</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">status</span>
+</code></pre></div>
+<p>Use <code>c.InOut[c.i32]</code> for a scalar pointer whose initial value is supplied by the caller and may be updated by the native call. Create it with <code>c.inout(value)</code> and consume its post-call value with <code>take()</code>. A binding outcome can state that an <code>Out</code> slot is initialized and that an <code>InOut</code> slot is updated; the compiler will reject an unguarded <code>Out.take()</code>.</p>
+<h2 id="what-this-slice-supports">What this slice supports<a class="headerlink" href="#what-this-slice-supports" title="Permanent link">&para;</a></h2>
+<p>You can use checked bindings today for scalar free functions, native integer constants, plain-structure layout declarations, opaque owned resources, inferred call-scoped resource borrows, and scalar or owned-resource <code>Out</code>/<code>InOut</code> positions. Pointer and by-value plain-structure calls remain unavailable. C strings, spans, caller-owned buffers, and scoped foreign views also remain separate work, as do callbacks, variadics, shims, bundled artifacts, and mobile packaging.</p>
 <p>Next, use the <a href="../../how-to/checked_c_bindings/">checked C binding how-to</a> when you need to model a real header, and read <a href="../../explanation/checked_c_interop/">how checked C interop is structured</a> before choosing C over Rust interop. The <a href="../../reference/stdlib/interop/"><code>std.interop</code> reference</a> lists every accepted declaration form and boundary.</p>
 
 

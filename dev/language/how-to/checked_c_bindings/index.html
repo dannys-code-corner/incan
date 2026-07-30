@@ -2158,6 +2158,24 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#associate-one-release-operation-with-an-opaque-resource" class="md-nav__link">
+    <span class="md-ellipsis">
+      Associate one release operation with an opaque resource
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-output-positions-only-through-compiler-managed-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use output positions only through compiler-managed storage
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#declare-constants-and-a-plain-layout" class="md-nav__link">
     <span class="md-ellipsis">
       Declare constants and a plain layout
@@ -6652,6 +6670,24 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#associate-one-release-operation-with-an-opaque-resource" class="md-nav__link">
+    <span class="md-ellipsis">
+      Associate one release operation with an opaque resource
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-output-positions-only-through-compiler-managed-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use output positions only through compiler-managed storage
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#declare-constants-and-a-plain-layout" class="md-nav__link">
     <span class="md-ellipsis">
       Declare constants and a plain layout
@@ -6748,9 +6784,61 @@
 <td>Nullable pointer</td>
 <td><code>Option[c.ConstPtr[T]]</code> or <code>Option[c.MutPtr[T]]</code></td>
 </tr>
+<tr>
+<td>Opaque resource consumed by the native call</td>
+<td><code>c.Owned[Handle]</code></td>
+</tr>
+<tr>
+<td>Call-scoped shared or exclusive resource access</td>
+<td><code>c.Borrowed[Handle]</code> or <code>c.BorrowedMut[Handle]</code></td>
+</tr>
+<tr>
+<td>Native-written or caller-initialized output storage</td>
+<td><code>c.Out[T]</code> or <code>c.InOut[T]</code></td>
+</tr>
 </tbody>
 </table>
-<p>The executable subset currently admits scalar free functions only. Pointer and structure declarations are still useful: the compiler verifies their declared shape, but rejects a call that would require unimplemented ownership or view rules.</p>
+<p>The executable subset admits scalar calls, opaque resource calls, and scalar or owned-resource output positions. Pointer and by-value structure declarations are still useful because the compiler verifies their declared shape, but calls that would require pointer arithmetic, arbitrary dereference, or unimplemented view rules remain rejected.</p>
+<h2 id="associate-one-release-operation-with-an-opaque-resource">Associate one release operation with an opaque resource<a class="headerlink" href="#associate-one-release-operation-with-an-opaque-resource" title="Permanent link">&para;</a></h2>
+<p>Declare a resource once, name the exact native opaque type, and associate it with the binding symbol that consumes it:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">binding</span> <span class="nc">Fixture</span><span class="p">:</span>
+    <span class="n">header</span> <span class="o">=</span> <span class="s2">&quot;fixture.h&quot;</span>
+    <span class="n">link</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">system_library</span><span class="p">(</span><span class="s2">&quot;fixture&quot;</span><span class="p">)</span>
+
+    <span class="n">resource</span> <span class="nc">Handle</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_handle&quot;</span>
+        <span class="n">release</span> <span class="o">=</span> <span class="n">close</span>
+
+    <span class="n">symbol</span> <span class="n">close</span><span class="p">(</span><span class="n">handle</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">Owned</span><span class="p">[</span><span class="nc">Handle</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_close&quot;</span>
+
+    <span class="n">symbol</span> <span class="nb">inspect</span><span class="p">(</span><span class="n">handle</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">Borrowed</span><span class="p">[</span><span class="nc">Handle</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_inspect&quot;</span>
+</code></pre></div>
+<p><code>c.Owned[Handle]</code> moves into <code>close</code>, so use after that call is a type error and generated Rust disarms the last-resort guard before invoking the native release function. <code>c.Borrowed[Handle]</code> and <code>c.BorrowedMut[Handle]</code> are selected from the parameter declaration at the call site; wrapper authors do not write Rust-shaped borrow calls. A mutable local is required for <code>c.BorrowedMut[Handle]</code>.</p>
+<h2 id="use-output-positions-only-through-compiler-managed-storage">Use output positions only through compiler-managed storage<a class="headerlink" href="#use-output-positions-only-through-compiler-managed-storage" title="Permanent link">&para;</a></h2>
+<p>The declaration owns the pointer level, while the bridge owns only the ordinary slot value:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">binding</span> <span class="nc">Fixture</span><span class="p">:</span>
+    <span class="k">enum</span> <span class="nc">Status</span><span class="p">:</span>
+        <span class="nc">OK</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span> <span class="o">=</span> <span class="nc">FIXTURE_OK</span>
+
+    <span class="n">symbol</span> <span class="nb">open</span><span class="p">(</span><span class="n">output</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">Out</span><span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="nc">Owned</span><span class="p">[</span><span class="nc">Handle</span><span class="p">]],</span> <span class="n">attempts</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">InOut</span><span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="kt">i32</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;fixture_open&quot;</span>
+
+        <span class="n">outcome</span> <span class="nc">Status</span><span class="o">.</span><span class="nc">OK</span><span class="p">:</span>
+            <span class="n">initializes</span> <span class="o">=</span> <span class="p">[</span><span class="n">output</span><span class="p">]</span>
+            <span class="n">updates</span> <span class="o">=</span> <span class="p">[</span><span class="n">attempts</span><span class="p">]</span>
+</code></pre></div>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">unsafe</span><span class="p">:</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">out</span><span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="nc">Owned</span><span class="p">[</span><span class="nc">Handle</span><span class="p">]]()</span>
+    <span class="n">attempts</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">inout</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">status</span> <span class="o">=</span> <span class="nc">Fixture</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">attempts</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">status</span> <span class="o">==</span> <span class="nc">Fixture</span><span class="o">.</span><span class="nc">Status</span><span class="o">.</span><span class="nc">OK</span><span class="p">:</span>
+        <span class="n">handle</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="nb">take</span><span class="p">()</span>
+        <span class="nc">Fixture</span><span class="o">.</span><span class="n">close</span><span class="p">(</span><span class="n">handle</span><span class="p">)</span>
+    <span class="n">updated_attempts</span> <span class="o">=</span> <span class="n">attempts</span><span class="o">.</span><span class="nb">take</span><span class="p">()</span>
+</code></pre></div>
+<p><code>c.Out[...]</code> can be read only on an outcome that declares it initialized. <code>c.InOut[...]</code> begins initialized and is readable after a call unless an outcome explicitly invalidates it. Neither slot can be returned from a safe façade or reused for a second raw call.</p>
 <h2 id="declare-constants-and-a-plain-layout">Declare constants and a plain layout<a class="headerlink" href="#declare-constants-and-a-plain-layout" title="Permanent link">&para;</a></h2>
 <p>Use a binding enum for a C macro or named constant. Every variant uses the same explicit C scalar carrier:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="n">binding</span> <span class="nc">Fixture</span><span class="p">:</span>
@@ -6787,7 +6875,7 @@
 </tr>
 <tr>
 <td>C symbol has an unsupported parameter or return type</td>
-<td>Use one of the current exact scalar types, or wait for the pointer/resource slice instead of weakening the source type.</td>
+<td>Use the current scalar, opaque-resource, or output forms. Do not weaken an unsupported pointer or view contract into an integer.</td>
 </tr>
 <tr>
 <td>Clang rejects the signature or layout</td>
@@ -6798,13 +6886,21 @@
 <td>Keep one declared <code>c.*</code> carrier for all variants and verify what the header exposes after macro expansion.</td>
 </tr>
 <tr>
+<td><code>take()</code> is rejected</td>
+<td>For <code>Out</code>, guard the read with the binding outcome that names the initialized parameter. For <code>InOut</code>, ensure the selected outcome has not invalidated the slot.</td>
+</tr>
+<tr>
+<td>C resource was transferred or requires a mutable borrow</td>
+<td>Do not reuse a resource passed as <code>c.Owned[...]</code>; bind it as <code>mut</code> before a call declared <code>c.BorrowedMut[...]</code>.</td>
+</tr>
+<tr>
 <td>Missing system library at final link</td>
 <td><code>c.system_library("name")</code> records a logical system capability; this slice does not download, vendor, or lock a library for you.</td>
 </tr>
 </tbody>
 </table>
 <h2 id="decide-whether-c-is-the-right-boundary">Decide whether C is the right boundary<a class="headerlink" href="#decide-whether-c-is-the-right-boundary" title="Permanent link">&para;</a></h2>
-<p>Choose this surface when the library's supported boundary is a compact C ABI and the part you need fits the verified scalar subset. Prefer <a href="../rust_interop/">Rust interop</a> when a maintained Rust crate already offers the safe, resource, callback, or asynchronous API you need. A C ABI may still be the right eventual boundary for a library implemented in another language; the implementation language is not the deciding factor.</p>
+<p>Choose this surface when the library's supported boundary is a compact C ABI and the part you need fits the verified scalar and opaque-resource subset. Prefer <a href="../rust_interop/">Rust interop</a> when a maintained Rust crate already offers the safe, resource, callback, or asynchronous API you need. A C ABI may still be the right eventual boundary for a library implemented in another language; the implementation language is not the deciding factor.</p>
 <p>If the header depends on callbacks, variadics, unions, bitfields, macros that cannot be represented as constants, or nontrivial lifetime rules, do not fake a scalar declaration. A checked C or C++ shim is the intended later adapter; it is not available in this first release slice.</p>
 <p>See <a href="../../explanation/checked_c_interop/">how checked C interop is structured</a> for the source-of-truth and toolchain boundary, and the <a href="../../reference/stdlib/interop/"><code>std.interop</code> reference</a> for precise accepted syntax.</p>
 
