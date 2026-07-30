@@ -56,12 +56,13 @@ mod validate_rust_module;
 pub use const_eval::ConstValue;
 pub(crate) use type_info::ClassFieldDefaultInfo;
 pub use type_info::{
-    ComputedPropertyAccessInfo, DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FixedUnpackPlan,
-    FunctionBindingInfo, IdentKind, PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind,
-    ProtocolIterationInfo, RegistryArtifacts, RegistryExplicitEntryInfo, ResolvedMethodCall, ResolvedMethodDispatch,
-    ResolvedOperatorCall, ResolvedOperatorKind, RustArgCoercionInfo, RustArgCoercionKind, SourceTargetInfo,
-    StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo, ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode,
-    ValidatedNewtypeCoercionStep,
+    CAbiInteropArtifacts, CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingParameter, CBindingStruct,
+    CBindingStructField, CBindingSymbol, CBindingType, ComputedPropertyAccessInfo, DecoratedFunctionBindingInfo,
+    DecoratedMethodBindingInfo, FixedUnpackPlan, FunctionBindingInfo, IdentKind, PartialProjectionInfo,
+    PartialProjectionPreset, PartialProjectionTargetKind, ProtocolIterationInfo, RegistryArtifacts,
+    RegistryExplicitEntryInfo, ResolvedMethodCall, ResolvedMethodDispatch, ResolvedOperatorCall, ResolvedOperatorKind,
+    RustArgCoercionInfo, RustArgCoercionKind, SourceTargetInfo, StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo,
+    ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode, ValidatedNewtypeCoercionStep,
 };
 #[cfg(test)]
 mod tests;
@@ -221,6 +222,8 @@ pub struct TypeChecker {
     pub(crate) await_operand_span: Option<(usize, usize)>,
     /// Nesting depth for expressions being checked as call arguments.
     pub(crate) call_argument_depth: usize,
+    /// Nesting depth of explicit `unsafe:` acknowledgement blocks.
+    pub(crate) unsafe_depth: usize,
     /// Expression spans where type-like identifiers are valid namespace/type owners.
     pub(crate) type_receiver_spans: Vec<(usize, usize)>,
     /// Expression spans where type-like identifiers are valid value-level `Type[T]` tokens.
@@ -417,6 +420,7 @@ impl TypeChecker {
             in_async_body: false,
             await_operand_span: None,
             call_argument_depth: 0,
+            unsafe_depth: 0,
             type_receiver_spans: Vec::new(),
             type_token_value_spans: Vec::new(),
             loop_stack: Vec::new(),
@@ -3382,6 +3386,11 @@ impl TypeChecker {
                     self.collect_static_initializer_static_writes_from_stmt(inner, current_static, visiting_functions);
                 }
             }
+            Statement::Unsafe(unsafe_stmt) => {
+                for inner in &unsafe_stmt.body {
+                    self.collect_static_initializer_static_writes_from_stmt(inner, current_static, visiting_functions);
+                }
+            }
             Statement::Break(Some(expr)) => {
                 self.collect_static_initializer_static_writes_from_expr(expr, current_static, visiting_functions);
             }
@@ -3493,6 +3502,11 @@ impl TypeChecker {
                     self.collect_static_dependencies_from_statement(&stmt.node, deps, visiting_functions);
                 }
             }
+            Statement::Unsafe(unsafe_stmt) => {
+                for stmt in &unsafe_stmt.body {
+                    self.collect_static_dependencies_from_statement(&stmt.node, deps, visiting_functions);
+                }
+            }
             Statement::CompoundAssignment(assign) => {
                 self.collect_static_dependencies_from_expr(&assign.value.node, deps, visiting_functions);
             }
@@ -3596,8 +3610,14 @@ impl TypeChecker {
                     self.validate_stdlib_type_name(first, span);
                 }
             }
+            Type::Dotted(_) => {}
             Type::Generic(name, args) => {
                 self.validate_stdlib_type_name(name, span);
+                for arg in args {
+                    self.validate_stdlib_type_usage_inner(&arg.node, arg.span);
+                }
+            }
+            Type::DottedGeneric(_, args) => {
                 for arg in args {
                     self.validate_stdlib_type_usage_inner(&arg.node, arg.span);
                 }
@@ -3854,6 +3874,13 @@ impl TypeChecker {
                     self.validate_source_type_annotation_names(&arg.node, arg.span);
                 }
             }
+            Type::Dotted(segments) => self.validate_source_dotted_type_annotation(segments, span),
+            Type::DottedGeneric(segments, args) => {
+                self.validate_source_dotted_type_annotation(segments, span);
+                for arg in args {
+                    self.validate_source_type_annotation_names(&arg.node, arg.span);
+                }
+            }
             Type::ConstrainedPrimitive(name, _) => self.validate_source_type_annotation_name(name, span),
             Type::Function(params, ret) => {
                 for param in params {
@@ -3883,6 +3910,15 @@ impl TypeChecker {
             return;
         }
         if let Some(root) = segments.first() {
+            self.emit_unknown_source_type_annotation_name(root, span);
+        }
+    }
+
+    /// Validate a namespace-qualified type such as `c.i32`.
+    fn validate_source_dotted_type_annotation(&mut self, segments: &[String], span: Span) {
+        if let Some(root) = segments.first()
+            && self.symbols.lookup(root).is_none()
+        {
             self.emit_unknown_source_type_annotation_name(root, span);
         }
     }
@@ -4888,7 +4924,10 @@ impl TypeChecker {
                 Declaration::Newtype(decl) => Some(decl.name.clone()),
                 Declaration::Enum(decl) => Some(decl.name.clone()),
                 Declaration::Function(decl) => Some(decl.name.clone()),
-                Declaration::Import(_) | Declaration::Docstring(_) | Declaration::TestModule(_) => None,
+                Declaration::Import(_)
+                | Declaration::Docstring(_)
+                | Declaration::TestModule(_)
+                | Declaration::VocabBlock(_) => None,
             })
             .collect()
     }
@@ -5871,7 +5910,10 @@ fn is_public_decl(decl: &Spanned<Declaration>) -> bool {
         Declaration::Trait(t) => matches!(t.visibility, Visibility::Public),
         Declaration::Function(f) => matches!(f.visibility, Visibility::Public),
         Declaration::Partial(partial) => matches!(partial.visibility, Visibility::Public),
-        Declaration::Import(_) | Declaration::Docstring(_) | Declaration::TestModule(_) => false,
+        Declaration::Import(_)
+        | Declaration::Docstring(_)
+        | Declaration::TestModule(_)
+        | Declaration::VocabBlock(_) => false,
     }
 }
 
@@ -5889,7 +5931,10 @@ fn declaration_name(decl: &Spanned<Declaration>) -> Option<&str> {
         Declaration::Trait(t) => Some(t.name.as_str()),
         Declaration::Function(f) => Some(f.name.as_str()),
         Declaration::Partial(partial) => Some(partial.name.as_str()),
-        Declaration::Import(_) | Declaration::Docstring(_) | Declaration::TestModule(_) => None,
+        Declaration::Import(_)
+        | Declaration::Docstring(_)
+        | Declaration::TestModule(_)
+        | Declaration::VocabBlock(_) => None,
     }
 }
 

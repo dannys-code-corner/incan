@@ -8,9 +8,14 @@ use std::collections::HashSet;
 use crate::frontend::api_metadata::ApiDeclaration;
 use crate::frontend::ast::*;
 use crate::frontend::decorator_resolution;
-use crate::frontend::diagnostics::errors;
+use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::{ResolvedType, SymbolKind, SymbolTable, TypeInfo};
 use crate::frontend::typechecker::TypeChecker;
+use crate::frontend::typechecker::type_info::{
+    CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingParameter, CBindingStruct, CBindingStructField,
+    CBindingSymbol, CBindingType,
+};
+use incan_core::lang::c_abi::{self, BindingArgumentId, BindingMemberId, LinkCapabilityId};
 use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::derives;
 use incan_core::lang::stdlib;
@@ -446,6 +451,604 @@ impl TypeChecker {
 
         let alias_resolved = decorator_resolution::resolve_decorator_path(dec, &self.import_aliases);
         decorators::from_segments(&alias_resolved)
+    }
+
+    /// Validate the source-owned descriptor attached to a checked C binding class.
+    ///
+    /// The import-activated `binding` vocabulary lowers to this ordinary decorator/class form, so the parser transports
+    /// only vocabulary data while this language-layer check owns all explicit, inspectable ABI meaning.
+    pub(crate) fn validate_c_binding_class(&mut self, class: &ClassDecl) {
+        // A class must contribute one descriptor at most. Rejecting the duplicate before parsing its fields avoids
+        // constructing a partial descriptor whose source authority would depend on decorator ordering.
+        let bindings = class
+            .decorators
+            .iter()
+            .filter(|decorator| self.decorator_id_with_import_aliases(&decorator.node) == Some(DecoratorId::CBinding))
+            .collect::<Vec<_>>();
+        if bindings.len() > 1 {
+            self.errors.push(CompileError::type_error(
+                "a class may declare only one @c.binding descriptor".to_string(),
+                bindings[1].span,
+            ));
+            return;
+        }
+        let Some(decorator) = bindings.first() else {
+            return;
+        };
+        let mut valid = true;
+        if !self.c_interop_decorator_is_imported(&decorator.node) {
+            self.errors.push(CompileError::type_error(
+                "@c.binding requires `from std.interop import c` (or an alias of c)".to_string(),
+                decorator.span,
+            ));
+            valid = false;
+        }
+        if class.extends.as_deref() != Some(c_abi::BINDING_DECLARATION_BASE) {
+            self.errors.push(CompileError::type_error(
+                "@c.binding classes must extend BindingDeclaration".to_string(),
+                decorator.span,
+            ));
+            valid = false;
+        }
+
+        // The decorator is the declaration's outer envelope: header and link facts live here, while its vocabulary
+        // members describe the named ABI surface below. Keep these channels separate so neither can imply the other.
+        let mut header = None;
+        let mut link = None;
+        for argument in &decorator.node.args {
+            let DecoratorArg::Named(name, DecoratorArgValue::Expr(value)) = argument else {
+                self.errors.push(CompileError::type_error(
+                    "@c.binding accepts only named `header` and `link` arguments".to_string(),
+                    decorator.span,
+                ));
+                valid = false;
+                continue;
+            };
+            let slot = match c_abi::binding_argument_from_str(name) {
+                Some(BindingArgumentId::Header) => &mut header,
+                Some(BindingArgumentId::Link) => &mut link,
+                None => {
+                    self.errors.push(CompileError::type_error(
+                        format!("@c.binding does not accept argument `{name}`"),
+                        value.span,
+                    ));
+                    valid = false;
+                    continue;
+                }
+            };
+            if slot.replace(value).is_some() {
+                self.errors.push(CompileError::type_error(
+                    format!("@c.binding repeats `{name}`"),
+                    value.span,
+                ));
+                valid = false;
+            }
+        }
+
+        let header = match header.and_then(|header| match &header.node {
+            Expr::Literal(Literal::String(value)) if !value.is_empty() => Some(value.clone()),
+            _ => None,
+        }) {
+            Some(header) => header,
+            None => {
+                self.errors.push(CompileError::type_error(
+                    "@c.binding requires a named non-empty string-literal `header` argument".to_string(),
+                    decorator.span,
+                ));
+                valid = false;
+                String::new()
+            }
+        };
+        let system_library = link.and_then(|value| self.c_system_library_name(value));
+        let system_library = match system_library {
+            Some(library) => library,
+            None => {
+                self.errors.push(CompileError::type_error(
+                    "@c.binding requires `link = c.system_library(\"name\")`".to_string(),
+                    decorator.span,
+                ));
+                valid = false;
+                String::new()
+            }
+        };
+
+        // Do not register an incomplete descriptor. Later access checking and lowering intentionally consume only this
+        // complete checked product, never the raw class body or a best-effort subset of its declarations.
+        let Some((symbols, enums, structs)) = self.validate_c_binding_members(class, decorator.span) else {
+            return;
+        };
+        if valid {
+            self.type_info.c_abi.bindings.insert(
+                class.name.clone(),
+                CBindingDescriptor {
+                    span: decorator.span,
+                    class_name: class.name.clone(),
+                    header,
+                    system_library,
+                    symbols,
+                    enums,
+                    structs,
+                },
+            );
+        }
+    }
+
+    /// Validate declarative C members retained by the ordinary lowered class.
+    fn validate_c_binding_members(
+        &mut self,
+        class: &ClassDecl,
+        fallback_span: Span,
+    ) -> Option<(Vec<CBindingSymbol>, Vec<CBindingEnum>, Vec<CBindingStruct>)> {
+        let mut valid = true;
+        let mut structs = Vec::new();
+        let mut enums = Vec::new();
+        let mut raw_symbols = Vec::new();
+
+        // Structures are collected first because the supported scalar call signatures may name a declared plain
+        // structure. The validation pass remains order-independent even when a symbol precedes its structure body.
+        let struct_names = class
+            .declarative_members
+            .iter()
+            .filter(|member| c_abi::binding_member_from_str(&member.keyword) == Some(BindingMemberId::Struct))
+            .filter_map(|member| member.head.name.clone())
+            .collect::<HashSet<_>>();
+
+        for member in &class.declarative_members {
+            let span = Self::c_member_span(member, fallback_span);
+            let Some(kind) = c_abi::binding_member_from_str(&member.keyword) else {
+                self.errors.push(CompileError::type_error(
+                    format!("@c.binding does not accept `{}` declarations", member.keyword),
+                    span,
+                ));
+                valid = false;
+                continue;
+            };
+            let Some(name) = member.head.name.as_ref().filter(|name| !name.is_empty()) else {
+                self.errors.push(CompileError::type_error(
+                    format!("C {} declarations require a name", member.keyword),
+                    span,
+                ));
+                valid = false;
+                continue;
+            };
+            if !member.decorators.is_empty() || !member.head.header_args.is_empty() {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C {} declarations do not accept decorators or header arguments",
+                        member.keyword
+                    ),
+                    span,
+                ));
+                valid = false;
+                continue;
+            }
+            // Every accepted member becomes data in the descriptor. In particular, `symbol` owns no executable body:
+            // it maps one Incan-facing signature to one explicit native spelling for later target verification.
+            match kind {
+                BindingMemberId::Symbol => {
+                    let Some(return_type) = member.head.return_type.as_ref() else {
+                        self.errors.push(CompileError::type_error(
+                            "C symbols require an explicit return type".to_string(),
+                            span,
+                        ));
+                        valid = false;
+                        continue;
+                    };
+                    let Some(return_type) = Self::c_binding_type(&return_type.source, &struct_names) else {
+                        self.errors.push(CompileError::type_error(
+                            format!("C symbol `{name}` uses an unsupported return type"),
+                            span,
+                        ));
+                        valid = false;
+                        continue;
+                    };
+                    let mut parameters = Vec::new();
+                    for parameter in &member.head.parameters {
+                        let Some(parameter_type) = parameter.param_type.as_ref() else {
+                            self.errors.push(CompileError::type_error(
+                                format!("C symbol `{name}` parameters require explicit types"),
+                                span,
+                            ));
+                            valid = false;
+                            continue;
+                        };
+                        let Some(parameter_type) = Self::c_binding_type(&parameter_type.source, &struct_names) else {
+                            self.errors.push(CompileError::type_error(
+                                format!("C symbol `{name}` uses an unsupported parameter type"),
+                                span,
+                            ));
+                            valid = false;
+                            continue;
+                        };
+                        if parameter.default_value.is_some() || parameter.name.is_empty() {
+                            self.errors.push(CompileError::type_error(
+                                format!("C symbol `{name}` does not accept default or unnamed parameters"),
+                                span,
+                            ));
+                            valid = false;
+                            continue;
+                        }
+                        parameters.push(CBindingParameter {
+                            name: parameter.name.clone(),
+                            ty: parameter_type,
+                        });
+                    }
+                    let Some(native) = Self::c_required_native(member, span, &mut self.errors) else {
+                        valid = false;
+                        continue;
+                    };
+                    raw_symbols.push(CBindingSymbol {
+                        name: name.clone(),
+                        native,
+                        parameters,
+                        return_type,
+                    });
+                }
+                BindingMemberId::Enum => {
+                    if !member.head.parameters.is_empty() || member.head.return_type.is_some() {
+                        self.errors.push(CompileError::type_error(
+                            "C enum declarations may not have a signature".to_string(),
+                            span,
+                        ));
+                        valid = false;
+                        continue;
+                    }
+                    let Some(enumeration) = Self::c_enum(member, name, span, &mut self.errors) else {
+                        valid = false;
+                        continue;
+                    };
+                    enums.push(enumeration);
+                }
+                BindingMemberId::Struct => {
+                    if !member.head.parameters.is_empty() || member.head.return_type.is_some() {
+                        self.errors.push(CompileError::type_error(
+                            "C struct declarations may not have a signature".to_string(),
+                            span,
+                        ));
+                        valid = false;
+                        continue;
+                    }
+                    let Some(structure) = Self::c_struct(member, name, span, &struct_names, &mut self.errors) else {
+                        valid = false;
+                        continue;
+                    };
+                    structs.push(structure);
+                }
+            }
+        }
+
+        if raw_symbols
+            .iter()
+            .map(|symbol| &symbol.name)
+            .collect::<HashSet<_>>()
+            .len()
+            != raw_symbols.len()
+            || enums
+                .iter()
+                .map(|enumeration| &enumeration.name)
+                .collect::<HashSet<_>>()
+                .len()
+                != enums.len()
+            || structs
+                .iter()
+                .map(|structure| &structure.name)
+                .collect::<HashSet<_>>()
+                .len()
+                != structs.len()
+        {
+            self.errors.push(CompileError::type_error(
+                "C binding members must have unique names within their declaration kind".to_string(),
+                fallback_span,
+            ));
+            valid = false;
+        }
+
+        valid.then_some((raw_symbols, enums, structs))
+    }
+
+    /// Prefer a vocabulary member's source span, retaining the binding span for synthesized members.
+    fn c_member_span(member: &incan_vocab::VocabDeclaration, fallback: Span) -> Span {
+        if member.span.end > member.span.start {
+            Span::new(member.span.start, member.span.end)
+        } else {
+            fallback
+        }
+    }
+
+    /// Extract the one required native spelling from a declaration-only C member.
+    fn c_required_native(
+        member: &incan_vocab::VocabDeclaration,
+        span: Span,
+        errors: &mut Vec<CompileError>,
+    ) -> Option<String> {
+        let mut native = None;
+        for item in &member.body {
+            let incan_vocab::VocabBodyItem::Statement(statement) = item else {
+                errors.push(CompileError::type_error(
+                    "C declarations contain data fields only".to_string(),
+                    span,
+                ));
+                return None;
+            };
+            let (field, value) = match statement {
+                incan_vocab::IncanStatement::Let { name, value, .. } => (name, value),
+                incan_vocab::IncanStatement::Assign { target, value } => (target, value),
+                _ => {
+                    errors.push(CompileError::type_error(
+                        "C declarations contain data fields only".to_string(),
+                        span,
+                    ));
+                    return None;
+                }
+            };
+            if c_abi::symbol_argument_from_str(field).is_none() {
+                errors.push(CompileError::type_error(
+                    format!("C declaration does not accept `{field}`"),
+                    span,
+                ));
+                return None;
+            }
+            let incan_vocab::IncanExpr::Str(value) = value else {
+                errors.push(CompileError::type_error(
+                    "C declaration `native` must be a non-empty string literal".to_string(),
+                    span,
+                ));
+                return None;
+            };
+            if value.is_empty() || native.replace(value.clone()).is_some() {
+                errors.push(CompileError::type_error(
+                    "C declaration requires exactly one non-empty `native` field".to_string(),
+                    span,
+                ));
+                return None;
+            }
+        }
+        native
+    }
+
+    /// Collect one C enum and enforce its shared scalar carrier.
+    fn c_enum(
+        member: &incan_vocab::VocabDeclaration,
+        name: &str,
+        span: Span,
+        errors: &mut Vec<CompileError>,
+    ) -> Option<CBindingEnum> {
+        let mut carrier = None;
+        let mut variants = Vec::new();
+        for item in &member.body {
+            let incan_vocab::VocabBodyItem::Statement(incan_vocab::IncanStatement::TypedLet {
+                name: variant,
+                mutable: false,
+                ty,
+                value,
+            }) = item
+            else {
+                errors.push(CompileError::type_error(
+                    "C enum declarations require typed carrier assignments".to_string(),
+                    span,
+                ));
+                return None;
+            };
+            let Some(this_carrier) = c_abi::scalar_type_from_str(&ty.source) else {
+                errors.push(CompileError::type_error(
+                    format!("C enum variant `{variant}` uses an unsupported carrier type"),
+                    span,
+                ));
+                return None;
+            };
+            if carrier
+                .replace(this_carrier)
+                .is_some_and(|existing| existing != this_carrier)
+            {
+                errors.push(CompileError::type_error(
+                    "C enum variants must use one shared carrier type".to_string(),
+                    span,
+                ));
+                return None;
+            }
+            let Some(native) = Self::c_native_reference(value) else {
+                errors.push(CompileError::type_error(
+                    format!("C enum variant `{variant}` requires a native constant reference"),
+                    span,
+                ));
+                return None;
+            };
+            variants.push(CBindingEnumVariant {
+                name: variant.clone(),
+                native,
+            });
+        }
+        let Some(carrier) = carrier else {
+            errors.push(CompileError::type_error(
+                "C enum declarations require at least one variant".to_string(),
+                span,
+            ));
+            return None;
+        };
+        Some(CBindingEnum {
+            name: name.to_string(),
+            carrier,
+            variants,
+        })
+    }
+
+    /// Collect one plain C structure and its declared native field layout.
+    fn c_struct(
+        member: &incan_vocab::VocabDeclaration,
+        name: &str,
+        span: Span,
+        structs: &HashSet<String>,
+        errors: &mut Vec<CompileError>,
+    ) -> Option<CBindingStruct> {
+        let mut native = None;
+        let mut fields = Vec::new();
+        for item in &member.body {
+            let incan_vocab::VocabBodyItem::Statement(statement) = item else {
+                errors.push(CompileError::type_error(
+                    "C struct declarations contain fields only".to_string(),
+                    span,
+                ));
+                return None;
+            };
+            match statement {
+                incan_vocab::IncanStatement::Let { name: field, value, .. }
+                | incan_vocab::IncanStatement::Assign { target: field, value }
+                    if c_abi::plain_struct_argument_from_str(field).is_some() =>
+                {
+                    let incan_vocab::IncanExpr::Str(value) = value else {
+                        errors.push(CompileError::type_error(
+                            "C struct `native` must be a non-empty string literal".to_string(),
+                            span,
+                        ));
+                        return None;
+                    };
+                    if value.is_empty() || native.replace(value.clone()).is_some() {
+                        errors.push(CompileError::type_error(
+                            "C struct requires exactly one non-empty `native` field".to_string(),
+                            span,
+                        ));
+                        return None;
+                    }
+                }
+                incan_vocab::IncanStatement::TypedLet {
+                    name: field,
+                    mutable: false,
+                    ty,
+                    value: incan_vocab::IncanExpr::Name(value),
+                } if field == value => {
+                    let Some(ty) = Self::c_binding_type(&ty.source, structs) else {
+                        errors.push(CompileError::type_error(
+                            format!("C struct field `{field}` uses an unsupported C type"),
+                            span,
+                        ));
+                        return None;
+                    };
+                    fields.push(CBindingStructField {
+                        name: field.clone(),
+                        ty,
+                    });
+                }
+                _ => {
+                    errors.push(CompileError::type_error(
+                        "C struct fields must use `field: c.Type = field`".to_string(),
+                        span,
+                    ));
+                    return None;
+                }
+            }
+        }
+        let Some(native) = native else {
+            errors.push(CompileError::type_error(
+                "C struct declarations require `native`".to_string(),
+                span,
+            ));
+            return None;
+        };
+        if fields.is_empty() {
+            errors.push(CompileError::type_error(
+                "C struct declarations require at least one field".to_string(),
+                span,
+            ));
+            return None;
+        }
+        Some(CBindingStruct {
+            name: name.to_string(),
+            native,
+            fields,
+        })
+    }
+
+    /// Resolve a supported C spelling into the checked binding type model.
+    fn c_binding_type(source: &str, structs: &HashSet<String>) -> Option<CBindingType> {
+        let source = source.trim();
+        if c_abi::is_void_type_spelling(source) {
+            return Some(CBindingType::Void);
+        }
+        if let Some(scalar) = c_abi::scalar_type_from_str(source) {
+            return Some(CBindingType::Scalar(scalar));
+        }
+        for (constructor, mutable) in [("c.ConstPtr", false), ("c.MutPtr", true)] {
+            if let Some(inner) = source
+                .strip_prefix(constructor)
+                .and_then(|rest| rest.strip_prefix('['))
+                .and_then(|rest| rest.strip_suffix(']'))
+            {
+                return Some(CBindingType::Pointer {
+                    mutable,
+                    pointee: Box::new(Self::c_binding_type(inner, structs)?),
+                });
+            }
+        }
+        structs
+            .contains(source)
+            .then(|| CBindingType::Struct(source.to_string()))
+    }
+
+    /// Render a source name or qualified access as a native C constant reference.
+    fn c_native_reference(value: &incan_vocab::IncanExpr) -> Option<String> {
+        match value {
+            incan_vocab::IncanExpr::Name(name) if !name.is_empty() => Some(name.clone()),
+            incan_vocab::IncanExpr::Field { object, field } if !field.is_empty() => {
+                Some(format!("{}.{}", Self::c_native_reference(object)?, field))
+            }
+            incan_vocab::IncanExpr::RelationField { relation, field } if !relation.is_empty() && !field.is_empty() => {
+                Some(format!("{relation}.{field}"))
+            }
+            _ => None,
+        }
+    }
+
+    /// Return whether the decorator's leading alias resolves to the activated C vocabulary.
+    fn c_interop_decorator_is_imported(&self, decorator: &Decorator) -> bool {
+        decorator.path.segments.first().is_some_and(|prefix| {
+            self.import_aliases
+                .get(prefix)
+                .is_some_and(|path| c_abi::is_interop_namespace_path(path.iter().map(String::as_str)))
+        })
+    }
+
+    /// Extract the logical library name from an imported `c.system_library(...)` call.
+    fn c_system_library_name(&self, value: &Spanned<Expr>) -> Option<String> {
+        let (namespace, method, type_args, arguments) = match &value.node {
+            Expr::MethodCall(namespace, method, type_args, arguments) => (
+                namespace.as_ref(),
+                method.as_str(),
+                type_args.as_slice(),
+                arguments.as_slice(),
+            ),
+            Expr::Call(callee, type_args, arguments) => {
+                let Expr::Field(namespace, method) = &callee.node else {
+                    return None;
+                };
+                (
+                    namespace.as_ref(),
+                    method.as_str(),
+                    type_args.as_slice(),
+                    arguments.as_slice(),
+                )
+            }
+            _ => return None,
+        };
+        if !type_args.is_empty() || c_abi::link_capability_from_str(method) != Some(LinkCapabilityId::SystemLibrary) {
+            return None;
+        }
+        let Expr::Ident(namespace_name) = &namespace.node else {
+            return None;
+        };
+        if !self
+            .import_aliases
+            .get(namespace_name)
+            .is_some_and(|path| c_abi::is_interop_namespace_path(path.iter().map(String::as_str)))
+        {
+            return None;
+        }
+        match arguments {
+            [CallArg::Positional(value)] => match &value.node {
+                Expr::Literal(Literal::String(value)) if !value.is_empty() => Some(value.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// Validate one lint name passed to `@rust.allow`.

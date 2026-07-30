@@ -154,10 +154,12 @@ impl AstLowering {
             ast::Type::Qualified(segments) => segments
                 .first()
                 .is_some_and(|name| self.rust_import_aliases.contains_key(name)),
+            ast::Type::Dotted(_) => false,
             ast::Type::Generic(base, args) => {
                 self.rust_import_aliases.contains_key(base)
                     || args.iter().any(|arg| self.field_uses_direct_rust_import(&arg.node))
             }
+            ast::Type::DottedGeneric(_, args) => args.iter().any(|arg| self.field_uses_direct_rust_import(&arg.node)),
             ast::Type::Function(params, ret) => {
                 params
                     .iter()

@@ -2627,7 +2627,7 @@ fn provider_declaration_name(declaration: &Declaration) -> Option<&str> {
         Declaration::Enum(item) => Some(&item.name),
         Declaration::Function(item) => Some(&item.name),
         Declaration::TestModule(item) => Some(&item.name),
-        Declaration::Import(_) | Declaration::Docstring(_) => None,
+        Declaration::Import(_) | Declaration::VocabBlock(_) | Declaration::Docstring(_) => None,
     }
 }
 
@@ -2646,7 +2646,7 @@ fn provider_declaration_is_public(declaration: &Declaration) -> bool {
         Declaration::Enum(item) => item.visibility,
         Declaration::Function(item) => item.visibility,
         Declaration::Import(item) => item.visibility,
-        Declaration::TestModule(_) | Declaration::Docstring(_) => Visibility::Private,
+        Declaration::TestModule(_) | Declaration::VocabBlock(_) | Declaration::Docstring(_) => Visibility::Private,
     };
     matches!(visibility, Visibility::Public)
 }

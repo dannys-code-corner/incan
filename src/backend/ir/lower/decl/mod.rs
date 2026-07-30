@@ -206,6 +206,12 @@ impl AstLowering {
                     span: IrSpan::default(),
                 });
             }
+            ast::Declaration::VocabBlock(_) => {
+                return Err(LoweringError {
+                    message: "raw vocabulary declarations must be desugared before IR lowering".to_string(),
+                    span: IrSpan::default(),
+                });
+            }
             ast::Declaration::Docstring(_) => {
                 // Skip docstrings in codegen
                 return Err(LoweringError {

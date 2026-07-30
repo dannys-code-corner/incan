@@ -73,6 +73,8 @@ impl<'a> Parser<'a> {
             self.while_stmt()?
         } else if self.check_keyword(KeywordId::For) {
             self.for_stmt()?
+        } else if self.starts_unsafe_block() {
+            self.unsafe_stmt()?
         } else if self.is_assert_statement_keyword() {
             self.assert_stmt()?
         } else if let Some(vocab_block) = self.try_vocab_block_statement()? {
@@ -148,6 +150,13 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
 
+        self.try_vocab_block(decorators)
+            .map(|block| block.map(Statement::VocabBlock))
+    }
+
+    /// Parse one raw imported vocabulary block with decorators already collected by the owning grammar position.
+    fn try_vocab_block(&mut self, decorators: Vec<Spanned<Decorator>>) -> Result<Option<VocabBlockStmt>, CompileError> {
+
         let keyword_name = match &self.peek().kind {
             TokenKind::Ident(name) => name.clone(),
             TokenKind::Keyword(id) => incan_core::lang::keywords::as_str(*id).to_string(),
@@ -180,6 +189,7 @@ impl<'a> Parser<'a> {
         let spec_activation_namespace = spec.activation_namespace.clone();
         let spec_surface_kind = spec.surface_kind;
         let spec_placement = spec.placement.clone();
+        let spec_declaration_head_kind = spec.declaration_head_kind;
         let spec_valid_decorators = spec.valid_decorators.clone();
         let spec_clause_body_kind = spec.clause_body_kind;
         let spec_is_declaration_owned_clause = spec.is_declaration_owned_clause;
@@ -209,6 +219,7 @@ impl<'a> Parser<'a> {
         self.consume_vocab_compound_tokens(&spec_compound_tokens)?;
 
         let mut header_args = Vec::new();
+        let mut signature_head = None;
         let (body, body_item_trailing_commas) = if parses_inline_clause && !has_header_colon {
             let body = self.parse_inline_vocab_clause_body(
                 &keyword_name,
@@ -218,7 +229,25 @@ impl<'a> Parser<'a> {
             let body_item_trailing_commas = vec![false; body.len()];
             (body, body_item_trailing_commas)
         } else {
-            if !self.check_punct(PunctuationId::Colon) {
+            if matches!(spec_declaration_head_kind, incan_vocab::DeclarationHeadKind::Signature) {
+                let name = self.identifier()?;
+                self.expect_punct(PunctuationId::LParen, "Expected '(' after vocabulary signature name")?;
+                let parameters = self.params()?;
+                self.expect_punct(
+                    PunctuationId::RParen,
+                    "Expected ')' after vocabulary signature parameters",
+                )?;
+                let return_type = if self.match_punct(PunctuationId::Arrow) {
+                    Some(self.type_expr()?)
+                } else {
+                    None
+                };
+                signature_head = Some(VocabSignatureHead {
+                    name,
+                    parameters,
+                    return_type,
+                });
+            } else if !self.check_punct(PunctuationId::Colon) {
                 header_args.push(self.expression()?);
                 while self.match_punct(PunctuationId::Comma) {
                     header_args.push(self.expression()?);
@@ -263,7 +292,7 @@ impl<'a> Parser<'a> {
             (body, body_item_trailing_commas)
         };
 
-        Ok(Some(Statement::VocabBlock(VocabBlockStmt {
+        Ok(Some(VocabBlockStmt {
             keyword: keyword_name,
             keyword_binding: VocabKeywordBinding {
                 is_declaration_owned_clause: spec_is_declaration_owned_clause,
@@ -275,10 +304,11 @@ impl<'a> Parser<'a> {
                 clause_body_kind: spec_clause_body_kind,
             },
             decorators,
+            signature_head,
             header_args,
             body,
             body_item_trailing_commas,
-        })))
+        }))
     }
 
     /// Parse an indentation-line clause with an inline expression payload, such as `FROM orders`.
@@ -512,6 +542,19 @@ impl<'a> Parser<'a> {
                 | TokenKind::Operator(OperatorId::SlashSlashEq)
                 | TokenKind::Operator(OperatorId::PercentEq)
         )
+    }
+
+    /// Return whether the current tokens form the contextual `unsafe:` acknowledgement block.
+    ///
+    /// `unsafe` remains available as an identifier; requiring a newline after the colon keeps typed assignments
+    /// such as `unsafe: int = value` outside this grammar form.
+    fn starts_unsafe_block(&self) -> bool {
+        self.peek_ident_text("unsafe")
+            && self.peek_next().kind.is_punctuation(PunctuationId::Colon)
+            && matches!(
+                self.tokens.get(self.pos + 2).map(|token| &token.kind),
+                Some(TokenKind::Newline)
+            )
     }
 
     /// Parse the RFC 018 `assert` statement family.
@@ -818,6 +861,20 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Dedent, "Expected dedent after for body")?;
 
         Ok(Statement::For(ForStmt { pattern, iter, body }))
+    }
+
+    /// Parse an `unsafe:` acknowledgement region without introducing a new local scope.
+    fn unsafe_stmt(&mut self) -> Result<Statement, CompileError> {
+        self.advance();
+        self.expect(
+            &TokenKind::Punctuation(PunctuationId::Colon),
+            "Expected ':' after unsafe",
+        )?;
+        self.expect(&TokenKind::Newline, "Expected newline after 'unsafe:'")?;
+        self.expect_suite_indent("Expected indented unsafe block")?;
+        let body = self.block()?;
+        self.expect(&TokenKind::Dedent, "Expected dedent after unsafe body")?;
+        Ok(Statement::Unsafe(UnsafeStmt { body }))
     }
 
     /// Parse the restricted binding-pattern subset accepted in `for` headers.

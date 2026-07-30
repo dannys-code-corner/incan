@@ -115,6 +115,35 @@ static rust_interop_boundary: RegistryEntry[CapabilityId, CapabilityDescriptor] 
         references=rust_interop_boundary_references,
     ),
 )
+const checked_c_binding_forms: FrozenList[str] = [
+    "from std.interop import c",
+    "binding LibC:",
+    "unsafe:\n    LibC.absolute(-7)",
+]
+const checked_c_binding_references: FrozenList[CapabilityReference] = [CapabilityReference(
+    label="std.interop",
+    path="stdlib/interop.md",
+), CapabilityReference(label="RFC 116", path="../../RFCs/116_typed_c_abi_interop.md"), CapabilityReference(
+    label="Release 0.5",
+    path="../../release_notes/0_5.md",
+)]
+static checked_c_binding: RegistryEntry[CapabilityId, CapabilityDescriptor] = capabilities.entry(
+    key=CapabilityId("CheckedCBindingFoundation"),
+    subject=RegistrySubject.current_unit(),
+    descriptor=CapabilityDescriptor(
+        id=CapabilityId("CheckedCBindingFoundation"),
+        name="Checked C binding foundation",
+        category=CapabilityCategory.Interop,
+        since="0.5",
+        rfc="RFC 116",
+        stability=CapabilityStability.Experimental,
+        activation="Import `c` from `std.interop`, then declare a `binding` in the importing module.",
+        summary="Explicit C headers, scalar free-function signatures, enum carriers, and plain layouts are verified before private generated C ABI calls.",
+        canonical_forms=checked_c_binding_forms,
+        prefer_over="Unverified Rust wrappers, ambient header discovery, or string-based dynamic symbol lookup.",
+        references=checked_c_binding_references,
+    ),
+)
 const incan_libraries_forms: FrozenList[str] = [
     "from pub::mylib import my_module",
     "from pub::mylib.my_module import my_function",

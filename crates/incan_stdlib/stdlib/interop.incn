@@ -1,0 +1,12 @@
+"""Source contracts for import-activated foreign-binding vocabularies."""
+
+pub class BindingDeclaration:
+    """Marker base class for source declarations that describe a foreign binding."""
+
+    _binding_marker: str
+
+
+pub class c:
+    """C interop namespace activated by `from std.interop import c`."""
+
+    _namespace_marker: str

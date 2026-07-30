@@ -13,6 +13,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 #[cfg(feature = "rust_inspect")]
 use crate::backend::ProjectGenerator;
+use crate::backend::c_abi::{CAbiTarget, ClangToolchain, verify_checked_c_binding};
 use crate::backend::ir::detect_serde_non_import_usage;
 use crate::backend::project::generator::GENERATED_CARGO_TARGET_DIR_ENV;
 use crate::backend::project::{GENERATED_TOOLCHAIN_SUPPORT_CRATES, INCAN_STDLIB_CRATE_NAME};
@@ -1500,6 +1501,43 @@ impl CompilationAnalysis {
     }
 }
 
+/// Index import-activated vocabulary packaged by enabled standard-library providers.
+///
+/// Standard providers remain owned by the SDK plan for module resolution and generated-Rust dependencies. This index
+/// contributes only companion metadata and WASM desugarers to the generic vocabulary pipeline.
+fn add_selected_standard_vocab_providers(
+    library_manifest_index: &mut LibraryManifestIndex,
+    sdk_inventory: Option<&SdkInventory>,
+    sdk_components: Option<&ResolvedSdkComponents>,
+) -> CliResult<()> {
+    let (Some(sdk_inventory), Some(sdk_components)) = (sdk_inventory, sdk_components) else {
+        return Ok(());
+    };
+
+    for component_id in &sdk_components.enabled {
+        let component = sdk_inventory.components.get(component_id).ok_or_else(|| {
+            CliError::failure(format!(
+                "selected SDK component `{component_id}` is absent from {}",
+                sdk_components.sdk_identity
+            ))
+        })?;
+        for provider in &component.providers {
+            let (Some(manifest_path), Some(crate_root)) = (&provider.manifest_path, &provider.crate_root) else {
+                continue;
+            };
+            library_manifest_index
+                .add_standard_vocab_provider(manifest_path, crate_root)
+                .map_err(|error| {
+                    CliError::failure(format!(
+                        "failed to index standard vocabulary from SDK component `{component_id}` provider `{}`: {error}",
+                        provider.name
+                    ))
+                })?;
+        }
+    }
+    Ok(())
+}
+
 /// Shared source-analysis context for CLI commands and the LSP.
 ///
 /// This owns the project-level inputs that affect context-sensitive parsing and typechecking so entrypoints do not
@@ -1619,7 +1657,7 @@ impl CompilationSession {
         {
             prepare_library_dependency_artifacts(manifest, package_feature_plan.as_ref(), &active_dependencies)?;
         }
-        let library_manifest_index = match (manifest.as_ref(), dependency_mode) {
+        let mut library_manifest_index = match (manifest.as_ref(), dependency_mode) {
             (Some(manifest), DependencyManifestMode::FullArtifacts) if !active_dependencies.is_empty() => {
                 LibraryManifestIndex::from_project_manifest_dependencies(
                     manifest,
@@ -1631,8 +1669,6 @@ impl CompilationSession {
             }
             _ => LibraryManifestIndex::default(),
         };
-        let library_imported_vocab = library_manifest_index.library_imported_vocab();
-        let library_imported_dsl_surfaces = library_manifest_index.library_imported_dsl_surfaces();
         let contract_model_bundles = manifest
             .as_ref()
             .map(|manifest| read_project_model_bundles(&project_root, &manifest.contract_model_bundle_paths()))
@@ -1659,6 +1695,13 @@ impl CompilationSession {
                 )
             })
             .transpose()?;
+        add_selected_standard_vocab_providers(
+            &mut library_manifest_index,
+            sdk_inventory.as_deref(),
+            sdk_components.as_ref(),
+        )?;
+        let library_imported_vocab = library_manifest_index.library_imported_vocab();
+        let library_imported_dsl_surfaces = library_manifest_index.library_imported_dsl_surfaces();
         let bootstrap_sdk_namespace_roots = sdk_provider_bootstrap_namespace_roots(&project_root)?;
         let provider_plan = Arc::new(
             ProviderPlan::from_resolved_inputs(
@@ -4255,6 +4298,10 @@ fn typecheck_modules_with_import_graph_artifacts(
     }
 
     if diagnostics_out.is_empty() {
+        verify_checked_c_bindings(modules, &mut type_infos, &mut diagnostics_out);
+    }
+
+    if diagnostics_out.is_empty() {
         Ok(TypecheckModuleArtifacts {
             type_infos,
             stdlib_cache,
@@ -4263,6 +4310,80 @@ fn typecheck_modules_with_import_graph_artifacts(
         Err(CliDiagnosticFailure {
             diagnostics: diagnostics_out,
         })
+    }
+}
+
+/// Verify every checked C descriptor against the selected host-target Clang toolchain before any code generation.
+///
+/// The typechecker has already established the source contract. This phase only checks those explicit facts against
+/// the declared header for the target; it neither imports arbitrary headers nor performs library discovery.
+fn verify_checked_c_bindings(
+    modules: &[ParsedModule],
+    type_infos: &mut [TypeCheckInfo],
+    diagnostics_out: &mut Vec<CliDiagnostic>,
+) {
+    let mut bindings = Vec::new();
+    for (module_index, (module, type_info)) in modules.iter().zip(type_infos.iter()).enumerate() {
+        let mut module_bindings = type_info.c_abi.bindings.values().cloned().collect::<Vec<_>>();
+        module_bindings.sort_by(|left, right| left.class_name.cmp(&right.class_name));
+        bindings.extend(
+            module_bindings
+                .into_iter()
+                .map(|binding| (module_index, module, binding)),
+        );
+    }
+    if bindings.is_empty() {
+        return;
+    }
+    let Some(target) = CAbiTarget::host() else {
+        for (_, module, binding) in bindings {
+            diagnostics_out.push(CliDiagnostic {
+                file_path: module.file_path.to_string_lossy().to_string(),
+                source: module.source.clone(),
+                phase: diagnostics::DiagnosticPhase::Typecheck,
+                error: diagnostics::CompileError::type_error(
+                    "checked C bindings currently require a Linux x86-64 or macOS arm64 verification target"
+                        .to_string(),
+                    binding.span,
+                ),
+            });
+        }
+        return;
+    };
+    let toolchain = match ClangToolchain::discover() {
+        Ok(toolchain) => toolchain,
+        Err(error) => {
+            for (_, module, binding) in bindings {
+                diagnostics_out.push(CliDiagnostic {
+                    file_path: module.file_path.to_string_lossy().to_string(),
+                    source: module.source.clone(),
+                    phase: diagnostics::DiagnosticPhase::Typecheck,
+                    error: diagnostics::CompileError::type_error(error.to_string(), binding.span),
+                });
+            }
+            return;
+        }
+    };
+    for (module_index, module, binding) in bindings {
+        match verify_checked_c_binding(&toolchain, target, &binding) {
+            Ok(receipt) => {
+                let enum_values = &mut type_infos[module_index].c_abi.enum_values;
+                for ((enumeration, variant), value) in receipt.enum_values() {
+                    enum_values.insert(
+                        (binding.class_name.clone(), enumeration.clone(), variant.clone()),
+                        *value,
+                    );
+                }
+            }
+            Err(error) => {
+                diagnostics_out.push(CliDiagnostic {
+                    file_path: module.file_path.to_string_lossy().to_string(),
+                    source: module.source.clone(),
+                    phase: diagnostics::DiagnosticPhase::Typecheck,
+                    error: diagnostics::CompileError::type_error(error.to_string(), binding.span),
+                });
+            }
+        }
     }
 }
 

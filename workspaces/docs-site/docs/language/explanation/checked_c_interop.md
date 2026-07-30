@@ -1,0 +1,45 @@
+# How checked C interop is structured
+
+Checked C interop is a language-owned contract for a deliberately small foreign boundary. It is not a header importer, an ambient linker search, or a claim that C pointers already have Incan ownership semantics.
+
+## One declaration authority
+
+The binding source is the authority for the Incan-facing names, C scalar categories, native spellings, and supported plain layouts. The compiler uses the declaration to construct a target-specific C probe; it does not scrape a header to invent a public API or infer safety from generated Rust.
+
+```mermaid
+flowchart LR
+  S["Incan binding declaration"] --> T["Typechecked C descriptor"]
+  T --> V["Clang target probe"]
+  V --> R["Verified ABI facts"]
+  R --> L["Generated private Rust C ABI bridge"]
+  L --> F["Ordinary Incan facade"]
+  F --> A["Application API"]
+```
+
+The probe is syntax-only. It checks free-function signatures, folds declared enum constants, and checks requested plain-structure size, alignment, and field offsets for the selected host ABI. It neither links the native library nor executes its code. The later generated build still links the system library named by `c.system_library("name")`.
+
+## Why the boundary begins with C declarations
+
+C is an ABI, not a complete ownership model. A header can expose an integer function accurately while saying little about which pointer owns a resource, when a callback expires, or how a caller must size an output buffer. Pretending that a foreign declaration is already a safe Incan API would hide those decisions at exactly the wrong boundary.
+
+The initial slice therefore admits only direct scalar free functions for execution. It lets the project prove that its declared ABI matches a real target header without silently committing to resource, pointer, callback, or packaging semantics that have not been designed. The façade above the binding remains responsible for input validation, native status interpretation, error models, and all future ownership-oriented behavior.
+
+## C interop and Rust interop solve different problems
+
+Neither choice is universally better:
+
+| Choose | When it is the better fit today |
+| --- | --- |
+| Checked C binding | The supported foreign boundary is a small, stable C ABI and the needed calls are scalar free functions whose exact declarations can be verified. |
+| Rust interop | A maintained Rust crate already exposes the safe API you need, especially for resources, callbacks, async work, collections, or richer types. |
+| A future checked shim | The underlying C API is real but needs an adapter for callbacks, variadics, function tables, bitfields, unions, or lifetime relationships. |
+
+The language in which a library happens to be implemented is not decisive. A C++ engine, a Python extension, or a Rust library may intentionally publish a C ABI; a Rust wrapper can still be preferable when it owns difficult safety and build concerns well. Conversely, a small C ABI can be clearer and more durable than a wrapper when it is the producer's published contract.
+
+## What is deliberately not claimed yet
+
+This first foundation does not resolve or lock native artifacts, compile C/C++ shims, provision Android or Apple targets, or hand application assemblies to Gradle and Xcode. It also does not make `c.system_library("name")` a portable library-discovery mechanism. Those jobs need target-specific artifact identity and packaging facts, which are distinct from the source ABI declaration.
+
+The same restraint applies to ownership. `Out`, `InOut`, opaque resources, release rules, borrowed views, and context management belong to later work because they require compiler-owned facts that remain correct across a whole call path. Keeping them out of the initial scalar surface makes the current guarantee meaningful: a checked declaration is exact about what it does represent, and explicit about what it does not.
+
+For a working first binding, start with the [tutorial](../tutorials/checked_c_binding.md). For declaration recipes and diagnostics, use the [how-to guide](../how-to/checked_c_bindings.md). The [`std.interop` reference](../reference/stdlib/interop.md) is the exact syntax and capability contract.

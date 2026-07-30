@@ -12,6 +12,7 @@ use crate::frontend::symbols::{
 };
 use crate::frontend::testing_markers::TestingFixtureScope;
 use incan_core::interop::{CoercionPolicy, RustFunctionSig};
+use incan_core::lang::c_abi::ScalarTypeId;
 use incan_core::lang::types::collections::{self as collection_types, CollectionTypeId};
 use incan_semantics_core::{
     CompilerNodeId, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType, SemanticFact,
@@ -65,6 +66,153 @@ pub struct TypeCheckInfo {
     pub testing: TestingArtifacts,
     /// Custom protocol decisions that lower into explicit runtime calls.
     pub protocols: ProtocolArtifacts,
+    /// Checked C ABI declaration facts consumed by verification and code generation.
+    pub c_abi: CAbiInteropArtifacts,
+}
+
+/// Checked source-level C ABI binding contracts.
+#[derive(Debug, Default, Clone)]
+pub struct CAbiInteropArtifacts {
+    /// Binding descriptor keyed by the ordinary lowered class name.
+    pub bindings: HashMap<String, CBindingDescriptor>,
+    /// Direct binding calls admitted through an explicit `unsafe:` acknowledgement.
+    pub raw_calls: Vec<CBindingRawCall>,
+    /// Source accesses to target-verified C enum constants.
+    pub enum_accesses: Vec<CBindingEnumAccess>,
+    /// Folded C enum values keyed by `(binding, enum, variant)` after Clang verification.
+    pub enum_values: HashMap<(String, String, String), i64>,
+}
+
+/// One direct source call to a checked C binding symbol.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingRawCall {
+    /// Source range for the full call expression.
+    pub span: Span,
+    /// Lowered binding class that owns the native symbol.
+    pub binding: String,
+    /// Binding-local symbol selected by the call.
+    pub symbol: String,
+}
+
+/// One source access to a target-verified C enum constant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingEnumAccess {
+    /// Source range for the complete `Binding.Enum.Variant` expression.
+    pub span: Span,
+    /// Lowered binding class that owns the enum declaration.
+    pub binding: String,
+    /// Binding-local enum declaration.
+    pub enumeration: String,
+    /// Source variant name.
+    pub variant: String,
+}
+
+/// One checked C binding declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingDescriptor {
+    /// Source location of the binding declaration, used for target-verifier diagnostics.
+    pub span: Span,
+    /// Ordinary class name visible to Incan source.
+    pub class_name: String,
+    /// Header path supplied by the binding declaration.
+    pub header: String,
+    /// Logical system-library capability selected by the declaration.
+    pub system_library: String,
+    /// Raw C functions declared by the binding.
+    pub symbols: Vec<CBindingSymbol>,
+    /// C enum carriers whose values are target-verified constants.
+    pub enums: Vec<CBindingEnum>,
+    /// Plain C structures whose layout is target-verified.
+    pub structs: Vec<CBindingStruct>,
+}
+
+/// One raw C function declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingSymbol {
+    /// Source member name.
+    pub name: String,
+    /// Native linker symbol.
+    pub native: String,
+    /// Explicit parameter contracts in source order.
+    pub parameters: Vec<CBindingParameter>,
+    /// Explicit return contract.
+    pub return_type: CBindingType,
+}
+
+/// One raw C function parameter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingParameter {
+    /// Parameter name.
+    pub name: String,
+    /// Exact checked C type.
+    pub ty: CBindingType,
+}
+
+/// Initial checked C type vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CBindingType {
+    /// A fixed scalar representation.
+    Scalar(ScalarTypeId),
+    /// A pointer to an admitted C type.
+    Pointer { mutable: bool, pointee: Box<CBindingType> },
+    /// A plain by-value C structure named by its binding member.
+    Struct(String),
+    /// `None`/unit for a C `void` return.
+    Void,
+}
+
+/// One C enum declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingEnum {
+    /// Source enum name.
+    pub name: String,
+    /// Shared scalar carrier representation.
+    pub carrier: ScalarTypeId,
+    /// Native constant facts in source order.
+    pub variants: Vec<CBindingEnumVariant>,
+}
+
+/// One target-verified C enum constant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingEnumVariant {
+    /// Source variant name.
+    pub name: String,
+    /// Native constant spelling such as `SQLITE_OK`.
+    pub native: String,
+}
+
+/// One plain C structure declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingStruct {
+    /// Source structure name.
+    pub name: String,
+    /// Native C tag or typedef spelling.
+    pub native: String,
+    /// Fields in declared C layout order.
+    pub fields: Vec<CBindingStructField>,
+}
+
+/// One plain C structure field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingStructField {
+    /// Source and native field name (the first slice does not rename fields).
+    pub name: String,
+    /// Exact checked C field type.
+    pub ty: CBindingType,
+}
+
+impl CAbiInteropArtifacts {
+    /// Return the verified C enum value selected by one recorded source access.
+    pub fn enum_value_for_access(&self, span: Span) -> Option<i64> {
+        let access = self.enum_accesses.iter().find(|access| access.span == span)?;
+        self.enum_values
+            .get(&(
+                access.binding.clone(),
+                access.enumeration.clone(),
+                access.variant.clone(),
+            ))
+            .copied()
+    }
 }
 
 /// Trait hierarchy metadata consumed by trait impl and default-method lowering.

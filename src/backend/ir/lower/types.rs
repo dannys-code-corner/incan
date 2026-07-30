@@ -967,6 +967,7 @@ impl AstLowering {
     ) -> IrType {
         match ty {
             ast::Type::Qualified(segments) => IrType::Struct(segments.join("::")),
+            ast::Type::Dotted(segments) => IrType::Struct(segments.join(".")),
             ast::Type::Simple(name) => {
                 let n = name.as_str();
 
@@ -1066,6 +1067,13 @@ impl AstLowering {
                     ),
                 }
             }
+            ast::Type::DottedGeneric(segments, params) => IrType::NamedGeneric(
+                segments.join("."),
+                params
+                    .iter()
+                    .map(|p| self.lower_type_with_type_params(&p.node, type_param_names))
+                    .collect(),
+            ),
             ast::Type::Function(params, ret) => IrType::Function {
                 params: params
                     .iter()

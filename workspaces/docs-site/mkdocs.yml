@@ -125,6 +125,7 @@ nav:
           - Dates and times: language/tutorials/dates_and_times.md
           - Build your first API: language/tutorials/build_your_first_api.md
           - Fallible and infallible paths: language/tutorials/fallible_and_infallible_paths.md
+          - Checked C binding (experimental): language/tutorials/checked_c_binding.md
           - Typed registries: language/tutorials/typed_registries.md
           - Web framework: language/tutorials/web_framework.md
       - How-to:
@@ -155,6 +156,7 @@ nav:
           - Working with UUIDs: language/how-to/working_with_uuids.md
           - Performance: language/how-to/performance.md
           - Rust interop: language/how-to/rust_interop.md
+          - Checked C bindings (experimental): language/how-to/checked_c_bindings.md
           - Rust types (coming from Python): language/how-to/rust_types_for_python_devs.md
       - Reference:
           - Language reference (generated): language/reference/language.md
@@ -188,6 +190,7 @@ nav:
               - std.graph: language/reference/stdlib/graph.md
               - std.hash: language/reference/stdlib/hash.md
               - std.io: language/reference/stdlib/io.md
+              - std.interop: language/reference/stdlib/interop.md
               - std.json: language/reference/stdlib/json.md
               - std.logging: language/reference/stdlib/logging.md
               - std.telemetry: language/reference/stdlib/telemetry.md
@@ -222,6 +225,7 @@ nav:
           - How Incan works: language/explanation/how_incan_works.md
           - Compile time and runtime: language/explanation/compile_time_and_runtime.md
           - Checked catalogues and loaded registries: language/explanation/checked_and_loaded_registries.md
+          - Checked C interop: language/explanation/checked_c_interop.md
           - Rust-shaped confidence: language/explanation/rust_shaped_confidence.md
           - Control flow: language/explanation/control_flow.md
           - Callable presets: language/explanation/callable_presets.md

@@ -565,6 +565,11 @@ fn collect_type_signature_references(ty: &ast::Type, names: &mut HashSet<String>
                 collect_type_signature_references(&arg.node, names);
             }
         }
+        ast::Type::DottedGeneric(_, args) => {
+            for arg in args {
+                collect_type_signature_references(&arg.node, names);
+            }
+        }
         ast::Type::Function(params, return_type) => {
             for param in params {
                 collect_type_signature_references(&param.node, names);
@@ -580,6 +585,7 @@ fn collect_type_signature_references(ty: &ast::Type, names: &mut HashSet<String>
             }
         }
         ast::Type::Qualified(_)
+        | ast::Type::Dotted(_)
         | ast::Type::ConstrainedPrimitive(_, _)
         | ast::Type::IntLiteral(_)
         | ast::Type::Unit
@@ -1018,6 +1024,7 @@ pub(super) fn collect_dependency_symbol_metadata(
                     | Declaration::Newtype(_)
                     | Declaration::Enum(_)
                     | Declaration::TestModule(_)
+                    | Declaration::VocabBlock(_)
                     | Declaration::Docstring(_) => None,
                 }
             {

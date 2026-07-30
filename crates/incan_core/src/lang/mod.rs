@@ -25,6 +25,7 @@
 //!   hand; change the tables here and re-run the binary.
 
 pub mod builtins;
+pub mod c_abi;
 pub mod callables;
 pub mod conventions;
 pub mod decorators;

@@ -84,6 +84,7 @@ impl<'a> Parser<'a> {
             method_partials,
             properties,
             methods,
+            declarative_members: Vec::new(),
         })
     }
 

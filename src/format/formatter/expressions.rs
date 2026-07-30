@@ -854,8 +854,32 @@ impl Formatter {
                     self.writer.write(seg);
                 }
             }
+            Type::Dotted(segments) => {
+                for (i, seg) in segments.iter().enumerate() {
+                    if i > 0 {
+                        self.writer.write(".");
+                    }
+                    self.writer.write(seg);
+                }
+            }
             Type::Generic(name, args) => {
                 self.writer.write(name);
+                self.writer.write("[");
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.writer.write(", ");
+                    }
+                    self.format_type(&arg.node);
+                }
+                self.writer.write("]");
+            }
+            Type::DottedGeneric(segments, args) => {
+                for (i, seg) in segments.iter().enumerate() {
+                    if i > 0 {
+                        self.writer.write(".");
+                    }
+                    self.writer.write(seg);
+                }
                 self.writer.write("[");
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {

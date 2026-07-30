@@ -25,6 +25,8 @@ pub const STDLIB_THIS: &str = "this";
 
 /// `std.async` module name.
 pub const STDLIB_ASYNC: &str = "async";
+/// `std.interop` module name for import-activated foreign binding vocabularies.
+pub const STDLIB_INTEROP: &str = "interop";
 /// `std.graph` module name.
 pub const STDLIB_GRAPH: &str = "graph";
 /// `std.rust` module name for capability bounds (RFC 041).
@@ -389,6 +391,13 @@ pub const STDLIB_NAMESPACES: &[StdlibNamespace] = &[
         feature: Some("async"),
         extra_crate_deps: &[],
         submodules: &["time", "task", "channel", "race", "sync", "prelude"],
+        typechecker_only: false,
+    },
+    StdlibNamespace {
+        name: STDLIB_INTEROP,
+        feature: None,
+        extra_crate_deps: &[],
+        submodules: &[],
         typechecker_only: false,
     },
     StdlibNamespace {

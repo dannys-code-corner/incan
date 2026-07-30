@@ -61,16 +61,25 @@ fn resolve_toolchain_relative_path_in(relative_path: &Path, paths: &ToolchainPat
     if let (Some(crates_dir), Some(crate_relative)) = (paths.crates_override.as_deref(), crate_relative) {
         let candidate = crates_dir.join(crate_relative);
         if toolchain_relative_path_exists(&candidate, crate_relative) {
-            return candidate;
+            return canonical_toolchain_path(candidate);
         }
     }
     for base in &paths.executable_bases {
         let candidate = base.join(relative_path);
         if toolchain_relative_path_exists(&candidate, crate_relative.unwrap_or(relative_path)) {
-            return candidate;
+            return canonical_toolchain_path(candidate);
         }
     }
-    paths.development_root.join(relative_path)
+    canonical_toolchain_path(paths.development_root.join(relative_path))
+}
+
+/// Return a canonical path whenever the selected compiler-owned source exists.
+///
+/// Generated Cargo manifests can combine paths from an SDK artifact with paths from the active compiler. On macOS,
+/// `/tmp` is a symlink to `/private/tmp`; preserving both spellings makes Cargo treat one checkout as two distinct path
+/// packages. Missing fallback paths remain unchanged so lookup errors retain their useful requested spelling.
+fn canonical_toolchain_path(path: PathBuf) -> PathBuf {
+    fs::canonicalize(&path).unwrap_or(path)
 }
 
 /// Require the owning crate manifest while allowing the requested path to point below that crate root.
@@ -226,7 +235,7 @@ fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::{
         StdlibSearchPaths, ToolchainPathSearchPaths, executable_search_bases_for, find_stdlib_source_dir_in,
@@ -327,15 +336,41 @@ mod tests {
             development_root: tmp.path().join("absent-checkout"),
             executable_bases: vec![installed_root.clone()],
         };
+        let installed_crates = installed_root.join("crates").canonicalize()?;
 
         assert_eq!(
             resolve_toolchain_relative_path_in(Path::new("crates/incan_stdlib"), &search_paths),
-            installed_root.join("crates/incan_stdlib")
+            installed_crates.join("incan_stdlib")
         );
         assert_eq!(
             resolve_toolchain_relative_path_in(Path::new("crates/incan_derive"), &search_paths),
-            installed_root.join("crates/incan_derive")
+            installed_crates.join("incan_derive")
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn toolchain_override_canonicalizes_symlinked_crate_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let real_crates = tmp.path().join("real/crates");
+        let real_core = real_crates.join("incan_core");
+        fs::create_dir_all(&real_core)?;
+        fs::write(
+            real_core.join("Cargo.toml"),
+            "[package]\nname = \"incan_core\"\nversion = \"0.5.0\"\n",
+        )?;
+        let alias_crates = tmp.path().join("alias-crates");
+        symlink_file(&real_crates, &alias_crates)?;
+        let search_paths = ToolchainPathSearchPaths {
+            crates_override: Some(alias_crates),
+            development_root: tmp.path().join("absent-checkout"),
+            executable_bases: Vec::new(),
+        };
+
+        let resolved = resolve_toolchain_relative_path_in(Path::new("crates/incan_core"), &search_paths);
+        assert_eq!(resolved, fs::canonicalize(real_core)?);
+        assert_ne!(resolved, PathBuf::from(tmp.path()).join("alias-crates/incan_core"));
         Ok(())
     }
 

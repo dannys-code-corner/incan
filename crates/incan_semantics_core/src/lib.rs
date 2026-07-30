@@ -54,6 +54,8 @@ pub enum DecoratorFeature {
     RustExtern,
     RustAllow,
     RustDerive,
+    /// Checked C ABI binding descriptor.
+    CBinding,
     TestingMarker,
     Route,
     Derive,
@@ -358,6 +360,7 @@ pub fn decorator_feature_from_id(id: DecoratorId) -> DecoratorFeature {
         DecoratorId::RustExtern => DecoratorFeature::RustExtern,
         DecoratorId::RustAllow => DecoratorFeature::RustAllow,
         DecoratorId::RustDerive => DecoratorFeature::RustDerive,
+        DecoratorId::CBinding => DecoratorFeature::CBinding,
         DecoratorId::Derive => DecoratorFeature::Derive,
         DecoratorId::StaticMethod => DecoratorFeature::StaticMethod,
         DecoratorId::ClassMethod => DecoratorFeature::ClassMethod,

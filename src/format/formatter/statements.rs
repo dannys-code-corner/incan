@@ -60,6 +60,7 @@ impl Formatter {
             Statement::Loop(loop_stmt) => self.format_loop(loop_stmt),
             Statement::While(while_stmt) => self.format_while(while_stmt),
             Statement::For(for_stmt) => self.format_for(for_stmt),
+            Statement::Unsafe(unsafe_stmt) => self.format_unsafe(unsafe_stmt),
             Statement::Surface(surface_stmt) => match (&surface_stmt.key, &surface_stmt.payload) {
                 (SurfaceFeatureKey::SoftKeyword(id), SurfaceStmtPayload::KeywordArgs(args)) => {
                     self.writer.write(keywords::as_str(*id));
@@ -271,6 +272,7 @@ impl Formatter {
         self.writer.dedent();
     }
 
+    /// Format a `for` statement and its Python-shaped loop pattern.
     fn format_for(&mut self, for_stmt: &ForStmt) {
         self.writer.write("for ");
         self.format_for_pattern(&for_stmt.pattern.node);
@@ -282,6 +284,19 @@ impl Formatter {
             self.format_statement(stmt);
         }
         if for_stmt.body.is_empty() {
+            self.writer.writeln("pass");
+        }
+        self.writer.dedent();
+    }
+
+    /// Format an acknowledgement block without changing the surrounding statement scope.
+    fn format_unsafe(&mut self, unsafe_stmt: &UnsafeStmt) {
+        self.writer.writeln("unsafe:");
+        self.writer.indent();
+        for stmt in &unsafe_stmt.body {
+            self.format_statement(stmt);
+        }
+        if unsafe_stmt.body.is_empty() {
             self.writer.writeln("pass");
         }
         self.writer.dedent();

@@ -7,7 +7,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use crate::ast::{IncanExpr, IncanStatement, Span, VocabSyntaxNode};
+use crate::ast::{IncanDeclaration, IncanExpr, IncanStatement, Span, VocabSyntaxNode};
 
 /// Desugarer runtime artifact format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -114,6 +114,8 @@ pub struct DesugarRequest {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum DesugarOutput {
+    /// Lowered compilation-unit declarations to splice into the compiler AST.
+    Declarations(Vec<IncanDeclaration>),
     /// Lowered statements to splice into compiler AST.
     Statements(Vec<IncanStatement>),
     /// Lowered expression to splice into an expression position.
@@ -135,6 +137,14 @@ pub struct DesugarResponse {
 }
 
 impl DesugarResponse {
+    /// Wrap a declaration list as a desugar response.
+    #[must_use]
+    pub fn declarations(declarations: Vec<IncanDeclaration>) -> Self {
+        Self {
+            output: DesugarOutput::Declarations(declarations),
+        }
+    }
+
     /// Wrap a statement list as a desugar response.
     #[must_use]
     pub fn statements(statements: Vec<IncanStatement>) -> Self {

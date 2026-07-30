@@ -13,7 +13,7 @@ use crate::frontend::typechecker::helpers::{
     collection_name, collection_type_id, generator_ty, is_frozen_bytes, is_frozen_str, is_intlike_for_index, list_ty,
     option_ty, render_resolved_type_as_rust_arg, string_method_return,
 };
-use crate::frontend::typechecker::type_info::{RustMethodTraitImportUse, RustTraitImportInfo};
+use crate::frontend::typechecker::type_info::{CBindingEnumAccess, RustMethodTraitImportUse, RustTraitImportInfo};
 use crate::frontend::typechecker::{IdentKind, canonical_public_library_type_name};
 use incan_core::interop::{
     RustCollectionFamily, RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata,
@@ -3374,6 +3374,9 @@ impl TypeChecker {
         field: &str,
         span: Span,
     ) -> ResolvedType {
+        if let Some(result) = self.check_c_binding_enum_constant(base, field, span) {
+            return result;
+        }
         let base_ty = self.check_type_receiver_expr(base);
 
         // Imported modules use symbol-driven metadata resolution.
@@ -3733,6 +3736,9 @@ impl TypeChecker {
         span: Span,
         expected_return_ty: Option<&ResolvedType>,
     ) -> ResolvedType {
+        if let Some(result) = self.check_c_binding_symbol_member_call(base, method, type_args, args, span) {
+            return result;
+        }
         if Self::is_explicit_builtin_namespace_expr(base) {
             let result = self.check_explicit_builtin_call(method, args, span);
             if !type_args.is_empty() {
@@ -4726,6 +4732,38 @@ impl TypeChecker {
                 .push(errors::missing_method(&base_ty.to_string(), method, span));
         }
         ResolvedType::Unknown
+    }
+
+    /// Resolve `Binding.Enum.Variant` through the checked binding descriptor.
+    ///
+    /// Binding enums are data-shaped class members, not source enum declarations. This records the selected variant so
+    /// target verification can supply its folded numeric value before lowering emits an ordinary Incan integer literal.
+    fn check_c_binding_enum_constant(&mut self, base: &Spanned<Expr>, field: &str, span: Span) -> Option<ResolvedType> {
+        let Expr::Field(binding_expr, enumeration) = &base.node else {
+            return None;
+        };
+        let Expr::Ident(binding) = &binding_expr.node else {
+            return None;
+        };
+        let descriptor = self.type_info.c_abi.bindings.get(binding)?;
+        let declaration = descriptor
+            .enums
+            .iter()
+            .find(|candidate| candidate.name == *enumeration)?;
+        if !declaration.variants.iter().any(|variant| variant.name == field) {
+            self.errors.push(CompileError::type_error(
+                format!("C binding enum `{binding}.{enumeration}` does not declare `{field}`"),
+                span,
+            ));
+            return Some(ResolvedType::Unknown);
+        }
+        self.type_info.c_abi.enum_accesses.push(CBindingEnumAccess {
+            span,
+            binding: binding.clone(),
+            enumeration: enumeration.clone(),
+            variant: field.to_string(),
+        });
+        Some(ResolvedType::Int)
     }
 
     /// Resolve methods supplied by Clone for anonymous union wrappers.

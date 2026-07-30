@@ -608,7 +608,7 @@ pub fn exported_symbols(ast: &Program) -> Vec<ExportedSymbol> {
                     }
                 }
             }
-            Declaration::Docstring(_) | Declaration::TestModule(_) => {}
+            Declaration::Docstring(_) | Declaration::TestModule(_) | Declaration::VocabBlock(_) => {}
         }
     }
 
@@ -1176,6 +1176,7 @@ source-root = "library"
             method_partials: vec![],
             properties: vec![],
             methods: vec![],
+            declarative_members: vec![],
         };
         let program = Program {
             declarations: vec![make_spanned(Declaration::Class(class))],

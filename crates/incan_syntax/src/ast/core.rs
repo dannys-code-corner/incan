@@ -138,5 +138,7 @@ pub enum Declaration {
     Enum(super::EnumDecl),
     Function(super::FunctionDecl),
     TestModule(super::TestModuleDecl),
+    /// A top-level import-activated vocabulary declaration awaiting generic desugaring.
+    VocabBlock(super::VocabBlockStmt),
     Docstring(String), // Module-level docstring
 }

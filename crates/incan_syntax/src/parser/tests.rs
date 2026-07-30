@@ -5183,6 +5183,62 @@ def has_name(name: str | None) -> bool:
     }
 
     #[test]
+    fn nested_declaration_vocab_preserves_signature_and_keyword_heads() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "from std.interop import c\n\nbinding Fixture:\n    header = \"fixture.h\"\n    link = c.system_library(\"fixture\")\n\n    symbol version() -> c.i32:\n        native = \"fixture_version\"\n\n    enum Status:\n        OK: c.i32 = fixture_status.OK\n\n    struct Pair:\n        native = \"fixture_pair\"\n        left: c.i32 = left\n";
+        let tokens = crate::lexer::lex(source).map_err(|errs| format!("lex errors: {errs:?}"))?;
+        let metadata = incan_vocab::VocabRegistration::new()
+            .with_surface(
+                incan_vocab::DslSurface::on_import("std.interop").with_declaration(
+                    incan_vocab::DeclarationSurface::named("binding")
+                        .with_statement_body()
+                        .with_declaration(
+                            incan_vocab::DeclarationSurface::named("symbol")
+                                .with_signature_head()
+                                .with_statement_body(),
+                        )
+                        .with_declaration(
+                            incan_vocab::DeclarationSurface::named("enum").with_statement_body(),
+                        )
+                        .with_declaration(
+                            incan_vocab::DeclarationSurface::named("struct").with_statement_body(),
+                        ),
+                ),
+            )
+            .metadata();
+        let mut keyword_map = std::collections::HashMap::new();
+        keyword_map.insert("std.interop".to_string(), metadata.keyword_registrations);
+        let mut surface_map = std::collections::HashMap::new();
+        surface_map.insert("std.interop".to_string(), metadata.dsl_surfaces);
+
+        let program = crate::parser::parse_with_context_and_surfaces(
+            &tokens,
+            None,
+            Some(&keyword_map),
+            Some(&surface_map),
+        )
+        .map_err(|errs| format!("parse errors: {errs:?}"))?;
+        let crate::ast::Declaration::VocabBlock(binding) = &program.declarations[1].node else {
+            return Err(format!("expected binding declaration, got {:?}", program.declarations[1].node).into());
+        };
+        let crate::ast::Statement::VocabBlock(symbol) = &binding.body[2].node else {
+            return Err(format!("expected symbol declaration, got {:?}", binding.body[2].node).into());
+        };
+        assert!(matches!(
+            &symbol.signature_head,
+            Some(head) if head.name == "version" && head.return_type.is_some()
+        ));
+        assert!(matches!(
+            &binding.body[3].node,
+            crate::ast::Statement::VocabBlock(block) if block.keyword == "enum"
+        ));
+        assert!(matches!(
+            &binding.body[4].node,
+            crate::ast::Statement::VocabBlock(block) if block.keyword == "struct"
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn test_active_scoped_symbol_misuse_uses_descriptor_diagnostic() -> Result<(), Box<dyn std::error::Error>> {
         let source = "import pub::analytics\n\ndef configure() -> None:\n  query:\n    sum(amount)\n";
         let tokens = crate::lexer::lex(source).map_err(|errs| format!("lex errors: {errs:?}"))?;

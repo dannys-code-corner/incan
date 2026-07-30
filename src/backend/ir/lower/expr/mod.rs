@@ -1056,6 +1056,31 @@ impl AstLowering {
 
             // ---- Method calls ----
             ast::Expr::MethodCall(o, m, type_args, args) => {
+                if let Some(c_function) = self.checked_c_function_for_call(expr_span) {
+                    let args = self.lower_call_args(args)?;
+                    let return_type = if c_function.return_type.is_some() {
+                        IrType::Int
+                    } else {
+                        IrType::Unit
+                    };
+                    return Ok(TypedExpr::new(
+                        IrExprKind::Call {
+                            func: Box::new(TypedExpr::new(
+                                IrExprKind::Var {
+                                    name: c_function.rust_name(),
+                                    access: VarAccess::Copy,
+                                    ref_kind: VarRefKind::Value,
+                                },
+                                IrType::Unknown,
+                            )),
+                            type_args: self.lower_call_site_type_args(expr_span, type_args),
+                            args,
+                            callable_signature: None,
+                            canonical_path: None,
+                        },
+                        return_type,
+                    ));
+                }
                 let is_public_module_constructor = self
                     .type_info
                     .as_ref()
@@ -1370,6 +1395,13 @@ impl AstLowering {
 
             // ---- Field access ----
             ast::Expr::Field(o, f) => {
+                if let Some(value) = self
+                    .type_info
+                    .as_ref()
+                    .and_then(|info| info.c_abi.enum_value_for_access(expr_span))
+                {
+                    return Ok(TypedExpr::new(IrExprKind::Int(value), IrType::Int));
+                }
                 if let ast::Expr::Ident(type_name) = &o.node
                     && f.starts_with("__incan_original_")
                 {

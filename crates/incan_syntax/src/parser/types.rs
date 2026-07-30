@@ -264,7 +264,9 @@ impl<'a> Parser<'a> {
             return Ok(Spanned::new(Type::IntLiteral(value), Span::new(start, end)));
         }
 
-        // Named type (optionally `::`-qualified for Rust paths: `proto_mod::Binary`)
+        // Named type. Rust backing paths use `::` (`proto_mod::Binary`), while normal Incan
+        // namespace types use `.` (`c.i32`). Preserve that distinction so formatters and
+        // vocabulary desugarers never have to guess the source spelling.
         let name = self.identifier()?;
 
         // Check for Self type (refers to the implementing type in traits)
@@ -274,13 +276,27 @@ impl<'a> Parser<'a> {
         }
 
         let mut path = vec![name];
-        while self.match_punct(PunctuationId::ColonColon) {
-            path.push(self.identifier_or_any_keyword()?);
+        let mut dotted = false;
+        loop {
+            if self.match_punct(PunctuationId::ColonColon) {
+                if dotted {
+                    return Err(CompileError::syntax(
+                        "Type paths cannot mix `.` namespace qualification with `::` Rust-path qualification".to_string(),
+                        Span::new(start, self.current_span().start),
+                    ));
+                }
+                path.push(self.identifier_or_any_keyword()?);
+            } else if self.match_punct(PunctuationId::Dot) {
+                dotted = true;
+                path.push(self.identifier_or_any_keyword()?);
+            } else {
+                break;
+            }
         }
 
         // Check for generic arguments (only on a simple name, not `a::B[T]` yet)
         if self.match_token(&TokenKind::Punctuation(PunctuationId::LBracket)) {
-            if path.len() != 1 {
+            if path.len() != 1 && !dotted {
                 return Err(CompileError::syntax(
                     "Generics on qualified type paths (`a::B[T]`) are not supported yet; import the concrete type directly"
                         .to_string(),
@@ -288,7 +304,7 @@ impl<'a> Parser<'a> {
                 ));
             }
             let type_name = path[0].clone();
-            if is_constrainable_primitive_type(&type_name) {
+            if is_constrainable_primitive_type(&type_name) && !dotted {
                 let constraints = self.constrained_primitive_type_constraints()?;
                 self.expect(
                     &TokenKind::Punctuation(PunctuationId::RBracket),
@@ -315,16 +331,23 @@ impl<'a> Parser<'a> {
             if type_name == "Callable" {
                 return self.desugar_callable_type(args, start, end);
             }
-            Ok(Spanned::new(
-                Type::Generic(type_name, args),
-                Span::new(start, end),
-            ))
+            if dotted {
+                Ok(Spanned::new(Type::DottedGeneric(path, args), Span::new(start, end)))
+            } else {
+                Ok(Spanned::new(
+                    Type::Generic(type_name, args),
+                    Span::new(start, end),
+                ))
+            }
         } else if path.len() == 1 {
             let end = self.tokens[self.pos - 1].span.end;
             Ok(Spanned::new(
                 Type::Simple(path[0].clone()),
                 Span::new(start, end),
             ))
+        } else if dotted {
+            let end = self.tokens[self.pos - 1].span.end;
+            Ok(Spanned::new(Type::Dotted(path), Span::new(start, end)))
         } else {
             let end = self.tokens[self.pos - 1].span.end;
             Ok(Spanned::new(Type::Qualified(path), Span::new(start, end)))

@@ -2175,6 +2175,10 @@ impl TypeChecker {
             Declaration::Enum(en) => self.check_enum(en),
             Declaration::Function(func) => self.check_function(func, decl.span),
             Declaration::TestModule(test_module) => self.check_test_module(test_module),
+            Declaration::VocabBlock(_) => self.errors.push(CompileError::syntax(
+                "raw vocabulary declarations must be desugared before type checking".to_string(),
+                decl.span,
+            )),
             Declaration::Docstring(_) => {} // Docstrings don't need checking
         }
     }
@@ -3443,6 +3447,7 @@ impl TypeChecker {
         }
 
         self.validate_decorators_rejecting_user_defined(&class.decorators, "class");
+        self.validate_c_binding_class(class);
         self.reject_registry_description_decorators(&class.decorators, "class");
         // Validate @derive decorators
         self.validate_derives(&class.decorators);

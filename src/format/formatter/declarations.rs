@@ -86,6 +86,7 @@ impl Formatter {
             Declaration::Enum(en) => self.format_enum(en),
             Declaration::Function(func) => self.format_function(func),
             Declaration::TestModule(test_module) => self.format_test_module(test_module),
+            Declaration::VocabBlock(vocab_block) => self.format_vocab_declaration(vocab_block),
             Declaration::Docstring(doc) => self.format_docstring(doc),
         }
     }
@@ -266,6 +267,24 @@ impl Formatter {
                 self.format_import_items(items);
             }
         }
+    }
+
+    /// Format a top-level vocabulary declaration before the desugaring pass lowers it to ordinary declarations.
+    fn format_vocab_declaration(&mut self, vocab_block: &VocabBlockStmt) {
+        for decorator in &vocab_block.decorators {
+            self.writer.write("@");
+            self.writer.writeln(&decorator.node.path.segments.join("."));
+        }
+        self.format_vocab_block_header(vocab_block);
+        self.writer.writeln(":");
+        self.writer.indent();
+        for statement in &vocab_block.body {
+            self.format_statement(statement);
+        }
+        if vocab_block.body.is_empty() {
+            self.writer.writeln("pass");
+        }
+        self.writer.dedent();
     }
 
     /// Format a list of import items with line-length-aware wrapping.

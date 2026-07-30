@@ -30,6 +30,7 @@ pub trait Visitor {
             Declaration::Enum(e) => self.visit_enum(e),
             Declaration::Function(f) => self.visit_function(f),
             Declaration::TestModule(t) => self.visit_test_module(t),
+            Declaration::VocabBlock(v) => self.visit_vocab_block(v),
             Declaration::Docstring(d) => self.visit_docstring(d),
         }
     }
@@ -51,6 +52,8 @@ pub trait Visitor {
     fn visit_function(&mut self, _func: &FunctionDecl) {}
     /// Visit an inline test module declaration in the AST.
     fn visit_test_module(&mut self, _test_module: &TestModuleDecl) {}
+    /// Visit a top-level vocabulary declaration before generic desugaring.
+    fn visit_vocab_block(&mut self, _vocab_block: &VocabBlockStmt) {}
     fn visit_statement(&mut self, _stmt: &Spanned<Statement>) {}
     fn visit_expr(&mut self, _expr: &Spanned<Expr>) {}
     fn visit_type(&mut self, _ty: &Spanned<Type>) {}
