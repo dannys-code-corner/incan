@@ -1218,6 +1218,7 @@ fn collect_project_lock_context(
     let semantic_sdk_paths = semantic_sdk_path_dependencies(&project_requirements);
     let semantic = semantic_lock_state(
         manifest.project_root(),
+        manifest.oven_interop(),
         sdk_inventory.as_deref(),
         sdk_components.as_ref(),
         Some(&package_feature_plan),

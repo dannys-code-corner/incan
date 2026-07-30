@@ -78,7 +78,7 @@ For the executable subset, Incan carries scalar values as `int`, releases owned 
 
 Before code generation, the compiler renders a non-executable C probe from the binding descriptor and invokes a Clang-compatible toolchain for the selected host ABI. The probe checks the exact free-function signature, every enum constant's declared carrier, and the size, alignment, and field offsets of every listed plain structure. A mismatch is reported at the binding declaration before native execution.
 
-Headers and native names are explicit in source. The verifier neither scans arbitrary headers to infer an API nor searches for a library that happens to provide a symbol. The logical library name records the link capability; target artifact selection and locking are intentionally deferred to the native-artifact slice.
+Headers and native names are explicit in source. The verifier neither scans arbitrary headers to infer an API nor searches for a library that happens to provide a symbol. The logical library name records the link capability. A package may separately declare package-relative interop inputs and compatibility requirements under `[oven.interop]` in `incan.toml`; `incan lock` records those requirements and the content-derived identities of package-owned files, but this experimental slice still does not resolve toolchains, download artifacts, or compile shims. See the [checked C binding how-to](../../how-to/checked_c_bindings.md#freeze-oven-interop-requirements-for-a-target) for the current schema and its limits.
 
 The repository verifies the pure checked-ABI fixture in Linux x86-64 and macOS arm64 Clang target modes. A normal project invocation checks its host target; cross-target toolchain provisioning and deployable target plans are not yet part of this slice.
 
@@ -88,7 +88,7 @@ Do not use this surface for:
 
 - C strings, spans, caller-owned buffers, scoped foreign views, pointer arithmetic, casts, dereferences, or dynamic symbol lookup;
 - callbacks, variadics, unions, and bitfields;
-- native artifact downloads, vendored libraries, C/C++ shim compilation, or `incan.pub` publication;
+- native artifact downloads, vendored libraries, C/C++ shim compilation, `incan.pub` publication policy, or final packaging handoff;
 - Android, Xcode, Gradle, or signing handoff artifacts.
 
 Those boundaries will build on the checked descriptor rather than adding a second source of ABI truth.

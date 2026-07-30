@@ -12,6 +12,8 @@ use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use toml_edit::{Array as EditArray, Document, DocumentMut, Item, Table, Value as EditValue};
 
+use crate::oven_interop::{OvenInteropSection, OvenSection};
+
 /// The canonical manifest filename that the compiler searches for.
 pub const MANIFEST_FILENAME: &str = "incan.toml";
 /// Internal manifest-path override used for nested `incan` subprocesses launched via `incan env run`.
@@ -443,6 +445,8 @@ pub struct WritableManifest {
     pub tool: Option<ToolSection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sdk: Option<SdkSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oven: Option<OvenSection>,
 }
 
 impl WritableManifest {
@@ -467,6 +471,8 @@ pub struct ProjectManifest {
     pub tool: Option<ToolSection>,
     /// `[sdk]` profile and component selection (optional).
     pub sdk: Option<SdkSection>,
+    /// `[oven]` build-plan requirements interpreted by Oven.
+    pub oven: Option<OvenSection>,
     /// `[workspace]` topology metadata when this manifest is a workspace root.
     pub workspace: Option<WorkspaceSection>,
     /// `[dependencies]` (Incan library dependencies).
@@ -552,6 +558,11 @@ impl ProjectManifest {
     /// Project-owned SDK profile and component refinements.
     pub fn sdk(&self) -> Option<&SdkSection> {
         self.sdk.as_ref()
+    }
+
+    /// Target-specific Oven interop requirements, if the project declares them.
+    pub fn oven_interop(&self) -> Option<&OvenInteropSection> {
+        self.oven.as_ref().and_then(|oven| oven.interop.as_ref())
     }
 
     /// Normal Rust dependencies from the manifest.
@@ -770,6 +781,8 @@ struct RawManifest {
     tool: Option<ToolSection>,
     #[serde(default)]
     sdk: Option<SdkSection>,
+    #[serde(default)]
+    oven: Option<OvenSection>,
     #[serde(default)]
     workspace: Option<WorkspaceSection>,
     #[serde(default)]
@@ -1001,6 +1014,11 @@ fn parse_manifest_content(content: &str, path: &Path) -> Result<ProjectManifest,
 
     validate_package_collisions(&rust_dependencies, &rust_dev_dependencies, path)?;
     validate_requires_incan_constraints(&raw, &spans, path)?;
+    if let Some(interop) = raw.oven.as_ref().and_then(|oven| oven.interop.as_ref()) {
+        interop
+            .validate()
+            .map_err(|message| manifest_invalid(path, spans.table_location(&["oven", "interop"]), message))?;
+    }
 
     if let Some(vocab) = &raw.vocab {
         if let Some(crate_path) = &vocab.crate_path {
@@ -1027,6 +1045,7 @@ fn parse_manifest_content(content: &str, path: &Path) -> Result<ProjectManifest,
         vocab: raw.vocab,
         tool: raw.tool,
         sdk: raw.sdk,
+        oven: raw.oven,
         workspace: raw.workspace,
         library_dependencies: library_dependencies.specs,
         rust_dependencies: rust_dependencies.specs,

@@ -122,6 +122,45 @@ binding Fixture:
 
 Clang checks each requested field offset, size, and alignment for the selected host target. It does not infer omitted fields or discover a structure from the header. By-value structure and pointer calls are deliberately unavailable in this slice, so do not use a structure declaration as an assertion that you can already pass it across the boundary.
 
+## Freeze Oven interop requirements for a target
+
+The binding remains the authority for the Incan-facing ABI. When a package needs physical interop inputs, declare its target-specific requirements under `[oven.interop]` in the package's `incan.toml`. The declaration names only package-owned files and compatible toolchain or SDK capabilities; it never claims that Oven has selected a local installation or asks the compiler to search the host for headers, libraries, or a C++ installation.
+
+```toml title="incan.toml"
+[oven.interop]
+schema = 1
+
+[[oven.interop.targets]]
+target = "aarch64-apple-ios"
+toolchain = { capability = "apple-clang", version = ">=17, <18" }
+sdk = { capability = "iphoneos", version = ">=18, <19" }
+headers = ["interop/include/bridge.h"]
+definitions = ["FIXTURE=1"]
+
+[[oven.interop.targets.artifacts]]
+name = "fixture"
+kind = "static"
+path = "interop/lib/libfixture.a"
+
+[[oven.interop.targets.artifacts]]
+name = "foundation"
+kind = "system"
+capability = "apple.framework.Foundation"
+
+[[oven.interop.targets.shims]]
+name = "fixture_bridge"
+language = "c"
+sources = ["interop/src/bridge.c"]
+headers = ["interop/include/bridge.h"]
+output = "fixture_bridge"
+```
+
+`static` artifacts name a package-owned archive. `bundled` artifacts name a package-owned dynamic library or framework and must also specify its `runtime-name`, `placement`, and `minimum-platform`. `system` artifacts instead name a required toolchain or SDK capability. Shims may be authored in C or C++, but Oven will expose C++ only behind the shim's bounded C contract.
+
+Every declared package file must be a regular, normalized relative path. Running `incan lock` hashes the exact header, artifact, and shim-source bytes into the semantic lock state with the target, compatibility requirements, definitions, and capability requirements. Changing any declared input makes the lock stale; relocating an unchanged package does not change these package-relative entries.
+
+This declaration and lock slice deliberately does not download artifacts, discover a system library, compile a shim, or define a Gradle/Xcode handover format. Oven will resolve the requirements, select concrete compiler and SDK installations, build shims, cache outputs, and record those choices in its own receipt or store. Do not put signing, provenance admission, or license policy here: publication policy belongs to `incan.pub`.
+
 ## Interpret common failures
 
 | Failure | What to check |

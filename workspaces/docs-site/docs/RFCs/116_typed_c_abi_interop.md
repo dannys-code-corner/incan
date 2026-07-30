@@ -551,29 +551,29 @@ The verification result must be keyed by the binding declaration, target and ABI
 
 Link-time symbol resolution remains a separate gate. Passing a header probe does not prove that the selected artifact exports the required symbol. Both verification and linking must use the same resolved target plan.
 
-### Native artifact resolution and deployment
+### Oven interop resolution and deployment
 
-The package graph must distinguish semantic binding declarations from physical native artifacts. A target variant may select:
+The package graph must distinguish semantic binding declarations from physical interop artifacts. Package authors declare target requirements and package-owned inputs under `[oven.interop]`; Oven resolves those requirements and records its concrete selections separately. A target variant may require:
 
 - a static archive linked into the generated product
 - a bundled shared library or framework staged for platform packaging
 - an explicit system library or framework supplied as a toolchain capability
 - an authored shim built through a governed package action
-- a locked prebuilt shim or native artifact
+- a locked prebuilt shim or interop artifact
 
 Machine-local absolute paths must not become publishable metadata. Explicit local development overrides may exist but must be non-portable, visible in inspection, and excluded from locked publication.
 
 Static linking should be preferred when supported and legally appropriate. Bundled artifacts must have declared runtime link names, placement, transitive native dependencies, minimum platform constraints, and packaging outputs. System artifacts must identify the providing toolchain or SDK capability.
 
-The Incan package manager must resolve, verify, build when declared, lock, cache, and stage native artifacts. It must not invent missing shims, accept licenses, supply signing credentials, infer status meaning, silently discover system libraries, or run arbitrary undeclared shell scripts.
+Oven must resolve, verify, build when declared, lock, cache, and stage interop artifacts. It must not invent missing shims, accept licenses, supply signing credentials, infer status meaning, silently discover system libraries, or run arbitrary undeclared shell scripts.
 
-Gradle, Xcode, or another platform packager may remain responsible for final application assembly and signing. Incan must emit one complete target-native plan so users do not manually reproduce include paths, linker flags, ABI directories, runtime search paths, or framework placement.
+Gradle, Xcode, or another platform packager may remain responsible for final application assembly and signing. Oven must emit one complete target interop plan so users do not manually reproduce include paths, linker flags, ABI directories, runtime search paths, or framework placement.
 
 ### Packaging, locking, and reproducibility
 
-A published binding package may include declarations, headers, authored C or C++ shim sources, safe Incan wrappers, and target-specific native artifacts subject to package policy.
+A published binding package may include declarations, headers, authored C or C++ shim sources, safe Incan wrappers, and target-specific interop artifacts subject to package policy.
 
-The lock graph must record the logical binding version, binding kind, selected target variant, declaration digest, header digests, definitions, shim source or artifact digests, native artifact digests, deployment class, toolchain and SDK constraints, configuration identity, and package provenance.
+The semantic lock records package-authored target constraints, toolchain and SDK capability requirements, header digests, definitions, shim-source digests, artifact digests, deployment requirements, and configuration identity. Oven records resolved compiler and SDK identities, commands, shim outputs, cache identity, and the resulting Loaf or deployment-plan identity in its receipt or store. Publication provenance remains an `incan.pub` concern.
 
 Offline and locked modes from RFC 020 apply to every binding input. A locked build must not download, discover, or substitute a different native library because the host happens to provide one.
 
@@ -769,7 +769,7 @@ Add resource release associations, inferred call-scoped borrowing, `Out` / `InOu
 
 ### Phase 3: Governed artifacts and shims (#942)
 
-Extend the package and lock graph with target-specific native artifacts, authored C/C++ shim inputs, provenance, verification, and offline behavior.
+Extend the package and lock graph with `[oven.interop]` target requirements, package-owned artifacts, authored C/C++ shim inputs, content identities, and offline drift detection.
 
 ### Phase 4: Tooling projection (#943)
 
@@ -827,10 +827,10 @@ Verify Android and iOS target paths with a real native inference binding and def
 - Call-scoped foreign borrows are inferred from semantic parameter modes and recorded before backend emission.
 - `c.Out[T]` and `c.InOut[T]` describe declaration positions without enabling arbitrary dereference. Private bridge code creates compiler-managed slots with ordinary expressions such as `c.out[c.Owned[Database]]()` and `c.inout(value)`, then consumes them with `take()` only on the declared valid outcome or post-call path.
 - Returned foreign views may be copied within the current unsafe region or declared static; owner-tied escaping views are excluded.
-- Source declarations remain the semantic authority. Target-specific artifact choice, authored shim sources, and physical build settings may live in `incan.toml` when an author needs them; they do not replace the binding declaration.
+- Source declarations remain the semantic authority. Target-specific artifact requirements, authored shim sources, and package-owned physical inputs may live under `[oven.interop]` in `incan.toml` when an author needs them; they do not replace the binding declaration or claim that Oven has already selected a local toolchain.
 - Shims are first-class governed package assets.
 - Verification requires a managed Clang-compatible target toolchain.
-- Native deployment classes are static, bundled, and explicit system capability.
-- Oven owns native resolution, verification, shim baking, locking, caching, staging, and the deployment plan. A Loaf carries enough semantic and physical metadata for directionally useful Gradle or Xcode handoff; those platform tools retain final app assembly and signing. The exact handoff schema remains an associated RFC concern.
-- Native publication policy belongs to `incan.pub`: signing identity, license/provenance facts, artifact verification, and publication admission must be established before prebuilt native artifacts are accepted.
+- Oven interop deployment classes are static, bundled, and explicit system capability.
+- Oven owns interop resolution, verification, shim baking, locking, caching, staging, and the deployment plan. A Loaf carries enough semantic and physical metadata for directionally useful Gradle or Xcode handoff; those platform tools retain final app assembly and signing. The exact handoff schema remains an associated RFC concern.
+- Interop publication policy belongs to `incan.pub`: signing identity, license/provenance facts, artifact verification, and publication admission must be established before prebuilt artifacts are accepted.
 - The shared package envelope is binding-kind-neutral; C-specific type and safety facts remain inside the C binding kind.
