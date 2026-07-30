@@ -48,6 +48,6 @@ Use the diagnostic to correct the binding declaration or selected environment, t
 
 ## Know where the report stops
 
-The report describes the checked language declaration. It does not read `incan.lock`, resolve or download artifacts, compile C/C++ shims, select a concrete compiler or SDK, classify a private bridge and public façade, or provide editor navigation. Use `[oven.interop]` and `incan lock` for declared physical requirements and locked package inputs; later Oven resolution and editor projections have separate lifecycles.
+The report describes the checked language declaration. It does not read `incan.lock`, resolve or download artifacts, compile C/C++ shims, select a concrete compiler or SDK, classify a private bridge and public façade, or provide editor navigation. `incan inspect codegraph` additionally marks the checked binding and direct C calls admitted inside `unsafe:`, but it has the same boundary: those are language-contract facts, not artifact, runtime, façade, or editor receipts. Use `[oven.interop]` and `incan lock` for declared physical requirements and locked package inputs; later Oven resolution and editor projections have separate lifecycles.
 
 For the language-side recipes, see [Work with checked C bindings](../../language/how-to/checked_c_bindings.md). For the reason these facts stay separate, see [How checked C interop is structured](../../language/explanation/checked_c_interop.md).
