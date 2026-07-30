@@ -57,12 +57,12 @@ pub use const_eval::ConstValue;
 pub(crate) use type_info::ClassFieldDefaultInfo;
 pub use type_info::{
     CAbiInteropArtifacts, CAbiOutputSlot, CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingOutcome,
-    CBindingParameter, CBindingResource, CBindingStruct, CBindingStructField, CBindingSymbol, CBindingType,
-    COutputMode, CResourceAccess, ComputedPropertyAccessInfo, DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo,
-    FixedUnpackPlan, FunctionBindingInfo, IdentKind, PartialProjectionInfo, PartialProjectionPreset,
-    PartialProjectionTargetKind, ProtocolIterationInfo, RegistryArtifacts, RegistryExplicitEntryInfo,
-    ResolvedMethodCall, ResolvedMethodDispatch, ResolvedOperatorCall, ResolvedOperatorKind, RustArgCoercionInfo,
-    RustArgCoercionKind, SourceTargetInfo, StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo,
+    CBindingParameter, CBindingRawCall, CBindingResource, CBindingStruct, CBindingStructField, CBindingSymbol,
+    CBindingType, COutputMode, CResourceAccess, ComputedPropertyAccessInfo, DecoratedFunctionBindingInfo,
+    DecoratedMethodBindingInfo, FixedUnpackPlan, FunctionBindingInfo, IdentKind, PartialProjectionInfo,
+    PartialProjectionPreset, PartialProjectionTargetKind, ProtocolIterationInfo, RegistryArtifacts,
+    RegistryExplicitEntryInfo, ResolvedMethodCall, ResolvedMethodDispatch, ResolvedOperatorCall, ResolvedOperatorKind,
+    RustArgCoercionInfo, RustArgCoercionKind, SourceTargetInfo, StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo,
     ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode, ValidatedNewtypeCoercionStep,
 };
 #[cfg(test)]
