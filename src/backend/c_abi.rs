@@ -147,6 +147,7 @@ impl CAbiVerificationError {
     }
 
     /// Construct a verifier failure that cannot be associated with one binding.
+    #[cfg(target_os = "macos")]
     fn toolchain(message: impl Into<String>) -> Self {
         Self {
             binding: None,
@@ -676,12 +677,14 @@ mod tests {
             &header,
             "typedef struct fixture_pair { int left; int right; } fixture_pair;\n#define FIXTURE_OK 0\nlong fixture_abs(int value);\n",
         )?;
-        let error = verify_checked_c_binding(
+        let error = match verify_checked_c_binding(
             &toolchain,
             target,
             &fixture_binding(header.to_string_lossy().into_owned()),
-        )
-        .expect_err("mismatched C return type must be rejected");
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("mismatched C return type must be rejected"),
+        };
         assert!(
             error.message.contains("Clang rejected"),
             "unexpected verifier error: {error}"
@@ -709,8 +712,10 @@ mod tests {
         )?;
         let mut binding = fixture_binding(header.to_string_lossy().into_owned());
         binding.enums[0].carrier = ScalarTypeId::U32;
-        let error = verify_checked_c_binding(&toolchain, target, &binding)
-            .expect_err("an enum carrier mismatch must be rejected");
+        let error = match verify_checked_c_binding(&toolchain, target, &binding) {
+            Err(error) => error,
+            Ok(_) => panic!("an enum carrier mismatch must be rejected"),
+        };
         assert!(
             error.message.contains("Incan C enum carrier mismatch"),
             "unexpected verifier error: {error}"
