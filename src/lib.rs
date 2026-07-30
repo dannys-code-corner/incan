@@ -27,6 +27,7 @@ pub mod lockfile;
 #[cfg(feature = "lsp")]
 pub mod lsp;
 pub mod manifest;
+pub mod native_artifact;
 pub mod numeric;
 pub mod numeric_adapters;
 pub mod project_lifecycle;

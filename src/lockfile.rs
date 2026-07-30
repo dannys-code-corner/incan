@@ -17,6 +17,7 @@ use crate::library_manifest::{
     digest_toolchain_source_tree_with_cache,
 };
 use crate::manifest::{DependencySource, DependencySpec, GitReference};
+use crate::native_artifact::{LockedNativeTarget, NativeSection, locked_native_targets_from_section};
 use crate::provider::{
     BackendImplementationRequirement, ComponentSelectionReason, PackageFeaturePlan, ProviderParticipation,
     ProviderPlan, ProviderProvenance, ProviderRecord, ResolvedSdkComponents, SdkInventory,
@@ -87,6 +88,8 @@ pub struct SemanticLockState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<LockedProvider>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native: Vec<LockedNativeTarget>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_members: Vec<LockedWorkspaceMember>,
 }
 
@@ -102,6 +105,8 @@ pub struct LockedWorkspaceMember {
     pub feature_edges: Vec<LockedFeatureEdge>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<LockedProvider>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native: Vec<LockedNativeTarget>,
 }
 
 /// Exact SDK inventory and expanded component selection recorded by the lock.
@@ -241,12 +246,14 @@ impl IncanLock {
 /// Snapshot the shared provider, SDK-component, and package-feature plans into portable canonical lock state.
 pub fn semantic_lock_state(
     project_root: &Path,
+    native: Option<&NativeSection>,
     sdk_inventory: Option<&SdkInventory>,
     sdk_components: Option<&ResolvedSdkComponents>,
     package_features: Option<&PackageFeaturePlan>,
     provider_plan: &ProviderPlan,
     sdk_path_dependencies: &[DependencySpec],
 ) -> Result<SemanticLockState, String> {
+    let native = locked_native_targets_from_section(project_root, native)?;
     let semantic_toolchain_dependencies = semantic_toolchain_dependencies(sdk_path_dependencies)?;
     let dependency_semantic_digests =
         provider_dependency_semantic_digests(provider_plan, &semantic_toolchain_dependencies)?;
@@ -341,6 +348,7 @@ pub fn semantic_lock_state(
         packages,
         feature_edges,
         providers,
+        native,
         workspace_members: Vec::new(),
     })
 }
@@ -555,6 +563,7 @@ pub fn workspace_semantic_lock_state(
                 packages,
                 feature_edges,
                 providers: semantic.providers,
+                native: semantic.native,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1706,6 +1715,7 @@ mod tests {
         } = production_toolchain_semantic_fixture(&second_checkout)?;
         let first_semantic = semantic_lock_state(
             &first_checkout,
+            None,
             Some(&first_inventory),
             Some(&first_components),
             None,
@@ -1714,6 +1724,7 @@ mod tests {
         )?;
         let second_semantic = semantic_lock_state(
             &second_checkout,
+            None,
             Some(&second_inventory),
             Some(&second_components),
             None,
@@ -1746,6 +1757,7 @@ mod tests {
         )?;
         let changed_semantic = semantic_lock_state(
             &second_checkout,
+            None,
             Some(&second_inventory),
             Some(&second_components),
             None,
@@ -1801,6 +1813,7 @@ mod tests {
 
         let first_semantic = semantic_lock_state(
             &first_checkout,
+            None,
             Some(&first.inventory),
             Some(&first.components),
             None,
@@ -1809,6 +1822,7 @@ mod tests {
         )?;
         let second_semantic = semantic_lock_state(
             &second_checkout,
+            None,
             Some(&second.inventory),
             Some(&second.components),
             None,
@@ -1845,6 +1859,7 @@ mod tests {
         )?;
         let changed_semantic = semantic_lock_state(
             &temp.path().join("changed-source"),
+            None,
             Some(&changed.inventory),
             Some(&changed.components),
             None,
@@ -1975,6 +1990,81 @@ mod tests {
         assert_eq!(
             member.feature_edges[1].to,
             fs::canonicalize(external.path())?.to_string_lossy().replace('\\', "/")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn semantic_lock_state_freezes_declared_native_inputs() -> TestResult {
+        let project = tempfile::tempdir()?;
+        fs::create_dir_all(project.path().join("native/include"))?;
+        fs::create_dir_all(project.path().join("native/src"))?;
+        fs::create_dir_all(project.path().join("native/lib"))?;
+        fs::write(project.path().join("native/include/bridge.h"), "int bridge(void);\n")?;
+        fs::write(
+            project.path().join("native/src/bridge.c"),
+            "int bridge(void) { return 7; }\n",
+        )?;
+        fs::write(project.path().join("native/lib/libfixture.a"), b"fixture archive")?;
+        let native = NativeSection {
+            schema: crate::native_artifact::NATIVE_MANIFEST_SCHEMA_VERSION,
+            targets: vec![crate::native_artifact::NativeTarget {
+                target: "aarch64-apple-ios".to_string(),
+                toolchain: "apple-clang-17".to_string(),
+                sdk: Some("iphoneos-18.0".to_string()),
+                headers: vec!["native/include/bridge.h".to_string()],
+                definitions: vec!["FIXTURE=1".to_string()],
+                provenance: Some("fixture-source".to_string()),
+                artifacts: vec![crate::native_artifact::NativeArtifact {
+                    name: "fixture".to_string(),
+                    kind: crate::native_artifact::NativeArtifactKind::Static,
+                    path: Some("native/lib/libfixture.a".to_string()),
+                    capability: None,
+                    runtime_name: None,
+                    placement: None,
+                    minimum_platform: None,
+                    dependencies: Vec::new(),
+                }],
+                shims: vec![crate::native_artifact::NativeShim {
+                    name: "fixture_bridge".to_string(),
+                    language: crate::native_artifact::NativeShimLanguage::C,
+                    sources: vec!["native/src/bridge.c".to_string()],
+                    headers: vec!["native/include/bridge.h".to_string()],
+                    output: "fixture_bridge".to_string(),
+                }],
+            }],
+        };
+        let cargo_features = CargoFeatureSelection::default();
+        let first = semantic_lock_state(
+            project.path(),
+            Some(&native),
+            None,
+            None,
+            None,
+            &ProviderPlan::default(),
+            &[],
+        )?;
+        assert_eq!(first.native.len(), 1);
+        assert_eq!(first.native[0].headers[0].path, "native/include/bridge.h");
+        let first_fingerprint = compute_resolved_fingerprint(&[], &[], &cargo_features, Some(project.path()), &first);
+
+        fs::write(
+            project.path().join("native/src/bridge.c"),
+            "int bridge(void) { return 8; }\n",
+        )?;
+        let second = semantic_lock_state(
+            project.path(),
+            Some(&native),
+            None,
+            None,
+            None,
+            &ProviderPlan::default(),
+            &[],
+        )?;
+        assert_ne!(first.native, second.native);
+        assert_ne!(
+            first_fingerprint,
+            compute_resolved_fingerprint(&[], &[], &cargo_features, Some(project.path()), &second)
         );
         Ok(())
     }
@@ -2340,6 +2430,7 @@ lock = "payload"
                 implementation_facets: vec!["json-core".to_string()],
                 backend_requirements: BTreeSet::from(["cargo-dependency:serde_json".to_string()]),
             }],
+            native: Vec::new(),
             workspace_members: Vec::new(),
         }
     }

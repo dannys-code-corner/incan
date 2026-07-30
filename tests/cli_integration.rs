@@ -5213,6 +5213,87 @@ fn lock_generates_lockfile_for_manifest_project() -> Result<(), Box<dyn std::err
 }
 
 #[test]
+fn lock_records_declared_native_input_receipts_and_detects_drift() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let main_path = write_minimal_project(
+        tmp.path(),
+        "native_input_lock",
+        r#"
+
+[native]
+schema = 1
+
+[[native.targets]]
+target = "x86_64-unknown-linux-gnu"
+toolchain = "clang-18"
+headers = ["native/include/bridge.h"]
+definitions = ["FIXTURE=1"]
+
+[[native.targets.artifacts]]
+name = "fixture"
+kind = "static"
+path = "native/lib/libfixture.a"
+
+[[native.targets.shims]]
+name = "fixture_bridge"
+language = "c"
+sources = ["native/src/bridge.c"]
+headers = ["native/include/bridge.h"]
+output = "fixture_bridge"
+"#,
+    )?;
+    fs::create_dir_all(tmp.path().join("native/include"))?;
+    fs::create_dir_all(tmp.path().join("native/src"))?;
+    fs::create_dir_all(tmp.path().join("native/lib"))?;
+    fs::write(tmp.path().join("native/include/bridge.h"), "int bridge(void);\n")?;
+    fs::write(
+        tmp.path().join("native/src/bridge.c"),
+        "int bridge(void) { return 7; }\n",
+    )?;
+    fs::write(tmp.path().join("native/lib/libfixture.a"), b"fixture archive")?;
+    let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
+
+    let lock_output = run_incan(tmp.path(), &["lock", main_arg])?;
+    assert_success(&lock_output, "incan lock with declared native inputs");
+    let lock: toml::Value = toml::from_str(&fs::read_to_string(tmp.path().join("incan.lock"))?)?;
+    let target = lock["semantic"]["native"]
+        .as_array()
+        .and_then(|targets| targets.first())
+        .ok_or("lock did not contain a native target receipt")?;
+    assert_eq!(target["target"].as_str(), Some("x86_64-unknown-linux-gnu"));
+    assert_eq!(target["toolchain"].as_str(), Some("clang-18"));
+    assert_eq!(
+        target["headers"]
+            .as_array()
+            .and_then(|headers| headers.first())
+            .and_then(|header| header["path"].as_str()),
+        Some("native/include/bridge.h")
+    );
+    assert_eq!(
+        target["shims"]
+            .as_array()
+            .and_then(|shims| shims.first())
+            .and_then(|shim| shim["sources"].as_array())
+            .and_then(|sources| sources.first())
+            .and_then(|source| source["path"].as_str()),
+        Some("native/src/bridge.c")
+    );
+
+    fs::write(
+        tmp.path().join("native/src/bridge.c"),
+        "int bridge(void) { return 8; }\n",
+    )?;
+    let stale = run_incan(tmp.path(), &["build", main_arg, "--locked"])?;
+    assert_failure(&stale, "locked build after declared native input drift");
+    assert!(
+        String::from_utf8_lossy(&stale.stderr).contains("incan.lock is out of date"),
+        "declared native input drift should invalidate the lock:\n{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+    Ok(())
+}
+
+#[test]
 fn canonical_lock_records_exact_registry_resolution_changes() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(

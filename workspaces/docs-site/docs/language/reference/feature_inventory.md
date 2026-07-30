@@ -21,6 +21,7 @@ Use it when deciding whether code should use an existing Incan surface before ad
 | Namespaced stdlib imports and decorators | Stdlib | 0.2 | Import the relevant `std.*` module. | `from std.testing import assert_eq`<br>`from std.web.routing import route`<br>`@route("/hello")` | Standard-library APIs and compiler-owned decorators resolve through explicit `std.*` module paths. | Bare pre-0.2 stdlib names and ambient decorator magic. | [Imports and modules](imports_and_modules.md), [Standard library](stdlib/index.md), [Release 0.2](../../release_notes/0_2.md) |
 | Rust interop boundary | Interop | 0.2 | Declare Rust dependencies in `incan.toml`; import through `rust` / `rust::` paths. | `from rust import uuid`<br>`from rust::std::time import Instant`<br>`type UserId = rusttype i64` | Incan can import Rust crates, bind Rust paths, declare `rusttype` wrappers, and model explicit interop edges. | Custom Rust backend modules used when ordinary Rust imports or wrappers are sufficient. | [Rust interop](../how-to/rust_interop.md), [Rust types for Python developers](../how-to/rust_types_for_python_devs.md), [Release 0.2](../../release_notes/0_2.md) |
 | Checked C binding foundation | Interop | 0.5 | Import `c` from `std.interop`, then declare a `binding` in the importing module. | `from std.interop import c`<br>`binding LibC:`<br>`unsafe:     LibC.absolute(-7)` | Explicit C headers, scalar signatures, opaque resources, output positions, enum carriers, and plain layouts are verified before private generated C ABI calls. | Unverified Rust wrappers, ambient header discovery, or string-based dynamic symbol lookup. | [std.interop](stdlib/interop.md), [RFC 116](../../RFCs/116_typed_c_abi_interop.md), [Release 0.5](../../release_notes/0_5.md) |
+| Locked native package inputs | Interop | 0.5 | Declare a target-specific `[native]` section in `incan.toml`, then run `incan lock`. | `[native]`<br>`[[native.targets]]`<br>`incan lock` | Package-native headers, artifacts, system capabilities, and C/C++ shim sources are declared explicitly and frozen as content-derived lock receipts. | Ambient host discovery, untracked native source trees, or manually maintained native-input checksums. | [Checked C bindings](../how-to/checked_c_bindings.md), [std.interop](stdlib/interop.md), [RFC 116](../../RFCs/116_typed_c_abi_interop.md) |
 | Incan libraries and `pub::` imports | Libraries | 0.2 | Build libraries with `incan build --lib`; consume dependencies through `pub::` imports. | `from pub::mylib import my_module`<br>`from pub::mylib.my_module import my_function`<br>`pub from session import Session` | Projects publish checked APIs through explicit root facades and source-derived module namespaces. | Copying source files between projects or relying on private module paths. | [Imports and modules](imports_and_modules.md), [Release 0.2](../../release_notes/0_2.md), [Release 0.5](../../release_notes/0_5.md) |
 | Module static storage | Syntax | 0.2 | None. | `static hits: int = 0`<br>`pub static registry: dict[str, int] = {}` | `static` declares live module-owned runtime storage, distinct from deeply immutable `const` values. | Module-level mutable state hidden behind ad hoc helper functions. | [Static storage](static_storage.md), [Module state](../how-to/module_state.md), [Release 0.2](../../release_notes/0_2.md) |
 | First-class function references | TypeSystem | 0.2 | None. | `handler: Callable[int, str] = label`<br>`callbacks = [on_success, on_error]`<br>`Mapper with Callable1[int, str]` | Named functions and closures can be passed, stored, typed, and accepted through `CallableN` bounds. | Closures or wrappers whose only job is to pass through an existing named function. | [Functions and calls](functions.md), [Callable objects](stdlib_traits/callable.md), [Release 0.2](../../release_notes/0_2.md), [Release 0.5](../../release_notes/0_5.md) |
@@ -144,6 +145,25 @@ Canonical forms:
 - `binding LibC:`
 - `unsafe:
     LibC.absolute(-7)`
+
+### Locked native package inputs
+
+- **Id:** `NativePackageInputs`
+- **Category:** `Interop`
+- **Since:** `0.5`
+- **RFC:** `RFC 116`
+- **Stability:** `Experimental`
+- **Activation:** Declare a target-specific `[native]` section in `incan.toml`, then run `incan lock`.
+- **Use instead of:** Ambient host discovery, untracked native source trees, or manually maintained native-input checksums.
+- **References:** [Checked C bindings](../how-to/checked_c_bindings.md), [std.interop](stdlib/interop.md), [RFC 116](../../RFCs/116_typed_c_abi_interop.md)
+
+Package-native headers, artifacts, system capabilities, and C/C++ shim sources are declared explicitly and frozen as content-derived lock receipts.
+
+Canonical forms:
+
+- `[native]`
+- `[[native.targets]]`
+- `incan lock`
 
 ### Incan libraries and `pub::` imports
 

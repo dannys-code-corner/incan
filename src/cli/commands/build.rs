@@ -878,6 +878,7 @@ fn prepare_project_with_options(
     let semantic_sdk_paths = semantic_sdk_path_dependencies(&project_requirements);
     let semantic = semantic_lock_state(
         &project_root,
+        manifest.as_ref().and_then(ProjectManifest::native),
         compilation_session.sdk_inventory.as_deref(),
         compilation_session.sdk_components.as_ref(),
         package_feature_plan.as_ref(),
@@ -1371,6 +1372,7 @@ fn prepare_library_project(
     let semantic_sdk_paths = semantic_sdk_path_dependencies(&project_requirements);
     let semantic = semantic_lock_state(
         &project_root,
+        manifest.native(),
         compilation_session.sdk_inventory.as_deref(),
         compilation_session.sdk_components.as_ref(),
         Some(&package_feature_plan),

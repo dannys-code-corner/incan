@@ -144,6 +144,35 @@ static checked_c_binding: RegistryEntry[CapabilityId, CapabilityDescriptor] = ca
         references=checked_c_binding_references,
     ),
 )
+const native_package_inputs_forms: FrozenList[str] = [
+    "[native]",
+    "[[native.targets]]",
+    "incan lock",
+]
+const native_package_inputs_references: FrozenList[CapabilityReference] = [CapabilityReference(
+    label="Checked C bindings",
+    path="../how-to/checked_c_bindings.md",
+), CapabilityReference(label="std.interop", path="stdlib/interop.md"), CapabilityReference(
+    label="RFC 116",
+    path="../../RFCs/116_typed_c_abi_interop.md",
+)]
+static native_package_inputs: RegistryEntry[CapabilityId, CapabilityDescriptor] = capabilities.entry(
+    key=CapabilityId("NativePackageInputs"),
+    subject=RegistrySubject.current_unit(),
+    descriptor=CapabilityDescriptor(
+        id=CapabilityId("NativePackageInputs"),
+        name="Locked native package inputs",
+        category=CapabilityCategory.Interop,
+        since="0.5",
+        rfc="RFC 116",
+        stability=CapabilityStability.Experimental,
+        activation="Declare a target-specific `[native]` section in `incan.toml`, then run `incan lock`.",
+        summary="Package-native headers, artifacts, system capabilities, and C/C++ shim sources are declared explicitly and frozen as content-derived lock receipts.",
+        canonical_forms=native_package_inputs_forms,
+        prefer_over="Ambient host discovery, untracked native source trees, or manually maintained native-input checksums.",
+        references=native_package_inputs_references,
+    ),
+)
 const incan_libraries_forms: FrozenList[str] = [
     "from pub::mylib import my_module",
     "from pub::mylib.my_module import my_function",

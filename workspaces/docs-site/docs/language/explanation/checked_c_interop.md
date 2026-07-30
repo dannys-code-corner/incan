@@ -38,7 +38,11 @@ The language in which a library happens to be implemented is not decisive. A C++
 
 ## What is deliberately not claimed yet
 
-This first foundation does not resolve or lock native artifacts, compile C/C++ shims, provision Android or Apple targets, or hand application assemblies to Gradle and Xcode. It also does not make `c.system_library("name")` a portable library-discovery mechanism. Those jobs need target-specific artifact identity and packaging facts, which are distinct from the source ABI declaration.
+The checked boundary does not resolve native artifacts, compile C/C++ shims, provision Android or Apple targets, or hand application assemblies to Gradle and Xcode. It also does not make `c.system_library("name")` a portable library-discovery mechanism. Those jobs need target-specific artifact identity and packaging facts, which are distinct from the source ABI declaration.
+
+A package can declare target-specific, package-relative headers, static or bundled artifacts, system capabilities, and C/C++ shim sources in `incan.toml`; `incan lock` then records content-derived receipts for those inputs. The declaration is intentionally binding-kind-neutral, so a future JNI, Python-extension, or other native entry point can consume the same package-level evidence without replacing the language binding as ABI authority.
+
+That is a locking boundary, not a native build system or a platform packager. It does not perform host discovery, download inputs, compile a shim, select a final Android/iOS deployment layout, or interpret publication signing and licence policy. Oven will eventually own managed resolution, verification, baking, caching, staging, and a directionally useful deployment plan; Gradle and Xcode remain final application assembly and signing consumers. The exact handover interface remains an associated RFC concern rather than a promise frozen into this experimental surface.
 
 The same restraint still applies to views and general pointers. C strings, spans, caller-owned buffers, scoped foreign views, arbitrary pointer operations, and context-manager syntax need additional lifetime and bounds contracts. The current guarantee is deliberately smaller: opaque resources and output storage remain private compiler-managed carriers, while public APIs use ordinary Incan values.
 
