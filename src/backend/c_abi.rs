@@ -95,6 +95,7 @@ impl ClangToolchain {
         }
     }
 
+    /// Construct a test-only toolchain with an explicit executable path.
     #[cfg(test)]
     fn at(executable: impl Into<PathBuf>) -> Self {
         Self {
@@ -137,6 +138,7 @@ impl CAbiVerificationReceipt {
 }
 
 impl CAbiVerificationError {
+    /// Construct a verifier failure that belongs to one checked binding.
     fn binding(binding: &CBindingDescriptor, message: impl Into<String>) -> Self {
         Self {
             binding: Some(binding.class_name.clone()),
@@ -144,6 +146,7 @@ impl CAbiVerificationError {
         }
     }
 
+    /// Construct a verifier failure that cannot be associated with one binding.
     fn toolchain(message: impl Into<String>) -> Self {
         Self {
             binding: None,
