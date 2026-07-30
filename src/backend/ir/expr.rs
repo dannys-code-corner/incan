@@ -658,7 +658,7 @@ pub enum BuiltinFn {
     Range,
     /// `enumerate(x)` → `x.iter().enumerate()` with the index cast to Incan `int`.
     Enumerate,
-    /// `zip(a, b)` → `a.iter().zip(b.iter())`
+    /// `zip(a, b)` → the same source-owned `Iterator[(T, U)]` model as `a.iter().zip(b.iter())`
     Zip,
     /// `sorted(xs)` → sorted copy
     Sorted,

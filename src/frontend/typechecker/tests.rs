@@ -9584,6 +9584,71 @@ def score_pairs(left: list[float], right: list[float]) -> float:
 }
 
 #[test]
+fn test_builtin_zip_is_a_canonical_lazy_iterator_issue950() {
+    let source = r#"
+def collected_pairs(left: list[int], right: list[str]) -> list[tuple[int, str]]:
+  return zip(left, right).collect()
+
+def explicit_builtin_pairs(left: list[int], right: list[str]) -> list[tuple[int, str]]:
+  return std.builtins.zip(left, right).collect()
+
+def iterator_pairs(left: Iterator[int], right: Iterator[str]) -> list[tuple[int, str]]:
+  return zip(left, right).collect()
+
+def frozen_pairs(left: FrozenList[int], right: FrozenList[str]) -> list[tuple[int, str]]:
+  return zip(left, right).collect()
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_builtin_zip_rejects_unsupported_operands_issue950() {
+    let bare = check_str_err(
+        "def main() -> None:\n  for pair in zip(1, [\"one\"]):\n    println(pair[0])\n",
+        "bare zip should reject a scalar operand",
+    );
+    assert!(
+        bare.iter()
+            .any(|error| error.message == "zip() argument 1 must be a list, FrozenList, or Iterator, got int"),
+        "unexpected errors: {:?}",
+        bare.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
+
+    let explicit = check_str_err(
+        "def main() -> None:\n  for pair in std.builtins.zip([1], true):\n    println(pair[0])\n",
+        "explicit builtin zip should reject a scalar operand",
+    );
+    assert!(
+        explicit
+            .iter()
+            .any(|error| error.message == "zip() argument 2 must be a list, FrozenList, or Iterator, got bool"),
+        "unexpected errors: {:?}",
+        explicit.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_builtin_zip_requires_exactly_two_operands_issue950() {
+    for (source, expected) in [
+        (
+            "def main() -> None:\n  zip([1])\n",
+            "zip() expects 2 argument(s), got 1",
+        ),
+        (
+            "def main() -> None:\n  std.builtins.zip([1], [2], [3])\n",
+            "zip() expects 2 argument(s), got 3",
+        ),
+    ] {
+        let errors = check_str_err(source, "zip arity mismatch should fail");
+        assert!(
+            errors.iter().any(|error| error.message == expected),
+            "expected {expected:?}, got {:?}",
+            errors.iter().map(|error| &error.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn test_rfc088_direct_iterator_loop_consumes_binding_issue950() {
     let source = r#"
 def consume_twice(items: Iterator[int]) -> int:

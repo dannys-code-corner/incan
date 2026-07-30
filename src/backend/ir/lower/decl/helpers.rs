@@ -13,6 +13,7 @@ use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::derives::{self, DeriveId};
 use incan_core::lang::keywords::{self, KeywordId};
 use incan_core::lang::trait_bounds;
+use incan_core::lang::traits as core_traits;
 
 const SERDE_SERIALIZE_DERIVE: &str = "serde::Serialize";
 const SERDE_DESERIALIZE_DERIVE: &str = "serde::Deserialize";
@@ -119,6 +120,7 @@ impl AstLowering {
         }
         let trait_path = trait_bounds::incan_to_rust(&bound.name)
             .map(str::to_string)
+            .or_else(|| self.source_owned_builtin_trait_path(&bound.name))
             .unwrap_or_else(|| bound.name.clone());
         let type_args = bound
             .type_args
@@ -126,6 +128,39 @@ impl AstLowering {
             .map(|arg| self.lower_type_with_type_params(&arg.node, Some(type_param_names)))
             .collect();
         IrTraitBound::with_type_args_classified(trait_path, type_args)
+    }
+
+    /// Return the generated path for a builtin trait that is owned by ordinary Incan stdlib source.
+    ///
+    /// Native Rust capability mappings such as Incan `Eq` to Rust `PartialEq` are handled first by
+    /// [`trait_bounds::incan_to_rust`]. This helper covers source-owned protocols such as `Iterator[T]` and only
+    /// accepts either their exact imported owner or the implicit builtin binding. A local or third-party same-named
+    /// trait stays on its own path.
+    fn source_owned_builtin_trait_path(&self, visible_name: &str) -> Option<String> {
+        let (actual_module, source_name) = self.canonical_trait_identity(visible_name);
+        let source_name = source_name?;
+        let trait_id = core_traits::from_str(&source_name)?;
+        let expected_module = core_traits::source_module(trait_id)?;
+        let expected_segments = expected_module.split('.').collect::<Vec<_>>();
+        let exact_import = actual_module.as_deref().is_some_and(|segments| {
+            segments
+                .iter()
+                .map(String::as_str)
+                .eq(expected_segments.iter().copied())
+        });
+        let implicit_builtin = !visible_name.contains('.')
+            && !self.import_aliases.contains_key(visible_name)
+            && !self.trait_decls.contains_key(visible_name)
+            && visible_name == source_name;
+        if !exact_import && !implicit_builtin {
+            return None;
+        }
+
+        let generated_module = core_traits::generated_module(trait_id)?;
+        Some(format!(
+            "crate::__incan_std::{generated_module}::{}",
+            core_traits::as_str(trait_id)
+        ))
     }
 
     /// Whether `name` resolves to a locally-known trait during lowering.
@@ -153,12 +188,14 @@ impl AstLowering {
             {
                 let trait_path = trait_bounds::incan_to_rust(name)
                     .map(str::to_string)
+                    .or_else(|| self.source_owned_builtin_trait_path(name))
                     .unwrap_or_else(|| name.clone());
                 Some(IrTraitBound::with_type_args_classified(trait_path, Vec::new()))
             }
             ast::Type::Generic(base, args) if self.is_known_trait_name(base) => {
                 let trait_path = trait_bounds::incan_to_rust(base)
                     .map(str::to_string)
+                    .or_else(|| self.source_owned_builtin_trait_path(base))
                     .unwrap_or_else(|| base.clone());
                 let type_args = args
                     .iter()

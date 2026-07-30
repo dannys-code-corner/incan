@@ -2,7 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::backend::ir::expr::{IrDictEntry, IrGeneratorClause, IrListEntry, MethodKind, Pattern, VarRefKind};
+use crate::backend::ir::expr::{
+    BuiltinFn, IrDictEntry, IrGeneratorClause, IrListEntry, MethodKind, Pattern, VarRefKind,
+};
 use crate::backend::ir::{IrDecl, IrDeclKind, IrExpr, IrExprKind, IrProgram, IrStmt, IrStmtKind, IrType};
 use crate::frontend::ast::{self, Declaration, Expr, ImportKind, ImportPath, Program};
 use crate::frontend::decorator_resolution;
@@ -159,8 +161,8 @@ fn record_generated_support_required_items(
 /// Keep support items for compiler-generated Rust paths when lowered IR uses the triggering semantic surface.
 ///
 /// This deliberately runs on IR instead of source spelling. Domain APIs may legitimately define methods named
-/// `filter`, `map`, or `count`; only calls that lowering classified as `MethodKind::Iterator` cause the emitter to
-/// name `__incan_std.derives.collection` directly.
+/// `filter`, `map`, or `count`; only calls classified as an iterator method or builtin iterator constructor cause the
+/// emitter to name `__incan_std.derives.collection` directly.
 pub(super) fn record_direct_generated_path_support_items_from_ir(
     reachable: &mut HashMap<Vec<String>, HashSet<String>>,
     program: &IrProgram,
@@ -184,11 +186,14 @@ fn ir_program_uses_direct_generated_path_support(
     support: &generated_support::GeneratedPathSupport,
 ) -> bool {
     match support.trigger {
-        generated_support::GeneratedPathSupportTrigger::IteratorMethod => ir_program_any_expr(program, &mut |expr| {
+        generated_support::GeneratedPathSupportTrigger::IteratorSurface => ir_program_any_expr(program, &mut |expr| {
             matches!(
                 expr.kind,
                 IrExprKind::KnownMethodCall {
                     kind: MethodKind::Iterator(_),
+                    ..
+                } | IrExprKind::BuiltinCall {
+                    func: BuiltinFn::Zip,
                     ..
                 }
             )
@@ -810,11 +815,49 @@ pub(super) fn collect_externally_reachable_items_by_module(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::ir::AstLowering;
+    use crate::frontend::typechecker::TypeChecker;
 
     fn parse(source: &str) -> Program {
         let tokens =
             crate::frontend::lexer::lex(source).unwrap_or_else(|errors| panic!("fixture should lex: {errors:?}"));
         crate::frontend::parser::parse(&tokens).unwrap_or_else(|errors| panic!("fixture should parse: {errors:?}"))
+    }
+
+    fn lower(source: &str) -> IrProgram {
+        let program = parse(source);
+        let mut checker = TypeChecker::new();
+        checker
+            .check_program(&program)
+            .unwrap_or_else(|errors| panic!("fixture should typecheck: {errors:?}"));
+        AstLowering::new_with_type_info(checker.type_info().clone())
+            .lower_program(&program)
+            .unwrap_or_else(|errors| panic!("fixture should lower: {errors:?}"))
+    }
+
+    #[test]
+    fn builtin_zip_keeps_direct_generated_iterator_support() {
+        let program = lower(
+            r#"
+def main(left: list[int], right: list[str]) -> None:
+    for pair in zip(left, right):
+        println(pair[0])
+"#,
+        );
+        let mut reachable = HashMap::new();
+        record_direct_generated_path_support_items_from_ir(&mut reachable, &program);
+
+        let generated_collection = vec![
+            "__incan_std".to_string(),
+            "derives".to_string(),
+            "collection".to_string(),
+        ];
+        let Some(items) = reachable.get(&generated_collection) else {
+            panic!("builtin zip should retain generated iterator support");
+        };
+        assert!(items.contains(core_traits::as_str(TraitId::Iterator)));
+        assert!(items.contains("ListIterator"));
+        assert!(items.contains("ZipIterator"));
     }
 
     #[test]

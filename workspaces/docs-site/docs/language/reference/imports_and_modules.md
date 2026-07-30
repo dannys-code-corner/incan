@@ -236,7 +236,7 @@ range(start, end, step)  # Iterator start..end with a custom step (Python-like)
 range(start..end)   # Iterator start..end (Rust-style range literal)
 range(start..=end)  # Iterator start..=end (inclusive end)
 enumerate(iter)     # Iterator with indices
-zip(iter1, iter2)   # Pair up two iterators
+zip(left, right)    # Lazy Iterator of pairs; stops at the shorter input
 
 # Type conversion (Python-like)
 dict()              # Empty Dict

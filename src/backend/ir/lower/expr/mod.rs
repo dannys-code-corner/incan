@@ -1075,12 +1075,13 @@ impl AstLowering {
                     && let Some(builtin) = BuiltinFn::from_name(m)
                 {
                     let args_ir = self.lower_call_args(args)?.into_iter().map(|a| a.expr).collect();
+                    let result_ty = self.lowered_builtin_call_type(builtin, expr_span);
                     return Ok(TypedExpr::new(
                         IrExprKind::BuiltinCall {
                             func: builtin,
                             args: args_ir,
                         },
-                        IrType::Unknown,
+                        result_ty,
                     ));
                 }
 
@@ -1339,7 +1340,10 @@ impl AstLowering {
                             message: "typechecked tuple index was not a statically resolved field".to_string(),
                             span: super::super::IrSpan::default(),
                         })?;
-                    let elem_ty = items.get(index).cloned().unwrap_or(IrType::Unknown);
+                    let elem_ty = items.get(index).cloned().ok_or_else(|| LoweringError {
+                        message: "typechecked tuple index did not resolve to a tuple field".to_string(),
+                        span: super::super::IrSpan::default(),
+                    })?;
                     (
                         IrExprKind::Field {
                             object: Box::new(obj),

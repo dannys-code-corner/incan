@@ -9,7 +9,7 @@ use incan_core::interop::RustItemMetadata;
 use incan_core::lang::builtins::{self, BuiltinFnId};
 use incan_core::lang::conventions;
 use incan_core::lang::surface::constructors;
-use incan_core::lang::surface::types as surface_types;
+use incan_core::lang::surface::types::{self as surface_types, SurfaceTypeId};
 use incan_core::lang::traits;
 use incan_core::lang::traits::TraitId;
 use incan_core::lang::types::collections;
@@ -1105,6 +1105,29 @@ impl ResolvedType {
                 args.first()
             }
             _ => None,
+        }
+    }
+
+    /// Return the item type accepted by the direct `zip(left, right)` builtin.
+    ///
+    /// The backend can currently adapt lists, frozen lists, and canonical source-owned iterators without broadening
+    /// this builtin to every value accepted by ordinary `for` iteration. Unknown types remain accepted for diagnostic
+    /// recovery; all other unsupported operands are rejected by the builtin call checker.
+    pub(crate) fn builtin_zip_item_type(&self) -> Option<&ResolvedType> {
+        match self {
+            ResolvedType::Unknown => Some(self),
+            ResolvedType::FrozenList(inner) => Some(inner),
+            ResolvedType::Generic(name, args)
+                if (name == surface_types::as_str(SurfaceTypeId::Vec)
+                    || matches!(
+                        collections::from_str(name),
+                        Some(CollectionTypeId::List | CollectionTypeId::FrozenList)
+                    ))
+                    && args.len() == 1 =>
+            {
+                args.first()
+            }
+            _ => self.iterator_item_type(),
         }
     }
 }

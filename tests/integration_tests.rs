@@ -7648,17 +7648,15 @@ async def main() -> None:
     }
 
     #[test]
-    fn test_run_iterator_adapters_as_loop_and_comprehension_sources_issue950_953() {
-        let Ok(output) = incan_command()
+    fn test_run_iterator_adapters_as_loop_and_comprehension_sources_issue950_953()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let output = incan_command()
             .args([
                 "run",
                 "tests/codegen_snapshots/issue950_953_iterator_adapter_sources.incn",
             ])
             .env("CARGO_NET_OFFLINE", "true")
-            .output()
-        else {
-            panic!("failed to run incan");
-        };
+            .output()?;
 
         assert!(
             output.status.success(),
@@ -7668,9 +7666,27 @@ async def main() -> None:
         );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
-            "11\n0:beta\n1:alpha\n2\nalpha\n2\n",
-            "iterator adapters must preserve item types and source-owned polling across loops and comprehensions"
+            "11\n11\n11\n0:beta\n1:alpha\n2\nalpha\n2\n",
+            "iterator adapters and builtin zip must preserve item types and source-owned polling across loops and comprehensions"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_builtin_zip_only_keeps_generated_iterator_support_issue950() -> Result<(), Box<dyn std::error::Error>> {
+        let output = incan_command()
+            .args(["run", "tests/codegen_snapshots/issue950_builtin_zip_only.incn"])
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "incan run issue950_builtin_zip_only failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "11\nalpha:1\n");
+        Ok(())
     }
 
     #[test]

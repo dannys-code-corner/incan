@@ -205,6 +205,8 @@ For `.any()`, `.all()`, `.find()`, `.take_while()`, and `.skip_while()`, evaluat
 
 `.zip(other)` yields pairs from the receiver and `other` until either iterator is exhausted.
 
+The existing builtin `zip(left, right)` is the direct two-input spelling of the same lazy operation. It returns `Iterator[tuple[T, U]]`; it does not eagerly build a list. The method spelling remains useful when pairing is one stage in a longer adapter chain.
+
 `.take_while(f)` yields input items until `f(item)` first returns `false`, then stops.
 
 `.skip_while(f)` discards input items while `f(item)` returns `true`, then yields that first non-skipped item and all following items.

@@ -160,11 +160,26 @@ pub(super) fn emit_iterator_method(
 }
 
 /// Emit the value returned by `.iter()` for builtin lists and values that are already Incan iterators.
-fn emit_iter_receiver(receiver: &TypedExpr, r: &TokenStream) -> TokenStream {
+pub(in crate::backend::ir::emit::expressions) fn emit_iter_receiver(
+    receiver: &TypedExpr,
+    r: &TokenStream,
+) -> TokenStream {
     match receiver_type_for_iterator_dispatch(&receiver.ty) {
         IrType::List(_) => {
             let items = plan_owned_iterator_source(receiver).apply(r.clone());
             quote! { crate::__incan_std::derives::collection::ListIterator { items: #items, index: 0i64 } }
+        }
+        IrType::NamedGeneric(name, _)
+            if incan_core::lang::types::collections::from_str(name)
+                == Some(incan_core::lang::types::collections::CollectionTypeId::FrozenList) =>
+        {
+            let items = plan_owned_iterator_source(receiver).apply(r.clone());
+            quote! {
+                crate::__incan_std::derives::collection::ListIterator {
+                    items: (#items).as_slice().to_vec(),
+                    index: 0i64,
+                }
+            }
         }
         IrType::NamedGeneric(name, _) | IrType::Struct(name)
             if core_traits::from_qualified_str(name) == Some(TraitId::Iterator) =>

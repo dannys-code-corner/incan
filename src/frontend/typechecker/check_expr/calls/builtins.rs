@@ -10,6 +10,7 @@ use incan_core::lang::stdlib;
 use incan_core::lang::surface::constructors::{self as surface_constructors, ConstructorId};
 use incan_core::lang::surface::functions::SurfaceFnId;
 use incan_core::lang::surface::types::{self as surface_types, SurfaceTypeId};
+use incan_core::lang::traits::{self as core_traits, TraitId};
 use incan_core::lang::types::collections::CollectionTypeId;
 
 impl TypeChecker {
@@ -379,35 +380,29 @@ impl TypeChecker {
                     Some(list_ty(ResolvedType::Tuple(vec![ResolvedType::Int, inner_ty])))
                 }
                 BuiltinFnId::Zip => {
-                    // zip(a, b) -> List[(T1, T2)] (simple)
-                    let mut ty1 = ResolvedType::Unknown;
-                    let mut ty2 = ResolvedType::Unknown;
-                    if args.len() >= 2 {
-                        let iter1_ty = self.check_expr(Self::call_arg_expr(&args[0]));
-                        let iter2_ty = self.check_expr(Self::call_arg_expr(&args[1]));
-                        if let ResolvedType::Generic(name, type_args) = &iter1_ty
-                            && (name == surface_types::as_str(SurfaceTypeId::Vec)
-                                || matches!(
-                                    collection_type_id(name.as_str()),
-                                    Some(CollectionTypeId::List | CollectionTypeId::FrozenList)
-                                ))
-                            && !type_args.is_empty()
-                        {
-                            ty1 = type_args[0].clone();
-                        }
-                        if let ResolvedType::Generic(name, type_args) = &iter2_ty
-                            && (name == surface_types::as_str(SurfaceTypeId::Vec)
-                                || matches!(
-                                    collection_type_id(name.as_str()),
-                                    Some(CollectionTypeId::List | CollectionTypeId::FrozenList)
-                                ))
-                            && !type_args.is_empty()
-                        {
-                            ty2 = type_args[0].clone();
+                    let arg_types = self.check_call_arg_types(args);
+                    if args.len() != 2 {
+                        self.errors.push(errors::builtin_arity(name, 2, args.len(), call_span));
+                    }
+                    let mut item_types = Vec::with_capacity(2);
+                    for (index, arg_type) in arg_types.iter().take(2).enumerate() {
+                        if let Some(item_type) = arg_type.builtin_zip_item_type() {
+                            item_types.push(item_type.clone());
+                        } else {
+                            self.errors.push(errors::builtin_zip_argument_not_supported(
+                                index + 1,
+                                &arg_type.to_string(),
+                                Self::call_arg_expr(&args[index]).span,
+                            ));
+                            item_types.push(ResolvedType::Unknown);
                         }
                     }
-                    self.check_call_args(args);
-                    Some(list_ty(ResolvedType::Tuple(vec![ty1, ty2])))
+                    item_types.resize(2, ResolvedType::Unknown);
+                    let pair_ty = ResolvedType::Tuple(item_types);
+                    Some(ResolvedType::Generic(
+                        core_traits::as_str(TraitId::Iterator).to_string(),
+                        vec![pair_ty],
+                    ))
                 }
                 BuiltinFnId::Sorted => {
                     if args.len() != 1 {
