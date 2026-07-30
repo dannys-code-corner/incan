@@ -962,7 +962,9 @@ impl CodegraphBuilder {
         });
         for descriptor in bindings {
             let binding_id = c_binding_record_id(module_id, &descriptor.class_name);
-            let declaration_id = c_binding_declaration_id(module, &descriptor.class_name);
+            let Some(declaration_id) = c_binding_declaration_id(module, &descriptor.class_name) else {
+                continue;
+            };
             self.records.push(CodegraphRecord::CBinding(CodegraphCBindingRecord {
                 id: binding_id.clone(),
                 language: CodegraphLanguage::Incan,
@@ -1959,7 +1961,11 @@ fn c_binding_call_record_id(module_id: &str, binding: &str, symbol: &str, span: 
 }
 
 /// Return the ordinary class declaration record that owns one compiler-checked C binding descriptor.
-fn c_binding_declaration_id(module: &ParsedModule, binding_name: &str) -> String {
+///
+/// A descriptor is expected to originate from the vocabulary-desugared class declaration. When a partially parsed
+/// module cannot supply that source declaration, omit the incomplete projection rather than crashing the codegraph
+/// command or publishing a dangling declaration reference.
+fn c_binding_declaration_id(module: &ParsedModule, binding_name: &str) -> Option<String> {
     module
         .ast
         .declarations
@@ -1969,7 +1975,6 @@ fn c_binding_declaration_id(module: &ParsedModule, binding_name: &str) -> String
             Declaration::Class(class) if class.name == binding_name => Some(declaration_id(module, declaration, index)),
             _ => None,
         })
-        .expect("checked C binding descriptor must originate from a class declaration")
 }
 
 /// Convert one opaque-resource declaration into the public codegraph vocabulary.
