@@ -10,7 +10,9 @@ use crate::cli::prelude::ParsedModule;
 use crate::compiled_sdk::CompiledSdkModules;
 use crate::frontend::ast::Program;
 use crate::frontend::library_manifest_index::LibraryManifestIndex;
-use crate::frontend::module::{SourceModuleImportResolution, resolve_program_source_imports};
+use crate::frontend::module::{
+    SourceModuleImportResolution, resolve_program_source_imports, self_import_diagnostic_message,
+};
 use crate::frontend::vocab_desugar_pass;
 use crate::frontend::{diagnostics, lexer, parser};
 use crate::provider::ProviderPlan;
@@ -80,6 +82,17 @@ fn queue_resolved_source_import(
                 ));
             }
             return Ok(Some(module_ref.file_path));
+        }
+        SourceModuleImportResolution::SelfImport {
+            module_ref,
+            import_path,
+            can_use_root_import,
+        } => {
+            return Err(self_import_diagnostic_message(
+                &module_ref,
+                &import_path,
+                can_use_root_import,
+            ));
         }
         SourceModuleImportResolution::External => {}
     }

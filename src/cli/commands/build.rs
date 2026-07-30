@@ -26,7 +26,7 @@ use crate::frontend::library_exports::{CheckedExportKind, CheckedNamedExport, co
 use crate::frontend::library_manifest_index::{LibraryArtifactKind, LibraryManifestIndex, LibraryManifestIndexEntry};
 use crate::frontend::module::{
     SourceModuleImportResolution, canonicalize_source_module_segments, resolve_program_source_imports,
-    resolve_source_module_import,
+    resolve_source_module_import_from_source_file, self_import_diagnostic_message,
 };
 use crate::frontend::registry_metadata::{
     CHECKED_REGISTRY_METADATA_SCHEMA_VERSION, CheckedRegistryMetadataPackage, CheckedRegistryPackageIdentity,
@@ -2230,8 +2230,24 @@ fn collect_unprojected_provider_modules(
         })?;
         let base_dir = file_path.parent().unwrap_or(session.source_root.as_path());
         for resolved in resolve_program_source_imports(&ast, base_dir, Some(&session.source_root)) {
-            if let SourceModuleImportResolution::Local(module) = resolved.resolution {
-                pending.push((module.file_path, module.module_name, module.path_segments));
+            match resolved.resolution {
+                SourceModuleImportResolution::Local(module) => {
+                    pending.push((module.file_path, module.module_name, module.path_segments));
+                }
+                SourceModuleImportResolution::SelfImport {
+                    module_ref,
+                    import_path,
+                    can_use_root_import,
+                } => {
+                    let error = diagnostics::CompileError::new(
+                        self_import_diagnostic_message(&module_ref, &import_path, can_use_root_import),
+                        resolved.span,
+                    );
+                    return Err(CliError::failure(
+                        diagnostics::format_error(file_path.to_string_lossy().as_ref(), &source, &error).trim_end(),
+                    ));
+                }
+                SourceModuleImportResolution::Stdlib { .. } | SourceModuleImportResolution::External => {}
             }
         }
         modules.push(ParsedModule {
@@ -2390,10 +2406,25 @@ fn propagate_provider_feature_predicates(
             let Declaration::Import(import) = &declaration.node else {
                 continue;
             };
-            let SourceModuleImportResolution::Local(target) =
-                resolve_source_module_import(base_dir, Some(source_root), import)
-            else {
-                continue;
+            let target = match resolve_source_module_import_from_source_file(
+                base_dir,
+                Some(source_root),
+                Some(&module.file_path),
+                import,
+            ) {
+                SourceModuleImportResolution::Local(target) => target,
+                SourceModuleImportResolution::SelfImport {
+                    module_ref,
+                    import_path,
+                    can_use_root_import,
+                } => {
+                    return Err(CliError::failure(self_import_diagnostic_message(
+                        &module_ref,
+                        &import_path,
+                        can_use_root_import,
+                    )));
+                }
+                SourceModuleImportResolution::Stdlib { .. } | SourceModuleImportResolution::External => continue,
             };
             let target_path = canonical_provider_source_path(&target.file_path);
             let Some(target_module) = modules_by_path.get(&target_path) else {

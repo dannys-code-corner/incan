@@ -7216,6 +7216,135 @@ def main() -> None:
         Ok(())
     }
 
+    /// Regression (GitHub #976): an explicit `crate::` import must select the root module even when a nested module
+    /// has the same leaf name.
+    #[test]
+    fn test_run_explicit_root_import_over_same_leaf_nested_module() -> Result<(), Box<dyn std::error::Error>> {
+        let project_dir = make_temp_dir("incan_explicit_root_import");
+        let src_dir = project_dir.join("src");
+        let nested_dir = src_dir.join("substrait");
+        std::fs::create_dir_all(&nested_dir)?;
+        std::fs::write(
+            project_dir.join("incan.toml"),
+            "[project]\nname = \"explicit_root_import\"\nversion = \"0.1.0\"\n",
+        )?;
+
+        let main_path = src_dir.join("main.incn");
+        std::fs::write(
+            &main_path,
+            r#"from substrait.schema_registry import selected_value
+
+def main() -> None:
+  println(selected_value())
+"#,
+        )?;
+        std::fs::write(
+            src_dir.join("schema_registry.incn"),
+            r#"pub def root_value() -> str:
+  return "root registry"
+"#,
+        )?;
+        std::fs::write(
+            nested_dir.join("schema_registry.incn"),
+            r#"from crate::schema_registry import root_value
+
+pub def selected_value() -> str:
+  return root_value()
+"#,
+        )?;
+
+        let run_output = incan_command()
+            .args(["run", main_path.to_string_lossy().as_ref()])
+            .env("INCAN_SOURCE_ROOT", env!("CARGO_MANIFEST_DIR"))
+            .env(
+                "INCAN_STDLIB",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
+            )
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+        assert!(
+            run_output.status.success(),
+            "explicit root import project failed: status={:?} stderr={}",
+            run_output.status,
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&run_output.stdout).contains("root registry"),
+            "explicit root import did not run the root module: stdout={} stderr={}",
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+
+        Ok(())
+    }
+
+    /// Regression (GitHub #976): a bare import that resolves to its own nested source file must give root guidance.
+    #[test]
+    fn test_build_rejects_same_leaf_self_import_with_root_guidance() -> Result<(), Box<dyn std::error::Error>> {
+        let project_dir = make_temp_dir("incan_same_leaf_self_import");
+        let src_dir = project_dir.join("src");
+        let nested_dir = src_dir.join("substrait");
+        std::fs::create_dir_all(&nested_dir)?;
+        std::fs::write(
+            project_dir.join("incan.toml"),
+            "[project]\nname = \"same_leaf_self_import\"\nversion = \"0.1.0\"\n",
+        )?;
+
+        let main_path = src_dir.join("main.incn");
+        std::fs::write(
+            &main_path,
+            r#"from substrait.schema_registry import registered_columns
+
+def main() -> None:
+  println(registered_columns())
+"#,
+        )?;
+        std::fs::write(
+            src_dir.join("schema_registry.incn"),
+            r#"pub def registered_columns() -> str:
+  return "root registry"
+"#,
+        )?;
+        std::fs::write(
+            nested_dir.join("schema_registry.incn"),
+            r#"from schema_registry import registered_columns
+
+pub def registered_columns() -> str:
+  return registered_columns()
+"#,
+        )?;
+
+        let output = incan_command()
+            .args(["build", main_path.to_string_lossy().as_ref()])
+            .env("INCAN_SOURCE_ROOT", env!("CARGO_MANIFEST_DIR"))
+            .env(
+                "INCAN_STDLIB",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
+            )
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+        assert!(
+            !output.status.success(),
+            "self-importing source module unexpectedly built successfully:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("imports itself"),
+            "expected a self-import diagnostic, got:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("crate::schema_registry"),
+            "expected root-import guidance, got:\n{stderr}"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn test_run_async_task_and_time_facade() -> Result<(), Box<dyn std::error::Error>> {
         let project_dir = make_temp_dir("incan_async_task_time_facade_test");
