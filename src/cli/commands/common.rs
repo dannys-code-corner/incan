@@ -30,7 +30,7 @@ use crate::frontend::library_manifest_index::{
 };
 use crate::frontend::module::{
     SourceModuleImportResolution, canonicalize_source_module_segments, logical_module_segments_from_file,
-    logical_source_import_candidates, resolve_program_source_imports,
+    logical_source_import_candidates, resolve_program_source_imports, self_import_diagnostic_message,
 };
 use crate::frontend::testing_markers::{
     TestingMarkerSemantics, load_testing_marker_semantics, testing_marker_semantics_from_manifest,
@@ -3571,6 +3571,7 @@ fn collect_modules_detailed_from_seeds(
             }
         }
         for resolved in resolve_program_source_imports(&ast, current_base, Some(&session.source_root)) {
+            let span = resolved.span;
             match resolved.resolution {
                 SourceModuleImportResolution::Stdlib { module_path } => {
                     if stdlib::stdlib_stub_path(&module_path).is_none() {
@@ -3610,6 +3611,21 @@ fn collect_modules_detailed_from_seeds(
                         .entry(file_path.clone())
                         .or_default()
                         .insert(dep_path_str);
+                }
+                SourceModuleImportResolution::SelfImport {
+                    module_ref,
+                    import_path,
+                    can_use_root_import,
+                } => {
+                    return Err(CliDiagnosticFailure::single(
+                        file_path,
+                        source,
+                        diagnostics::CompileError::new(
+                            self_import_diagnostic_message(&module_ref, &import_path, can_use_root_import),
+                            span,
+                        ),
+                        diagnostics::DiagnosticPhase::Typecheck,
+                    ));
                 }
                 SourceModuleImportResolution::External => {}
             }

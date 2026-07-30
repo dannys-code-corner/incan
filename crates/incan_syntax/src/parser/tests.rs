@@ -3398,6 +3398,84 @@ def main() -> int:
     }
 
     #[test]
+    /// Verifies that a direct zero-argument call remains an ordinary call expression inside an f-string interpolation.
+    fn test_parse_fstring_expr_direct_zero_arg_call() -> Result<(), Vec<CompileError>> {
+        let source = "def enabled() -> bool:\n  return True\n\ndef render() -> str:\n  return f\"enabled:{enabled()}\"\n";
+        let program = parse_str(source)?;
+        let render = match &program.declarations[1].node {
+            Declaration::Function(function) => function,
+            _ => {
+                return Err(vec![CompileError::new(
+                    "parser test internal error: expected render function".to_string(),
+                    program.declarations[1].span,
+                )]);
+            }
+        };
+        let interpolation = match &render.body[0].node {
+            Statement::Return(Some(expr)) => match &expr.node {
+                Expr::FString(parts) => match &parts[1] {
+                    FStringPart::Expr { expr, .. } => expr,
+                    _ => {
+                        return Err(vec![CompileError::new(
+                            "parser test internal error: expected f-string interpolation".to_string(),
+                            expr.span,
+                        )]);
+                    }
+                },
+                _ => {
+                    return Err(vec![CompileError::new(
+                        "parser test internal error: expected f-string return value".to_string(),
+                        expr.span,
+                    )]);
+                }
+            },
+            _ => {
+                return Err(vec![CompileError::new(
+                    "parser test internal error: expected return expression".to_string(),
+                    render.body[0].span,
+                )]);
+            }
+        };
+
+        let expected_interpolation_start = match source.rfind("{enabled()}") {
+            Some(start) => start,
+            None => {
+                return Err(vec![CompileError::new(
+                    "parser test internal error: missing direct-call interpolation".to_string(),
+                    render.body[0].span,
+                )]);
+            }
+        };
+        let expected_callee_start = match source.rfind("enabled()") {
+            Some(start) => start,
+            None => {
+                return Err(vec![CompileError::new(
+                    "parser test internal error: missing direct-call callee".to_string(),
+                    render.body[0].span,
+                )]);
+            }
+        };
+
+        assert_eq!(interpolation.span.start, expected_interpolation_start);
+        assert_eq!(
+            interpolation.span.end,
+            expected_interpolation_start + "{enabled()}".len()
+        );
+        let Expr::Call(callee, type_args, args) = &interpolation.node else {
+            return Err(vec![CompileError::new(
+                "parser test internal error: expected direct call interpolation".to_string(),
+                interpolation.span,
+            )]);
+        };
+        assert!(type_args.is_empty());
+        assert!(args.is_empty());
+        assert!(matches!(&callee.node, Expr::Ident(name) if name == "enabled"));
+        assert_eq!(callee.span.start, expected_callee_start);
+        assert_eq!(callee.span.end, expected_callee_start + "enabled".len());
+        Ok(())
+    }
+
+    #[test]
     fn test_parse_fstring_expr_span_method_call_with_index() -> Result<(), Vec<CompileError>> {
         let source = "def render(users: List[str]) -> str:\n  return f\"user: {users[unknown_idx].upper()}\"\n";
         let program = parse_str(source)?;

@@ -47,7 +47,9 @@ use crate::frontend::contract_metadata::{
 };
 use crate::frontend::diagnostics::{CompileError, DiagnosticPhase, phase_for_typecheck_span};
 use crate::frontend::library_manifest_index::{LibraryManifestIndex, LibraryManifestIndexEntry};
-use crate::frontend::module::{SourceModuleImportResolution, resolve_program_source_imports};
+use crate::frontend::module::{
+    SourceModuleImportResolution, resolve_program_source_imports, self_import_diagnostic_message,
+};
 use crate::frontend::symbols::{FunctionInfo, ResolvedType, SymbolKind as FrontendSymbolKind, TypeInfo};
 use crate::frontend::typechecker::stdlib_loader::{StdlibAstCache, StdlibFunctionLspMetadata};
 use crate::frontend::{lexer, parser, typechecker};
@@ -519,8 +521,24 @@ impl IncanLanguageServer {
 
         // Seed stack with direct imports from the entry AST
         for resolved in resolve_program_source_imports(ast, &entry_base, source_root) {
-            if let SourceModuleImportResolution::Local(module_ref) = resolved.resolution {
-                stack.push((module_ref, resolved.span));
+            match resolved.resolution {
+                SourceModuleImportResolution::Local(module_ref) => stack.push((module_ref, resolved.span)),
+                SourceModuleImportResolution::SelfImport {
+                    module_ref,
+                    import_path,
+                    can_use_root_import,
+                } => entry_diags.push(Diagnostic {
+                    range: span_to_range(entry_source, resolved.span.start, resolved.span.end),
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: None,
+                    code_description: None,
+                    source: Some("incan".to_string()),
+                    message: self_import_diagnostic_message(&module_ref, &import_path, can_use_root_import),
+                    related_information: None,
+                    tags: None,
+                    data: None,
+                }),
+                SourceModuleImportResolution::Stdlib { .. } | SourceModuleImportResolution::External => {}
             }
         }
 
@@ -597,10 +615,33 @@ impl IncanLanguageServer {
 
             // Queue nested dependencies
             let current_base = canonical.parent().unwrap_or(&entry_base);
+            let mut dependency_diags = Vec::new();
             for resolved in resolve_program_source_imports(&dep_ast, current_base, source_root) {
-                if let SourceModuleImportResolution::Local(nested_ref) = resolved.resolution {
-                    stack.push((nested_ref, Span::default()));
+                match resolved.resolution {
+                    SourceModuleImportResolution::Local(nested_ref) => stack.push((nested_ref, Span::default())),
+                    SourceModuleImportResolution::SelfImport {
+                        module_ref,
+                        import_path,
+                        can_use_root_import,
+                    } => dependency_diags.push(Diagnostic {
+                        range: span_to_range(&dep_source, resolved.span.start, resolved.span.end),
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: None,
+                        code_description: None,
+                        source: Some("incan".to_string()),
+                        message: self_import_diagnostic_message(&module_ref, &import_path, can_use_root_import),
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                    }),
+                    SourceModuleImportResolution::Stdlib { .. } | SourceModuleImportResolution::External => {}
                 }
+            }
+            if !dependency_diags.is_empty()
+                && let Some(uri) = dep_uri.clone()
+            {
+                let version = dep_doc.map(|document| document.version);
+                self.client.publish_diagnostics(uri, dependency_diags, version).await;
             }
 
             result.push(ParsedModule {

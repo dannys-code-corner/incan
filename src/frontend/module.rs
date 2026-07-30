@@ -38,6 +38,15 @@ impl SourceModuleRef {
 pub(crate) enum SourceModuleImportResolution {
     /// Import resolved to a local Incan source file.
     Local(SourceModuleRef),
+    /// Import resolved to the importing source file itself.
+    ///
+    /// Source-graph consumers must reject this before typechecking or Rust emission. A bare import is
+    /// same-directory-relative, so a nested collision that intends the project root must spell `crate::...`.
+    SelfImport {
+        module_ref: SourceModuleRef,
+        import_path: Vec<String>,
+        can_use_root_import: bool,
+    },
     /// Import points at an Incan stdlib source module. Callers that materialize stdlib source decide how to load it.
     Stdlib { module_path: Vec<String> },
     /// Import is not a source-backed Incan module, or no matching local source file exists.
@@ -61,6 +70,7 @@ pub(crate) fn resolve_program_source_imports(
     base_dir: &Path,
     source_root: Option<&Path>,
 ) -> Vec<ResolvedProgramSourceImport> {
+    let current_source_file = program.source_path.as_deref().map(Path::new);
     program
         .declarations
         .iter()
@@ -70,7 +80,12 @@ pub(crate) fn resolve_program_source_imports(
             };
             let mut resolved = vec![ResolvedProgramSourceImport {
                 span: decl.span,
-                resolution: resolve_source_module_import(base_dir, source_root, import),
+                resolution: resolve_source_module_import_from_source_file(
+                    base_dir,
+                    source_root,
+                    current_source_file,
+                    import,
+                ),
             }];
 
             if let ImportKind::From { module, items } = &import.kind
@@ -106,6 +121,19 @@ pub(crate) fn resolve_source_module_import(
     source_root: Option<&Path>,
     import: &ImportDecl,
 ) -> SourceModuleImportResolution {
+    resolve_source_module_import_from_source_file(base_dir, source_root, None, import)
+}
+
+/// Resolve one import declaration while retaining the importing source-file identity when it is known.
+///
+/// A located local module that is the importing file is classified as [`SourceModuleImportResolution::SelfImport`].
+/// This keeps accidental self imports from entering the source graph and becoming recursive generated Rust.
+pub(crate) fn resolve_source_module_import_from_source_file(
+    base_dir: &Path,
+    source_root: Option<&Path>,
+    current_source_file: Option<&Path>,
+    import: &ImportDecl,
+) -> SourceModuleImportResolution {
     let Some((path, candidates)) = source_import_candidates(import) else {
         return SourceModuleImportResolution::External;
     };
@@ -123,10 +151,11 @@ pub(crate) fn resolve_source_module_import(
     }
 
     let identity_root = effective_source_root(base_dir, source_root);
+    let can_use_root_import = !path.is_absolute && path.parent_levels == 0;
 
     let primary_base = primary_import_base_dir(base_dir, source_root, path);
     if let Some(module_ref) = resolve_first_source_candidate(&primary_base, identity_root.as_deref(), &candidates) {
-        return SourceModuleImportResolution::Local(module_ref);
+        return classify_local_source_import(module_ref, current_source_file, &path.segments, can_use_root_import);
     }
 
     if !path.is_absolute
@@ -135,10 +164,55 @@ pub(crate) fn resolve_source_module_import(
         && root != primary_base
         && let Some(module_ref) = resolve_first_source_candidate(&root, Some(&root), &candidates)
     {
-        return SourceModuleImportResolution::Local(module_ref);
+        return classify_local_source_import(module_ref, current_source_file, &path.segments, can_use_root_import);
     }
 
     SourceModuleImportResolution::External
+}
+
+/// Classify a located source module while enforcing the no-self-import invariant.
+fn classify_local_source_import(
+    module_ref: SourceModuleRef,
+    current_source_file: Option<&Path>,
+    import_path: &[String],
+    can_use_root_import: bool,
+) -> SourceModuleImportResolution {
+    if current_source_file.is_some_and(|source_file| source_files_match(source_file, &module_ref.file_path)) {
+        return SourceModuleImportResolution::SelfImport {
+            module_ref,
+            import_path: import_path.to_vec(),
+            can_use_root_import,
+        };
+    }
+    SourceModuleImportResolution::Local(module_ref)
+}
+
+/// Return whether two source paths name the same file, accounting for canonical and relative spellings.
+fn source_files_match(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+/// Render the common diagnostic for an accidental source-module self import.
+pub(crate) fn self_import_diagnostic_message(
+    module_ref: &SourceModuleRef,
+    import_path: &[String],
+    can_use_root_import: bool,
+) -> String {
+    let message = format!(
+        "module `{}` imports itself; remove this import",
+        module_ref.path_segments.join(".")
+    );
+    if can_use_root_import && module_ref.path_segments != import_path {
+        format!(
+            "{message} or use `crate::{}` to import a project-root module",
+            import_path.join(".")
+        )
+    } else {
+        message
+    }
 }
 
 /// Resolve an `import` / `from ... import ...` into an on-disk Incan module file path.
@@ -149,7 +223,9 @@ pub(crate) fn resolve_source_module_import(
 pub fn resolve_import_path(base_dir: &Path, import: &ImportDecl) -> Option<PathBuf> {
     match resolve_source_module_import(base_dir, None, import) {
         SourceModuleImportResolution::Local(module_ref) => Some(module_ref.file_path),
-        SourceModuleImportResolution::Stdlib { .. } | SourceModuleImportResolution::External => None,
+        SourceModuleImportResolution::SelfImport { .. }
+        | SourceModuleImportResolution::Stdlib { .. }
+        | SourceModuleImportResolution::External => None,
     }
 }
 
@@ -892,6 +968,72 @@ source-root = "library"
         assert_eq!(module_ref.file_path, sibling.canonicalize()?);
         assert_eq!(module_ref.path_segments, vec!["pkg".to_string(), "bar".to_string()]);
         assert_eq!(module_ref.module_name, "pkg_bar");
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_program_source_imports_does_not_admit_same_leaf_self_import() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let src = tmp.path().join("src");
+        let nested = src.join("substrait");
+        std::fs::create_dir_all(&nested)?;
+        let nested_registry = nested.join("schema_registry.incn");
+        std::fs::write(&nested_registry, "from schema_registry import registered_columns\n")?;
+
+        let source = std::fs::read_to_string(&nested_registry)?;
+        let tokens =
+            lexer::lex(&source).map_err(|errors| std::io::Error::other(format!("fixture should lex: {errors:?}")))?;
+        let source_path = nested_registry.to_string_lossy();
+        let program = parser::parse_with_context_and_surfaces(&tokens, Some(source_path.as_ref()), None, None)
+            .map_err(|errors| std::io::Error::other(format!("fixture should parse: {errors:?}")))?;
+
+        let resolved = resolve_program_source_imports(&program, &nested, Some(&src));
+        let canonical_nested_registry = nested_registry.canonicalize()?;
+        assert!(matches!(
+            &resolved[0].resolution,
+            SourceModuleImportResolution::SelfImport { module_ref, import_path, can_use_root_import }
+                if module_ref.file_path == canonical_nested_registry
+                    && import_path == &["schema_registry"]
+                    && *can_use_root_import
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_source_module_import_keeps_explicit_root_and_distinct_sibling_precedence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let src = tmp.path().join("src");
+        let nested = src.join("substrait");
+        std::fs::create_dir_all(&nested)?;
+        let root_registry = src.join("schema_registry.incn");
+        let nested_registry = nested.join("schema_registry.incn");
+        let consumer = nested.join("consumer.incn");
+        std::fs::write(&root_registry, "pub const ROOT: int = 1\n")?;
+        std::fs::write(&nested_registry, "pub const NESTED: int = 2\n")?;
+        std::fs::write(&consumer, "pub const CONSUMER: int = 3\n")?;
+
+        let bare_import = relative_module_import(&["schema_registry"]);
+        let SourceModuleImportResolution::Local(sibling) =
+            resolve_source_module_import_from_source_file(&nested, Some(&src), Some(&consumer), &bare_import)
+        else {
+            return Err("expected a distinct same-directory module to remain preferred".into());
+        };
+        assert_eq!(sibling.file_path, nested_registry.canonicalize()?);
+
+        let root_import = ImportDecl {
+            visibility: Visibility::Private,
+            kind: ImportKind::Module(ImportPath::absolute(vec!["schema_registry".to_string()])),
+            alias: None,
+        };
+        let SourceModuleImportResolution::Local(root) =
+            resolve_source_module_import_from_source_file(&nested, Some(&src), Some(&nested_registry), &root_import)
+        else {
+            return Err("expected an explicit root import to select the root module".into());
+        };
+        assert_eq!(root.file_path, root_registry.canonicalize()?);
+
         Ok(())
     }
 

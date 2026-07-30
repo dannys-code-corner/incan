@@ -9147,6 +9147,30 @@ def main() -> None:
     Ok(())
 }
 
+/// Verifies that a direct zero-argument call in an f-string survives the complete CLI pipeline.
+#[test]
+fn fstring_interpolation_zero_arg_function_call_issue979() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let main_path = write_minimal_project(tmp.path(), "fstring_zero_arg_call_issue979", "")?;
+    fs::write(
+        &main_path,
+        r#"def enabled() -> bool:
+  return True
+
+def main() -> None:
+  println(f"enabled:{enabled()}")
+"#,
+    )?;
+
+    let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
+    let check = run_incan(tmp.path(), &["check", main_arg, "--sdk-profile", "minimal"])?;
+    assert_success(&check, "incan check with a direct f-string zero-argument call");
+    let output = run_incan(tmp.path(), &["run", main_arg, "--sdk-profile", "minimal"])?;
+    assert_success(&output, "incan run with a direct f-string zero-argument call");
+    assert_eq!(String::from_utf8(output.stdout)?, "enabled:true\n");
+    Ok(())
+}
+
 #[test]
 fn build_static_str_const_rust_string_struct_field() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
