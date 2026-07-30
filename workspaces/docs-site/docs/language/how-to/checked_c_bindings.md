@@ -173,10 +173,16 @@ This declaration and lock slice deliberately does not download artifacts, discov
 | C resource was transferred or requires a mutable borrow | Do not reuse a resource passed as `c.Owned[...]`; bind it as `mut` before a call declared `c.BorrowedMut[...]`. |
 | Missing system library at final link | `c.system_library("name")` records a logical system capability; this slice does not download, vendor, or lock a library for you. |
 
+## Review the checked declaration
+
+Run `incan inspect bindings` after the declaration checks successfully to review the compiler-owned binding contract without reading generated Rust. The text report is suitable for a human review; `--format json` emits a schema-versioned projection for tools.
+
+The command inspects the selected source graph, so pass the same feature and SDK-profile options used by the build when declarations are conditional. Follow the [binding inspection how-to](../../tooling/how-to/inspect_checked_c_bindings.md) for entrypoint selection, JSON use, and failure handling.
+
 ## Decide whether C is the right boundary
 
 Choose this surface when the library's supported boundary is a compact C ABI and the part you need fits the verified scalar and opaque-resource subset. Prefer [Rust interop](rust_interop.md) when a maintained Rust crate already offers the safe, resource, callback, or asynchronous API you need. A C ABI may still be the right eventual boundary for a library implemented in another language; the implementation language is not the deciding factor.
 
 If the header depends on callbacks, variadics, unions, bitfields, macros that cannot be represented as constants, or nontrivial lifetime rules, do not fake a scalar declaration. A checked C or C++ shim is the intended later adapter; it is not available in this first release slice.
 
-See [how checked C interop is structured](../explanation/checked_c_interop.md) for the source-of-truth and toolchain boundary, and the [`std.interop` reference](../reference/stdlib/interop.md) for precise accepted syntax.
+See [how checked C interop is structured](../explanation/checked_c_interop.md) for the source-of-truth and toolchain boundary, the [binding inspection JSON schema](../../tooling/reference/binding_inspection_schema.md) for tool integration, and the [`std.interop` reference](../reference/stdlib/interop.md) for precise accepted syntax.

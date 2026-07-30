@@ -351,7 +351,7 @@ Options:
 - `--features`, `--no-default-features`, `--all-features`: Select which feature-conditioned declarations are checked and projected.
 - `--sdk-profile <PROFILE>`: Select the SDK profile used to resolve the checked source graph.
 
-The command is strict: it emits ordinary compiler diagnostics rather than partial data when the source graph is not valid. Its checked compilation path runs the normal host-target C probe, but the report remains a declaration projection rather than a reusable verification receipt. It does not resolve native artifacts, compile shims, read native lock receipts, classify a bridge or façade, or expose LSP data. See [Checked C binding inspection](binding_inspection.md) for the full JSON contract and boundary.
+The command is strict: it emits ordinary compiler diagnostics rather than partial data when the source graph is not valid. Its checked compilation path runs the normal host-target C probe, but the report remains a declaration projection rather than a reusable verification receipt. It does not resolve native artifacts, compile shims, read native lock receipts, classify a bridge or façade, or expose LSP data. Use the [inspection how-to](../how-to/inspect_checked_c_bindings.md) for the review workflow and the [binding inspection JSON schema](binding_inspection_schema.md) for the machine contract.
 
 Examples:
 

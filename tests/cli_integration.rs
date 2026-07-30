@@ -3466,7 +3466,7 @@ main = "src/main.incn"
     )?;
     fs::write(
         tmp.path().join("fixture.h"),
-        "typedef struct fixture_pair { int left; int right; } fixture_pair;\n#define FIXTURE_OK 0\nint fixture_add(int left, int right);\n",
+        "typedef struct fixture_handle fixture_handle;\ntypedef struct fixture_pair { int left; int right; } fixture_pair;\n#define FIXTURE_OK 0\nint fixture_add(int left, int right);\nvoid fixture_close(fixture_handle *handle);\nint fixture_inspect(fixture_handle *handle);\nint fixture_open(fixture_handle **output, int *attempts);\n",
     )?;
     fs::write(
         src_dir.join("fixture.incn"),
@@ -3476,11 +3476,28 @@ binding Fixture:
     header = "fixture.h"
     link = c.system_library("fixture")
 
+    resource Handle:
+        native = "fixture_handle"
+        release = close
+
+    symbol close(handle: c.Owned[Handle]) -> None:
+        native = "fixture_close"
+
+    symbol inspect(handle: c.Borrowed[Handle]) -> c.i32:
+        native = "fixture_inspect"
+
     symbol add(left: c.i32, right: c.i32) -> c.i32:
         native = "fixture_add"
 
     enum Status:
         OK: c.i32 = FIXTURE_OK
+
+    symbol open(output: c.Out[c.Owned[Handle]], attempts: c.InOut[c.i32]) -> c.i32:
+        native = "fixture_open"
+
+        outcome Status.OK:
+            initializes = [output]
+            updates = [attempts]
 
     struct Pair:
         native = "fixture_pair"
@@ -3523,15 +3540,59 @@ def main() -> None:
     assert_eq!(fixture["source"]["start_line"], serde_json::json!(3));
     assert_eq!(fixture["source"]["start_column"], serde_json::json!(1));
     assert!(fixture["source"]["end_column"].is_number());
-    assert_eq!(fixture["symbols"][0]["name"], serde_json::json!("add"));
-    assert_eq!(fixture["symbols"][0]["native"], serde_json::json!("fixture_add"));
+    assert_eq!(fixture["resources"][0]["name"], serde_json::json!("Handle"));
+    assert_eq!(fixture["resources"][0]["native"], serde_json::json!("fixture_handle"));
+    assert_eq!(fixture["resources"][0]["release"], serde_json::json!("close"));
+    assert_eq!(fixture["symbols"][0]["name"], serde_json::json!("close"));
+    assert_eq!(fixture["symbols"][0]["native"], serde_json::json!("fixture_close"));
     assert_eq!(
-        fixture["symbols"][0]["parameters"][0]["type"]["spelling"],
+        fixture["symbols"][0]["parameters"][0]["type"]["kind"],
+        serde_json::json!("resource")
+    );
+    assert_eq!(
+        fixture["symbols"][0]["parameters"][0]["type"]["access"],
+        serde_json::json!("owned")
+    );
+    assert_eq!(
+        fixture["symbols"][1]["parameters"][0]["type"]["access"],
+        serde_json::json!("borrowed")
+    );
+    assert_eq!(
+        fixture["symbols"][2]["parameters"][0]["type"]["spelling"],
         serde_json::json!("c.i32")
     );
     assert_eq!(
-        fixture["symbols"][0]["return_type"]["spelling"],
+        fixture["symbols"][2]["return_type"]["spelling"],
         serde_json::json!("c.i32")
+    );
+    assert_eq!(fixture["symbols"][3]["name"], serde_json::json!("open"));
+    assert_eq!(
+        fixture["symbols"][3]["parameters"][0]["type"]["kind"],
+        serde_json::json!("output")
+    );
+    assert_eq!(
+        fixture["symbols"][3]["parameters"][0]["type"]["mode"],
+        serde_json::json!("out")
+    );
+    assert_eq!(
+        fixture["symbols"][3]["parameters"][0]["type"]["value"]["kind"],
+        serde_json::json!("resource")
+    );
+    assert_eq!(
+        fixture["symbols"][3]["parameters"][1]["type"]["mode"],
+        serde_json::json!("in_out")
+    );
+    assert_eq!(
+        fixture["symbols"][3]["outcomes"][0]["result"],
+        serde_json::json!("Status.OK")
+    );
+    assert_eq!(
+        fixture["symbols"][3]["outcomes"][0]["initializes"],
+        serde_json::json!(["output"])
+    );
+    assert_eq!(
+        fixture["symbols"][3]["outcomes"][0]["updates"],
+        serde_json::json!(["attempts"])
     );
     assert_eq!(fixture["enums"][0]["name"], serde_json::json!("Status"));
     assert_eq!(fixture["enums"][0]["carrier"], serde_json::json!("c.i32"));
@@ -3552,6 +3613,14 @@ def main() -> None:
     );
     assert!(text.contains("fixture.h"), "unexpected binding report:\n{text}");
     assert!(text.contains("fixture_add"), "unexpected binding report:\n{text}");
+    assert!(
+        text.contains("resource Handle [native: fixture_handle, release: close]"),
+        "unexpected binding report:\n{text}"
+    );
+    assert!(
+        text.contains("outcome Status.OK [initializes: output, updates: attempts, invalidates: -]"),
+        "unexpected binding report:\n{text}"
+    );
 
     let broken_path = src_dir.join("broken.incn");
     fs::write(

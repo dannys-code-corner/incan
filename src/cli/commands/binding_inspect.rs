@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::cli::prelude::ParsedModule;
 use crate::cli::{CliError, CliResult, ExitCode};
 use crate::frontend::ast::Span;
-use crate::frontend::typechecker::{CBindingDescriptor, CBindingType};
+use crate::frontend::typechecker::{CBindingDescriptor, CBindingOutcome, CBindingType, COutputMode, CResourceAccess};
 use crate::provider::FeatureSelection;
 
 use super::common::{CompilationAnalysis, CompilationSession, collect_modules_detailed_with_session};
@@ -46,9 +46,18 @@ struct BindingReport {
     header: String,
     system_library: String,
     source: BindingSourceSpan,
+    resources: Vec<ResourceReport>,
     symbols: Vec<SymbolReport>,
     enums: Vec<EnumReport>,
     structs: Vec<StructReport>,
+}
+
+/// One nominal opaque resource and its binding-local release association.
+#[derive(Debug, Serialize)]
+struct ResourceReport {
+    name: String,
+    native: String,
+    release: String,
 }
 
 /// One declaration-level C symbol contract.
@@ -58,6 +67,7 @@ struct SymbolReport {
     native: String,
     parameters: Vec<ParameterReport>,
     return_type: BindingTypeReport,
+    outcomes: Vec<OutcomeReport>,
 }
 
 /// One named C parameter contract.
@@ -66,6 +76,15 @@ struct ParameterReport {
     name: String,
     #[serde(rename = "type")]
     ty: BindingTypeReport,
+}
+
+/// One declared result path and its output-slot state transitions.
+#[derive(Debug, Serialize)]
+struct OutcomeReport {
+    result: String,
+    initializes: Vec<String>,
+    updates: Vec<String>,
+    invalidates: Vec<String>,
 }
 
 /// One C enum declaration and its target-verified carrier contract.
@@ -113,7 +132,35 @@ enum BindingTypeReport {
     Struct {
         name: String,
     },
+    Resource {
+        access: ResourceAccessReport,
+        resource: String,
+    },
+    Output {
+        mode: OutputModeReport,
+        value: Box<BindingTypeReport>,
+    },
+    Nullable {
+        value: Box<BindingTypeReport>,
+    },
     Void,
+}
+
+/// Stable inspection spelling for an opaque resource's checked access mode.
+#[derive(Debug, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum ResourceAccessReport {
+    Owned,
+    Borrowed,
+    BorrowedMut,
+}
+
+/// Stable inspection spelling for one compiler-managed output position.
+#[derive(Debug, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum OutputModeReport {
+    Out,
+    InOut,
 }
 
 /// A byte- and editor-addressable source span for one binding declaration.
@@ -217,6 +264,15 @@ fn binding_report(module: &ParsedModule, descriptor: &CBindingDescriptor) -> Bin
         header: descriptor.header.clone(),
         system_library: descriptor.system_library.clone(),
         source: binding_source_span(&module.file_path, &module.source, descriptor.span),
+        resources: descriptor
+            .resources
+            .iter()
+            .map(|resource| ResourceReport {
+                name: resource.name.clone(),
+                native: resource.native.clone(),
+                release: resource.release.clone(),
+            })
+            .collect(),
         symbols: descriptor
             .symbols
             .iter()
@@ -232,6 +288,7 @@ fn binding_report(module: &ParsedModule, descriptor: &CBindingDescriptor) -> Bin
                     })
                     .collect(),
                 return_type: binding_type_report(&symbol.return_type),
+                outcomes: symbol.outcomes.iter().map(outcome_report).collect(),
             })
             .collect(),
         enums: descriptor
@@ -269,6 +326,16 @@ fn binding_report(module: &ParsedModule, descriptor: &CBindingDescriptor) -> Bin
     }
 }
 
+/// Project one checked output-state declaration without reinterpreting its result spelling.
+fn outcome_report(outcome: &CBindingOutcome) -> OutcomeReport {
+    OutcomeReport {
+        result: outcome.result.clone(),
+        initializes: outcome.initializes.clone(),
+        updates: outcome.updates.clone(),
+        invalidates: outcome.invalidates.clone(),
+    }
+}
+
 /// Translate the checked typechecker representation into a stable, source-vocabulary-oriented report value.
 fn binding_type_report(ty: &CBindingType) -> BindingTypeReport {
     match ty {
@@ -280,7 +347,35 @@ fn binding_type_report(ty: &CBindingType) -> BindingTypeReport {
             pointee: Box::new(binding_type_report(pointee)),
         },
         CBindingType::Struct(name) => BindingTypeReport::Struct { name: name.clone() },
+        CBindingType::Resource { access, resource } => BindingTypeReport::Resource {
+            access: resource_access_report(*access),
+            resource: resource.clone(),
+        },
+        CBindingType::Output { mode, value } => BindingTypeReport::Output {
+            mode: output_mode_report(*mode),
+            value: Box::new(binding_type_report(value)),
+        },
+        CBindingType::Nullable(value) => BindingTypeReport::Nullable {
+            value: Box::new(binding_type_report(value)),
+        },
         CBindingType::Void => BindingTypeReport::Void,
+    }
+}
+
+/// Project a resource argument's checked access mode into its stable report enum.
+fn resource_access_report(access: CResourceAccess) -> ResourceAccessReport {
+    match access {
+        CResourceAccess::Owned => ResourceAccessReport::Owned,
+        CResourceAccess::Borrowed => ResourceAccessReport::Borrowed,
+        CResourceAccess::BorrowedMut => ResourceAccessReport::BorrowedMut,
+    }
+}
+
+/// Project a compiler-managed output position into its stable report enum.
+fn output_mode_report(mode: COutputMode) -> OutputModeReport {
+    match mode {
+        COutputMode::Out => OutputModeReport::Out,
+        COutputMode::InOut => OutputModeReport::InOut,
     }
 }
 
@@ -314,6 +409,12 @@ fn render_binding_inspection_text(report: &BindingInspectionReport) {
             "  source: {}:{}:{}",
             binding.source.file, binding.source.start_line, binding.source.start_column
         );
+        for resource in &binding.resources {
+            println!(
+                "  resource {} [native: {}, release: {}]",
+                resource.name, resource.native, resource.release
+            );
+        }
         for symbol in &binding.symbols {
             let parameters = symbol
                 .parameters
@@ -327,6 +428,15 @@ fn render_binding_inspection_text(report: &BindingInspectionReport) {
                 format_binding_type(&symbol.return_type),
                 symbol.native
             );
+            for outcome in &symbol.outcomes {
+                println!(
+                    "    outcome {} [initializes: {}, updates: {}, invalidates: {}]",
+                    outcome.result,
+                    format_output_names(&outcome.initializes),
+                    format_output_names(&outcome.updates),
+                    format_output_names(&outcome.invalidates)
+                );
+            }
         }
         for enumeration in &binding.enums {
             println!("  enum {}: {}", enumeration.name, enumeration.carrier);
@@ -343,6 +453,14 @@ fn render_binding_inspection_text(report: &BindingInspectionReport) {
     }
 }
 
+/// Format output-position names for the concise terminal report.
+fn format_output_names(names: &[String]) -> String {
+    if names.is_empty() {
+        return "-".to_string();
+    }
+    names.join(", ")
+}
+
 /// Format one structured binding type with the corresponding Incan C vocabulary spelling for terminal output.
 fn format_binding_type(ty: &BindingTypeReport) -> String {
     match ty {
@@ -352,6 +470,22 @@ fn format_binding_type(ty: &BindingTypeReport) -> String {
             format!("{constructor}[{}]", format_binding_type(pointee))
         }
         BindingTypeReport::Struct { name } => name.clone(),
+        BindingTypeReport::Resource { access, resource } => {
+            let constructor = match access {
+                ResourceAccessReport::Owned => "c.Owned",
+                ResourceAccessReport::Borrowed => "c.Borrowed",
+                ResourceAccessReport::BorrowedMut => "c.BorrowedMut",
+            };
+            format!("{constructor}[{resource}]")
+        }
+        BindingTypeReport::Output { mode, value } => {
+            let constructor = match mode {
+                OutputModeReport::Out => "c.Out",
+                OutputModeReport::InOut => "c.InOut",
+            };
+            format!("{constructor}[{}]", format_binding_type(value))
+        }
+        BindingTypeReport::Nullable { value } => format!("Option[{}]", format_binding_type(value)),
         BindingTypeReport::Void => "None".to_string(),
     }
 }
