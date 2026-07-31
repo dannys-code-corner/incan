@@ -3357,7 +3357,7 @@ def main() -> None:
 fn assert_codegraph_v05_record_contract(records: &[serde_json::Value]) {
     assert!(!records.is_empty(), "codegraph export should include a header record");
     assert_eq!(records[0]["record"], serde_json::json!("header"));
-    assert_eq!(records[0]["schema_version"], serde_json::json!(2));
+    assert_eq!(records[0]["schema_version"], serde_json::json!(3));
     assert_eq!(records[0]["languages"], serde_json::json!(["incan"]));
     assert!(
         records[0]["degraded"].is_boolean(),
@@ -3725,6 +3725,147 @@ class Broken:
         String::from_utf8_lossy(&broken.stderr).contains("must extend BindingDeclaration"),
         "binding inspection should preserve the compiler diagnostic:\n{}",
         String::from_utf8_lossy(&broken.stderr)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn codegraph_projects_checked_c_bindings_and_explicit_unsafe_calls() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source_path = tmp.path().join("main.incn");
+    let header_path = tmp.path().join("fixture.h");
+    fs::write(
+        &header_path,
+        concat!(
+            "typedef struct fixture_handle fixture_handle;\n",
+            "#define FIXTURE_OK 0\n",
+            "void fixture_close(fixture_handle *handle);\n",
+            "int fixture_open(fixture_handle **output, int *attempts);\n",
+            "unsigned int fixture_random(unsigned int *seed);\n",
+        ),
+    )?;
+    fs::write(
+        &source_path,
+        format!(
+            r#"from std.interop import c
+
+binding Fixture:
+    header = "{}"
+    link = c.system_library("c")
+
+    resource Handle:
+        native = "fixture_handle"
+        release = close
+
+    symbol close(handle: c.Owned[Handle]) -> None:
+        native = "fixture_close"
+
+    enum Status:
+        OK: c.i32 = FIXTURE_OK
+
+    symbol open(output: c.Out[c.Owned[Handle]], attempts: c.InOut[c.i32]) -> c.i32:
+        native = "fixture_open"
+
+        outcome Status.OK:
+            initializes = [output]
+            updates = [attempts]
+
+    symbol random(seed: c.InOut[c.u32]) -> c.u32:
+        native = "fixture_random"
+
+def inspect_contract() -> None:
+    unsafe:
+        handle = c.out[c.Owned[Handle]]()
+        attempts = c.inout(0)
+        status = Fixture.open(handle, attempts)
+        if status == Fixture.Status.OK:
+            resource = handle.take()
+            Fixture.close(resource)
+
+        seed = c.inout(7)
+        Fixture.random(seed)
+        seed.take()
+"#,
+            header_path.display()
+        ),
+    )?;
+
+    let source = source_path.to_str().ok_or("source path was not valid UTF-8")?;
+    let first = run_incan(tmp.path(), &["inspect", "codegraph", source, "--format", "jsonl"])?;
+    assert_success(&first, "codegraph checked C binding projection");
+    let second = run_incan(tmp.path(), &["inspect", "codegraph", source, "--format", "jsonl"])?;
+    assert_success(&second, "second codegraph checked C binding projection");
+    assert_eq!(
+        first.stdout, second.stdout,
+        "checked C codegraph records must be deterministic"
+    );
+
+    let records = parse_jsonl_stdout(&first)?;
+    assert_codegraph_v05_record_contract(&records);
+    let binding = records
+        .iter()
+        .find(|record| record["record"] == serde_json::json!("c_binding"))
+        .ok_or("codegraph did not emit the checked C binding record")?;
+    assert_eq!(binding["name"], serde_json::json!("Fixture"));
+    assert_eq!(binding["header"], serde_json::json!(header_path.to_string_lossy()));
+    assert_eq!(binding["system_library"], serde_json::json!("c"));
+    assert_eq!(binding["provenance"], serde_json::json!("checked"));
+    let declaration_id = binding["declaration_id"]
+        .as_str()
+        .ok_or("checked C binding did not link to its class declaration record")?;
+    assert!(records.iter().any(|record| {
+        record["record"] == serde_json::json!("declaration")
+            && record["id"] == serde_json::json!(declaration_id)
+            && record["name"] == serde_json::json!("Fixture")
+    }));
+    assert_eq!(binding["resources"][0]["name"], serde_json::json!("Handle"));
+    assert_eq!(binding["resources"][0]["release"], serde_json::json!("close"));
+    assert_eq!(
+        binding["symbols"][1]["parameters"][0]["type"]["kind"],
+        serde_json::json!("output")
+    );
+    assert_eq!(
+        binding["symbols"][1]["parameters"][0]["type"]["mode"],
+        serde_json::json!("out")
+    );
+    assert_eq!(
+        binding["symbols"][1]["parameters"][1]["type"]["mode"],
+        serde_json::json!("in_out")
+    );
+    assert_eq!(
+        binding["symbols"][1]["outcomes"][0]["initializes"],
+        serde_json::json!(["output"])
+    );
+    assert_eq!(binding["enums"][0]["carrier"], serde_json::json!("c.i32"));
+
+    let raw_call = records
+        .iter()
+        .find(|record| {
+            record["record"] == serde_json::json!("c_binding_call")
+                && record["binding"] == serde_json::json!("Fixture")
+                && record["symbol"] == serde_json::json!("open")
+        })
+        .ok_or("codegraph did not emit the checked raw C call record")?;
+    assert_eq!(raw_call["binding_id"], binding["id"]);
+    assert_eq!(raw_call["unsafe_acknowledged"], serde_json::json!(true));
+    assert_eq!(raw_call["provenance"], serde_json::json!("checked"));
+    let call_id = raw_call["call_id"]
+        .as_str()
+        .ok_or("checked raw C call did not link to its generic call record")?;
+    assert!(
+        records.iter().any(|record| {
+            record["record"] == serde_json::json!("call") && record["id"] == serde_json::json!(call_id)
+        })
+    );
+
+    let raw_call_count = records
+        .iter()
+        .filter(|record| record["record"] == serde_json::json!("c_binding_call"))
+        .count();
+    assert_eq!(
+        raw_call_count, 3,
+        "only direct native calls should receive C binding call records"
     );
 
     Ok(())
@@ -5092,7 +5233,7 @@ def main() -> None:
     assert_eq!(first.stdout, second.stdout, "importer summary must be deterministic");
 
     let summary = parse_json_stdout(&first)?;
-    assert_eq!(summary["schema_version"], serde_json::json!(2));
+    assert_eq!(summary["schema_version"], serde_json::json!(3));
     assert_eq!(summary["mode"], serde_json::json!("strict"));
     assert_eq!(summary["metadata_record_count"], serde_json::json!(1));
     assert!(

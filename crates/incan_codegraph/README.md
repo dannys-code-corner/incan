@@ -13,6 +13,7 @@ The 0.5 schema is the first RFC 106 codegraph slice. It covers:
 - top-level declarations
 - imports and public exports
 - compiler-checked registry entries, including public facade projections that preserve one canonical subject identity
+- compiler-checked C binding declarations and direct C calls admitted through explicit `unsafe:` source
 - body-level reference and call syntax, with conservative checked `target_id` values when the compiler has a source declaration identity
 - containment relationships
 - stable diagnostic records in tolerant exports
@@ -25,7 +26,7 @@ This crate deliberately has no dependency on compiler internals, graph databases
 The 0.5 exporter emits Incan-language facts only:
 
 ```json
-{"record":"header","schema_version":2,"languages":["incan"]}
+{"record":"header","schema_version":3,"languages":["incan"]}
 ```
 
 Every non-header fact record carries:

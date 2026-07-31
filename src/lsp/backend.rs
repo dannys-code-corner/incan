@@ -52,6 +52,7 @@ use crate::frontend::module::{
 };
 use crate::frontend::symbols::{FunctionInfo, ResolvedType, SymbolKind as FrontendSymbolKind, TypeInfo};
 use crate::frontend::typechecker::stdlib_loader::{StdlibAstCache, StdlibFunctionLspMetadata};
+use crate::frontend::typechecker::{CAbiInteropArtifacts, CBindingType, COutputMode, CResourceAccess};
 use crate::frontend::{lexer, parser, typechecker};
 #[cfg(all(test, feature = "rust_inspect"))]
 use crate::generated_cache::resolve_generated_cargo_target_in_cache_root;
@@ -68,6 +69,7 @@ use crate::lsp::diagnostics::{compile_error_to_diagnostic_with_phase, position_t
 use crate::manifest::ProjectManifest;
 use crate::provider::{ProviderModuleResolution, ProviderPlan, ProviderProvenance};
 use incan_core::interop::{RustItemKind, RustModuleChildKind, RustTraitAssoc};
+use incan_core::lang::c_abi::scalar_type_as_str;
 use incan_core::lang::decorators;
 use incan_core::lang::keywords;
 use incan_core::lang::stdlib;
@@ -99,6 +101,8 @@ pub struct DocumentState {
     api_metadata_previews: Vec<ApiMetadataPreview>,
     /// Compiler-owned registry memberships used for hover and navigation without reinterpreting decorators.
     registry_previews: Vec<RegistryPreview>,
+    /// Checked C binding declarations and raw-call links used for hover and navigation without reading generated Rust.
+    c_binding_previews: Vec<CBindingPreview>,
     /// Imported DSL surfaces from loaded `pub::` library manifests, used for scoped symbol LSP affordances.
     library_imported_dsl_surfaces: parser::ImportedLibraryDslSurfaces,
     /// Checked package artifacts used for public-library module and member completion.
@@ -132,6 +136,14 @@ struct ApiMetadataPreview {
 struct RegistryPreview {
     registration_span: Span,
     subject_span: Span,
+    markdown: String,
+}
+
+/// One checked C declaration or source call projected into LSP affordances.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CBindingPreview {
+    span: Span,
+    declaration_span: Span,
     markdown: String,
 }
 
@@ -386,6 +398,11 @@ impl IncanLanguageServer {
         } else {
             Vec::new()
         };
+        let c_binding_previews = if check_result.is_ok() {
+            c_binding_previews(&checker.type_info().c_abi)
+        } else {
+            Vec::new()
+        };
         let rust_origin_symbols = collect_rust_origin_symbols(&checker);
 
         if let Err(errors) = check_result {
@@ -478,6 +495,7 @@ impl IncanLanguageServer {
                     rusttype_info,
                     api_metadata_previews,
                     registry_previews,
+                    c_binding_previews,
                     library_imported_dsl_surfaces: library_manifest_index.library_imported_dsl_surfaces(),
                     library_manifest_index: library_manifest_index.clone(),
                     provider_plan: document_provider_plan,
@@ -1405,6 +1423,133 @@ def normalize(value: str) -> str:
         assert!(preview.markdown.contains("Registry: `functions`"));
         assert!(preview.markdown.contains("FunctionId(\"normalize\")"));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod c_binding_lsp_tests {
+    use std::collections::HashMap;
+
+    use super::{c_binding_preview_at_offset, c_binding_previews, c_binding_type_spelling};
+    use crate::frontend::ast::Span;
+    use crate::frontend::typechecker::{
+        CAbiInteropArtifacts, CBindingDescriptor, CBindingParameter, CBindingRawCall, CBindingResource, CBindingSymbol,
+        CBindingType, COutputMode, CResourceAccess,
+    };
+    use incan_core::lang::c_abi::ScalarTypeId;
+
+    #[test]
+    fn checked_c_lsp_previews_link_raw_calls_to_the_checked_declaration() -> Result<(), String> {
+        let source = r#"
+from std.interop import c
+
+binding SQLite:
+    header "sqlite3.h"
+    link c.system_library("sqlite3")
+
+def bridge() -> int:
+    unsafe:
+        return SQLite.open()
+"#;
+        let declaration_start = source
+            .find("binding SQLite")
+            .ok_or_else(|| "expected binding declaration".to_string())?;
+        let raw_call_start = source
+            .find("SQLite.open()")
+            .ok_or_else(|| "expected raw C call".to_string())?;
+        let declaration_span = Span::new(declaration_start, raw_call_start.saturating_sub(1));
+        let raw_call_span = Span::new(raw_call_start, raw_call_start + "SQLite.open()".len());
+        let mut artifacts = CAbiInteropArtifacts {
+            bindings: HashMap::new(),
+            raw_calls: vec![CBindingRawCall {
+                span: raw_call_span,
+                binding: "SQLite".to_string(),
+                symbol: "open".to_string(),
+            }],
+            output_slots: Vec::new(),
+            enum_accesses: Vec::new(),
+            enum_values: HashMap::new(),
+        };
+        artifacts.bindings.insert(
+            "SQLite".to_string(),
+            CBindingDescriptor {
+                span: declaration_span,
+                class_name: "SQLite".to_string(),
+                header: "sqlite3.h".to_string(),
+                system_library: "sqlite3".to_string(),
+                resources: vec![CBindingResource {
+                    span: declaration_span,
+                    name: "Database".to_string(),
+                    native: "sqlite3".to_string(),
+                    release: "close".to_string(),
+                }],
+                symbols: vec![
+                    CBindingSymbol {
+                        name: "open".to_string(),
+                        native: "sqlite3_open".to_string(),
+                        parameters: vec![CBindingParameter {
+                            name: "path".to_string(),
+                            ty: CBindingType::Pointer {
+                                mutable: false,
+                                pointee: Box::new(CBindingType::Scalar(ScalarTypeId::CChar)),
+                            },
+                        }],
+                        return_type: CBindingType::Nullable(Box::new(CBindingType::Resource {
+                            access: CResourceAccess::Owned,
+                            resource: "Database".to_string(),
+                        })),
+                        outcomes: Vec::new(),
+                    },
+                    CBindingSymbol {
+                        name: "close".to_string(),
+                        native: "sqlite3_close".to_string(),
+                        parameters: vec![CBindingParameter {
+                            name: "database".to_string(),
+                            ty: CBindingType::Resource {
+                                access: CResourceAccess::Owned,
+                                resource: "Database".to_string(),
+                            },
+                        }],
+                        return_type: CBindingType::Scalar(ScalarTypeId::I32),
+                        outcomes: Vec::new(),
+                    },
+                ],
+                enums: Vec::new(),
+                structs: Vec::new(),
+            },
+        );
+
+        let previews = c_binding_previews(&artifacts);
+        let declaration_preview = c_binding_preview_at_offset(&previews, declaration_start)
+            .ok_or_else(|| "expected checked binding declaration preview".to_string())?;
+        assert!(declaration_preview.markdown.contains("*checked C binding*"));
+        assert!(declaration_preview.markdown.contains("Header: `sqlite3.h`"));
+        assert!(declaration_preview.markdown.contains("Database → close"));
+        assert!(
+            declaration_preview
+                .markdown
+                .contains("open(path: c.ConstPtr[c.c_char])")
+        );
+
+        let raw_call_preview = c_binding_preview_at_offset(&previews, raw_call_start)
+            .ok_or_else(|| "expected checked raw-call preview".to_string())?;
+        assert!(raw_call_preview.markdown.contains("*checked raw C call*"));
+        assert!(raw_call_preview.markdown.contains("Declaration: `SQLite.open`"));
+        assert_eq!(raw_call_preview.declaration_span, declaration_span);
+        Ok(())
+    }
+
+    #[test]
+    fn checked_c_lsp_type_spelling_preserves_output_and_borrowing_contracts() {
+        let output = CBindingType::Output {
+            mode: COutputMode::InOut,
+            value: Box::new(CBindingType::Resource {
+                access: CResourceAccess::BorrowedMut,
+                resource: "Buffer".to_string(),
+            }),
+        };
+
+        assert_eq!(c_binding_type_spelling(&output), "c.InOut[c.BorrowedMut[Buffer]]");
     }
 }
 
@@ -2727,6 +2872,162 @@ fn registry_preview_at_offset(previews: &[RegistryPreview], offset: usize) -> Op
                 .end
                 .saturating_sub(preview.registration_span.start)
         })
+}
+
+/// Build editor previews from the checked C descriptor and direct-call artifacts produced by the typechecker.
+///
+/// This keeps the editor on the declaration-level contract: it does not inspect generated Rust, linker commands, or
+/// a future Oven receipt. A raw-call preview points back to its exact checked declaration so navigation does not have
+/// to infer the binding from source spelling.
+fn c_binding_previews(artifacts: &CAbiInteropArtifacts) -> Vec<CBindingPreview> {
+    let mut descriptors = artifacts.bindings.values().collect::<Vec<_>>();
+    descriptors.sort_by(|left, right| {
+        left.span
+            .start
+            .cmp(&right.span.start)
+            .then_with(|| left.class_name.cmp(&right.class_name))
+    });
+
+    let declaration_spans = descriptors
+        .iter()
+        .map(|descriptor| (descriptor.class_name.as_str(), descriptor.span))
+        .collect::<HashMap<_, _>>();
+    let mut previews = descriptors
+        .into_iter()
+        .map(|descriptor| CBindingPreview {
+            span: descriptor.span,
+            declaration_span: descriptor.span,
+            markdown: c_binding_declaration_markdown(descriptor),
+        })
+        .collect::<Vec<_>>();
+
+    let mut raw_calls = artifacts.raw_calls.iter().collect::<Vec<_>>();
+    raw_calls.sort_by(|left, right| {
+        left.span
+            .start
+            .cmp(&right.span.start)
+            .then_with(|| left.span.end.cmp(&right.span.end))
+            .then_with(|| left.binding.cmp(&right.binding))
+            .then_with(|| left.symbol.cmp(&right.symbol))
+    });
+    for raw_call in raw_calls {
+        let Some(declaration_span) = declaration_spans.get(raw_call.binding.as_str()) else {
+            continue;
+        };
+        previews.push(CBindingPreview {
+            span: raw_call.span,
+            declaration_span: *declaration_span,
+            markdown: format!(
+                "```incan\n{}.{}(...)\n```\n\n*checked raw C call*\n\n- Declaration: `{}.{}`\n- Safety: acknowledged by the enclosing `unsafe:` block\n- Navigation: go to definition opens the checked binding declaration",
+                raw_call.binding, raw_call.symbol, raw_call.binding, raw_call.symbol,
+            ),
+        });
+    }
+
+    previews
+}
+
+/// Render one checked C declaration as source-level contract facts suitable for hover.
+fn c_binding_declaration_markdown(descriptor: &crate::frontend::typechecker::CBindingDescriptor) -> String {
+    let resources = if descriptor.resources.is_empty() {
+        "none".to_string()
+    } else {
+        descriptor
+            .resources
+            .iter()
+            .map(|resource| format!("{} → {}", resource.name, resource.release))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let symbols = if descriptor.symbols.is_empty() {
+        "none".to_string()
+    } else {
+        descriptor
+            .symbols
+            .iter()
+            .map(c_binding_symbol_signature)
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let enums = if descriptor.enums.is_empty() {
+        "none".to_string()
+    } else {
+        descriptor
+            .enums
+            .iter()
+            .map(|enumeration| format!("{}: {}", enumeration.name, scalar_type_as_str(enumeration.carrier)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let structures = if descriptor.structs.is_empty() {
+        "none".to_string()
+    } else {
+        descriptor
+            .structs
+            .iter()
+            .map(|structure| structure.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    format!(
+        "```incan\nbinding {}:\n```\n\n*checked C binding*\n\n- Header: `{}`\n- System library: `{}`\n- Resources: {}\n- Symbols: {}\n- Enums: {}\n- Structures: {}\n\nThis is the compiler-checked declaration contract. Its direct calls require `unsafe:`; an ordinary Incan façade should own public domain behavior.",
+        descriptor.class_name, descriptor.header, descriptor.system_library, resources, symbols, enums, structures,
+    )
+}
+
+/// Render one checked symbol signature without exposing generated-Rust carrier types.
+fn c_binding_symbol_signature(symbol: &crate::frontend::typechecker::CBindingSymbol) -> String {
+    let parameters = symbol
+        .parameters
+        .iter()
+        .map(|parameter| format!("{}: {}", parameter.name, c_binding_type_spelling(&parameter.ty)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{}({parameters}) -> {}",
+        symbol.name,
+        c_binding_type_spelling(&symbol.return_type)
+    )
+}
+
+/// Render the checked source vocabulary for a structural C type.
+fn c_binding_type_spelling(ty: &CBindingType) -> String {
+    match ty {
+        CBindingType::Scalar(scalar) => scalar_type_as_str(*scalar).to_string(),
+        CBindingType::Pointer { mutable, pointee } => format!(
+            "{}[{}]",
+            if *mutable { "c.MutPtr" } else { "c.ConstPtr" },
+            c_binding_type_spelling(pointee)
+        ),
+        CBindingType::Struct(name) => name.clone(),
+        CBindingType::Resource { access, resource } => format!(
+            "{}[{resource}]",
+            match access {
+                CResourceAccess::Owned => "c.Owned",
+                CResourceAccess::Borrowed => "c.Borrowed",
+                CResourceAccess::BorrowedMut => "c.BorrowedMut",
+            }
+        ),
+        CBindingType::Output { mode, value } => format!(
+            "{}[{}]",
+            match mode {
+                COutputMode::Out => "c.Out",
+                COutputMode::InOut => "c.InOut",
+            },
+            c_binding_type_spelling(value)
+        ),
+        CBindingType::Nullable(value) => format!("Option[{}]", c_binding_type_spelling(value)),
+        CBindingType::Void => constructors::as_str(constructors::ConstructorId::None).to_string(),
+    }
+}
+
+/// Return the most precise checked C preview containing an editor offset.
+fn c_binding_preview_at_offset(previews: &[CBindingPreview], offset: usize) -> Option<&CBindingPreview> {
+    previews
+        .iter()
+        .filter(|preview| preview.span.start <= offset && offset < preview.span.end)
+        .min_by_key(|preview| preview.span.end.saturating_sub(preview.span.start))
 }
 
 /// Convert a metadata anchor to an LSP preview entry.
@@ -5920,6 +6221,16 @@ impl LanguageServer for IncanLanguageServer {
                 }));
             }
 
+            if let Some(preview) = c_binding_preview_at_offset(&doc.c_binding_previews, offset) {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: preview.markdown.clone(),
+                    }),
+                    range: Some(span_to_range(&doc.source, preview.span.start, preview.span.end)),
+                }));
+            }
+
             // Decorator hover: show decorator name + description from registry
             if let Some((id, resolved)) = find_decorator_at_position(ast, offset, &aliases) {
                 let info = decorators::info_for(id);
@@ -6222,6 +6533,18 @@ impl LanguageServer for IncanLanguageServer {
             return Ok(Some(GotoDefinitionResponse::Scalar(Location {
                 uri: uri.clone(),
                 range: span_to_range(&doc.source, preview.subject_span.start, preview.subject_span.end),
+            })));
+        }
+        if let Some(preview) = c_binding_preview_at_offset(&doc.c_binding_previews, offset)
+            && preview.span != preview.declaration_span
+        {
+            return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                uri: uri.clone(),
+                range: span_to_range(
+                    &doc.source,
+                    preview.declaration_span.start,
+                    preview.declaration_span.end,
+                ),
             })));
         }
         if let Some(path) = find_stdlib_import_path(ast, offset)

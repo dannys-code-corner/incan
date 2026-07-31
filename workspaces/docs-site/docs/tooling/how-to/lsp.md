@@ -98,6 +98,8 @@ When the file type-checks successfully, hover also previews checked public API m
 
 If the file has parse or type errors, diagnostics remain the source of truth and the LSP falls back to syntax-oriented hover details. The current LSP does not expose a workspace command for fetching the full checked API metadata JSON package from the editor; use `incan tools metadata api` for that.
 
+When a checked C binding type-checks successfully, hovering its declaration shows the header, logical system-library capability, resources and their release operations, symbols with their checked C signatures, enum carriers, and plain structures. Hovering a direct raw C call identifies its checked declaration and its `unsafe:` acknowledgement. This is a source-level compiler projection, not generated-Rust, linker, or machine-local toolchain information.
+
 ### Contract model emit command
 
 Editor integrations can call `workspace/executeCommand` command `incan.metadata.model.emit` to emit a contract-backed model from the same checked metadata used by the CLI:
@@ -125,6 +127,7 @@ The command accepts a source URI inside a project, a project path, a bundle JSON
 Works for:
 
 - `@describe` decorators: navigate to the described function or concrete method after a successful typecheck.
+- Checked raw C calls: navigate to the checked binding declaration that owns the selected symbol after a successful typecheck.
 - Functions
 - Models
 - Classes

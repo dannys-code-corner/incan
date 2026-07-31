@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current codegraph JSONL schema version.
-pub const CODEGRAPH_SCHEMA_VERSION: u32 = 2;
+pub const CODEGRAPH_SCHEMA_VERSION: u32 = 3;
 
 /// Package identity attached to a codegraph export when an `incan.toml` manifest is available.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -563,6 +563,204 @@ pub struct CodegraphRegistryRecord {
     pub degraded: bool,
 }
 
+/// Compiler-checked C binding declaration.
+///
+/// A binding record projects the source-level ABI contract admitted by the same typechecking pass as the surrounding
+/// codegraph. It is not an artifact-resolution receipt, a generated Rust ABI, or evidence that a runtime library has
+/// been loaded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingRecord {
+    /// Stable id unique within the export.
+    pub id: String,
+    /// Source language for this graph fact.
+    pub language: CodegraphLanguage,
+    /// Module that owns the binding declaration.
+    pub module_id: String,
+    /// Ordinary class declaration record for this binding.
+    pub declaration_id: String,
+    /// Binding class name visible to Incan source.
+    pub name: String,
+    /// Header spelling declared by the binding.
+    pub header: String,
+    /// Logical system-library capability selected by the binding.
+    pub system_library: String,
+    /// Opaque resource declarations and their release associations.
+    pub resources: Vec<CodegraphCBindingResource>,
+    /// Raw native symbol contracts in declaration order.
+    pub symbols: Vec<CodegraphCBindingSymbol>,
+    /// C enum carrier and constant contracts in declaration order.
+    pub enums: Vec<CodegraphCBindingEnum>,
+    /// Plain C structure contracts in declaration order.
+    pub structs: Vec<CodegraphCBindingStruct>,
+    /// Source span for the binding declaration.
+    pub span: CodegraphSourceSpan,
+    /// Fact provenance.
+    pub provenance: CodegraphProvenance,
+    /// Binding records are emitted only for successful checked modules.
+    pub degraded: bool,
+}
+
+/// One nominal opaque resource in a checked C binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingResource {
+    /// Binding-local resource name.
+    pub name: String,
+    /// Native opaque C type spelling.
+    pub native: String,
+    /// Binding-local symbol that releases one owned resource.
+    pub release: String,
+}
+
+/// One raw native symbol in a checked C binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingSymbol {
+    /// Binding-local source name.
+    pub name: String,
+    /// Native linker symbol spelling.
+    pub native: String,
+    /// Parameter contracts in source order.
+    pub parameters: Vec<CodegraphCBindingParameter>,
+    /// Return contract.
+    pub return_type: CodegraphCBindingType,
+    /// Output-slot state transitions declared for selected results.
+    pub outcomes: Vec<CodegraphCBindingOutcome>,
+}
+
+/// One named raw C parameter contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingParameter {
+    /// Parameter name.
+    pub name: String,
+    /// Checked C type contract.
+    #[serde(rename = "type")]
+    pub ty: CodegraphCBindingType,
+}
+
+/// One outcome that changes compiler-managed output-slot state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingOutcome {
+    /// Binding-local enum and variant spelling.
+    pub result: String,
+    /// `c.Out[...]` parameters made readable on this outcome.
+    pub initializes: Vec<String>,
+    /// `c.InOut[...]` parameters updated on this outcome.
+    pub updates: Vec<String>,
+    /// `c.InOut[...]` parameters invalidated on this outcome.
+    pub invalidates: Vec<String>,
+}
+
+/// A structural C type from the checked binding vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CodegraphCBindingType {
+    /// Fixed-width or target-sized C scalar spelling.
+    Scalar {
+        /// Canonical Incan C vocabulary spelling such as `c.i32`.
+        spelling: String,
+    },
+    /// C pointer contract.
+    Pointer {
+        /// Whether the pointee is mutable through the pointer.
+        mutable: bool,
+        /// Nested pointee contract.
+        pointee: Box<CodegraphCBindingType>,
+    },
+    /// Plain by-value C structure named by a binding member.
+    Struct {
+        /// Binding-local structure name.
+        name: String,
+    },
+    /// Nominal opaque resource passed with an ownership contract.
+    Resource {
+        /// `owned`, `borrowed`, or `borrowed_mut`.
+        access: String,
+        /// Binding-local resource declaration name.
+        resource: String,
+    },
+    /// Compiler-managed C output storage.
+    Output {
+        /// `out` or `in_out`.
+        mode: String,
+        /// Native value contract stored in this output position.
+        value: Box<CodegraphCBindingType>,
+    },
+    /// Nullable owned-resource result.
+    Nullable {
+        /// Nested resource contract.
+        value: Box<CodegraphCBindingType>,
+    },
+    /// C `void` result.
+    Void,
+}
+
+/// One target-verified C enum declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingEnum {
+    /// Binding-local enum name.
+    pub name: String,
+    /// Checked scalar carrier spelling.
+    pub carrier: String,
+    /// Native constant contracts in declaration order.
+    pub variants: Vec<CodegraphCBindingEnumVariant>,
+}
+
+/// One target-verified native enum constant spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingEnumVariant {
+    /// Binding-local variant name.
+    pub name: String,
+    /// Native constant spelling.
+    pub native: String,
+}
+
+/// One checked plain C structure declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingStruct {
+    /// Binding-local structure name.
+    pub name: String,
+    /// Native C tag or typedef spelling.
+    pub native: String,
+    /// Fields in declared layout order.
+    pub fields: Vec<CodegraphCBindingStructField>,
+}
+
+/// One checked plain C structure field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingStructField {
+    /// Source and native field name.
+    pub name: String,
+    /// Checked C type contract.
+    #[serde(rename = "type")]
+    pub ty: CodegraphCBindingType,
+}
+
+/// One direct raw C call admitted by an explicit `unsafe:` acknowledgement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingCallRecord {
+    /// Stable id unique within the export.
+    pub id: String,
+    /// Source language for this graph fact.
+    pub language: CodegraphLanguage,
+    /// Module that owns the call.
+    pub module_id: String,
+    /// Generic source-level `call` record for this expression, when the export contains it.
+    pub call_id: Option<String>,
+    /// Checked binding declaration selected by the call.
+    pub binding_id: String,
+    /// Binding class name visible to Incan source.
+    pub binding: String,
+    /// Binding-local native symbol name.
+    pub symbol: String,
+    /// Raw calls are admitted only through an explicit `unsafe:` acknowledgement.
+    pub unsafe_acknowledged: bool,
+    /// Source span for the full call expression.
+    pub span: CodegraphSourceSpan,
+    /// Fact provenance.
+    pub provenance: CodegraphProvenance,
+    /// Raw-call records are emitted only for successful checked modules.
+    pub degraded: bool,
+}
+
 /// One public facade path attached to a source-owned checked registry fact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodegraphRegistryReexportProjection {
@@ -598,6 +796,10 @@ pub enum CodegraphRecord {
     Diagnostic(CodegraphDiagnosticRecord),
     /// Compiler-checked typed registry entry.
     Registry(CodegraphRegistryRecord),
+    /// Compiler-checked C binding declaration.
+    CBinding(CodegraphCBindingRecord),
+    /// Direct C binding call admitted by explicit `unsafe:` source.
+    CBindingCall(CodegraphCBindingCallRecord),
 }
 
 /// Serialize records as newline-delimited JSON, preserving caller-provided deterministic ordering.
