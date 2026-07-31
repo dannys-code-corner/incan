@@ -4985,6 +4985,8 @@
       
         
       
+        
+      
     
     
       
@@ -5175,6 +5177,27 @@
   
   <span class="md-ellipsis">
     SDK components and package features
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tooling/reference/interop_deployment_plans/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Oven interop deployment plans
   </span>
   
 
@@ -6753,7 +6776,7 @@
 <h2 id="tooling">Tooling<a class="headerlink" href="#tooling" title="Permanent link">&para;</a></h2>
 <ul>
 <li>
-<p><strong>Interop (experimental)</strong>: <code>from std.interop import c</code> activates import-scoped <code>binding</code> declarations for checked C scalar functions, opaque resources, and scalar or owned-resource output positions. The compiler verifies explicit signatures, enum carriers, and listed plain layouts with Clang before generated Rust emits a private C ABI bridge. A declared <code>c.Owned[T]</code> resource has one native release operation and a last-resort release guard; <code>c.Borrowed[T]</code> and <code>c.BorrowedMut[T]</code> are inferred from the checked parameter contract; <code>c.Out[T]</code> and <code>c.InOut[T]</code> use compiler-managed slots and outcome-guarded reads. Direct calls remain inside explicit <code>unsafe:</code> blocks, and scalar conversions are range-checked. A package can separately declare target-specific headers, static or bundled artifacts, system capabilities, C/C++ shim sources, and compatible toolchain or SDK requirements under <code>[oven.interop]</code> in <code>incan.toml</code>; <code>incan lock</code> records the normalized requirements and content-derived identities of package-owned files without claiming that Oven has resolved a concrete local toolchain. C strings, spans, scoped views, Oven artifact resolution, shim compilation, and mobile packaging remain separate RFC 116 work (#940, #941, #942).</p>
+<p><strong>Interop (experimental)</strong>: <code>from std.interop import c</code> activates import-scoped <code>binding</code> declarations for checked C scalar functions, opaque resources, and scalar or owned-resource output positions. The compiler verifies explicit signatures, enum carriers, and listed plain layouts with Clang before generated Rust emits a private C ABI bridge. A declared <code>c.Owned[T]</code> resource has one native release operation and a last-resort release guard; <code>c.Borrowed[T]</code> and <code>c.BorrowedMut[T]</code> are inferred from the checked parameter contract; <code>c.Out[T]</code> and <code>c.InOut[T]</code> use compiler-managed slots and outcome-guarded reads. Direct calls remain inside explicit <code>unsafe:</code> blocks, and scalar conversions are range-checked. A package can separately declare target-specific headers, static or bundled artifacts, system capabilities, C/C++ shim sources, compatible toolchain or SDK requirements, and Android/iOS platform constraints under <code>[oven.interop]</code> in <code>incan.toml</code>; <code>incan lock</code> records the normalized requirements and content-derived identities of package-owned files without claiming that Oven has resolved a concrete local toolchain. <code>incan check --interop-target &lt;triple&gt;</code> verifies the same source declaration against one declared mobile ABI profile, including its API or deployment version and preprocessor definitions. <code>incan inspect interop-plan --target &lt;triple&gt;</code> emits the locked requirement projection that a later Gradle or Xcode adapter can consume without duplicating target, artifact, shim, or placement facts. C strings, spans, scoped views, Oven artifact resolution, shim compilation, cross-target generated-Rust builds, toolchain attestation, and mobile packaging remain separate RFC 116 work (#940, #941, #942, #944).</p>
 </li>
 <li>
 <p><strong>Interop tooling (experimental)</strong>: <code>incan inspect bindings</code> provides deterministic human and JSON views of the compiler-checked C declaration descriptors, including source anchors, symbols, exact C types, enum constants, and plain structures. It runs the ordinary host-target C probe but intentionally reports declaration facts rather than a reusable verifier receipt; native artifact resolution, shim baking, bridge/façade classification, and editor support remain separate work (#943).</p>

@@ -4992,6 +4992,8 @@
       
         
       
+        
+      
     
     
       
@@ -5206,6 +5208,15 @@
   <a href="#incan-inspect-features" class="md-nav__link">
     <span class="md-ellipsis">
       incan inspect features
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#incan-inspect-interop-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      incan inspect interop-plan
     </span>
   </a>
   
@@ -5516,6 +5527,27 @@
   
   <span class="md-ellipsis">
     SDK components and package features
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../interop_deployment_plans/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Oven interop deployment plans
   </span>
   
 
@@ -7065,6 +7097,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#incan-inspect-interop-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      incan inspect interop-plan
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#incan-inspect-bindings" class="md-nav__link">
     <span class="md-ellipsis">
       incan inspect bindings
@@ -7281,7 +7322,7 @@
 <li><code>tools</code> - Inspect local toolchain, editor integration state, and checked metadata</li>
 </ul>
 <h2 id="semantic-inspection-surfaces">Semantic inspection surfaces<a class="headerlink" href="#semantic-inspection-surfaces" title="Permanent link">&para;</a></h2>
-<p>Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use <code>incan check --format json</code> for the stable diagnostic plane, <code>incan build --report json</code> for successful build and artifact metadata, <code>incan inspect rust --format json</code> for current generated Rust output, <code>incan inspect codegraph --format jsonl</code> for source-structure graph facts, <code>incan inspect providers --format json</code> for SDK component and provider participation, <code>incan inspect features --format json</code> for the additive package-feature graph, and <code>incan inspect bindings --format json</code> for checked C declaration facts.</p>
+<p>Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use <code>incan check --format json</code> for the stable diagnostic plane, <code>incan build --report json</code> for successful build and artifact metadata, <code>incan inspect rust --format json</code> for current generated Rust output, <code>incan inspect codegraph --format jsonl</code> for source-structure graph facts, <code>incan inspect providers --format json</code> for SDK component and provider participation, <code>incan inspect features --format json</code> for the additive package-feature graph, <code>incan inspect bindings --format json</code> for checked C declaration facts, and <code>incan inspect interop-plan --format json</code> for one locked Oven interop platform handoff.</p>
 <p>These commands are intentionally not a single full semantic database. They are stable public surfaces that tools can join without scraping terminal prose, generated Rust, or source text independently. When a fact appears in more than one surface, consumers should prefer compiler-owned identity fields, source paths, schema versions, and explicit degraded-state or diagnostic records over human output.</p>
 <h2 id="global-options">Global options<a class="headerlink" href="#global-options" title="Permanent link">&para;</a></h2>
 <ul>
@@ -7328,6 +7369,7 @@ incan<span class="w"> </span>--emit-rust<span class="w"> </span>path/to/file.inc
 <li><code>--format text|json</code>: Output human diagnostics or a stable machine-readable JSON report (default: <code>text</code>).</li>
 <li><code>--features</code>, <code>--no-default-features</code>, <code>--all-features</code>: Select the root package-feature projection.</li>
 <li><code>--sdk-profile &lt;PROFILE&gt;</code>: Select a non-persistent SDK profile for this check.</li>
+<li><code>--interop-target &lt;TRIPLE&gt;</code>: Verify checked C declarations against one exact target declared by <code>[oven.interop]</code>. This does not cross-compile generated Rust or package an application.</li>
 <li><code>--workspace</code>: Check every selected workspace member.</li>
 <li><code>--member &lt;NAME_OR_PATH&gt;</code>: Check one or more selected workspace members.</li>
 </ul>
@@ -7335,6 +7377,7 @@ incan<span class="w"> </span>--emit-rust<span class="w"> </span>path/to/file.inc
 <p>Examples:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>check<span class="w"> </span>src/main.incn
 incan<span class="w"> </span>check<span class="w"> </span>src/main.incn<span class="w"> </span>--format<span class="w"> </span>json
+incan<span class="w"> </span>check<span class="w"> </span>--interop-target<span class="w"> </span>aarch64-linux-android<span class="w"> </span>src/main.incn
 incan<span class="w"> </span>--check<span class="w"> </span>src/main.incn<span class="w"> </span>--format<span class="w"> </span>json
 incan<span class="w"> </span>check<span class="w"> </span>--workspace<span class="w"> </span>--format<span class="w"> </span>json
 </code></pre></div>
@@ -7496,6 +7539,17 @@ incan<span class="w"> </span>inspect<span class="w"> </span>providers<span class
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>features
 incan<span class="w"> </span>inspect<span class="w"> </span>features<span class="w"> </span>.<span class="w"> </span>--format<span class="w"> </span>json
 incan<span class="w"> </span>inspect<span class="w"> </span>features<span class="w"> </span>.<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>--no-default-features<span class="w"> </span>--features<span class="w"> </span>json
+</code></pre></div>
+<h3 id="incan-inspect-interop-plan"><code>incan inspect interop-plan</code><a class="headerlink" href="#incan-inspect-interop-plan" title="Permanent link">&para;</a></h3>
+<p>Usage:</p>
+<div class="language-text highlight"><pre><span></span><code>incan inspect interop-plan [PATH] --target &lt;TRIPLE&gt; [--format text|json]
+</code></pre></div>
+<p>Projects a standalone package or selected workspace member's exact locked Oven interop target into a deterministic, versioned deployment handoff. The command requires the selected target in <code>[[oven.interop.targets]]</code> and a current canonical <code>incan.lock</code>; workspace members use the single workspace-root lock. It refuses to emit a plan after a declared interop file or deployment fact changes.</p>
+<p>The JSON report contains package-relative input receipts, target/toolchain/SDK/platform requirements, include roots, definitions, dependency-ordered static, bundled, and system actions, runtime names, placements, minimum platform constraints, and governed shim inputs and logical outputs. It does not build, stage, link, sign, publish, or invoke Gradle or Xcode.</p>
+<p>Examples:</p>
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>interop-plan<span class="w"> </span>--target<span class="w"> </span>aarch64-linux-android
+incan<span class="w"> </span>inspect<span class="w"> </span>interop-plan<span class="w"> </span>.<span class="w"> </span>--target<span class="w"> </span>aarch64-apple-ios<span class="w"> </span>--format<span class="w"> </span>json
+incan<span class="w"> </span>inspect<span class="w"> </span>interop-plan<span class="w"> </span>packages/mobile<span class="w"> </span>--target<span class="w"> </span>aarch64-apple-ios<span class="w"> </span>--format<span class="w"> </span>json
 </code></pre></div>
 <p>See <a href="../sdk_components_and_package_features/">SDK components and package features</a> for the state and resolution model.</p>
 <h3 id="incan-inspect-bindings"><code>incan inspect bindings</code><a class="headerlink" href="#incan-inspect-bindings" title="Permanent link">&para;</a></h3>
