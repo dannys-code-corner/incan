@@ -3018,7 +3018,7 @@ fn c_binding_type_spelling(ty: &CBindingType) -> String {
             c_binding_type_spelling(value)
         ),
         CBindingType::Nullable(value) => format!("Option[{}]", c_binding_type_spelling(value)),
-        CBindingType::Void => "None".to_string(),
+        CBindingType::Void => constructors::as_str(constructors::ConstructorId::None).to_string(),
     }
 }
 
