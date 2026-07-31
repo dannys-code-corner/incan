@@ -25,6 +25,7 @@ pub mod debug;
 pub mod diagnostics;
 pub mod format;
 pub mod init;
+pub mod interop_plan;
 pub mod lifecycle;
 pub mod lock;
 pub mod provider_inspect;
@@ -45,6 +46,7 @@ pub use diagnostics::{
 };
 pub use format::format_files;
 pub use init::init_project;
+pub use interop_plan::{InteropPlanInspectionFormat, inspect_interop_plan};
 pub use lifecycle::{env_list, env_run, env_show, version_project};
 pub use lock::lock_project;
 pub use provider_inspect::{ProviderInspectionFormat, inspect_features, inspect_providers};

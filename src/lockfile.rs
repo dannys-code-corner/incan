@@ -2015,7 +2015,7 @@ mod tests {
             "int bridge(void) { return 7; }\n",
         )?;
         fs::write(project.path().join("interop/lib/libfixture.a"), b"fixture archive")?;
-        let interop = OvenInteropSection {
+        let mut interop = OvenInteropSection {
             schema: crate::oven_interop::OVEN_INTEROP_SCHEMA_VERSION,
             targets: vec![crate::oven_interop::OvenInteropTarget {
                 target: "aarch64-apple-ios".to_string(),
@@ -2026,6 +2026,9 @@ mod tests {
                 sdk: Some(crate::oven_interop::CapabilityRequirement {
                     capability: "iphoneos".to_string(),
                     version: Some(">=18, <19".to_string()),
+                }),
+                platform: Some(crate::oven_interop::InteropTargetPlatform::Ios {
+                    deployment_target: "13.0".to_string(),
                 }),
                 headers: vec!["interop/include/bridge.h".to_string()],
                 definitions: vec!["FIXTURE=1".to_string()],
@@ -2060,8 +2063,35 @@ mod tests {
         )?;
         let first_interop = first.oven.as_ref().ok_or("lock state omitted Oven requirements")?;
         assert_eq!(first_interop.interop.len(), 1);
+        assert_eq!(
+            first_interop.interop[0].platform,
+            Some(crate::oven_interop::InteropTargetPlatform::Ios {
+                deployment_target: "13.0".to_string(),
+            })
+        );
         assert_eq!(first_interop.interop[0].headers[0].path, "interop/include/bridge.h");
         let first_fingerprint = compute_resolved_fingerprint(&[], &[], &cargo_features, Some(project.path()), &first);
+
+        interop.targets[0].platform = Some(crate::oven_interop::InteropTargetPlatform::Ios {
+            deployment_target: "14.0".to_string(),
+        });
+        let changed_platform = semantic_lock_state(
+            project.path(),
+            Some(&interop),
+            None,
+            None,
+            None,
+            &ProviderPlan::default(),
+            &[],
+        )?;
+        assert_ne!(first.oven, changed_platform.oven);
+        assert_ne!(
+            first_fingerprint,
+            compute_resolved_fingerprint(&[], &[], &cargo_features, Some(project.path()), &changed_platform)
+        );
+        interop.targets[0].platform = Some(crate::oven_interop::InteropTargetPlatform::Ios {
+            deployment_target: "13.0".to_string(),
+        });
 
         fs::write(
             project.path().join("interop/src/bridge.c"),

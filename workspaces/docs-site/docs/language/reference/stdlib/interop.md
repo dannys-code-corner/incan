@@ -76,11 +76,11 @@ For the executable subset, Incan carries scalar values as `int`, releases owned 
 
 ## Verification and diagnostics
 
-Before code generation, the compiler renders a non-executable C probe from the binding descriptor and invokes a Clang-compatible toolchain for the selected host ABI. The probe checks the exact free-function signature, every enum constant's declared carrier, and the size, alignment, and field offsets of every listed plain structure. A mismatch is reported at the binding declaration before native execution.
+Before code generation, the compiler renders a non-executable C probe from the binding descriptor and invokes a Clang-compatible toolchain for the selected ABI. A normal invocation selects the host ABI; `incan check --interop-target <triple>` instead requires and selects the matching `[[oven.interop.targets]]` declaration. The probe checks the exact free-function signature, every enum constant's declared carrier, and the size, alignment, and field offsets of every listed plain structure. A mismatch is reported at the binding declaration before native execution.
 
 Headers and native names are explicit in source. The verifier neither scans arbitrary headers to infer an API nor searches for a library that happens to provide a symbol. The logical library name records the link capability. A package may separately declare package-relative interop inputs and compatibility requirements under `[oven.interop]` in `incan.toml`; `incan lock` records those requirements and the content-derived identities of package-owned files, but this experimental slice still does not resolve toolchains, download artifacts, or compile shims. See the [checked C binding how-to](../../how-to/checked_c_bindings.md#freeze-oven-interop-requirements-for-a-target) for the current schema and its limits.
 
-The repository verifies the pure checked-ABI fixture in Linux x86-64 and macOS arm64 Clang target modes. A normal project invocation checks its host target; cross-target toolchain provisioning and deployable target plans are not yet part of this slice.
+The repository verifies the pure checked-ABI fixture in Linux x86-64 and macOS arm64 Clang target modes. Declared Android arm64 verification uses `aarch64-linux-android<api-level>` and the selected target's definitions; until Oven manages the toolchain, `INCAN_C_ABI_CLANG` must point at the corresponding NDK Clang executable. Declared iOS arm64 verification uses `arm64-apple-ios<deployment-target>` with Xcode's iPhoneOS SDK sysroot. `incan inspect interop-plan --target <triple>` separately projects the current lock into a deterministic, schema-versioned adapter input. It retains package-relative inputs, dependency-ordered deployment classes, runtime and placement facts, shim inputs, and platform constraints, but it does not cross-compile generated Rust, link or stage artifacts, attest compatible requirements against a concrete local installation, or produce a deployable application.
 
 ## Not included yet
 
@@ -88,8 +88,8 @@ Do not use this surface for:
 
 - C strings, spans, caller-owned buffers, scoped foreign views, pointer arithmetic, casts, dereferences, or dynamic symbol lookup;
 - callbacks, variadics, unions, and bitfields;
-- native artifact downloads, vendored libraries, C/C++ shim compilation, `incan.pub` publication policy, or final packaging handoff;
-- Android, Xcode, Gradle, or signing handoff artifacts.
+- interop artifact downloads, vendored libraries, C/C++ shim compilation, `incan.pub` publication policy, or final application assembly;
+- cross-target toolchain provisioning, generated-Rust cross-compilation, artifact staging, Gradle/Xcode command execution, or signing.
 
 Those boundaries will build on the checked descriptor rather than adding a second source of ABI truth.
 
