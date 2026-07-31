@@ -7129,6 +7129,7 @@ hint:<span class="w"> </span>Wrap<span class="w"> </span>the<span class="w"> </s
 </code></pre></div>
 <p>When the file type-checks successfully, hover also previews checked public API metadata for public declarations, public partial callable presets, fields on public models/classes, checked public methods, and public enum variants. These previews use the same checked metadata extractor as <code>incan tools metadata api</code>, so they can include raw docstrings, checked signatures, partial target/preset provenance, field visibility and aliases/descriptions, enum backing values, derives, trait adoption, and safe const values. Private model and class fields are labeled private in their field preview without becoming accessible outside the declaring type. Hovering a canonical or supported-alias <code>@describe</code> decorator additionally shows its checked registry membership: registry, key, descriptor, and described subject. For value enums, enum and variant hover details show the backing type and variant raw value where available.</p>
 <p>If the file has parse or type errors, diagnostics remain the source of truth and the LSP falls back to syntax-oriented hover details. The current LSP does not expose a workspace command for fetching the full checked API metadata JSON package from the editor; use <code>incan tools metadata api</code> for that.</p>
+<p>When a checked C binding type-checks successfully, hovering its declaration shows the header, logical system-library capability, resources and their release operations, symbols with their checked C signatures, enum carriers, and plain structures. Hovering a direct raw C call identifies its checked declaration and its <code>unsafe:</code> acknowledgement. This is a source-level compiler projection, not generated-Rust, linker, or machine-local toolchain information.</p>
 <h3 id="contract-model-emit-command">Contract model emit command<a class="headerlink" href="#contract-model-emit-command" title="Permanent link">&para;</a></h3>
 <p>Editor integrations can call <code>workspace/executeCommand</code> command <code>incan.metadata.model.emit</code> to emit a contract-backed model from the same checked metadata used by the CLI:</p>
 <div class="language-json highlight"><pre><span></span><code><span class="p">{</span>
@@ -7151,6 +7152,7 @@ hint:<span class="w"> </span>Wrap<span class="w"> </span>the<span class="w"> </s
 <p>Works for:</p>
 <ul>
 <li><code>@describe</code> decorators: navigate to the described function or concrete method after a successful typecheck.</li>
+<li>Checked raw C calls: navigate to the checked binding declaration that owns the selected symbol after a successful typecheck.</li>
 <li>Functions</li>
 <li>Models</li>
 <li>Classes</li>
