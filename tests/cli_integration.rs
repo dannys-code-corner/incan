@@ -24,6 +24,34 @@ fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::e
     run_incan_with_env(current_dir, args, &[])
 }
 
+/// Run a CLI command with a Cargo executable that records and rejects any launch.
+#[cfg(unix)]
+fn run_incan_with_failing_cargo_guard(
+    current_dir: &Path,
+    args: &[&str],
+    guard_dir: &Path,
+    marker: &Path,
+) -> Result<Output, Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::create_dir_all(guard_dir)?;
+    let guard = guard_dir.join("cargo");
+    fs::write(
+        &guard,
+        format!("#!/bin/sh\nprintf cargo > \"{}\"\nexit 97\n", marker.display()),
+    )?;
+    let mut permissions = fs::metadata(&guard)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&guard, permissions)?;
+    let mut paths = vec![guard_dir.to_path_buf()];
+    if let Some(inherited) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&inherited));
+    }
+    Ok(configured_incan_command(current_dir, args)
+        .env("PATH", std::env::join_paths(paths)?)
+        .output()?)
+}
+
 fn run_incan_with_env(
     current_dir: &Path,
     args: &[&str],
@@ -59,12 +87,15 @@ fn configured_incan_command(current_dir: &Path, args: &[&str]) -> Command {
         .env(
             "INCAN_STDLIB_DIR",
             Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
-        )
-        .env(
-            "INCAN_GENERATED_CARGO_TARGET_DIR",
-            support::generated_cargo_target_dir(),
-        )
-        .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store());
+        );
+    if !support::oven_compiler_suite_is_active() {
+        command
+            .env(
+                "INCAN_GENERATED_CARGO_TARGET_DIR",
+                support::generated_cargo_target_dir(),
+            )
+            .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store());
+    }
     command
 }
 
@@ -170,26 +201,7 @@ fn run_incan_with_os_env(
     key: &str,
     value: std::ffi::OsString,
 ) -> Result<Output, Box<dyn std::error::Error>> {
-    Ok(Command::new(incan_binary())
-        .args(args)
-        .current_dir(current_dir)
-        .env("CARGO_NET_OFFLINE", "true")
-        .env("INCAN_NO_BANNER", "1")
-        .env(
-            "INCAN_STDLIB",
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
-        )
-        .env(
-            "INCAN_STDLIB_DIR",
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
-        )
-        .env(
-            "INCAN_GENERATED_CARGO_TARGET_DIR",
-            support::generated_cargo_target_dir(),
-        )
-        .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store())
-        .env(key, value)
-        .output()?)
+    Ok(configured_incan_command(current_dir, args).env(key, value).output()?)
 }
 
 fn assert_success(output: &Output, context: &str) {
@@ -775,27 +787,51 @@ fn concurrent_sdk_provider_publication_reuses_one_complete_identity() -> Result<
     assert_success(&first, "first concurrent SDK provider publication");
     assert_success(&second, "second concurrent SDK provider publication");
 
-    let entries = fs::read_dir(&store)?.collect::<Result<Vec<_>, _>>()?;
-    assert!(
-        entries
-            .iter()
-            .all(|entry| !entry.file_name().to_string_lossy().starts_with(".staging-")),
-        "successful concurrent publication must not leave private staging directories"
-    );
-    let artifact_roots = entries
-        .into_iter()
-        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
-        .map(|entry| entry.path())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        artifact_roots.len(),
-        1,
-        "identical concurrent producers must publish and reuse one immutable identity: {artifact_roots:?}"
-    );
-    let inventory_path = artifact_roots
-        .first()
-        .ok_or("concurrent provider publication did not produce an artifact root")?
-        .join("sdk-inventory.json");
+    let (artifact_root, inventory_path) = if support::oven_compiler_suite_is_active() {
+        assert!(
+            !store.exists(),
+            "compiler-suite checks must reuse the sealed SDK inventory instead of publishing a mutable per-fixture \
+             provider store: {}",
+            store.display()
+        );
+        let inventory_path = std::env::var_os("INCAN_SDK_INVENTORY")
+            .map(PathBuf::from)
+            .ok_or("compiler-suite check has no sealed SDK inventory")?;
+        assert!(
+            inventory_path.is_file(),
+            "compiler-suite SDK inventory is not a regular file: {}",
+            inventory_path.display()
+        );
+        let artifact_root = inventory_path
+            .parent()
+            .ok_or("compiler-suite SDK inventory has no immutable provider root")?
+            .to_path_buf();
+        (artifact_root, inventory_path)
+    } else {
+        let entries = fs::read_dir(&store)?.collect::<Result<Vec<_>, _>>()?;
+        assert!(
+            entries
+                .iter()
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with(".staging-")),
+            "successful concurrent publication must not leave private staging directories"
+        );
+        let artifact_roots = entries
+            .into_iter()
+            .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            artifact_roots.len(),
+            1,
+            "identical concurrent producers must publish and reuse one immutable identity: {artifact_roots:?}"
+        );
+        let artifact_root = artifact_roots
+            .into_iter()
+            .next()
+            .ok_or("concurrent provider publication did not produce an artifact root")?;
+        let inventory_path = artifact_root.join("sdk-inventory.json");
+        (artifact_root, inventory_path)
+    };
     let inventory = incan::provider::SdkInventory::read_from_path(&inventory_path)?;
     inventory.validate_compiler_version(incan::version::INCAN_VERSION)?;
     assert!(
@@ -813,12 +849,7 @@ fn concurrent_sdk_provider_publication_reuses_one_complete_identity() -> Result<
         .filter_map(|package| package.get("name").and_then(toml::Value::as_str))
         .collect::<std::collections::HashSet<_>>();
     for component_id in inventory.components.keys() {
-        let manifest_path = artifact_roots
-            .first()
-            .ok_or("concurrent provider publication did not produce an artifact root")?
-            .join("components")
-            .join(component_id)
-            .join("Cargo.toml");
+        let manifest_path = artifact_root.join("components").join(component_id).join("Cargo.toml");
         let manifest: toml::Value = toml::from_str(&fs::read_to_string(&manifest_path)?)?;
         let package = manifest.get("package").and_then(toml::Value::as_table).ok_or_else(|| {
             format!(
@@ -5622,7 +5653,11 @@ fn lock_generates_lockfile_for_manifest_project() -> Result<(), Box<dyn std::err
     );
     assert!(lock.contains("deps-fingerprint = \"sha256:"));
     assert!(lock.contains("[cargo]"));
-    assert!(lock.contains("[[package]]"));
+    let parsed = incan::lockfile::IncanLock::load(&tmp.path().join("incan.lock"))?;
+    assert_eq!(
+        parsed.cargo_lock_payload, "version = 4\n",
+        "normal `incan lock` records semantic Incan state, not a generated Cargo resolution"
+    );
 
     let second_output = run_incan(
         tmp.path(),
@@ -5631,6 +5666,31 @@ fn lock_generates_lockfile_for_manifest_project() -> Result<(), Box<dyn std::err
     assert_success(&second_output, "second incan lock");
     let second_lock = fs::read_to_string(tmp.path().join("incan.lock"))?;
     assert_eq!(lock, second_lock, "relocking unchanged inputs must be deterministic");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_generates_semantic_state_without_starting_cargo() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let main_path = write_minimal_project(tmp.path(), "cli_guarded_lock_project", "")?;
+    let marker = tmp.path().join("cargo-was-started");
+
+    let output = run_incan_with_failing_cargo_guard(
+        tmp.path(),
+        &["lock", main_path.to_str().ok_or("main path was not valid UTF-8")?],
+        &tmp.path().join("cargo-guard"),
+        &marker,
+    )?;
+
+    assert_success(&output, "Cargo-guarded incan lock");
+    assert!(
+        !marker.exists(),
+        "normal incan lock must not launch Cargo; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lock = incan::lockfile::IncanLock::load(&tmp.path().join("incan.lock"))?;
+    assert_eq!(lock.cargo_lock_payload, "version = 4\n");
     Ok(())
 }
 
@@ -6109,7 +6169,7 @@ deployment-target = "13.0"
 }
 
 #[test]
-fn canonical_lock_records_exact_registry_resolution_changes() -> Result<(), Box<dyn std::error::Error>> {
+fn semantic_lock_records_registry_dependency_input_changes() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(
         tmp.path(),
@@ -6128,14 +6188,10 @@ bitflags = "=1.3.2"
     assert_success(&first_output, "canonical lock with bitflags 1.3.2");
     let first_bytes = fs::read(tmp.path().join("incan.lock"))?;
     let first = incan::lockfile::IncanLock::load(&tmp.path().join("incan.lock"))?;
-    let first_cargo: toml::Value = toml::from_str(&first.cargo_lock_payload)?;
-    assert!(first_cargo["package"].as_array().into_iter().flatten().any(|package| {
-        package["name"].as_str() == Some("bitflags")
-            && package["version"].as_str() == Some("1.3.2")
-            && package["source"]
-                .as_str()
-                .is_some_and(|source| source.starts_with("registry+"))
-    }));
+    assert_eq!(
+        first.cargo_lock_payload, "version = 4\n",
+        "normal lock generation must not resolve a Cargo package graph"
+    );
 
     let manifest_path = tmp.path().join("incan.toml");
     let first_manifest = fs::read_to_string(&manifest_path)?;
@@ -6144,17 +6200,10 @@ bitflags = "=1.3.2"
     assert_success(&second_output, "canonical lock with bitflags 2.11.0");
     let second_bytes = fs::read(tmp.path().join("incan.lock"))?;
     let second = incan::lockfile::IncanLock::load(&tmp.path().join("incan.lock"))?;
-    let second_cargo: toml::Value = toml::from_str(&second.cargo_lock_payload)?;
-    assert!(second_cargo["package"].as_array().into_iter().flatten().any(|package| {
-        package["name"].as_str() == Some("bitflags")
-            && package["version"].as_str() == Some("2.11.0")
-            && package["source"]
-                .as_str()
-                .is_some_and(|source| source.starts_with("registry+"))
-    }));
+    assert_eq!(second.cargo_lock_payload, "version = 4\n");
     assert_ne!(
-        first.cargo_lock_payload, second.cargo_lock_payload,
-        "the embedded canonical Cargo payload must change with the registry resolution"
+        first.deps_fingerprint, second.deps_fingerprint,
+        "the semantic dependency fingerprint must change with the declared registry input"
     );
     assert_ne!(
         first_bytes, second_bytes,
@@ -6164,7 +6213,7 @@ bitflags = "=1.3.2"
 }
 
 #[test]
-fn lock_preheats_dependency_graph_for_path_dependencies() -> Result<(), Box<dyn std::error::Error>> {
+fn lock_records_path_dependency_without_preheating_a_cargo_graph() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let helper_dir = tmp.path().join("preheat_helper");
     fs::create_dir_all(helper_dir.join("src"))?;
@@ -6196,17 +6245,15 @@ def main() -> None:
         &["lock", main_path.to_str().ok_or("main path was not valid UTF-8")?],
     )?;
 
-    assert_success(&output, "incan lock with dependency preheat");
+    assert_success(&output, "incan lock with a path dependency");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("preheating Cargo dependencies for generated test harnesses"),
-        "lock should explain dependency preheat work, got:\n{stderr}"
+        !stderr.contains("preheating Cargo dependencies"),
+        "normal lock generation must not preheat a Cargo graph, got:\n{stderr}"
     );
     assert!(
-        tmp.path()
-            .join("target/incan_lock/.incan_dependency_preheat_fingerprint")
-            .is_file(),
-        "dependency preheat should write a fingerprint stamp"
+        !tmp.path().join("target/incan_lock/Cargo.toml").exists(),
+        "normal lock generation must not create a generated Cargo workspace"
     );
     Ok(())
 }

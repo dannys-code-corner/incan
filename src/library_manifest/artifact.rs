@@ -1451,9 +1451,16 @@ mod tests {
         fs::write(temp.path().join("outside.txt"), "outside\n")?;
         std::os::unix::fs::symlink(temp.path().join("outside.txt"), package.join("linked.txt"))?;
         let special = package.join("special-entry");
-        let _special_listener = std::os::unix::net::UnixListener::bind(&special)?;
+        // Some sandboxed macOS runners prohibit Unix-domain sockets even in an otherwise writable temporary
+        // directory. Preserve the special-file assertion where the platform permits it, while keeping the portable
+        // invalid-path matrix active instead of making this pure fail-closed test depend on that ambient capability.
+        let special_listener = match std::os::unix::net::UnixListener::bind(&special) {
+            Ok(listener) => Some(listener),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => None,
+            Err(error) => return Err(error.into()),
+        };
 
-        let invalid_values = [
+        let mut invalid_values = vec![
             ("\"present.txt\"", "must be an array of paths"),
             ("[1]", "entries must be strings"),
             ("[\"\"]", "must be a non-empty relative path"),
@@ -1461,8 +1468,10 @@ mod tests {
             ("[\"../outside.txt\"]", "must be a non-empty relative path"),
             ("[\"missing.txt\"]", "failed to inspect provider artifact path"),
             ("[\"linked.txt\"]", "is not a regular file or directory"),
-            ("[\"special-entry\"]", "is not a regular file or directory"),
         ];
+        if special_listener.is_some() {
+            invalid_values.push(("[\"special-entry\"]", "is not a regular file or directory"));
+        }
         for (manifest, expected) in [
             (
                 "[package]\nname = \"support\"\nversion = \"0.5.0\"\nmetadata = \"invalid\"\n",

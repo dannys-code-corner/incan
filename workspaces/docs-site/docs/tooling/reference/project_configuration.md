@@ -35,7 +35,7 @@ requires-incan = ">=0.2"
 
 `requires-incan` is enforced by project-aware execution commands. If the active compiler does not satisfy the requirement, `incan run` in project mode, `incan build`, `incan test`, `incan lock`, and `incan env run` fail before compiling, locking, or launching scripts. Single-file or inline commands without a discovered project manifest do not infer a toolchain requirement.
 
-For `incan build` and `incan build --lib`, declared `version` and `license` values are preserved in the generated Cargo package. A generated library's Cargo version therefore matches its `.incnlib` version. The plural Incan `license-files` field remains source-package metadata and is not translated to Cargo's singular `license-file` field.
+Declared `version` and `license` values are preserved in the generated compatibility manifest used by the explicit Oven publisher transition. The plural Incan `license-files` field remains source-package metadata and is not translated to Cargo's singular `license-file` field. `incan build --lib` remains a distinct compiler library-artifact workflow; it is not the Oven Alpha normal executable consumer path, and ordinary `incan build`, `incan run`, and `incan test` never fall back to it.
 
 ### `[project.scripts]`
 
@@ -282,7 +282,7 @@ Use this only for library projects that export vocab entries. Projects without c
 | ------- | ------ | ------------------------------------------------------------------------------------- |
 | `crate` | string | Path to the vocab companion crate directory, relative to project root unless absolute |
 
-During `incan build --lib`, the compiler:
+In the legacy library-publishing workflow, the compiler:
 
 1. resolves `[vocab].crate`
 2. validates that the directory contains `Cargo.toml` and `src/lib.rs`

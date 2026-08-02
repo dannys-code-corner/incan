@@ -1121,8 +1121,6 @@ where
         semantic: None,
         package_features: None,
         sdk_profile_override: None,
-        generated_cargo_target_dir: lock_generation_target,
-        rust_inspect_query_paths: &query_paths,
     })
     .map_err(|error| error.to_string())?;
     let cargo_package_name = lock_resolution.cargo_package_name;

@@ -390,6 +390,21 @@ fn write_fixture_sdk_provider_seed(root: &Path, profile: &str) -> Result<PathBuf
     Ok(seed)
 }
 
+/// Supply the archive-layout contract to fixture packagers without asking their shell-placeholder compiler to build
+/// a real native closure. End-to-end seed validation is covered by the compiler-owned native-unit tests instead.
+fn write_fixture_native_unit_seeds(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let seed_root = root.join("fixture-oven-native-unit-seeds");
+    for compatibility_unit in ["base-release", "testing-debug"] {
+        let unit = seed_root.join(compatibility_unit);
+        fs::create_dir_all(&unit)?;
+        fs::write(
+            unit.join("seed.json"),
+            format!("{{\"fixture_compatibility_unit\":\"{compatibility_unit}\"}}\n"),
+        )?;
+    }
+    Ok(seed_root)
+}
+
 const NPM_PLATFORM_TARGETS: [(&str, &str, &str, &str); 3] = [
     ("x86_64-unknown-linux-gnu", "@incan/toolchain-linux-x64", "linux", "x64"),
     ("x86_64-apple-darwin", "@incan/toolchain-darwin-x64", "darwin", "x64"),
@@ -446,6 +461,7 @@ fn package_fixture_archive_with_profile(
     profile: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let seed = write_fixture_sdk_provider_seed(root, profile)?;
+    let native_unit_seeds = write_fixture_native_unit_seeds(root)?;
     let output = Command::new("bash")
         .arg(toolchain_package_archive_script())
         .arg(target)
@@ -453,6 +469,7 @@ fn package_fixture_archive_with_profile(
         .env("INCAN_BIN", incan)
         .env("INCAN_LSP_BIN", incan_lsp)
         .env("INCAN_SDK_PROVIDER_SEED_DIR", seed)
+        .env("INCAN_OVEN_NATIVE_UNIT_SEED_DIR", native_unit_seeds)
         .env("INCAN_SDK_DISTRIBUTION_PROFILE", profile)
         .current_dir(repo_root())
         .output()?;
@@ -489,6 +506,72 @@ fn profile_evidence_path(archive: &Path) -> PathBuf {
         "{}.profile.json",
         archive.file_name().and_then(|name| name.to_str()).unwrap_or_default()
     ))
+}
+
+/// Validate the support-crate workspace shape without asking the Cargo-free Oven suite to launch Cargo.
+///
+/// The package proof still uses `cargo metadata` in ordinary developer test runs. When Oven runs this integration
+/// target, the archive has already been created by the named publisher boundary, so validate its complete workspace
+/// declaration and every shipped member directly from the immutable extracted files instead.
+fn assert_packaged_support_workspace_without_cargo(extracted: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let crates = extracted.join("crates");
+    let workspace: toml::Value = toml::from_str(&fs::read_to_string(crates.join("Cargo.toml"))?)?;
+    let workspace = workspace
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .ok_or("packaged support workspace has no [workspace] table")?;
+    let expected_members = [
+        "incan_core",
+        "incan_derive",
+        "incan_stdlib",
+        "incan_vocab",
+        "incan_web_macros",
+    ];
+    let members = workspace
+        .get("members")
+        .and_then(toml::Value::as_array)
+        .ok_or("packaged support workspace has no workspace member list")?
+        .iter()
+        .map(|member| {
+            member
+                .as_str()
+                .ok_or("packaged support workspace has a non-string member")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(members, expected_members, "packaged support workspace members drifted");
+    assert_eq!(workspace.get("resolver").and_then(toml::Value::as_str), Some("2"));
+    let package = workspace
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .ok_or("packaged support workspace has no [workspace.package] table")?;
+    for (field, expected) in [("edition", "2024"), ("rust-version", "1.93"), ("license", "Apache-2.0")] {
+        assert_eq!(
+            package.get(field).and_then(toml::Value::as_str),
+            Some(expected),
+            "packaged support workspace has an invalid {field}"
+        );
+    }
+    assert!(
+        fs::metadata(crates.join("Cargo.lock"))?.len() > 0,
+        "packaged support workspace has an empty Cargo.lock"
+    );
+    for member in expected_members {
+        let manifest: toml::Value = toml::from_str(&fs::read_to_string(crates.join(member).join("Cargo.toml"))?)?;
+        let package = manifest
+            .get("package")
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| format!("packaged support crate {member} has no [package] table"))?;
+        assert_eq!(
+            package.get("name").and_then(toml::Value::as_str),
+            Some(member),
+            "packaged support crate {member} declares the wrong package name"
+        );
+    }
+    Ok(())
+}
+
+fn oven_compiler_suite_is_active() -> bool {
+    std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC").is_some()
 }
 
 fn read_profile_evidence(archive: &Path) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
@@ -599,6 +682,22 @@ fn toolchain_archive_packager_writes_archive_checksum_and_release_metadata() -> 
     assert_eq!(evidence["sdk_component_count"], serde_json::json!(9));
     assert_eq!(evidence["archive_bytes"].as_u64(), Some(fs::metadata(&archive)?.len()));
     assert!(evidence["sdk_payload_bytes"].as_u64().is_some_and(|bytes| bytes > 0));
+    assert_eq!(evidence["oven_native_unit_seed_count"].as_u64(), Some(2));
+    assert!(
+        evidence["oven_native_unit_payload_bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 0)
+    );
+    assert_eq!(
+        evidence["oven_native_unit_logical_bytes"],
+        evidence["oven_native_unit_payload_bytes"]
+    );
+    assert!(
+        evidence["oven_native_unit_physical_bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 0)
+    );
+    assert_eq!(evidence["oven_native_unit_max_bytes"].as_u64(), Some(320 * 1024 * 1024));
 
     let listing = Command::new("tar").arg("-tzf").arg(&archive).output()?;
     assert!(listing.status.success(), "tar listing failed");
@@ -625,6 +724,9 @@ fn toolchain_archive_packager_writes_archive_checksum_and_release_metadata() -> 
     );
     assert!(listing.contains("share/incan/sdk/sdk-inventory.json"));
     assert!(listing.contains("share/incan/sdk/Cargo.lock"));
+    for compatibility_unit in ["base-release", "testing-debug"] {
+        assert!(listing.contains(&format!("share/incan/oven/native-units/{compatibility_unit}/seed.json")));
+    }
     for component in [
         "stdlib-core",
         "stdlib-system",
@@ -672,16 +774,20 @@ fn toolchain_archive_packager_writes_archive_checksum_and_release_metadata() -> 
         incan::version::INCAN_VERSION,
         incan::version::SDK_PROVIDER_CODEGEN_REVISION,
     )?;
-    let metadata = Command::new("cargo")
-        .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path"])
-        .arg(extracted.join("crates/Cargo.toml"))
-        .env("CARGO_NET_OFFLINE", "true")
-        .output()?;
-    assert!(
-        metadata.status.success(),
-        "packaged support-crate workspace is invalid:\n{}",
-        String::from_utf8_lossy(&metadata.stderr)
-    );
+    if oven_compiler_suite_is_active() {
+        assert_packaged_support_workspace_without_cargo(&extracted)?;
+    } else {
+        let metadata = Command::new("cargo")
+            .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path"])
+            .arg(extracted.join("crates/Cargo.toml"))
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+        assert!(
+            metadata.status.success(),
+            "packaged support-crate workspace is invalid:\n{}",
+            String::from_utf8_lossy(&metadata.stderr)
+        );
+    }
     Ok(())
 }
 
@@ -699,6 +805,7 @@ fn minimal_sdk_archive_physically_excludes_non_profile_components() -> Result<()
     assert_eq!(evidence["sdk_profile"], serde_json::json!("minimal"));
     assert_eq!(evidence["sdk_component_count"], serde_json::json!(1));
     assert!(evidence["sdk_payload_bytes"].as_u64().is_some_and(|bytes| bytes > 0));
+    assert_eq!(evidence["oven_native_unit_seed_count"].as_u64(), Some(2));
     let listing = Command::new("tar").arg("-tzf").arg(&archive).output()?;
     assert!(listing.status.success(), "minimal archive listing failed");
     let listing = String::from_utf8_lossy(&listing.stdout);
@@ -735,6 +842,7 @@ fn default_sdk_archive_contains_every_default_profile_component() -> Result<(), 
     assert_eq!(evidence["sdk_profile"], serde_json::json!("default"));
     assert_eq!(evidence["sdk_component_count"], serde_json::json!(9));
     assert!(evidence["sdk_payload_bytes"].as_u64().is_some_and(|bytes| bytes > 0));
+    assert_eq!(evidence["oven_native_unit_seed_count"].as_u64(), Some(2));
     let listing = Command::new("tar").arg("-tzf").arg(&archive).output()?;
     assert!(listing.status.success(), "default archive listing failed");
     let listing = String::from_utf8_lossy(&listing.stdout);

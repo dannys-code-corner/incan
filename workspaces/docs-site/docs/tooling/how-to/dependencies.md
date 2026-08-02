@@ -109,7 +109,9 @@ incan lock
 
 For compiled SDK providers, the fingerprint identifies checked provider contracts, dependency and feature choices, and authored Incan inputs. Native Rust output and host-derived ABI metadata remain covered by each installed provider artifact's exact integrity digest, but do not make an otherwise equivalent macOS and Linux SDK selection semantically different. User-authored path dependencies remain part of the semantic fingerprint.
 
-### Default build/test behavior
+### Legacy generated-Cargo behavior (pre-Oven Alpha)
+
+The details in this section describe the former generated-Cargo workflow retained for historical and explicit publisher context. Ordinary `incan build`, `incan run`, and `incan test` now use Oven receipt/plan selection and do not use this cache, preheat, or Cargo-policy path.
 
 If `incan.lock` doesn't exist and you run `incan build` or `incan test` without strict flags, the lock file is created automatically on first build.
 

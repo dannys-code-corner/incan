@@ -61,7 +61,7 @@ The Incan flags are:
 | `--all-features` | Select every feature declared by the root package. |
 | `--sdk-profile PROFILE` | Replace the manifest's base SDK profile for this invocation. |
 
-These flags are accepted by `incan build`, `incan check`, `incan run`, `incan test`, and `incan lock`. `incan inspect codegraph`, `incan inspect providers`, and `incan inspect features` accept the same projection flags. Cargo pass-through remains explicitly prefixed as `--cargo-features`, `--cargo-no-default-features`, and `--cargo-all-features` where supported.
+These flags are accepted by `incan build`, `incan check`, `incan run`, `incan test`, and `incan lock`. `incan inspect codegraph`, `incan inspect providers`, and `incan inspect features` accept the same projection flags. Oven Alpha normal build, run, and test do not accept Cargo pass-through or Cargo feature controls.
 
 `incan test --feature NAME` is unrelated: it supplies a collection-time probe to `std.testing.feature("NAME")`. Use `--features` for public package features.
 

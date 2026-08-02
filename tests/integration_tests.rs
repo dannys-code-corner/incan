@@ -862,12 +862,18 @@ fn shared_generated_cargo_target_dir() -> std::path::PathBuf {
     support::generated_cargo_target_dir()
 }
 
+fn oven_compiler_suite_is_active() -> bool {
+    std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC").is_some()
+}
+
 fn incan_command() -> Command {
     let mut command = Command::new(incan_debug_binary());
     command
         .env("INCAN_GENERATED_CARGO_TARGET_DIR", shared_generated_cargo_target_dir())
-        .env("CARGO_NET_OFFLINE", "true")
-        .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store());
+        .env("CARGO_NET_OFFLINE", "true");
+    if !oven_compiler_suite_is_active() {
+        command.env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store());
+    }
     command
 }
 
@@ -9107,7 +9113,7 @@ def main() -> None:
 /// End-to-end integration tests for `incan test`.
 ///
 /// These tests exercise the full pipeline: write an Incan test file → run `incan test` via the CLI → verify
-/// stdout/stderr/exit code. They catch integration bugs like broken per-file `cargo test` harness wiring or parametrize
+/// stdout/stderr/exit code. They catch integration bugs like broken Oven native-harness wiring or parametrize
 /// expansion that unit tests cannot detect.
 mod test_runner_e2e {
     use super::incan_command;
@@ -9145,16 +9151,8 @@ mod test_runner_e2e {
     fn run_incan_test_path(path: &Path) -> std::process::Output {
         incan_command()
             .args(["test", path.to_string_lossy().as_ref()])
-            .env("CARGO_NET_OFFLINE", "true")
-            .env("INCAN_TEST_SHARED_TARGET_DIR", shared_test_runner_target_dir())
             .output()
             .unwrap_or_else(|e| panic!("failed to run `incan test`: {}", e))
-    }
-
-    fn shared_test_runner_target_dir() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("incan_e2e_shared_target")
     }
 
     /// Run `incan test` on a directory and return the combined output.
@@ -9170,8 +9168,6 @@ mod test_runner_e2e {
             cmd.arg(arg);
         }
         cmd.arg(dir.to_string_lossy().as_ref());
-        cmd.env("CARGO_NET_OFFLINE", "true");
-        cmd.env("INCAN_TEST_SHARED_TARGET_DIR", shared_test_runner_target_dir());
         cmd.output()
             .unwrap_or_else(|e| panic!("failed to run `incan test`: {}", e))
     }
@@ -9181,8 +9177,6 @@ mod test_runner_e2e {
         incan_command()
             .arg("test")
             .arg(relative_path)
-            .env("CARGO_NET_OFFLINE", "true")
-            .env("INCAN_TEST_SHARED_TARGET_DIR", shared_test_runner_target_dir())
             .current_dir(cwd)
             .output()
             .unwrap_or_else(|e| panic!("failed to run `incan test {relative_path}`: {}", e))
@@ -9357,13 +9351,13 @@ def test_prints() -> None:
     }
 
     #[test]
-    fn e2e_generated_harness_preheat_is_fingerprinted() {
+    fn e2e_generated_harness_oven_bake_is_reused() {
         let dir = write_test_project(
-            "test_preheat.incn",
+            "test_oven_bake_reuse.incn",
             r#"
 from std.testing import assert_eq
 
-def test_preheat() -> None:
+def test_oven_bake_reuse() -> None:
     assert_eq(1, 1)
 "#,
         );
@@ -9373,13 +9367,13 @@ def test_preheat() -> None:
         let first_stderr = String::from_utf8_lossy(&first.stderr);
         assert!(
             first.status.success(),
-            "expected first preheat run to succeed.\nstdout:\n{}\nstderr:\n{}",
+            "expected first Oven run to succeed.\nstdout:\n{}\nstderr:\n{}",
             first_stdout,
             first_stderr,
         );
         assert!(
-            first_stdout.contains("preheat phase: ran"),
-            "expected first run to preheat stale harness.\nstdout:\n{}",
+            first_stdout.contains("Oven test phases"),
+            "expected verbose first run to report Oven phases.\nstdout:\n{}",
             first_stdout,
         );
         assert!(
@@ -9388,8 +9382,8 @@ def test_preheat() -> None:
             first_stdout,
         );
         assert!(
-            first_stdout.contains("cargo test phase: completed"),
-            "expected verbose run to report cargo test phase timing.\nstdout:\n{}",
+            first_stdout.contains("native bake"),
+            "expected first run to bake its caller-owned native output.\nstdout:\n{}",
             first_stdout,
         );
 
@@ -9398,13 +9392,13 @@ def test_preheat() -> None:
         let second_stderr = String::from_utf8_lossy(&second.stderr);
         assert!(
             second.status.success(),
-            "expected second preheat run to succeed.\nstdout:\n{}\nstderr:\n{}",
+            "expected second Oven run to succeed.\nstdout:\n{}\nstderr:\n{}",
             second_stdout,
             second_stderr,
         );
         assert!(
-            second_stdout.contains("preheat phase: up-to-date"),
-            "expected second run to reuse preheated harness.\nstdout:\n{}",
+            second_stdout.contains("native reuse"),
+            "expected second run to reuse its stored native output.\nstdout:\n{}",
             second_stdout,
         );
     }
@@ -12324,6 +12318,8 @@ mod rfc031_pub_import_integration_tests {
     use incan::manifest::{INTERNAL_MANIFEST_OVERRIDE_ENV, INTERNAL_PROJECT_ROOT_OVERRIDE_ENV};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     fn write_project_files(
@@ -12960,6 +12956,37 @@ def test_borrowed_slice_callbacks() -> None:
             .args(["build", "--lib"])
             .current_dir(project_root)
             .env("CARGO_NET_OFFLINE", "true")
+            .output()?)
+    }
+
+    /// Run the normal Oven library route with a failing Cargo binary first on PATH.
+    ///
+    /// This is a behavioural boundary: a successful build proves that both library materialization and vocabulary
+    /// extraction used only the selected direct-rustc closure rather than merely avoiding Cargo in an outer command.
+    #[cfg(unix)]
+    fn run_build_lib_with_failing_cargo_guard(
+        project_root: &Path,
+        guard_root: &Path,
+        cargo_marker: &Path,
+    ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(guard_root)?;
+        let cargo_guard = guard_root.join("cargo");
+        std::fs::write(
+            &cargo_guard,
+            format!("#!/bin/sh\nprintf cargo > \"{}\"\nexit 97\n", cargo_marker.display()),
+        )?;
+        let mut permissions = std::fs::metadata(&cargo_guard)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&cargo_guard, permissions)?;
+        let mut paths = vec![guard_root.to_path_buf()];
+        if let Some(inherited) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&inherited));
+        }
+        Ok(super::incan_command()
+            .args(["build", "--lib"])
+            .current_dir(project_root)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("PATH", std::env::join_paths(paths)?)
             .output()?)
     }
 
@@ -17036,6 +17063,43 @@ def main() -> None:\n  xs = [1, 2, 3, 4, 5]\n  ys = xs.iter().filter(is_even).ma
                 keyword: "await".to_string(),
             }]
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normal_oven_build_lib_with_vocab_companion_never_launches_cargo() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let producer_root = tmp.path().join("guarded_widgets_vocab_project");
+        std::fs::create_dir_all(producer_root.join("src"))?;
+        std::fs::write(
+            producer_root.join("incan.toml"),
+            "[project]\nname = \"guarded_widgets_core\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
+        )?;
+        std::fs::write(
+            producer_root.join("src/lib.incn"),
+            "pub def make_widget(name: str) -> str:\n  return name\n",
+        )?;
+        write_vocab_companion_crate(&producer_root, "vocab_companion", "guarded_widgets_vocab_companion")?;
+        let cargo_marker = tmp.path().join("cargo-was-started");
+
+        let producer_build =
+            run_build_lib_with_failing_cargo_guard(&producer_root, &tmp.path().join("cargo-guard"), &cargo_marker)?;
+        assert!(
+            producer_build.status.success(),
+            "expected normal Oven `build --lib` with vocab companion to succeed without Cargo.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&producer_build.stdout),
+            String::from_utf8_lossy(&producer_build.stderr)
+        );
+        assert!(
+            !cargo_marker.exists(),
+            "normal Oven vocabulary extraction launched the guarded Cargo binary"
+        );
+
+        let manifest = LibraryManifest::read_from_path(&producer_root.join("target/lib/guarded_widgets_core.incnlib"))?;
+        let vocab = manifest.vocab.as_ref().ok_or("expected vocab payload in .incnlib")?;
+        assert_eq!(vocab.package_name, "guarded_widgets_vocab_companion");
+        assert_eq!(vocab.keyword_registrations.len(), 1);
         Ok(())
     }
 

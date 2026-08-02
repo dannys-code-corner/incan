@@ -12,6 +12,15 @@ pub(crate) fn incan_binary() -> PathBuf {
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/incan"))
 }
 
+/// Return whether this test binary is executing as a stored Oven compiler-suite child.
+///
+/// In that mode the scheduler has already injected a sealed SDK inventory and direct-Rustc capability. Test helpers
+/// must not replace those inputs with the legacy generated-Cargo provider store.
+#[allow(dead_code)]
+pub(crate) fn oven_compiler_suite_is_active() -> bool {
+    std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC").is_some_and(|value| !value.is_empty())
+}
+
 /// Return the generated Cargo target selected by the outer test harness.
 ///
 /// `make` and CI preheat one task-local target before starting nextest. Subprocess helpers must preserve that

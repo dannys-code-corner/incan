@@ -23,7 +23,7 @@ resolver = "2"
 ra_ap_proc_macro_api = { path = "crates/third_party/ra_ap_proc_macro_api" }
 
 [workspace.package]
-version = "0.5.0-dev.39"
+version = "0.5.0-dev.40"
 description = "The Incan programming language compiler"
 edition = "2024"
 rust-version = "1.93"
@@ -148,6 +148,15 @@ wat = "1"
 # `regex` deliberately anchors generated std.regex consumers in Cargo.lock for offline test shards; the Rust test
 # harness does not link it directly.
 development = ["regex"]
+
+# The named, receipt-bound compatibility profile used only by Oven's explicit compiler-suite publisher. Normal
+# `incan build`, `incan run`, and `incan test` consume the resulting direct-rustc Oven unit and never select this
+# Cargo profile. Keep the settings mirrored by Oven's direct-rustc test runner so the transient publisher does not
+# smuggle a different compilation contract into an immutable suite entry.
+[profile.oven-test]
+inherits = "dev"
+debug = 0
+incremental = false
 
 [[bin]]
 name = "incan"

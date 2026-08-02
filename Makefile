@@ -8,9 +8,16 @@ TEST_VERBOSE ?= 0
 INCAN_TEST_CARGO_BUILD_JOBS ?= 2
 INCAN_TEST_GENERATED_CARGO_TARGET_DIR ?= $(CURDIR)/target/incan_generated_shared_target
 INCAN_TEST_SDK_PROVIDER_STORE ?= $(CURDIR)/target/incan_test_sdk_provider_store
+INCAN_TEST_SDK_PROVIDER_PATH_FILE ?= $(CURDIR)/target/incan_test_sdk_provider_path
+INCAN_TEST_OVEN_HOME ?= $(CURDIR)/target/incan_test_oven_home
+INCAN_TEST_OVEN_NATIVE_UNIT_ROOT ?= $(CURDIR)/target/share/incan/oven/native-units
+# Aggregate physical limit for the two compiler-owned native-unit compatibility domains. The script also enforces
+# the ordinary 768 MiB logical and 1 GiB physical allowance for each individual domain.
+INCAN_TEST_OVEN_NATIVE_UNIT_MAX_BYTES ?= 2147483648
 TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
 	INCAN_GENERATED_CARGO_TARGET_DIR="$(INCAN_TEST_GENERATED_CARGO_TARGET_DIR)" \
-	INCAN_INTERNAL_SDK_PROVIDER_STORE="$(INCAN_TEST_SDK_PROVIDER_STORE)"
+	INCAN_INTERNAL_SDK_PROVIDER_STORE="$(INCAN_TEST_SDK_PROVIDER_STORE)" \
+	INCAN_HOME="$(INCAN_TEST_OVEN_HOME)"
 
 ifeq ($(strip $(NEXTEST)),)
 ifeq ($(TEST_VERBOSE),1)
@@ -254,22 +261,33 @@ fetch-locked-cargo-sources:
 	@cargo fetch --manifest-path crates/incan_stdlib/stdlib/components/stdlib-interop/vocab_companion/Cargo.toml --locked
 
 .PHONY: test  ## test - Run all tests
-test: test-prewarm-sdk
+test: test-prewarm-oven-native-units
 	@echo "\033[1mRunning tests...\033[0m"
 	@$(TEST_CMD)
 
 .PHONY: test-prewarm-sdk
 test-prewarm-sdk:
 	@echo "\033[1mPrewarming compiled SDK providers...\033[0m"
-	@if [ -n "$(NEXTEST)" ]; then \
-		$(TEST_ENV) cargo nextest run --all --features lsp --no-run; \
-	else \
-		$(TEST_ENV) cargo build --features lsp; \
-	fi
+	@$(TEST_ENV) cargo build --features lsp
 	@$(TEST_ENV) CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
 		INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
 		INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
+		INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)" \
 		./target/debug/incan check tests/fixtures/test_assert_canary.incn
+	@test -s "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)"
+	@test -f "$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json"
+
+.PHONY: test-prewarm-oven-native-units
+test-prewarm-oven-native-units: test-prewarm-sdk
+	@echo "\033[1mPreparing compiler-owned Oven native test units...\033[0m"
+	@$(TEST_ENV) CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
+		INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
+		INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
+		INCAN_SDK_INVENTORY="$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json" \
+		bash scripts/prepare_oven_test_native_units.sh \
+			--incan "$(CURDIR)/target/debug/incan" \
+			--output "$(INCAN_TEST_OVEN_NATIVE_UNIT_ROOT)" \
+			--max-bytes "$(INCAN_TEST_OVEN_NATIVE_UNIT_MAX_BYTES)"
 
 .PHONY: test-rust-inspect  ## test - Run focused rust-inspect regression tests
 test-rust-inspect:
@@ -377,12 +395,12 @@ verify:
 	@$(MAKE) pre-commit
 
 .PHONY: test-verbose  ## test - Run tests with output
-test-verbose:
+test-verbose: test-prewarm-oven-native-units
 	@echo "\033[1mRunning tests (verbose)...\033[0m"
 	@cargo nextest run --all --no-capture 2>/dev/null || cargo test --all -- --nocapture
 
 .PHONY: test-diagnose  ## test - Run tests with live output (use if pre-commit hangs to find culprit)
-test-diagnose:
+test-diagnose: test-prewarm-oven-native-units
 	@echo "\033[1mRunning tests with live output (Ctrl+C when stuck to see last test)...\033[0m"
 	@cargo test --all --no-fail-fast -- --nocapture --test-threads=1
 
@@ -393,7 +411,7 @@ test-timings:
 	@echo "\033[32m✓ Timing report generated in target/cargo-timings\033[0m"
 
 .PHONY: test-one  ## test - Run specific test (TEST=name)
-test-one:
+test-one: test-prewarm-oven-native-units
 ifdef TEST
 	@echo "\033[1mRunning test: $(TEST)\033[0m"
 	@cargo nextest run -E "test($(TEST))" --no-capture 2>/dev/null || cargo test $(TEST) -- --nocapture

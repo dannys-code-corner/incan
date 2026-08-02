@@ -1,8 +1,10 @@
 # Generated-build storage model
 
-Incan compiles generated Rust through Cargo. Cargo dependency and intermediate artifacts are usually the largest part of that pipeline, so Incan shares those rebuildable files across compatible projects while keeping source and durable outputs project-local.
+Normal `incan build`, `incan run`, and `incan test` generate caller-owned Rust source, verify a receipt, select one bounded Oven-native closure, and consume it through direct `rustc`. They do not launch Cargo or inspect a generated Cargo target directory. The store is policy-bounded rather than merely inspectable: admission prunes inactive least-recently-used entries, rejects an oversized single compatibility domain, and never deletes an active lease.
 
-## Storage ownership
+`incan oven` exposes the receipt and store-maintenance boundary. An explicitly named `incan oven legacy-cargo prepare` command may temporarily prepare a compatible native closure, but it is never a normal-command fallback. Its receipt, bounded store-owned direct-`rustc` file closure, explicit test and binary-run commands, and native test inventory are documented in [Oven Alpha](oven_alpha.md). The generated-Cargo detail retained below is legacy historical material, not normal execution architecture.
+
+## Legacy generated-Cargo storage (historical)
 
 | Category                                                | Default owner and location                                                                                                                      | Lifecycle                                                                                                                                                                                                               |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

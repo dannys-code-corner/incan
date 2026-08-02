@@ -75,6 +75,11 @@ static PREPARED_LIBRARY_DEPENDENCIES: LazyLock<Mutex<HashMap<PathBuf, BTreeSet<S
 static SDK_PROVIDER_COMPILER_DIGESTS: LazyLock<Mutex<HashMap<PathBuf, [u8; 32]>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 pub(crate) const INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV: &str = "INCAN_INTERNAL_LIBRARY_ARTIFACT_ONLY";
+/// Internal marker for a nested `pub::` dependency library build.
+///
+/// Unlike artifact-only mode, an Oven direct-rustc dependency build must emit caller-owned rlibs. It still targets
+/// exactly the dependency project selected by the parent, even if that project is the root of a larger workspace.
+pub(crate) const INTERNAL_LIBRARY_DEPENDENCY_PREPARATION_ENV: &str = "INCAN_INTERNAL_LIBRARY_DEPENDENCY_PREPARATION";
 /// Internal provider-store override used by isolated compiler and packaging tests.
 const INTERNAL_SDK_PROVIDER_STORE_ENV: &str = "INCAN_INTERNAL_SDK_PROVIDER_STORE";
 /// Internal file through which release packaging receives the exact immutable SDK provider root.
@@ -512,9 +517,23 @@ fn staged_sdk_provider_root(store_root: &Path, identity: &str) -> CliResult<Path
 
 /// Build and atomically publish every SDK component provider from the source catalog.
 fn prepare_sdk_provider_inventory() -> CliResult<Arc<SdkInventory>> {
-    let stdlib_root = crate::cli::prelude::find_stdlib_dir().ok_or_else(|| {
-        CliError::failure("cannot locate built-in stdlib sources needed to prepare SDK component providers")
-    })?;
+    prepare_sdk_provider_inventory_in_store(None, None)
+}
+
+/// Build SDK providers into a publisher-owned store rather than the normal SDK cache.
+///
+/// This is for the explicitly named Oven `legacy_cargo` transition only. The caller is responsible for copying the
+/// resulting immutable inventory into its receipt-bound artifact before the temporary publisher root is reclaimed.
+pub(crate) fn prepare_sdk_provider_inventory_in_store(
+    publisher_store_root: Option<&Path>,
+    source_root_override: Option<&Path>,
+) -> CliResult<Arc<SdkInventory>> {
+    let stdlib_root = match source_root_override {
+        Some(source_root) => source_root.join("crates/incan_stdlib/stdlib"),
+        None => crate::cli::prelude::find_stdlib_dir().ok_or_else(|| {
+            CliError::failure("cannot locate built-in stdlib sources needed to prepare SDK component providers")
+        })?,
+    };
     let stdlib_root = fs::canonicalize(&stdlib_root).map_err(|error| {
         CliError::failure(format!(
             "failed to canonicalize built-in stdlib source directory {}: {error}",
@@ -537,20 +556,22 @@ fn prepare_sdk_provider_inventory() -> CliResult<Arc<SdkInventory>> {
         .ok()
         .filter(|profile| !profile.is_empty())
         .unwrap_or_else(|| "full".to_string());
-    let store_root = env::var_os(INTERNAL_SDK_PROVIDER_STORE_ENV)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            if cfg!(test) {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/incan_test_sdk_provider_store")
-            } else {
-                default_sdk_provider_store(
-                    &stdlib_root,
-                    env::var_os("INCAN_HOME"),
-                    env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")),
-                )
-            }
-        });
+    let store_root = publisher_store_root.map(Path::to_path_buf).unwrap_or_else(|| {
+        env::var_os(INTERNAL_SDK_PROVIDER_STORE_ENV)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                if cfg!(test) {
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/incan_test_sdk_provider_store")
+                } else {
+                    default_sdk_provider_store(
+                        &stdlib_root,
+                        env::var_os("INCAN_HOME"),
+                        env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")),
+                    )
+                }
+            })
+    });
     let identity = sdk_provider_store_identity(
         &stdlib_root,
         &executable,
@@ -586,6 +607,8 @@ fn prepare_sdk_provider_inventory() -> CliResult<Arc<SdkInventory>> {
         workspace_lock.as_deref(),
         &staging_root,
         &distribution_profile,
+        source_root_override,
+        &stdlib_root,
     ) {
         Ok(inventory) => inventory,
         Err(error) => {
@@ -633,6 +656,8 @@ fn build_sdk_components_into_staging(
     workspace_lock: Option<&Path>,
     staging_root: &Path,
     distribution_profile: &str,
+    source_root_override: Option<&Path>,
+    stdlib_root: &Path,
 ) -> CliResult<SdkInventory> {
     fs::create_dir_all(staging_root).map_err(|error| {
         CliError::failure(format!(
@@ -687,6 +712,7 @@ fn build_sdk_components_into_staging(
             &component.id,
             &cargo_target_dir,
             caller_cargo_target.as_deref(),
+            source_root_override.map(|source_root| (source_root, stdlib_root)),
         );
         if built_any {
             inventory
@@ -780,6 +806,7 @@ fn configure_sdk_provider_build_environment(
     component_id: &str,
     transaction_cargo_target: &Path,
     caller_cargo_target: Option<&std::ffi::OsStr>,
+    toolchain_source: Option<(&Path, &Path)>,
 ) {
     let cargo_target_dir = caller_cargo_target.map(Path::new).unwrap_or(transaction_cargo_target);
     command
@@ -789,6 +816,11 @@ fn configure_sdk_provider_build_environment(
         .env(INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV, "1")
         // Share transient Cargo artifacts across components, then remove them before immutable provider publication.
         .env(GENERATED_CARGO_TARGET_DIR_ENV, cargo_target_dir);
+    if let Some((source_root, stdlib_root)) = toolchain_source {
+        command
+            .env("INCAN_SOURCE_ROOT", source_root)
+            .env("INCAN_STDLIB", stdlib_root);
+    }
 }
 
 /// Validate producer claims against the namespace grant before publishing them into the SDK inventory.
@@ -1036,7 +1068,11 @@ fn split_env_cargo_args(value: Option<&str>) -> Vec<String> {
 }
 
 /// Discover the active component-aware SDK relative to the selected toolchain or an explicit override.
-fn discover_active_sdk_inventory() -> CliResult<Option<Arc<SdkInventory>>> {
+/// Discover the installed SDK inventory without publishing source-checkout providers.
+///
+/// Oven consumers use this narrow read-only path. A normal command must treat an absent inventory as an explicit
+/// preparation requirement, never as authority to invoke the legacy Cargo publisher.
+pub(crate) fn discover_active_sdk_inventory() -> CliResult<Option<Arc<SdkInventory>>> {
     let explicit = env::var_os(SDK_INVENTORY_OVERRIDE_ENV)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from);
@@ -1579,9 +1615,10 @@ impl CompilationSession {
         feature_selection: &FeatureSelection,
         sdk_profile_override: Option<&str>,
     ) -> CliResult<Self> {
-        Self::discover_with_dependency_mode(
+        Self::discover_with_dependency_mode_and_sdk_source(
             entry_path,
             DependencyManifestMode::FullArtifacts,
+            SdkInventorySource::PrepareLegacyCargoIfAbsent,
             feature_selection,
             sdk_profile_override,
         )
@@ -1601,23 +1638,46 @@ impl CompilationSession {
     }
 
     /// Discover parser-only project context for explicit package-feature and transient SDK-profile selections.
+    ///
+    /// Test collection is part of the normal Oven execution path, so a missing SDK inventory is an explicit
+    /// preparation error rather than authorization to rebuild it through the former Cargo backend.
     pub(crate) fn discover_for_collection_with_selections(
         entry_path: &Path,
         feature_selection: &FeatureSelection,
         sdk_profile_override: Option<&str>,
     ) -> CliResult<Self> {
-        Self::discover_with_dependency_mode(
+        Self::discover_with_dependency_mode_and_sdk_source(
             entry_path,
             DependencyManifestMode::ParserOnly,
+            SdkInventorySource::DiscoverOnly,
+            feature_selection,
+            sdk_profile_override,
+        )
+    }
+
+    /// Discover the semantic context for an Oven consumer without triggering any legacy Cargo publication.
+    ///
+    /// This permits an already installed or Oven-prepared SDK inventory, but a normal command must never respond to a
+    /// cache miss by launching the old provider builder. The explicit `legacy_cargo` publisher owns that transition.
+    pub(crate) fn discover_for_oven(
+        entry_path: &Path,
+        feature_selection: &FeatureSelection,
+        sdk_profile_override: Option<&str>,
+    ) -> CliResult<Self> {
+        Self::discover_with_dependency_mode_and_sdk_source(
+            entry_path,
+            DependencyManifestMode::OvenArtifacts,
+            SdkInventorySource::DiscoverOnly,
             feature_selection,
             sdk_profile_override,
         )
     }
 
     /// Discover project context with either full dependency artifacts or parser-only dependency metadata.
-    fn discover_with_dependency_mode(
+    fn discover_with_dependency_mode_and_sdk_source(
         entry_path: &Path,
         dependency_mode: DependencyManifestMode,
+        sdk_source: SdkInventorySource,
         feature_selection: &FeatureSelection,
         sdk_profile_override: Option<&str>,
     ) -> CliResult<Self> {
@@ -1628,7 +1688,10 @@ impl CompilationSession {
             .map(|manifest| manifest.project_root().to_path_buf())
             .unwrap_or(inferred_project_root);
         let source_root = resolve_source_root(&project_root, manifest.as_ref());
-        let sdk_inventory = prepare_or_discover_sdk_inventory()?;
+        let sdk_inventory = match sdk_source {
+            SdkInventorySource::PrepareLegacyCargoIfAbsent => prepare_or_discover_sdk_inventory()?,
+            SdkInventorySource::DiscoverOnly => discover_active_sdk_inventory()?,
+        };
         let package_feature_plan = manifest
             .as_ref()
             .map(|manifest| {
@@ -1653,12 +1716,17 @@ impl CompilationSession {
             .map(|graph| graph.declared_features().map(str::to_string).collect())
             .unwrap_or_default();
         if let Some(manifest) = manifest.as_ref()
-            && dependency_mode == DependencyManifestMode::FullArtifacts
+            && let Some(preparation) = dependency_mode.library_dependency_preparation()
         {
-            prepare_library_dependency_artifacts(manifest, package_feature_plan.as_ref(), &active_dependencies)?;
+            prepare_library_dependency_artifacts(
+                manifest,
+                package_feature_plan.as_ref(),
+                &active_dependencies,
+                preparation,
+            )?;
         }
         let mut library_manifest_index = match (manifest.as_ref(), dependency_mode) {
-            (Some(manifest), DependencyManifestMode::FullArtifacts) if !active_dependencies.is_empty() => {
+            (Some(manifest), mode) if mode.uses_materialized_library_index() && !active_dependencies.is_empty() => {
                 LibraryManifestIndex::from_project_manifest_dependencies(
                     manifest,
                     active_dependencies.iter().map(String::as_str),
@@ -1950,8 +2018,43 @@ impl CompilationSession {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DependencyManifestMode {
+    /// Prepare a legacy source-compatible dependency manifest without baking a native library.
     FullArtifacts,
+    /// Materialize direct-Rustc caller-owned libraries for a normal Oven consumer.
+    OvenArtifacts,
     ParserOnly,
+}
+
+impl DependencyManifestMode {
+    fn library_dependency_preparation(self) -> Option<LibraryDependencyPreparation> {
+        match self {
+            Self::FullArtifacts => Some(LibraryDependencyPreparation::LegacyManifestOnly),
+            Self::OvenArtifacts => Some(LibraryDependencyPreparation::OvenDirectRustc),
+            Self::ParserOnly => None,
+        }
+    }
+
+    fn uses_materialized_library_index(self) -> bool {
+        matches!(self, Self::FullArtifacts | Self::OvenArtifacts)
+    }
+}
+
+/// Specify which owned artifact a local `pub::` dependency preparation must provide to its caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LibraryDependencyPreparation {
+    /// Preserve the legacy preparation behavior used by commands that only require dependency metadata.
+    LegacyManifestOnly,
+    /// Produce metadata and profile-specific caller-owned rlibs through normal Oven direct-rustc library execution.
+    OvenDirectRustc,
+}
+
+/// Decide whether session construction is permitted to invoke the temporary legacy-Cargo provider publisher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SdkInventorySource {
+    /// Existing compatibility behavior for commands that still explicitly own legacy artifact preparation.
+    PrepareLegacyCargoIfAbsent,
+    /// Oven consumer mode: read an installed/prepared inventory only and never create Cargo state on a cache miss.
+    DiscoverOnly,
 }
 
 /// Build a parser-only dependency manifest index for formatting and other collection-only entrypoints.
@@ -1959,7 +2062,11 @@ enum DependencyManifestMode {
 /// This deliberately does not write `.incnlib` artifacts. A source-derived parser manifest contains vocab
 /// registrations and soft-keyword activations only, because collection parsing needs syntax context but not generated
 /// Rust artifacts, checked exports, Rust ABI metadata, or a packaged desugarer.
-fn parser_only_library_manifest_index(
+/// Load source dependency manifests without materializing their legacy library artifacts.
+///
+/// This is intentionally available to Oven's lock validator so `--locked` and `--frozen` can retain canonical
+/// freshness semantics without starting Cargo merely to inspect dependency metadata.
+pub(crate) fn parser_only_library_manifest_index(
     manifest: &ProjectManifest,
     active_dependencies: &BTreeSet<String>,
 ) -> CliResult<LibraryManifestIndex> {
@@ -2050,10 +2157,11 @@ fn parser_only_library_manifest_entry(
 }
 
 /// Ensure clean check/format/test entrypoints see the same public dependency manifests as warmed worktrees.
-pub(crate) fn prepare_library_dependency_artifacts(
+fn prepare_library_dependency_artifacts(
     manifest: &ProjectManifest,
     feature_plan: Option<&PackageFeaturePlan>,
     active_dependencies: &BTreeSet<String>,
+    preparation: LibraryDependencyPreparation,
 ) -> CliResult<()> {
     if active_dependencies.is_empty() {
         return Ok(());
@@ -2100,7 +2208,7 @@ pub(crate) fn prepare_library_dependency_artifacts(
     }
 
     for (dependency_key, dependency_root, active_features) in required {
-        prepare_library_dependency_artifact(&dependency_key, &dependency_root, &active_features)?;
+        prepare_library_dependency_artifact(&dependency_key, &dependency_root, &active_features, preparation)?;
     }
 
     Ok(())
@@ -2111,6 +2219,7 @@ fn prepare_library_dependency_artifact(
     dependency_key: &str,
     dependency_root: &Path,
     active_features: &BTreeSet<String>,
+    preparation: LibraryDependencyPreparation,
 ) -> CliResult<()> {
     let canonical_root = fs::canonicalize(dependency_root).unwrap_or_else(|_| dependency_root.to_path_buf());
     {
@@ -2122,8 +2231,12 @@ fn prepare_library_dependency_artifact(
         }
     }
 
+    let preparation_label = match preparation {
+        LibraryDependencyPreparation::LegacyManifestOnly => "metadata artifact",
+        LibraryDependencyPreparation::OvenDirectRustc => "Oven direct-rustc library",
+    };
     eprintln!(
-        "Preparing missing pub::{dependency_key} dependency artifact with `incan build --lib` in {}",
+        "Preparing missing pub::{dependency_key} {preparation_label} with `incan build --lib` in {}",
         dependency_root.display()
     );
     let current_exe = env::current_exe()
@@ -2134,7 +2247,18 @@ fn prepare_library_dependency_artifact(
         .current_dir(dependency_root)
         .env_remove(INTERNAL_MANIFEST_OVERRIDE_ENV)
         .env_remove(INTERNAL_PROJECT_ROOT_OVERRIDE_ENV)
-        .env(INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV, "1");
+        .env(INTERNAL_LIBRARY_DEPENDENCY_PREPARATION_ENV, "1");
+    match preparation {
+        LibraryDependencyPreparation::LegacyManifestOnly => {
+            command.env(INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV, "1");
+        }
+        LibraryDependencyPreparation::OvenDirectRustc => {
+            // An inherited preparation flag would silently turn this child back into metadata-only output, leaving
+            // the normal Oven consumer without a caller-owned rlib. Clear only that internal flag: the child keeps
+            // the suite's sealed SDK inventory and direct-rustc selection context.
+            command.env_remove(INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV);
+        }
+    }
     if !active_features.is_empty() {
         command
             .arg("--features")
@@ -2428,58 +2552,6 @@ pub(crate) fn merge_project_requirement_dependencies(
         .dependencies
         .sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
     Ok(())
-}
-
-/// Merge project-level dependency requirements into the resolved dependency set.
-pub(crate) fn merge_project_requirements(
-    current: &ProjectRequirements,
-    extra: &ProjectRequirements,
-) -> CliResult<ProjectRequirements> {
-    let stdlib_features = current
-        .stdlib_features
-        .iter()
-        .chain(extra.stdlib_features.iter())
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-
-    let mut dependencies = current.dependencies.clone();
-    for candidate in &extra.dependencies {
-        if let Some(existing) = dependencies.iter().find(|dep| dep.crate_name == candidate.crate_name) {
-            if existing != candidate {
-                return Err(CliError::failure(format!(
-                    "dependency requirement `{}` conflicts between project requirement contexts",
-                    candidate.crate_name
-                )));
-            }
-            continue;
-        }
-        dependencies.push(candidate.clone());
-    }
-    dependencies.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
-    let mut sdk_dependency_rebindings = current.sdk_dependency_rebindings.clone();
-    sdk_dependency_rebindings.extend(extra.sdk_dependency_rebindings.iter().cloned());
-    normalize_sdk_dependency_rebindings(&mut sdk_dependency_rebindings);
-    let mut sdk_path_dependencies = current.sdk_path_dependencies.clone();
-    for candidate in &extra.sdk_path_dependencies {
-        merge_requirement_dependency(
-            &mut sdk_path_dependencies,
-            candidate.clone(),
-            "merged SDK/toolchain path context".to_string(),
-        )?;
-    }
-    let mut sdk_artifact_projections = current.sdk_artifact_projections.clone();
-    sdk_artifact_projections.extend(extra.sdk_artifact_projections.iter().cloned());
-    normalize_sdk_artifact_projections(&mut sdk_artifact_projections);
-
-    Ok(ProjectRequirements {
-        stdlib_features,
-        dependencies,
-        sdk_dependency_rebindings,
-        sdk_path_dependencies,
-        sdk_artifact_projections,
-    })
 }
 
 #[cfg(feature = "rust_inspect")]
@@ -2939,7 +3011,7 @@ fn prewarm_rust_inspect_out_dirs(manifest_dir: &Path, target_dir: &Path, query_p
 ///
 /// When the same inputs are seen again (for example across multiple `incan test` cases in one package), regeneration is
 /// skipped if the namespaced workspace fingerprint matches the computed digest and expected artifacts exist.
-#[cfg(feature = "rust_inspect")]
+#[cfg(all(test, feature = "rust_inspect"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ensure_rust_inspect_workspace(
     project_root: &Path,
@@ -3324,15 +3396,6 @@ pub(crate) fn uses_result_combinator_surface(program: &Program) -> bool {
 /// parsed AST needs them. Migrated modules are resolved through the compiled built-in artifact instead.
 pub fn collect_modules(entry_path: &str) -> CliResult<Vec<ParsedModule>> {
     collect_modules_detailed(entry_path).map_err(|failure| CliError::failure(failure.render_human()))
-}
-
-/// Collect and parse one compilation graph using an explicit Incan package-feature selection.
-pub(crate) fn collect_modules_with_feature_selection(
-    entry_path: &str,
-    feature_selection: &FeatureSelection,
-) -> CliResult<Vec<ParsedModule>> {
-    collect_modules_detailed_with_feature_selection(entry_path, feature_selection)
-        .map_err(|failure| CliError::failure(failure.render_human()))
 }
 
 /// Return whether the SDK catalog claims a module that source collection must never materialize locally.
@@ -4477,7 +4540,7 @@ mod tests {
     fn sdk_provider_build_uses_transaction_local_cargo_target() {
         let mut command = Command::new("incan");
         let target = Path::new("/staging/.cargo-target");
-        configure_sdk_provider_build_environment(&mut command, "stdlib-core", target, None);
+        configure_sdk_provider_build_environment(&mut command, "stdlib-core", target, None, None);
         let configured_target = command
             .get_envs()
             .find_map(|(name, value)| (name == GENERATED_CARGO_TARGET_DIR_ENV).then_some(value))
@@ -4495,12 +4558,38 @@ mod tests {
             "stdlib-core",
             transaction_target,
             Some(caller_target.as_os_str()),
+            None,
         );
         let configured_target = command
             .get_envs()
             .find_map(|(name, value)| (name == GENERATED_CARGO_TARGET_DIR_ENV).then_some(value))
             .flatten();
         assert_eq!(configured_target, Some(caller_target.as_os_str()));
+    }
+
+    #[test]
+    fn sdk_provider_build_pins_an_explicit_compiler_source_tree() {
+        let mut command = Command::new("incan");
+        let target = Path::new("/staging/.cargo-target");
+        let compiler_root = Path::new("/compiler");
+        let stdlib_root = Path::new("/compiler/crates/incan_stdlib/stdlib");
+        configure_sdk_provider_build_environment(
+            &mut command,
+            "stdlib-core",
+            target,
+            None,
+            Some((compiler_root, stdlib_root)),
+        );
+        let source_root = command
+            .get_envs()
+            .find_map(|(name, value)| (name == "INCAN_SOURCE_ROOT").then_some(value))
+            .flatten();
+        let configured_stdlib = command
+            .get_envs()
+            .find_map(|(name, value)| (name == "INCAN_STDLIB").then_some(value))
+            .flatten();
+        assert_eq!(source_root, Some(compiler_root.as_os_str()));
+        assert_eq!(configured_stdlib, Some(stdlib_root.as_os_str()));
     }
 
     #[test]
@@ -6159,17 +6248,14 @@ pub def main() -> int:
 
     #[cfg(feature = "rust_inspect")]
     #[test]
-    fn rust_inspect_projection_receives_frozen_cargo_policy() -> Result<(), Box<dyn std::error::Error>> {
+    fn rust_inspect_workspace_without_a_lock_projection_never_launches_cargo() -> Result<(), Box<dyn std::error::Error>>
+    {
         let tmp = tempfile::tempdir()?;
         let requirements = ProjectRequirements::default();
         let resolved = ResolvedDependencies {
             dependencies: Vec::new(),
             dev_dependencies: Vec::new(),
         };
-        let canonical = format!(
-            "version = 4\n\n[[package]]\nname = \"incan_workspace\"\nversion = \"{}\"\n",
-            crate::version::INCAN_VERSION
-        );
         let fingerprint = super::rust_inspect_workspace_fingerprint(
             "policy_probe",
             "caller",
@@ -6179,13 +6265,12 @@ pub def main() -> int:
             &requirements.sdk_dependency_rebindings,
             &requirements.sdk_path_dependencies,
             &requirements.sdk_artifact_projections,
-            Some(&canonical),
-            Some("incan_workspace"),
+            None,
+            None,
             false,
             &tmp.path().join("cargo-target"),
         );
         let output_dir = super::rust_inspect_workspace_dir(tmp.path(), "policy_probe", &fingerprint);
-        let flags = vec!["--frozen".to_string()];
 
         let result = ensure_rust_inspect_workspace_with_cargo_package_name(
             tmp.path(),
@@ -6194,20 +6279,17 @@ pub def main() -> int:
             None,
             &resolved,
             &requirements,
-            Some(canonical),
-            Some("incan_workspace"),
+            None,
+            None,
             false,
             &tmp.path().join("cargo-target"),
-            &flags,
-        );
-        assert!(
-            result.is_err(),
-            "the deliberately incomplete canonical fixture must fail closed"
-        );
+            &[],
+        )?;
+        assert_eq!(result, output_dir);
         assert_eq!(
-            crate::backend::project::runner::test_projection_cargo_policy(&output_dir),
-            Some(flags),
-            "rust-inspect must set frozen policy before attempting Cargo lock projection"
+            fs::read_to_string(output_dir.join("Cargo.lock")).ok(),
+            None,
+            "a Rust-inspect workspace without a compatibility projection must not create Cargo.lock"
         );
         Ok(())
     }
@@ -6423,22 +6505,6 @@ pub def main() -> int:
         let cargo_manifest = fs::read_to_string(generated.join("Cargo.toml"))?;
         assert!(cargo_manifest.contains(".incan-sdk-rebound"));
         assert!(!cargo_manifest.contains(absent_sdk.to_string_lossy().as_ref()));
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let output = Command::new(cargo)
-            .arg("check")
-            .arg("--offline")
-            .arg("--manifest-path")
-            .arg(generated.join("Cargo.toml"))
-            .env("CARGO_TARGET_DIR", workspace.path().join("cargo-target"))
-            .output()?;
-        if !output.status.success() {
-            return Err(format!(
-                "rust-inspect projected Cargo graph failed:\n{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
-        }
         let projection_parent = generated
             .parent()
             .ok_or("rust-inspect workspace has no parent")?
@@ -6448,6 +6514,83 @@ pub def main() -> int:
             .map(|entry| entry.path())
             .find(|path| path.is_dir())
             .ok_or("missing rust-inspect projected artifact")?;
+        let rebound_manifest = toml::from_str::<toml::Value>(&fs::read_to_string(shadow_root.join("Cargo.toml"))?)?;
+        let runtime_relative = rebound_manifest
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .and_then(|dependencies| dependencies.get("issue911_runtime"))
+            .and_then(toml::Value::as_table)
+            .and_then(|dependency| dependency.get("path"))
+            .and_then(toml::Value::as_str)
+            .ok_or("rust-inspect rebound artifact has no runtime path dependency")?;
+        let runtime_root = shadow_root.join(runtime_relative);
+        let direct = workspace.path().join("oven-direct-rustc");
+        fs::create_dir_all(&direct)?;
+        let rustc = std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC")
+            .or_else(|| std::env::var_os("RUSTC"))
+            .unwrap_or_else(|| "rustc".into());
+        let compile = |source: &Path,
+                       crate_name: &str,
+                       output: &Path,
+                       externs: &[(&str, &Path)]|
+         -> Result<(), Box<dyn std::error::Error>> {
+            let mut command = Command::new(&rustc);
+            command
+                .arg("--edition")
+                .arg("2024")
+                .arg("--crate-name")
+                .arg(crate_name)
+                .arg("--crate-type")
+                .arg("lib")
+                .arg(source)
+                .arg("-o")
+                .arg(output)
+                .env_remove("CARGO")
+                .env_remove("CARGO_MANIFEST_DIR")
+                .env_remove("CARGO_MANIFEST_PATH");
+            for (name, artifact) in externs {
+                let parent = artifact.parent().ok_or_else(|| {
+                    format!(
+                        "rust-inspect direct artifact for `{name}` has no dependency search directory: {}",
+                        artifact.display()
+                    )
+                })?;
+                command
+                    .arg("-L")
+                    .arg(format!("dependency={}", parent.display()))
+                    .arg("--extern")
+                    .arg(format!("{name}={}", artifact.display()));
+            }
+            let result = command.output()?;
+            if result.status.success() {
+                return Ok(());
+            }
+            Err(format!(
+                "rust-inspect direct-Rustc fixture compilation for `{crate_name}` failed:\n{}{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            )
+            .into())
+        };
+        let runtime = direct.join("libissue911_runtime.rlib");
+        let compiled = direct.join("libissue911_compiled.rlib");
+        let probe = direct.join("libissue911_probe.rlib");
+        compile(&runtime_root.join("src/lib.rs"), "issue911_runtime", &runtime, &[])?;
+        compile(
+            &shadow_root.join("src/lib.rs"),
+            "issue911_compiled",
+            &compiled,
+            &[("issue911_runtime", runtime.as_path())],
+        )?;
+        compile(
+            &generated.join("src/main.rs"),
+            "issue911_probe",
+            &probe,
+            &[
+                ("issue911_compiled", compiled.as_path()),
+                ("issue911_runtime", runtime.as_path()),
+            ],
+        )?;
         fs::write(shadow_root.join("src/lib.rs"), "pub fn corrupt() {}\n")?;
         let regenerated = ensure_rust_inspect_workspace_with_cargo_package_name(
             workspace.path(),
@@ -6819,6 +6962,25 @@ def main() -> None:
         assert!(message.contains("was built with package features [alpha]"));
         assert!(message.contains("requires [beta]"));
         Ok(())
+    }
+
+    #[test]
+    fn oven_dependency_discovery_materializes_while_legacy_preparation_remains_metadata_only() {
+        assert_eq!(
+            DependencyManifestMode::FullArtifacts.library_dependency_preparation(),
+            Some(LibraryDependencyPreparation::LegacyManifestOnly)
+        );
+        assert_eq!(
+            DependencyManifestMode::OvenArtifacts.library_dependency_preparation(),
+            Some(LibraryDependencyPreparation::OvenDirectRustc)
+        );
+        assert_eq!(
+            DependencyManifestMode::ParserOnly.library_dependency_preparation(),
+            None
+        );
+        assert!(DependencyManifestMode::FullArtifacts.uses_materialized_library_index());
+        assert!(DependencyManifestMode::OvenArtifacts.uses_materialized_library_index());
+        assert!(!DependencyManifestMode::ParserOnly.uses_materialized_library_index());
     }
 
     #[test]
