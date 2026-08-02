@@ -2175,7 +2175,23 @@ hees_ai = { workspace = true }
     let parsed = incan::lockfile::IncanLock::load(&lock_path)?;
     assert!(!parsed.deps_fingerprint.is_empty());
     assert!(root.path().join("target/lib/hees_ai.incnlib").is_file());
-    assert!(provider_store.is_dir());
+    if support::oven_compiler_suite_is_active() {
+        assert!(
+            !provider_store.exists(),
+            "sealed compiler-suite execution must not publish a mutable per-fixture provider store: {}",
+            provider_store.display()
+        );
+        let inventory_path = std::env::var_os("INCAN_SDK_INVENTORY")
+            .map(PathBuf::from)
+            .ok_or("compiler-suite workspace lock has no sealed SDK inventory")?;
+        assert!(
+            inventory_path.is_file(),
+            "compiler-suite SDK inventory is not a regular file: {}",
+            inventory_path.display()
+        );
+    } else {
+        assert!(provider_store.is_dir());
+    }
 
     let second_lock_output = run(&["lock"])?;
     assert_success(&second_lock_output, "cold rooted workspace lock fixed point");

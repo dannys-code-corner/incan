@@ -38,8 +38,7 @@ use super::common::{
     cargo_command_flags, collect_modules_detailed_with_session, collect_project_requirements,
     collect_rust_dependency_uses, discover_active_sdk_inventory, enforce_project_toolchain_constraint,
     extend_requirements_with_provider_plan, format_dependency_error, merge_project_requirement_dependencies,
-    parser_only_library_manifest_index, provider_used_module_paths, resolve_sdk_component_selection,
-    semantic_sdk_path_dependencies,
+    provider_used_module_paths, resolve_sdk_component_selection, semantic_sdk_path_dependencies,
 };
 #[cfg(feature = "rust_inspect")]
 use super::common::{
@@ -1131,9 +1130,6 @@ fn collect_project_lock_context(
         .root_package()
         .map(|package| package.active_dependencies.clone())
         .unwrap_or_default();
-    let library_manifest_index = parser_only_library_manifest_index(manifest, &active_dependencies)?;
-    let library_imported_vocab = library_manifest_index.library_imported_vocab();
-    let library_imported_dsl_surfaces = library_manifest_index.library_imported_dsl_surfaces();
     let mut modules = Vec::new();
     let mut provider_module_groups = Vec::new();
     for entry_path in entry_paths {
@@ -1143,6 +1139,17 @@ fn collect_project_lock_context(
         modules.extend(entry_modules.iter().cloned());
         provider_module_groups.push(entry_modules);
     }
+
+    // Each Oven session above prepares a missing local `pub::` dependency before collecting its entry. Re-open the
+    // index only after that preparation so the first published lock records the same checked artifact identity that
+    // every later `lock` observes. A parser-source placeholder here would make the first lock stale as soon as the
+    // preparation wrote its `.incnlib` manifest.
+    let library_manifest_index = LibraryManifestIndex::from_project_manifest_dependencies(
+        manifest,
+        active_dependencies.iter().map(String::as_str),
+    );
+    let library_imported_vocab = library_manifest_index.library_imported_vocab();
+    let library_imported_dsl_surfaces = library_manifest_index.library_imported_dsl_surfaces();
 
     let sdk_selection =
         SdkComponentSelection::from_manifest_with_profile_override(Some(manifest), sdk_profile_override);
