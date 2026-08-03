@@ -2947,6 +2947,7 @@ mod tests {
         fs::create_dir_all(&staging)?;
         let publisher_lock = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(staging.join(LEGACY_CARGO_PUBLISHER_LOCK_FILE))?;
@@ -3303,7 +3304,7 @@ mod tests {
 
         let preview = bounded.preview_prune()?;
         assert!(preview.dry_run);
-        assert_eq!(preview.removed_entries, [first.identity.clone()]);
+        assert_eq!(preview.removed_entries, [&first.identity]);
         assert_eq!(preview.after_physical_bytes, 0);
         assert!(
             bounded.select(&first.identity).is_ok(),

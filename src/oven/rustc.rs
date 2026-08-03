@@ -4454,9 +4454,11 @@ mod tests {
                 package: "itoa".to_string(),
                 version: version.to_string(),
                 crate_name: "itoa".to_string(),
-                features: (version == "1.0.18")
-                    .then(|| vec!["std".to_string()])
-                    .unwrap_or_default(),
+                features: if version == "1.0.18" {
+                    vec!["std".to_string()]
+                } else {
+                    Vec::new()
+                },
                 artifact: OvenRustcArtifactExtern {
                     crate_name: "itoa".to_string(),
                     relative_path: artifact

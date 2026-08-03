@@ -3514,6 +3514,7 @@ fn compiler_suite_target_plan_coverage(
 
 #[cfg(test)]
 /// Plan the direct-rustc compiler-suite target closure for test-only publisher verification.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn compiler_suite_direct_target_plan(
     compiler_root: &Path,
     receipt: &OvenReceipt,
