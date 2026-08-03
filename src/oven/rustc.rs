@@ -1206,6 +1206,7 @@ fn validate_inactive_path_dependency_features(
     })
 }
 
+/// Normalize a declared package name to the direct-rustc crate identifier it exposes.
 fn direct_rustc_crate_name(name: &str) -> Result<String, OvenRustcError> {
     let normalized = name.replace('-', "_");
     validate_rust_identifier(&normalized)?;
@@ -1611,6 +1612,7 @@ enum OvenDirectRustcOutputKind {
 }
 
 impl OvenDirectRustcOutputKind {
+    /// Return the stable receipt spelling for this caller-owned output kind.
     const fn receipt_value(self) -> &'static str {
         match self {
             Self::Binary => "binary",
@@ -1621,6 +1623,7 @@ impl OvenDirectRustcOutputKind {
     }
 }
 
+/// Return the receipt default for callers that predate an explicit output-kind field.
 fn default_direct_rustc_output_kind() -> String {
     OvenDirectRustcOutputKind::Binary.receipt_value().to_string()
 }

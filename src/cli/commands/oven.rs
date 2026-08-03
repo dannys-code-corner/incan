@@ -2751,6 +2751,7 @@ fn attach_compiler_suite_target_workspace_libraries(
     libraries: &[OvenCompilerWorkspaceLibrary],
     outputs: &BTreeMap<OvenCompilerWorkspaceLibraryKey, OvenCallerOwnedRustcLibrary>,
 ) -> CliResult<()> {
+    /// Visit one workspace library and its dependencies in direct-rustc order.
     fn visit(
         key: &OvenCompilerWorkspaceLibraryKey,
         target_name: &str,

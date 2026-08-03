@@ -2026,6 +2026,7 @@ enum DependencyManifestMode {
 }
 
 impl DependencyManifestMode {
+    /// Return the caller-owned library artifact policy for this dependency preparation mode.
     fn library_dependency_preparation(self) -> Option<LibraryDependencyPreparation> {
         match self {
             Self::FullArtifacts => Some(LibraryDependencyPreparation::LegacyManifestOnly),
@@ -2034,6 +2035,7 @@ impl DependencyManifestMode {
         }
     }
 
+    /// Return whether this mode needs the checked library index after preparation.
     fn uses_materialized_library_index(self) -> bool {
         matches!(self, Self::FullArtifacts | Self::OvenArtifacts)
     }

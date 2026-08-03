@@ -51,6 +51,7 @@ struct NativeUnitTemporaryDirectory {
 }
 
 impl NativeUnitTemporaryDirectory {
+    /// Create a unique owner-scoped native-unit staging directory below `parent`.
     fn create(parent: &Path, prefix: &str) -> io::Result<Self> {
         for _ in 0..128 {
             let sequence = NATIVE_UNIT_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -70,10 +71,12 @@ impl NativeUnitTemporaryDirectory {
         ))
     }
 
+    /// Return the staging directory path while this owner retains cleanup responsibility.
     fn path(&self) -> &Path {
         &self.path
     }
 
+    /// Retain the staging directory after its caller has atomically published it.
     fn persist(mut self) -> PathBuf {
         self.keep = true;
         self.path.clone()
@@ -308,6 +311,7 @@ impl OvenNativeUnitCompatibility {
     }
 }
 
+/// Parse the canonical provider-capability records sealed into a native-unit receipt.
 fn parse_provider_capabilities(records: &str) -> Result<Vec<OvenNativeUnitProviderCapability>, OvenNativeUnitError> {
     let mut providers = Vec::new();
     for record in records.lines().filter(|record| !record.is_empty()) {
@@ -1780,6 +1784,7 @@ fn validate_registry_leaf_catalog(seed: &OvenNativeUnitSeed, seed_path: &Path) -
     Ok(())
 }
 
+/// Read one native-unit seed and attach the source path to any decoding failure.
 fn read_native_unit_seed(seed_path: &Path) -> Result<OvenNativeUnitSeed, OvenNativeUnitError> {
     let bytes = fs::read(seed_path).map_err(|source| OvenNativeUnitError::Io {
         path: seed_path.to_path_buf(),

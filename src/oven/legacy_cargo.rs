@@ -3193,6 +3193,7 @@ fn compiler_suite_workspace_libraries_for_roots(
     artifact_index: &BTreeMap<CargoUnitArtifactKey, Vec<PathBuf>>,
     catalog: &CompilerSuiteArtifactCatalog,
 ) -> Result<Vec<OvenCompilerWorkspaceLibrary>, OvenLegacyCargoError> {
+    /// Visit one publisher graph unit and retain its receipt-authorized workspace closure.
     #[allow(clippy::too_many_arguments)]
     fn visit(
         index: usize,
@@ -3512,6 +3513,7 @@ fn compiler_suite_target_plan_coverage(
 }
 
 #[cfg(test)]
+/// Plan the direct-rustc compiler-suite target closure for test-only publisher verification.
 fn compiler_suite_direct_target_plan(
     compiler_root: &Path,
     receipt: &OvenReceipt,
@@ -4614,6 +4616,7 @@ fn select_direct_proc_macro_artifact(
     select_direct_artifact_with_extensions(files, dependency, &["dylib", "so", "dll"])
 }
 
+/// Select one artifact with an allowed direct-rustc extension for a dependency name.
 fn select_direct_artifact_with_extensions(
     files: &BTreeMap<String, (String, String)>,
     dependency: &str,
@@ -4635,6 +4638,7 @@ fn select_direct_artifact_with_extensions(
     })
 }
 
+/// Return whether an artifact filename is a dynamically loaded rustc library.
 fn is_dynamic_rustc_artifact(name: &str) -> bool {
     [".dylib", ".so", ".dll"]
         .iter()

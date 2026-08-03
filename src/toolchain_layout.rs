@@ -154,6 +154,7 @@ fn scheduler_toolchain_data_root(
     scheduler_native_execution.then_some(configured_root).flatten()
 }
 
+/// Resolve one immutable compiler-data path from the scheduler handoff or executable-relative layout.
 fn resolve_toolchain_data_path_in(
     relative_path: &Path,
     scheduler_data_root: Option<PathBuf>,
