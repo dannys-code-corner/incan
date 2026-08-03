@@ -26,7 +26,9 @@ use crate::oven::legacy_cargo::{
     OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind, prepare_compiler_test_suite,
     prepare_direct_rustc_plan,
 };
-use crate::oven::native_test::{OvenNativeTestRequest, run_native_test_batch_all_in_directory, run_native_tests};
+use crate::oven::native_test::{
+    OvenNativeTestCaseCounts, OvenNativeTestRequest, run_native_test_batch_all_in_directory, run_native_tests,
+};
 use crate::oven::native_unit::prepare_native_unit_seed_from_generated_project;
 use crate::oven::rustc::{
     OvenCallerOwnedRustcLibrary, OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenStoredDirectRustcRunRequest,
@@ -39,7 +41,7 @@ use crate::oven::rustc::{
 };
 use crate::oven::store::{
     OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreExecutionPayload,
-    OvenStoreLimits,
+    OvenStoreLease, OvenStoreLimits,
 };
 use crate::oven::{
     OVEN_COMPILER_TEST_PROFILE, OvenBuildIntent, OvenCompilerSuiteRequest, OvenImportRequest, OvenReceipt,
@@ -474,10 +476,8 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     let rustc = options.rustc.unwrap_or(resolve_active_rustc().map_err(oven_error)?);
     let (receipt, receipt_path) = compiler_libtests_receipt(&options.compiler_root, &rustc, &options.features)?;
     let store = open_store(&options.store)?;
-    let suite_identity = select_compiler_test_suite(&store, &receipt, &options.compiler_root, &rustc)?;
-    let (manifest, artifact_root, payload, _lease) = store
-        .select_payload_for_execution(&suite_identity)
-        .map_err(oven_error)?;
+    let selected_suite = select_compiler_test_suite(&store, &receipt, &options.compiler_root, &rustc)?;
+    let (manifest, artifact_root, payload, suite_lease) = selected_suite.into_parts();
     if manifest.kind != OvenArtifactKind::CompilerTestSuite
         || manifest.build_unit_identity != receipt.build_unit_identity
         || manifest.intent != receipt.intent
@@ -488,7 +488,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     }
     let suite = serde_json::from_slice::<OvenCompilerTestSuitePayload>(&payload)
         .map_err(|error| CliError::failure(format!("stored Oven compiler suite payload is invalid: {error}")))?;
-    if !matches!(suite.schema_version, 8 | 9 | 10 | 11 | 12 | 13) {
+    if !matches!(suite.schema_version, 8..=13) {
         return Err(CliError::failure(format!(
             "stored Oven compiler suite payload schema {} is unsupported",
             suite.schema_version
@@ -555,7 +555,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             let foundations = select_compiler_suite_foundations(&store, &receipt, &suite.foundation_references)?;
             (shards, foundations)
         }
-        11 | 12 | 13 => {
+        11..=13 => {
             if !suite.test_targets.is_empty()
                 || !suite.binary_targets.is_empty()
                 || suite.test_artifact_closure.is_some()
@@ -599,7 +599,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
         8 => suite.test_artifact_closure.as_ref().ok_or_else(|| {
             CliError::failure("stored compiler-suite payload has no direct-rustc test closure".to_string())
         })?,
-        9 | 10 | 11 | 12 | 13 => suite.cli_artifact_closure.as_ref().ok_or_else(|| {
+        9..=13 => suite.cli_artifact_closure.as_ref().ok_or_else(|| {
             CliError::failure("stored indexed compiler-suite payload has no compiler CLI closure".to_string())
         })?,
         _ => unreachable!("schema was validated above"),
@@ -618,12 +618,17 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             output_directory.display()
         ))
     })?;
-    let stored_sdk_inventory = compiler_suite_file(
+    let stored_sdk_inventory = fs::canonicalize(compiler_suite_file(
         &artifact_root,
         &suite.sdk_inventory_relative_path,
         &suite.sdk_inventory_digest,
         "SDK provider inventory",
-    )?;
+    )?)
+    .map_err(|error| {
+        CliError::failure(format!(
+            "cannot canonicalize stored compiler-suite SDK provider inventory: {error}"
+        ))
+    })?;
     let compiler_data_root = if suite.schema_version == 13 {
         Some(materialize_compiler_suite_toolchain_data(
             &output_directory,
@@ -739,90 +744,91 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
         compiler_data_root.as_deref(),
         &output_directory,
     )?;
-    environment.insert("CARGO_BIN_EXE_incan".to_string(), cli_bake.output.display().to_string());
-    let provider_root = stored_sdk_inventory.parent().ok_or_else(|| {
-        CliError::failure(format!(
-            "stored compiler-suite SDK inventory {} has no provider root",
-            stored_sdk_inventory.display()
-        ))
-    })?;
     environment.insert(
-        "INCAN_INTERNAL_SDK_PROVIDER_STORE".to_string(),
-        provider_root.display().to_string(),
+        "CARGO_BIN_EXE_incan".to_string(),
+        compiler_suite_environment_path(&cli_bake.output)?.display().to_string(),
     );
-    let (native_test_count, doctest_targets, failed, planned_target_count, planned_binary_count) = if suite
-        .schema_version
-        == 8
-    {
-        let test_artifact_closure = suite.test_artifact_closure.as_ref().ok_or_else(|| {
-            CliError::failure("stored compiler-suite payload has no direct-rustc test closure".to_string())
-        })?;
-        let binary_outputs = bake_planned_compiler_suite_binaries(
-            &suite.binary_targets,
-            test_artifact_closure,
-            &manifest.intent,
-            &receipt,
-            &artifact_root,
-            &rustc,
-            &options.compiler_root,
-            &output_directory,
-            &cli_bake.output,
-            &[],
-            &BTreeMap::new(),
-            &[],
-            None,
-            &mut binary_cache,
-        )?;
-        let (native_test_count, doctest_targets, failed) = run_planned_compiler_suite_children(
-            &suite.test_targets,
-            test_artifact_closure,
-            &manifest.intent,
-            &receipt,
-            &artifact_root,
-            &rustc,
-            &options.compiler_root,
-            &output_directory,
-            &environment,
-            &binary_outputs,
-            &[],
-            &BTreeMap::new(),
-            &[],
-            None,
-        )?;
-        (
-            native_test_count,
-            doctest_targets,
-            failed,
-            suite.test_targets.len(),
-            suite.binary_targets.len(),
-        )
-    } else {
-        let mut prepared_children = Vec::with_capacity(shard_executions.len());
-        let mut planned_binary_count = 0;
-        for (index, shard) in shard_executions.iter().enumerate() {
-            let shard_output = output_directory.join("shards").join(format!("{index:04}"));
-            if suite.schema_version < 11
-                && (!shard.payload.workspace_libraries.is_empty()
-                    || !shard.payload.target.workspace_library_dependencies.is_empty()
-                    || shard
-                        .payload
-                        .binary_targets
-                        .iter()
-                        .any(|target| !target.workspace_library_dependencies.is_empty()))
-            {
-                return Err(CliError::failure(
-                    "schema-10-or-earlier Oven compiler suite shard declares workspace-library edges that its stored schema cannot execute",
-                ));
-            }
-            let foundations = matches!(suite.schema_version, 10 | 11 | 12 | 13).then_some(&foundation_executions);
-            let foundation_references = if matches!(suite.schema_version, 10 | 11 | 12 | 13) {
-                shard.payload.foundation_references.as_slice()
-            } else {
-                &[]
-            };
-            let workspace_library_outputs = if suite.schema_version >= 11 {
-                bake_planned_compiler_suite_workspace_libraries(
-                    &shard.payload.workspace_libraries,
+    let run_children = || -> CliResult<(CompilerSuiteChildrenReport, usize, usize)> {
+        if suite.schema_version == 8 {
+            let test_artifact_closure = suite.test_artifact_closure.as_ref().ok_or_else(|| {
+                CliError::failure("stored compiler-suite payload has no direct-rustc test closure".to_string())
+            })?;
+            let binary_outputs = bake_planned_compiler_suite_binaries(
+                &suite.binary_targets,
+                test_artifact_closure,
+                &manifest.intent,
+                &receipt,
+                &artifact_root,
+                &rustc,
+                &options.compiler_root,
+                &output_directory,
+                &cli_bake.output,
+                &[],
+                &BTreeMap::new(),
+                &[],
+                None,
+                &mut binary_cache,
+            )?;
+            let suite_report = run_planned_compiler_suite_children(
+                &suite.test_targets,
+                test_artifact_closure,
+                &manifest.intent,
+                &receipt,
+                &artifact_root,
+                &rustc,
+                &options.compiler_root,
+                &output_directory,
+                &environment,
+                &binary_outputs,
+                &[],
+                &BTreeMap::new(),
+                &[],
+                None,
+            )?;
+            Ok((suite_report, suite.test_targets.len(), suite.binary_targets.len()))
+        } else {
+            let mut prepared_children = Vec::with_capacity(shard_executions.len());
+            let mut planned_binary_count = 0;
+            for (index, shard) in shard_executions.iter().enumerate() {
+                let shard_output = output_directory.join("shards").join(format!("{index:04}"));
+                if suite.schema_version < 11
+                    && (!shard.payload.workspace_libraries.is_empty()
+                        || !shard.payload.target.workspace_library_dependencies.is_empty()
+                        || shard
+                            .payload
+                            .binary_targets
+                            .iter()
+                            .any(|target| !target.workspace_library_dependencies.is_empty()))
+                {
+                    return Err(CliError::failure(
+                        "schema-10-or-earlier Oven compiler suite shard declares workspace-library edges that its stored schema cannot execute",
+                    ));
+                }
+                let foundations = matches!(suite.schema_version, 10..=13).then_some(&foundation_executions);
+                let foundation_references = if matches!(suite.schema_version, 10..=13) {
+                    shard.payload.foundation_references.as_slice()
+                } else {
+                    &[]
+                };
+                let workspace_library_outputs = if suite.schema_version >= 11 {
+                    bake_planned_compiler_suite_workspace_libraries(
+                        &shard.payload.workspace_libraries,
+                        &shard.payload.artifact_closure,
+                        &shard.stored.manifest.intent,
+                        &receipt,
+                        &shard.stored.artifact_root,
+                        &rustc,
+                        &options.compiler_root,
+                        &shard_output,
+                        foundation_references,
+                        foundations,
+                        &mut workspace_library_cache,
+                    )?
+                } else {
+                    BTreeMap::new()
+                };
+                let binary_outputs = bake_planned_compiler_suite_binaries(
+                    &shard.payload.binary_targets,
                     &shard.payload.artifact_closure,
                     &shard.stored.manifest.intent,
                     &receipt,
@@ -830,78 +836,92 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
                     &rustc,
                     &options.compiler_root,
                     &shard_output,
+                    &cli_bake.output,
+                    &shard.payload.workspace_libraries,
+                    &workspace_library_outputs,
                     foundation_references,
                     foundations,
-                    &mut workspace_library_cache,
-                )?
-            } else {
-                BTreeMap::new()
-            };
-            let binary_outputs = bake_planned_compiler_suite_binaries(
-                &shard.payload.binary_targets,
-                &shard.payload.artifact_closure,
-                &shard.stored.manifest.intent,
-                &receipt,
-                &shard.stored.artifact_root,
-                &rustc,
-                &options.compiler_root,
-                &shard_output,
-                &cli_bake.output,
-                &shard.payload.workspace_libraries,
-                &workspace_library_outputs,
-                foundation_references,
-                foundations,
-                &mut binary_cache,
-            )?;
-            prepared_children.push(prepare_compiler_suite_child(
-                &shard.payload.target,
-                &shard.payload.artifact_closure,
-                &shard.stored.manifest.intent,
-                &shard.stored.artifact_root,
-                &rustc,
-                &options.compiler_root,
-                &shard_output,
-                &environment,
-                &binary_outputs,
-                &shard.payload.workspace_libraries,
-                workspace_library_outputs,
-                foundation_references,
-                foundations,
-            )?);
-            planned_binary_count += shard.payload.binary_targets.len();
+                    &mut binary_cache,
+                )?;
+                prepared_children.push(prepare_compiler_suite_child(
+                    &shard.payload.target,
+                    &shard.payload.artifact_closure,
+                    &shard.stored.manifest.intent,
+                    &shard.stored.artifact_root,
+                    &rustc,
+                    &options.compiler_root,
+                    &shard_output,
+                    &environment,
+                    &binary_outputs,
+                    &shard.payload.workspace_libraries,
+                    workspace_library_outputs,
+                    foundation_references,
+                    foundations,
+                )?);
+                planned_binary_count += shard.payload.binary_targets.len();
+            }
+            let suite_report = run_prepared_compiler_suite_children(prepared_children, &receipt, &rustc)?;
+            Ok((suite_report, shard_executions.len(), planned_binary_count))
         }
-        let (native_test_count, doctest_targets, failed) =
-            run_prepared_compiler_suite_children(prepared_children, &receipt, &rustc)?;
-        (
-            native_test_count,
-            doctest_targets,
-            failed,
-            shard_executions.len(),
-            planned_binary_count,
-        )
     };
-    if !failed.is_empty() {
+    let (suite_report, planned_target_count, planned_binary_count) = run_compiler_suite_children_with_leases_retained(
+        &suite_lease,
+        &shard_executions,
+        &foundation_executions,
+        &toolchain_data_executions,
+        run_children,
+    )?;
+    let native_test_case_totals = suite_report.native_test_case_totals();
+    let success = suite_report.failed.is_empty();
+    let report_path = output_directory.join("compiler-suite-report.json");
+    let report = serde_json::json!({
+        "success": success,
+        "receipt": receipt_path.display().to_string(),
+        "report_path": report_path.display().to_string(),
+        "native_test_count": suite_report.native_test_count,
+        "native_test_case_totals": native_test_case_totals.clone(),
+        "native_test_roots": suite_report.native_test_roots.clone(),
+        "doctest_targets": suite_report.doctest_targets,
+        "test_targets": planned_target_count,
+        "binary_targets": planned_binary_count,
+        "suite_schema_version": suite.schema_version,
+        "shard_count": shard_executions.len(),
+        "compiler_cli_reused": cli_bake.reused,
+        "cargo_process_started": false,
+        "failures": suite_report.failed.clone(),
+    });
+    write_compiler_suite_report(&report_path, &report)?;
+    if !success {
+        if matches!(options.format, OvenOutputFormat::Json) {
+            print_json(&report)?;
+            return Ok(ExitCode::FAILURE);
+        }
         return Err(CliError::failure(format!(
-            "compiler workspace native tests failed after Cargo-free Oven execution:\n{}",
-            failed.join("\n\n")
+            "compiler workspace native tests failed after Cargo-free Oven execution: {} passed, {} failed, {} ignored across {} reported libtest root(s): {} green, {} failing, with {} root(s) lacking a terminal libtest summary.\n{}",
+            native_test_case_totals.passed,
+            native_test_case_totals.failed,
+            native_test_case_totals.ignored,
+            native_test_case_totals.reported_roots,
+            native_test_case_totals.green_roots,
+            native_test_case_totals.failed_roots,
+            native_test_case_totals.unreported_roots,
+            suite_report.failed.join("\n\n")
         )));
     }
     match options.format {
         OvenOutputFormat::Text => println!(
-            "Oven executed {native_test_count} compiler workspace native test(s) and {doctest_targets} doctest target(s) through its Cargo-free stored target plan (receipt {}).",
+            "Oven executed {} compiler workspace native test(s): {} passed, {} failed, {} ignored across {} reported root(s): {} green and {} failing, plus {} doctest target(s), through its Cargo-free stored target plan (receipt {}).",
+            suite_report.native_test_count,
+            native_test_case_totals.passed,
+            native_test_case_totals.failed,
+            native_test_case_totals.ignored,
+            native_test_case_totals.reported_roots,
+            native_test_case_totals.green_roots,
+            native_test_case_totals.failed_roots,
+            suite_report.doctest_targets,
             receipt_path.display(),
         ),
-        OvenOutputFormat::Json => print_json(&serde_json::json!({
-            "receipt": receipt_path,
-            "native_test_count": native_test_count,
-            "doctest_targets": doctest_targets,
-            "test_targets": planned_target_count,
-            "binary_targets": planned_binary_count,
-            "suite_schema_version": suite.schema_version,
-            "shard_count": shard_executions.len(),
-            "compiler_cli_reused": cli_bake.reused,
-            "cargo_process_started": false,
-        }))?,
+        OvenOutputFormat::Json => print_json(&report)?,
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -954,12 +974,36 @@ fn compiler_suite_environment_with_vocab(
             stdlib_root.display()
         )));
     }
+    let sdk_inventory = fs::canonicalize(sdk_inventory).map_err(|error| {
+        CliError::failure(format!(
+            "cannot canonicalize compiler-suite SDK provider inventory {}: {error}",
+            sdk_inventory.display()
+        ))
+    })?;
     if !sdk_inventory.is_file() {
         return Err(CliError::failure(format!(
             "compiler-suite SDK provider inventory {} is not a regular file",
             sdk_inventory.display()
         )));
     }
+    let sdk_provider_root = sdk_inventory.parent().ok_or_else(|| {
+        CliError::failure(format!(
+            "compiler-suite SDK provider inventory {} has no provider root",
+            sdk_inventory.display()
+        ))
+    })?;
+    let output_directory = compiler_suite_environment_path(output_directory)?;
+    let compiler_data_root = compiler_data_root.map(compiler_suite_environment_path).transpose()?;
+    let runtime_root = sdk_inventory
+        .parent()
+        .map(|parent| parent.join("runtime"))
+        .filter(|root| root.join("Cargo.lock").is_file())
+        .ok_or_else(|| {
+            CliError::failure(format!(
+                "compiler-suite SDK provider inventory {} has no sealed runtime closure",
+                sdk_inventory.display()
+            ))
+        })?;
     let stdlib_extern = warning_check_artifacts
         .externs
         .iter()
@@ -969,6 +1013,8 @@ fn compiler_suite_environment_with_vocab(
                 "stored compiler-suite direct-rustc closure has no `incan_stdlib` extern for generated-code checks",
             )
         })?;
+    let stdlib_extern = compiler_suite_environment_path(stdlib_extern)?;
+    let rustup_home = default_rustup_home(env::var_os("RUSTUP_HOME"), user_home());
     // Store identities contain `sha256:`. On Unix, `:` is the path-list separator, so joining these verified
     // absolute paths into one environment variable would either be ambiguous or rejected. Transport each opaque
     // direct-rustc search path in its own environment value instead.
@@ -979,17 +1025,48 @@ fn compiler_suite_environment_with_vocab(
         ("INCAN_SOURCE_ROOT".to_string(), compiler_root.display().to_string()),
         ("INCAN_STDLIB".to_string(), stdlib_root.display().to_string()),
         ("INCAN_SDK_INVENTORY".to_string(), sdk_inventory.display().to_string()),
+        (
+            "INCAN_INTERNAL_SDK_PROVIDER_STORE".to_string(),
+            sdk_provider_root.display().to_string(),
+        ),
+        // Provider discovery may intentionally clear INCAN_SDK_INVENTORY in a cold-store fixture. Keep runtime
+        // source identity separately receipt-bound, so that action cannot make the same native closure appear to
+        // belong to an ambient checkout.
+        (
+            "INCAN_INTERNAL_OVEN_RUNTIME_ROOT".to_string(),
+            runtime_root.display().to_string(),
+        ),
         // Stored-suite children may need a managed Oven store, but that state belongs to the suite invocation. Never
         // allow a scheduler run to silently write under the developer's default `~/.incan` home.
         (
             "INCAN_HOME".to_string(),
             output_directory.join("incan-home").display().to_string(),
         ),
+        // A fixture may intentionally clear INCAN_HOME while testing the default command path. Keep that default
+        // inside the scheduler-owned output as well: inherited developer HOME state must neither make a stored suite
+        // non-reproducible nor send normal nested Oven commands outside the active invocation's bounded policy.
+        ("HOME".to_string(), output_directory.join("home").display().to_string()),
+        // The scheduler has already validated this exact direct-rustc executable. Propagate it explicitly so the
+        // isolated suite home cannot make a nested normal command ask rustup to rediscover a developer toolchain.
+        // This selects the compiler; it does not authorize Cargo.
+        (
+            "RUSTC".to_string(),
+            compiler_suite_environment_path(rustc)?.display().to_string(),
+        ),
+        // Some compiler self-tests deliberately clear RUSTC to exercise Rustup's compiler discovery. Keep only the
+        // parent toolchain-manager state available for that test behavior; normal child commands use RUSTC above,
+        // and this does not expose or authorize Cargo state.
+        (
+            "RUSTUP_HOME".to_string(),
+            rustup_home.map_or_else(String::new, |root| root.display().to_string()),
+        ),
         // The parent scheduler derives this only from its active installed toolchain. An empty value deliberately
         // clears any inherited override when the parent is a development binary without package data.
         (
             "INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT".to_string(),
-            compiler_data_root.map_or_else(String::new, |root| root.display().to_string()),
+            compiler_data_root
+                .as_ref()
+                .map_or_else(String::new, |root| root.display().to_string()),
         ),
         // This is an internal scheduler capability, not a user-selectable artifact path. It authorizes nested normal
         // commands to consume the parent-leased, read-only native seed directly instead of copying its closure into
@@ -1015,7 +1092,7 @@ fn compiler_suite_environment_with_vocab(
     for (index, path) in warning_check_artifacts.dependency_search_paths.iter().enumerate() {
         environment.insert(
             format!("INCAN_OVEN_COMPILER_SUITE_DEPENDENCY_PATH_{index}"),
-            path.display().to_string(),
+            compiler_suite_environment_path(path)?.display().to_string(),
         );
     }
     for (index, (crate_name, path)) in warning_check_artifacts.externs.iter().enumerate() {
@@ -1025,16 +1102,43 @@ fn compiler_suite_environment_with_vocab(
         );
         environment.insert(
             format!("INCAN_OVEN_COMPILER_SUITE_EXTERN_{index}_PATH"),
-            path.display().to_string(),
+            compiler_suite_environment_path(path)?.display().to_string(),
         );
     }
+    // The suite-built CLI is a caller-owned direct-Rustc output. A root can launch that CLI through
+    // `CARGO_BIN_EXE_incan` even when the root itself has no dynamic workspace-library dependency, so exporting
+    // this receipt-selected loader path only for `prefer_dynamic` roots leaves those nested launches broken.
+    // Keep the toolchain path in the base child environment: native test execution and every child it starts then
+    // inherit the exact selected standard-library closure without trusting a Cargo-provided loader environment.
+    let (dynamic_library_environment_name, dynamic_library_environment_value) =
+        rustc_dynamic_library_environment(rustc).map_err(oven_error)?;
+    environment.insert(dynamic_library_environment_name, dynamic_library_environment_value);
     append_compiler_suite_direct_rustc_environment(
         &mut environment,
         "INCAN_OVEN_COMPILER_SUITE_VOCAB",
         rustc,
         vocab_extraction_artifacts,
-    );
+    )?;
     Ok(environment)
+}
+
+/// Convert a scheduler-selected path into an absolute environment value before a test changes directory.
+///
+/// Stored suite entries may be selected from a relative `--store` path, while compiler tests deliberately create
+/// nested fixture directories. Forwarding those paths verbatim would make a receipt-authorized inventory or native
+/// seed disappear from a nested `incan` process despite still being held by the parent suite lease.
+fn compiler_suite_environment_path(path: &Path) -> CliResult<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    env::current_dir()
+        .map(|directory| directory.join(path))
+        .map_err(|error| {
+            CliError::failure(format!(
+                "cannot resolve compiler-suite environment path {} from the current directory: {error}",
+                path.display()
+            ))
+        })
 }
 
 /// Export a second, named direct-Rustc closure for compiler-internal vocab companion extraction.
@@ -1047,20 +1151,30 @@ fn append_compiler_suite_direct_rustc_environment(
     prefix: &str,
     rustc: &Path,
     artifacts: &crate::oven::rustc::OvenRustcArtifactPlan,
-) {
-    environment.insert(format!("{prefix}_RUSTC"), rustc.display().to_string());
+) -> CliResult<()> {
+    environment.insert(
+        format!("{prefix}_RUSTC"),
+        compiler_suite_environment_path(rustc)?.display().to_string(),
+    );
     environment.insert(
         format!("{prefix}_DEPENDENCY_PATH_COUNT"),
         artifacts.dependency_search_paths.len().to_string(),
     );
     environment.insert(format!("{prefix}_EXTERN_COUNT"), artifacts.externs.len().to_string());
     for (index, path) in artifacts.dependency_search_paths.iter().enumerate() {
-        environment.insert(format!("{prefix}_DEPENDENCY_PATH_{index}"), path.display().to_string());
+        environment.insert(
+            format!("{prefix}_DEPENDENCY_PATH_{index}"),
+            compiler_suite_environment_path(path)?.display().to_string(),
+        );
     }
     for (index, (crate_name, path)) in artifacts.externs.iter().enumerate() {
         environment.insert(format!("{prefix}_EXTERN_{index}_NAME"), crate_name.clone());
-        environment.insert(format!("{prefix}_EXTERN_{index}_PATH"), path.display().to_string());
+        environment.insert(
+            format!("{prefix}_EXTERN_{index}_PATH"),
+            compiler_suite_environment_path(path)?.display().to_string(),
+        );
     }
+    Ok(())
 }
 
 /// Place the suite-built CLI beside its caller-owned workspace libraries.
@@ -1286,7 +1400,9 @@ fn prepare_compiler_suite_child<'a>(
     // the shared, leased provider store through the receipt-bound environment above.
     target_environment.insert(
         "INCAN_HOME".to_string(),
-        output_directory.join("incan-home").display().to_string(),
+        compiler_suite_environment_path(&output_directory.join("incan-home"))?
+            .display()
+            .to_string(),
     );
     for dependency in &target.binary_dependencies {
         let output = binary_outputs.get(dependency).ok_or_else(|| {
@@ -1296,7 +1412,7 @@ fn prepare_compiler_suite_child<'a>(
             ))
         })?;
         let name = format!("CARGO_BIN_EXE_{dependency}");
-        let value = output.display().to_string();
+        let value = compiler_suite_environment_path(output)?.display().to_string();
         target_environment.insert(name.clone(), value.clone());
         binary_compile_environment.insert(name, value);
     }
@@ -1330,13 +1446,13 @@ fn run_prepared_compiler_suite_children(
     children: Vec<PreparedCompilerSuiteChild<'_>>,
     receipt: &OvenReceipt,
     rustc: &Path,
-) -> CliResult<(usize, usize, Vec<String>)> {
+) -> CliResult<CompilerSuiteChildrenReport> {
     let child_count = children.len();
     if child_count == 0 {
-        return Ok((0, 0, Vec::new()));
+        return Ok(CompilerSuiteChildrenReport::default());
     }
     let queue = Mutex::new(VecDeque::from(children));
-    let results = Mutex::new(Vec::<Result<(usize, usize, Vec<String>), String>>::with_capacity(
+    let results = Mutex::new(Vec::<Result<CompilerSuiteChildrenReport, String>>::with_capacity(
         child_count,
     ));
     let worker_count = compiler_suite_parallel_jobs(child_count);
@@ -1382,20 +1498,28 @@ fn run_prepared_compiler_suite_children(
             results.len()
         )));
     }
-    let mut native_test_count = 0;
-    let mut doctest_targets = 0;
-    let mut failed = Vec::new();
+    let mut report = CompilerSuiteChildrenReport::default();
     for result in results {
         match result {
-            Ok((native_count, doctest_count, child_failures)) => {
-                native_test_count += native_count;
-                doctest_targets += doctest_count;
-                failed.extend(child_failures);
-            }
-            Err(error) => failed.push(format!("Oven direct-Rustc compiler-suite worker failed:\n{error}")),
+            Ok(child_report) => report.append(child_report),
+            Err(error) => report
+                .failed
+                .push(format!("Oven direct-Rustc compiler-suite worker failed:\n{error}")),
         }
     }
-    Ok((native_test_count, doctest_targets, failed))
+    report.native_test_roots.sort_by(|left, right| {
+        (
+            left.package_name.as_str(),
+            left.target_kind.as_str(),
+            left.target_name.as_str(),
+        )
+            .cmp(&(
+                right.package_name.as_str(),
+                right.target_kind.as_str(),
+                right.target_name.as_str(),
+            ))
+    });
+    Ok(report)
 }
 
 /// Execute one prepared direct-Rustc compiler-suite child with no Cargo process or store mutation.
@@ -1403,7 +1527,7 @@ fn run_prepared_compiler_suite_child(
     child: PreparedCompilerSuiteChild<'_>,
     receipt: &OvenReceipt,
     rustc: &Path,
-) -> CliResult<(usize, usize, Vec<String>)> {
+) -> CliResult<CompilerSuiteChildrenReport> {
     let mut artifacts = child.closure.manifest_for_target(child.target, child.intent.clone());
     for (name, value) in &child.binary_compile_environment {
         artifacts.compile_environment.insert(name.clone(), value.clone());
@@ -1456,7 +1580,20 @@ fn run_prepared_compiler_suite_child(
                     native_test_failure_summary(&report.output)
                 )]
             };
-            Ok((report.inventory.names.len(), 0, failures))
+            Ok(CompilerSuiteChildrenReport {
+                native_test_count: report.inventory.names.len(),
+                doctest_targets: 0,
+                failed: failures,
+                native_test_roots: vec![CompilerSuiteNativeTestRootReport {
+                    package_name: child.target.package_name.clone(),
+                    target_kind: child.target.target_kind.clone(),
+                    target_name: child.target.target_name.clone(),
+                    source_relative_path: child.target.source_relative_path.clone(),
+                    inventory_count: report.inventory.names.len(),
+                    success: report.success,
+                    case_counts: report.case_counts,
+                }],
+            })
         }
         "rustdoc-test" => {
             let temporary_directory = child.output.with_extension("rustdoc-tmp");
@@ -1476,7 +1613,12 @@ fn run_prepared_compiler_suite_child(
                 prefer_dynamic: child.prefer_dynamic,
             })
             .map_err(oven_error)?;
-            Ok((0, 1, Vec::new()))
+            Ok(CompilerSuiteChildrenReport {
+                native_test_count: 0,
+                doctest_targets: 1,
+                failed: Vec::new(),
+                native_test_roots: Vec::new(),
+            })
         }
         runner => Err(CliError::failure(format!(
             "stored compiler-suite target `{}` declares unsupported Oven runner `{runner}`",
@@ -1513,10 +1655,8 @@ fn run_planned_compiler_suite_children(
     workspace_library_outputs: &BTreeMap<OvenCompilerWorkspaceLibraryKey, OvenCallerOwnedRustcLibrary>,
     foundation_references: &[OvenCompilerTestSuiteFoundationReference],
     foundations: Option<&BTreeMap<String, CompilerSuiteFoundationExecution>>,
-) -> CliResult<(usize, usize, Vec<String>)> {
-    let mut native_test_count = 0_usize;
-    let mut doctest_targets = 0_usize;
-    let mut failed = Vec::new();
+) -> CliResult<CompilerSuiteChildrenReport> {
+    let mut suite_report = CompilerSuiteChildrenReport::default();
     for (index, target) in targets.iter().enumerate() {
         let mut artifacts = closure.manifest_for_target(target, intent.clone());
         let source = compiler_suite_target_source(compiler_root, target)?;
@@ -1532,7 +1672,7 @@ fn run_planned_compiler_suite_children(
                 ))
             })?;
             let name = format!("CARGO_BIN_EXE_{dependency}");
-            let value = output.display().to_string();
+            let value = compiler_suite_environment_path(output)?.display().to_string();
             artifacts.compile_environment.insert(name.clone(), value.clone());
             target_environment.insert(name, value);
         }
@@ -1575,10 +1715,19 @@ fn run_planned_compiler_suite_children(
                 let report =
                     run_native_test_batch_all_in_directory(&bake.output, &target_environment, Some(&working_directory))
                         .map_err(oven_error)?;
-                native_test_count += report.inventory.names.len();
+                suite_report.native_test_count += report.inventory.names.len();
+                suite_report.native_test_roots.push(CompilerSuiteNativeTestRootReport {
+                    package_name: target.package_name.clone(),
+                    target_kind: target.target_kind.clone(),
+                    target_name: target.target_name.clone(),
+                    source_relative_path: target.source_relative_path.clone(),
+                    inventory_count: report.inventory.names.len(),
+                    success: report.success,
+                    case_counts: report.case_counts.clone(),
+                });
                 if !report.success {
                     let transcript = write_native_test_failure_transcript(&output, &report.output)?;
-                    failed.push(format!(
+                    suite_report.failed.push(format!(
                         "{} target `{}` failed; full libtest transcript: {}\n{}",
                         target.target_kind,
                         target.target_name,
@@ -1605,7 +1754,7 @@ fn run_planned_compiler_suite_children(
                     prefer_dynamic,
                 })
                 .map_err(oven_error)?;
-                doctest_targets += 1;
+                suite_report.doctest_targets += 1;
             }
             runner => {
                 return Err(CliError::failure(format!(
@@ -1615,7 +1764,7 @@ fn run_planned_compiler_suite_children(
             }
         }
     }
-    Ok((native_test_count, doctest_targets, failed))
+    Ok(suite_report)
 }
 
 /// Resolve a target-plan source only beneath the current receipt-authorized compiler root.
@@ -1810,6 +1959,98 @@ struct CompilerSuiteFoundationExecution {
 struct CompilerSuiteToolchainDataExecution {
     stored: OvenStoreExecutionPayload,
     payload: OvenCompilerTestSuiteToolchainDataPayload,
+}
+
+/// One direct-Rustc libtest root's terminal coverage result.
+#[derive(Debug, Clone, Serialize)]
+struct CompilerSuiteNativeTestRootReport {
+    package_name: String,
+    target_kind: String,
+    target_name: String,
+    source_relative_path: String,
+    inventory_count: usize,
+    /// Whether this root reached a successful terminal libtest result.
+    success: bool,
+    case_counts: Option<OvenNativeTestCaseCounts>,
+}
+
+/// Complete native-test coverage for one compiler-suite invocation.
+#[derive(Debug, Default)]
+struct CompilerSuiteChildrenReport {
+    native_test_count: usize,
+    doctest_targets: usize,
+    failed: Vec<String>,
+    native_test_roots: Vec<CompilerSuiteNativeTestRootReport>,
+}
+
+/// Aggregate case counts from libtest summaries already captured by the worker processes.
+#[derive(Debug, Clone, Default, Serialize)]
+struct CompilerSuiteNativeTestCaseTotals {
+    passed: usize,
+    failed: usize,
+    ignored: usize,
+    reported_roots: usize,
+    green_roots: usize,
+    failed_roots: usize,
+    unreported_roots: usize,
+}
+
+impl CompilerSuiteChildrenReport {
+    /// Add one child result without losing its root-level coverage accounting.
+    fn append(&mut self, other: Self) {
+        self.native_test_count += other.native_test_count;
+        self.doctest_targets += other.doctest_targets;
+        self.failed.extend(other.failed);
+        self.native_test_roots.extend(other.native_test_roots);
+    }
+
+    /// Summarize libtest cases and root outcomes without a second execution or caller-output scan.
+    fn native_test_case_totals(&self) -> CompilerSuiteNativeTestCaseTotals {
+        let mut totals = CompilerSuiteNativeTestCaseTotals::default();
+        for root in &self.native_test_roots {
+            if let Some(counts) = &root.case_counts {
+                totals.passed += counts.passed;
+                totals.failed += counts.failed;
+                totals.ignored += counts.ignored;
+                totals.reported_roots += 1;
+            } else {
+                totals.unreported_roots += 1;
+            }
+            match (&root.case_counts, root.success) {
+                (Some(_), true) => totals.green_roots += 1,
+                (Some(_), false) => totals.failed_roots += 1,
+                (None, _) => {}
+            }
+        }
+        totals
+    }
+}
+
+/// Run one worker phase while retaining every immutable input's advisory lease.
+///
+/// Worker preparation borrows only manifest data from the selected payloads. Without an explicit use after the
+/// worker phase, non-lexical lifetimes may release the sibling payload field that owns an advisory lock before the
+/// workers finish. That would let policy pruning remove a not-yet-finished suite input. Keep the index, every shard,
+/// every foundation, and every toolchain-data partition observably live until the worker phase has returned.
+fn run_compiler_suite_children_with_leases_retained<T>(
+    suite_lease: &OvenStoreLease,
+    shards: &[CompilerSuiteShardExecution],
+    foundations: &BTreeMap<String, CompilerSuiteFoundationExecution>,
+    toolchain_data: &[CompilerSuiteToolchainDataExecution],
+    run: impl FnOnce() -> T,
+) -> T {
+    let result = run();
+    std::hint::black_box(suite_lease);
+    for shard in shards {
+        std::hint::black_box(&shard.stored);
+    }
+    for foundation in foundations.values() {
+        std::hint::black_box(&foundation.stored);
+    }
+    for partition in toolchain_data {
+        std::hint::black_box(&partition.stored);
+    }
+    result
 }
 
 /// One direct compiler-suite root after shared caller-owned inputs are ready.
@@ -2292,9 +2533,12 @@ fn bake_planned_compiler_suite_workspace_libraries(
             )));
         }
         for key in ready {
-            let library = pending
-                .remove(&key)
-                .expect("ready keys are drawn from pending libraries");
+            let library = pending.remove(&key).ok_or_else(|| {
+                CliError::failure(format!(
+                    "stored compiler-suite workspace library `{}` disappeared before scheduling",
+                    key.crate_name
+                ))
+            })?;
             let dependencies = library
                 .dependencies
                 .iter()
@@ -2375,6 +2619,7 @@ fn bake_planned_compiler_suite_workspace_libraries(
             let output = OvenCallerOwnedRustcLibrary {
                 crate_name: library.key.crate_name.clone(),
                 output: bake.output,
+                expose_extern: true,
             };
             workspace_library_cache.insert(cache_key.clone(), output.clone());
             output_recipe_keys.insert(library.key.clone(), cache_key);
@@ -2574,28 +2819,28 @@ fn select_compiler_test_suite(
     receipt: &OvenReceipt,
     compiler_root: &Path,
     rustc: &Path,
-) -> CliResult<String> {
-    let identities = store
-        .manifests_for_selection()
-        .map_err(oven_error)?
-        .into_iter()
-        .filter(|manifest| {
+) -> CliResult<OvenStoreExecutionPayload> {
+    let mut selected = store
+        .select_payloads_matching_for_execution(|manifest| {
             manifest.kind == OvenArtifactKind::CompilerTestSuite
                 && manifest.build_unit_identity == receipt.build_unit_identity
                 && manifest.intent == receipt.intent
         })
-        .map(|manifest| manifest.identity)
-        .collect::<Vec<_>>();
-    match identities.as_slice() {
-        [identity] => Ok(identity.clone()),
-        [] => Err(CliError::failure(format!(
+        .map_err(oven_error)?;
+    match selected.len() {
+        1 => Ok(selected.remove(0)),
+        0 => Err(CliError::failure(format!(
             "no Oven compiler test suite is prepared for this exact receipt. The requested compiler-suite provider/dependency unit is not available for {} with rustc {}.",
             compiler_root.display(),
             rustc.display(),
         ))),
         _ => Err(CliError::failure(format!(
             "multiple Oven compiler test suites are prepared for one build unit: {}",
-            identities.join(", ")
+            selected
+                .iter()
+                .map(|entry| entry.manifest.identity.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ))),
     }
 }
@@ -2722,6 +2967,7 @@ fn native_test_failure_summary(output: &str) -> String {
         .filter(|line| {
             line.contains("FAILED")
                 || line.contains("panicked")
+                || line.contains("Error:")
                 || line.starts_with("error:")
                 || line.contains("test result:")
         })
@@ -2995,6 +3241,7 @@ pub fn oven_test(options: OvenTestCommandOptions) -> CliResult<ExitCode> {
         executable: bake.output.clone(),
         exact_names: options.exact_names,
         environment: BTreeMap::new(),
+        timeout: None,
     })
     .map_err(oven_error)?;
     match options.format {
@@ -3083,20 +3330,38 @@ pub(crate) fn open_default_oven_store() -> CliResult<OvenStore> {
 
 /// Resolve bounded policy from command overrides, then explicit environment values, then Alpha defaults.
 fn resolve_limits(options: &OvenStoreCommandOptions) -> CliResult<OvenStoreLimits> {
+    resolve_limits_with_environment(options, |name| env::var(name).ok())
+}
+
+/// Resolve bounded policy with an explicit environment reader so default-policy tests cannot inherit a caller's
+/// intentionally configured Oven limits.
+fn resolve_limits_with_environment(
+    options: &OvenStoreCommandOptions,
+    environment_value: impl Fn(&str) -> Option<String>,
+) -> CliResult<OvenStoreLimits> {
     let aggregate = match options.max_physical_bytes {
         Some(value) => value,
-        None => parse_limit_env(OVEN_MAX_PHYSICAL_BYTES_ENV, DEFAULT_OVEN_MAX_PHYSICAL_BYTES)?,
+        None => parse_limit_value(
+            OVEN_MAX_PHYSICAL_BYTES_ENV,
+            environment_value(OVEN_MAX_PHYSICAL_BYTES_ENV),
+            DEFAULT_OVEN_MAX_PHYSICAL_BYTES,
+        )?,
     };
     let domain_physical = match options.max_domain_physical_bytes {
         Some(value) => value,
-        None => parse_limit_env(
+        None => parse_limit_value(
             OVEN_MAX_DOMAIN_PHYSICAL_BYTES_ENV,
+            environment_value(OVEN_MAX_DOMAIN_PHYSICAL_BYTES_ENV),
             DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES,
         )?,
     };
     let domain_logical = match options.max_domain_logical_bytes {
         Some(value) => value,
-        None => parse_limit_env(OVEN_MAX_DOMAIN_LOGICAL_BYTES_ENV, DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES)?,
+        None => parse_limit_value(
+            OVEN_MAX_DOMAIN_LOGICAL_BYTES_ENV,
+            environment_value(OVEN_MAX_DOMAIN_LOGICAL_BYTES_ENV),
+            DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES,
+        )?,
     };
     if aggregate == 0 || domain_physical == 0 || domain_logical == 0 {
         return Err(CliError::failure(
@@ -3112,14 +3377,13 @@ fn resolve_limits(options: &OvenStoreCommandOptions) -> CliResult<OvenStoreLimit
 }
 
 /// Parse one explicit byte-count environment variable without accepting ambiguous unit suffixes.
-fn parse_limit_env(name: &str, default: u64) -> CliResult<u64> {
-    match env::var(name) {
-        Ok(value) if !value.trim().is_empty() => value
+fn parse_limit_value(name: &str, value: Option<String>, default: u64) -> CliResult<u64> {
+    match value {
+        Some(value) if !value.trim().is_empty() => value
             .trim()
             .parse::<u64>()
             .map_err(|error| CliError::failure(format!("invalid {name} value `{value}`; expected bytes: {error}"))),
-        Ok(_) | Err(env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(CliError::failure(format!("failed to read {name}: {error}"))),
+        Some(_) | None => Ok(default),
     }
 }
 
@@ -3140,6 +3404,20 @@ fn user_home() -> Option<OsString> {
     env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))
 }
 
+/// Resolve the toolchain-manager state needed when a compiler self-test deliberately exercises Rustup fallback.
+///
+/// Stored normal commands receive a verified absolute `RUSTC`; this path exists solely because compiler tests also
+/// verify Rustup discovery after removing that explicit variable. It is intentionally separate from Cargo state.
+fn default_rustup_home(rustup_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    rustup_home
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|path| !path.is_empty())
+                .map(|path| PathBuf::from(path).join(".rustup"))
+        })
+}
+
 /// Parse a named source argument with a portable digest key and a filesystem input path.
 fn parse_named_path(value: &str) -> CliResult<(String, PathBuf)> {
     let Some((name, path)) = value.split_once('=') else {
@@ -3155,6 +3433,41 @@ fn parse_named_path(value: &str) -> CliResult<(String, PathBuf)> {
         )));
     }
     Ok((name.to_string(), PathBuf::from(path)))
+}
+
+/// Persist a complete scheduler aggregate beside caller-owned test outputs.
+///
+/// The terminal is intentionally a convenience surface and can be detached by a CI or desktop-session wrapper.
+/// The report is therefore a normal caller-owned output, not an immutable-store artifact, and remains available for
+/// a failed batch as well as a green batch. Atomic replacement prevents a reader from observing a partial summary.
+fn write_compiler_suite_report(path: &Path, report: &serde_json::Value) -> CliResult<()> {
+    let parent = path.parent().ok_or_else(|| {
+        CliError::failure(format!(
+            "compiler-suite report path {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        CliError::failure(format!(
+            "cannot create compiler-suite report directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    let encoded = serde_json::to_vec_pretty(report)
+        .map_err(|error| CliError::failure(format!("failed to serialize compiler-suite report: {error}")))?;
+    let temporary = parent.join(format!(".compiler-suite-report-{}.tmp", std::process::id()));
+    fs::write(&temporary, encoded).map_err(|error| {
+        CliError::failure(format!(
+            "cannot write compiler-suite report temporary file {}: {error}",
+            temporary.display()
+        ))
+    })?;
+    fs::rename(&temporary, path).map_err(|error| {
+        CliError::failure(format!(
+            "cannot publish compiler-suite report {}: {error}",
+            path.display()
+        ))
+    })
 }
 
 /// Serialize a stable JSON report or convert the failure into standard CLI error vocabulary.
@@ -3190,14 +3503,17 @@ fn oven_error(error: impl std::fmt::Display) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES, DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES, DEFAULT_OVEN_MAX_PHYSICAL_BYTES,
-        OvenImportCommandOptions, OvenPlanPublishCommandOptions, OvenRunCommandOptions, OvenStoreCommandOptions,
-        OvenTestCommandOptions, attach_compiler_suite_target_workspace_libraries, bake_planned_compiler_suite_binaries,
+        CompilerSuiteChildrenReport, CompilerSuiteNativeTestRootReport, DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES,
+        DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES, DEFAULT_OVEN_MAX_PHYSICAL_BYTES, OvenImportCommandOptions,
+        OvenPlanPublishCommandOptions, OvenRunCommandOptions, OvenStoreCommandOptions, OvenTestCommandOptions,
+        attach_compiler_suite_target_workspace_libraries, bake_planned_compiler_suite_binaries,
         bake_planned_compiler_suite_workspace_libraries, compiler_suite_cli_output, compiler_suite_directory,
-        compiler_suite_environment, compiler_suite_file, compiler_suite_selected_shard_references, default_store_root,
-        oven_import, oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path,
-        prepare_compiler_suite_child, resolve_limits, run_prepared_compiler_suite_children,
-        select_compiler_suite_shards, write_native_test_failure_transcript,
+        compiler_suite_environment, compiler_suite_environment_path, compiler_suite_file,
+        compiler_suite_selected_shard_references, default_rustup_home, default_store_root, oven_import,
+        oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path, prepare_compiler_suite_child,
+        resolve_limits, resolve_limits_with_environment, run_compiler_suite_children_with_leases_retained,
+        run_prepared_compiler_suite_children, select_compiler_suite_shards, write_compiler_suite_report,
+        write_native_test_failure_transcript,
     };
     use crate::cli::OvenOutputFormat;
     use crate::oven::digest_bytes;
@@ -3206,9 +3522,11 @@ mod tests {
         OvenCompilerTestSuiteShardPayload, OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteTarget,
         OvenCompilerWorkspaceLibrary, OvenCompilerWorkspaceLibraryKey,
     };
+    use crate::oven::native_test::OvenNativeTestCaseCounts;
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
-        OvenTrustedDirectRustcTargetRequest, bake_trusted_direct_rustc_run, resolve_active_rustc, rustc_host_target,
+        OvenTrustedDirectRustcTargetRequest, bake_trusted_direct_rustc_run, resolve_active_rustc,
+        rustc_dynamic_library_environment, rustc_host_target,
     };
     use crate::oven::store::{OvenArtifactKind, OvenArtifactPublishRequest, OvenStore, OvenStoreLimits};
     use crate::oven::{OvenCompilerSuiteRequest, receipt_native_compiler_suite};
@@ -3232,6 +3550,79 @@ mod tests {
     }
 
     #[test]
+    fn compiler_suite_aggregate_is_persisted_beside_caller_outputs() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let report_path = directory.path().join("caller-output/compiler-suite-report.json");
+        let report = serde_json::json!({
+            "success": false,
+            "native_test_case_totals": { "passed": 12, "failed": 1, "ignored": 2 },
+        });
+
+        write_compiler_suite_report(&report_path, &report)?;
+
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&fs::read(&report_path)?)?,
+            report
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiler_suite_case_totals_distinguish_green_failed_and_unreported_roots() {
+        let report = CompilerSuiteChildrenReport {
+            native_test_count: 4,
+            doctest_targets: 0,
+            failed: vec!["failed root".to_string()],
+            native_test_roots: vec![
+                CompilerSuiteNativeTestRootReport {
+                    package_name: "green".to_string(),
+                    target_kind: "test".to_string(),
+                    target_name: "green_root".to_string(),
+                    source_relative_path: "tests/green.rs".to_string(),
+                    inventory_count: 2,
+                    success: true,
+                    case_counts: Some(OvenNativeTestCaseCounts {
+                        passed: 2,
+                        failed: 0,
+                        ignored: 1,
+                    }),
+                },
+                CompilerSuiteNativeTestRootReport {
+                    package_name: "failed".to_string(),
+                    target_kind: "test".to_string(),
+                    target_name: "failed_root".to_string(),
+                    source_relative_path: "tests/failed.rs".to_string(),
+                    inventory_count: 2,
+                    success: false,
+                    case_counts: Some(OvenNativeTestCaseCounts {
+                        passed: 1,
+                        failed: 1,
+                        ignored: 0,
+                    }),
+                },
+                CompilerSuiteNativeTestRootReport {
+                    package_name: "unreported".to_string(),
+                    target_kind: "test".to_string(),
+                    target_name: "unreported_root".to_string(),
+                    source_relative_path: "tests/unreported.rs".to_string(),
+                    inventory_count: 0,
+                    success: false,
+                    case_counts: None,
+                },
+            ],
+        };
+
+        let totals = report.native_test_case_totals();
+        assert_eq!(totals.passed, 3);
+        assert_eq!(totals.failed, 1);
+        assert_eq!(totals.ignored, 1);
+        assert_eq!(totals.reported_roots, 2);
+        assert_eq!(totals.green_roots, 1);
+        assert_eq!(totals.failed_roots, 1);
+        assert_eq!(totals.unreported_roots, 1);
+    }
+
+    #[test]
     fn default_store_root_prefers_incan_home() {
         assert_eq!(
             default_store_root(Some(OsString::from("/incan")), Some(OsString::from("/user"))),
@@ -3240,6 +3631,18 @@ mod tests {
         assert_eq!(
             default_store_root(None, Some(OsString::from("/user"))),
             Some(PathBuf::from("/user/.incan/oven/store/v1"))
+        );
+    }
+
+    #[test]
+    fn default_rustup_home_prefers_an_explicit_toolchain_manager_root() {
+        assert_eq!(
+            default_rustup_home(Some(OsString::from("/rustup")), Some(OsString::from("/user"))),
+            Some(PathBuf::from("/rustup"))
+        );
+        assert_eq!(
+            default_rustup_home(None, Some(OsString::from("/user"))),
+            Some(PathBuf::from("/user/.rustup"))
         );
     }
 
@@ -3301,12 +3704,15 @@ mod tests {
 
     #[test]
     fn storage_policy_has_bounded_defaults() -> Result<(), Box<dyn std::error::Error>> {
-        let limits = resolve_limits(&OvenStoreCommandOptions {
-            root: None,
-            max_physical_bytes: None,
-            max_domain_physical_bytes: None,
-            max_domain_logical_bytes: None,
-        })?;
+        let limits = resolve_limits_with_environment(
+            &OvenStoreCommandOptions {
+                root: None,
+                max_physical_bytes: None,
+                max_domain_physical_bytes: None,
+                max_domain_logical_bytes: None,
+            },
+            |_| None,
+        )?;
         assert_eq!(limits.max_physical_bytes, DEFAULT_OVEN_MAX_PHYSICAL_BYTES);
         assert_eq!(limits.max_physical_bytes, 2 * 1024 * 1024 * 1024);
         assert_eq!(limits.max_domain_physical_bytes, DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES);
@@ -3417,7 +3823,17 @@ mod tests {
         assert_eq!(selected[0].payload, shard);
         let inspection = store.inspect()?;
         assert_eq!(inspection.active_lease_physical_bytes, inspection.physical_bytes);
+
+        let constrained = OvenStore::new(store_root.path(), OvenStoreLimits::new(1, 1, 1));
+        let (_index_entry, suite_lease) = constrained.select(&manifest.identity)?;
+        let preview =
+            run_compiler_suite_children_with_leases_retained(&suite_lease, &selected, &BTreeMap::new(), &[], || {
+                constrained.preview_prune()
+            })?;
+        assert!(preview.removed_entries.is_empty());
+        assert_eq!(preview.skipped_active_entries, vec![manifest.identity.clone()]);
         drop(selected);
+        drop(suite_lease);
         assert_eq!(store.inspect()?.active_lease_physical_bytes, 0);
         Ok(())
     }
@@ -3612,6 +4028,18 @@ mod tests {
     }
 
     #[test]
+    fn compiler_suite_environment_paths_are_absolute_before_nested_tests_change_directory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let relative = Path::new("target/compiler-suite-relative-environment-value");
+
+        assert_eq!(
+            compiler_suite_environment_path(relative)?,
+            std::env::current_dir()?.join(relative),
+        );
+        Ok(())
+    }
+
+    #[test]
     fn compiler_suite_environment_transports_the_complete_direct_rustc_closure()
     -> Result<(), Box<dyn std::error::Error>> {
         let compiler_root = tempfile::tempdir()?;
@@ -3620,6 +4048,19 @@ mod tests {
         let inventory = compiler_root.path().join("providers/sdk-inventory.json");
         fs::create_dir_all(inventory.parent().ok_or("SDK inventory parent missing")?)?;
         fs::write(&inventory, "sealed SDK inventory")?;
+        fs::create_dir_all(
+            inventory
+                .parent()
+                .ok_or("SDK inventory parent missing")?
+                .join("runtime"),
+        )?;
+        fs::write(
+            inventory
+                .parent()
+                .ok_or("SDK inventory parent missing")?
+                .join("runtime/Cargo.lock"),
+            "version = 4\n",
+        )?;
         let target_dependencies = compiler_root.path().join("target/deps");
         let host_dependencies = compiler_root.path().join("host/deps");
         let stdlib = target_dependencies.join("libincan_stdlib.rlib");
@@ -3628,10 +4069,13 @@ mod tests {
         let toolchain_data_root = compiler_root.path().join("installed-toolchain");
         fs::create_dir_all(toolchain_data_root.join("share/incan/oven/native-units"))?;
         let output_directory = compiler_root.path().join("suite-output");
+        let rustc = resolve_active_rustc()?;
+        let (dynamic_library_environment_name, dynamic_library_environment_value) =
+            rustc_dynamic_library_environment(&rustc)?;
         let environment = compiler_suite_environment(
             compiler_root.path(),
             &inventory,
-            Path::new("/toolchain/rustc"),
+            &rustc,
             &OvenRustcArtifactPlan {
                 dependency_search_paths: vec![target_dependencies.clone(), host_dependencies.clone()],
                 native_search_paths: Vec::new(),
@@ -3651,6 +4095,12 @@ mod tests {
             environment["INCAN_HOME"],
             output_directory.join("incan-home").display().to_string()
         );
+        assert_eq!(environment["HOME"], output_directory.join("home").display().to_string());
+        assert_eq!(environment["RUSTC"], rustc.display().to_string());
+        assert_eq!(
+            environment[&dynamic_library_environment_name],
+            dynamic_library_environment_value
+        );
         assert_eq!(
             environment["INSTA_WORKSPACE_ROOT"],
             compiler_root.path().canonicalize()?.display().to_string()
@@ -3660,6 +4110,16 @@ mod tests {
             toolchain_data_root.display().to_string()
         );
         assert_eq!(environment["INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION"], "1");
+        assert_eq!(
+            environment["INCAN_INTERNAL_OVEN_RUNTIME_ROOT"],
+            inventory
+                .parent()
+                .ok_or("SDK inventory parent missing")?
+                .join("runtime")
+                .canonicalize()?
+                .display()
+                .to_string(),
+        );
         assert_eq!(
             environment["INCAN_OVEN_COMPILER_SUITE_STDLIB"],
             stdlib.display().to_string()
@@ -3692,7 +4152,10 @@ mod tests {
             environment["INCAN_OVEN_COMPILER_SUITE_EXTERN_2_PATH"],
             derive.display().to_string()
         );
-        assert_eq!(environment["INCAN_OVEN_COMPILER_SUITE_VOCAB_RUSTC"], "/toolchain/rustc");
+        assert_eq!(
+            environment["INCAN_OVEN_COMPILER_SUITE_VOCAB_RUSTC"],
+            rustc.display().to_string()
+        );
         assert_eq!(
             environment["INCAN_OVEN_COMPILER_SUITE_VOCAB_DEPENDENCY_PATH_COUNT"],
             "2"
@@ -3715,6 +4178,8 @@ mod tests {
         fs::create_dir_all(&provider_root)?;
         let inventory = provider_root.join("sdk-inventory.json");
         fs::write(&inventory, "sealed SDK inventory")?;
+        fs::create_dir_all(provider_root.join("runtime"))?;
+        fs::write(provider_root.join("runtime/Cargo.lock"), "version = 4\n")?;
         let stdlib_root = compiler_root.path().join("crates/incan_stdlib/stdlib");
         fs::create_dir_all(&stdlib_root)?;
         let toolchain_data_root = artifact_root.path().join("toolchain-data");
@@ -3734,8 +4199,60 @@ mod tests {
         )?;
         fs::write(
             compiler_root.path().join("src/lib.rs"),
-            "#[test]\nfn planned_suite_child_uses_sdk_inventory() {\n    let inventory = std::env::var(\"INCAN_SDK_INVENTORY\").expect(\"SDK inventory\");\n    assert!(std::path::Path::new(&inventory).is_file());\n    assert_eq!(std::path::Path::new(&inventory).parent().unwrap(), std::path::Path::new(&std::env::var(\"INCAN_INTERNAL_SDK_PROVIDER_STORE\").unwrap()));\n    assert_eq!(std::path::Path::new(&std::env::var(\"INCAN_HOME\").expect(\"suite home\")).file_name().unwrap(), \"incan-home\");\n    assert!(std::path::Path::new(&std::env::var(\"INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT\").expect(\"native-unit root\")).join(\"share/incan/oven/native-units\").is_dir());\n    assert_eq!(std::env::current_dir().unwrap().canonicalize().unwrap(), std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).canonicalize().unwrap(), \"stored direct-rustc test must run from its package root\");\n    let status = std::process::Command::new(std::env::var(\"CARGO_BIN_EXE_incan\").expect(\"Oven CLI\")).arg(&inventory).status().expect(\"Oven CLI starts\");\n    assert!(status.success());\n    let helper = env!(\"CARGO_BIN_EXE_suite_helper\");\n    assert!(std::process::Command::new(helper).status().expect(\"Oven helper starts\").success());\n}\n",
+            r#"#[test]
+fn planned_suite_child_uses_sdk_inventory() -> Result<(), String> {
+    let inventory = std::env::var("INCAN_SDK_INVENTORY").map_err(|error| format!("SDK inventory: {error}"))?;
+    let inventory_path = std::path::Path::new(&inventory);
+    if !inventory_path.is_file() {
+        return Err("SDK inventory is not a file".to_string());
+    }
+    let provider_root = std::env::var("INCAN_INTERNAL_SDK_PROVIDER_STORE")
+        .map_err(|error| format!("SDK provider root: {error}"))?;
+    let inventory_parent = inventory_path.parent().ok_or_else(|| "SDK inventory has no parent".to_string())?;
+    if inventory_parent != std::path::Path::new(&provider_root) {
+        return Err("SDK inventory must be rooted in the injected provider tree".to_string());
+    }
+    let suite_home = std::env::var("INCAN_HOME").map_err(|error| format!("suite home: {error}"))?;
+    if std::path::Path::new(&suite_home).file_name().and_then(|name| name.to_str()) != Some("incan-home") {
+        return Err("stored child must receive its caller-owned suite home".to_string());
+    }
+    let native_root = std::env::var("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT")
+        .map_err(|error| format!("native-unit root: {error}"))?;
+    if !std::path::Path::new(&native_root).join("share/incan/oven/native-units").is_dir() {
+        return Err("stored child must receive its native-unit root".to_string());
+    }
+    let current_directory = std::env::current_dir().map_err(|error| format!("current directory: {error}"))?.canonicalize()
+        .map_err(|error| format!("canonical current directory: {error}"))?;
+    let package_directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).canonicalize()
+        .map_err(|error| format!("canonical package directory: {error}"))?;
+    if current_directory != package_directory {
+        return Err("stored direct-rustc test must run from its package root".to_string());
+    }
+    let dynamic_key = std::env::var("OVEN_TEST_DYNAMIC_LIBRARY_ENVIRONMENT_NAME")
+        .map_err(|error| format!("dynamic key: {error}"))?;
+    let dynamic_value = std::env::var("OVEN_TEST_DYNAMIC_LIBRARY_ENVIRONMENT_VALUE")
+        .map_err(|error| format!("dynamic value: {error}"))?;
+    if std::env::var(&dynamic_key).map_err(|error| format!("direct Rustc loader path: {error}"))? != dynamic_value {
+        return Err("stored child received the wrong direct Rustc loader path".to_string());
+    }
+    let oven_cli = std::env::var("CARGO_BIN_EXE_incan").map_err(|error| format!("Oven CLI: {error}"))?;
+    let oven_status = std::process::Command::new(oven_cli).arg(&inventory).status()
+        .map_err(|error| format!("Oven CLI starts: {error}"))?;
+    if !oven_status.success() {
+        return Err("Oven CLI exited unsuccessfully".to_string());
+    }
+    let helper_status = std::process::Command::new(env!("CARGO_BIN_EXE_suite_helper")).status()
+        .map_err(|error| format!("Oven helper starts: {error}"))?;
+    if !helper_status.success() {
+        return Err("Oven helper exited unsuccessfully".to_string());
+    }
+    Ok(())
+}
+"#,
         )?;
+        let rustc = resolve_active_rustc()?;
+        let (dynamic_library_environment_name, dynamic_library_environment_value) =
+            rustc_dynamic_library_environment(&rustc)?;
         let cli = artifact_root.path().join("oven-incan");
         write_executable(
             &cli,
@@ -3749,7 +4266,6 @@ mod tests {
             &format!("#!/bin/sh\nprintf cargo > \"{}\"\nexit 97\n", cargo_marker.display()),
         )?;
 
-        let rustc = resolve_active_rustc()?;
         let receipt = receipt_native_compiler_suite(&OvenCompilerSuiteRequest::new(
             compiler_root.path(),
             rustc_host_target(&rustc)?,
@@ -3773,8 +4289,12 @@ mod tests {
         )?;
         environment.insert("CARGO_BIN_EXE_incan".to_string(), cli.display().to_string());
         environment.insert(
-            "INCAN_INTERNAL_SDK_PROVIDER_STORE".to_string(),
-            provider_root.display().to_string(),
+            "OVEN_TEST_DYNAMIC_LIBRARY_ENVIRONMENT_NAME".to_string(),
+            dynamic_library_environment_name,
+        );
+        environment.insert(
+            "OVEN_TEST_DYNAMIC_LIBRARY_ENVIRONMENT_VALUE".to_string(),
+            dynamic_library_environment_value,
         );
         environment.insert(
             "PATH".to_string(),
@@ -3877,12 +4397,15 @@ mod tests {
                 .as_ref(),
             "the worker must retain the exact direct helper-binary compile environment"
         );
-        let (test_count, doctest_targets, failed) =
-            run_prepared_compiler_suite_children(vec![prepared_child], &receipt, &rustc)?;
+        let report = run_prepared_compiler_suite_children(vec![prepared_child], &receipt, &rustc)?;
 
-        assert_eq!(test_count, 1);
-        assert_eq!(doctest_targets, 0);
-        assert!(failed.is_empty(), "stored-suite child failures: {failed:?}");
+        assert_eq!(report.native_test_count, 1);
+        assert_eq!(report.doctest_targets, 0);
+        assert!(
+            report.failed.is_empty(),
+            "stored-suite child failures: {:?}",
+            report.failed
+        );
         assert!(
             !cargo_marker.exists(),
             "the Cargo guard was executed, so a direct-rustc planned suite child attempted a Cargo launch"
@@ -3932,7 +4455,9 @@ mod tests {
                 native_search_paths: Vec::new(),
                 externs: Vec::new(),
                 entrypoint_externs: std::collections::BTreeMap::new(),
+                registry_leaves: Vec::new(),
                 compile_environment: std::collections::BTreeMap::new(),
+                vocab_auxiliary_targets: Vec::new(),
                 supporting_artifacts: vec![crate::oven::rustc::OvenRustcSupportingArtifact {
                     relative_path: "support/libpublisher-proof.rlib".to_string(),
                     digest: digest_bytes(b"publisher proof"),

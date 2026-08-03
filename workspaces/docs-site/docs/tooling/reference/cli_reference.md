@@ -164,7 +164,9 @@ Behavior:
 - Default mode compiles a source file into an executable.
 - Prints the generated Rust project path (default example): `target/incan/<name>/`
 - Builds the generated Rust project with a receipt-selected, store-owned direct-`rustc` closure and prints the binary path. Generated source and the published final binary stay under the default project `target/incan/` tree, or under the positional caller-selected `OUTPUT_DIR`.
-- `--lib` is unavailable on the Oven Alpha normal path. It does not silently restore a Cargo backend.
+- `--lib` builds a project library from `src/lib.incn`, emits its checked `.incnlib` manifest, and publishes
+  caller-owned debug and release `rlib` outputs through the receipt-selected direct-`rustc` plan. It never restores a
+  Cargo backend.
 
 Dependency flags:
 

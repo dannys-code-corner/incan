@@ -6,8 +6,9 @@ runtime benchmarks and never uses Cargo as part of the benchmark workflow.
 
 The harness is deliberately strict. It starts with an empty `INCAN_HOME`, records the first normal command (which
 materializes a verified compiler-shipped unit and produces the caller-owned output), then records unchanged normal
-command repeats. The first command is not labelled warm. An optional failing `cargo` executable can be prepended to
-`PATH`; it turns an accidental consumer-side Cargo launch into a failed run.
+command repeats. The first command is not labelled warm. A required failing `cargo` executable is probed to confirm
+that it exits with status 97, then prepended to `PATH`; a successful normal stage therefore proves that it did not
+launch Cargo.
 
 ## Reference-machine requirements
 
@@ -15,15 +16,16 @@ Run the same supported workload on one documented macOS machine and one document
 revision, release archive identity, `incan --version`, OS/architecture, exact source fixture, profile, storage limits,
 and whether the store started empty. Keep the generated `report.json` and per-phase logs with the release evidence.
 
-The documented Alpha envelope is intentionally finite. At present the release archive ships core closures in debug
-and release plus the `std.testing` closure in debug, which is the only profile normal tests use. An unsupported
-provider/dependency closure must fail explicitly; do not turn the benchmark into a manual `legacy_cargo` publication
-to make it pass.
+The documented Alpha envelope is intentionally finite. At present the release archive ships exactly two units: a
+release core closure and a debug foundation closure for `std.testing`, `std.fs`, and `std.json` (which may satisfy a
+narrower compatible debug-core request). An unsupported provider/dependency closure must fail explicitly; do not turn
+the benchmark into a manual `legacy_cargo` publication to make it pass.
 
 ## Run a guarded test workload
 
-Extract the candidate release archive, then create a task-specific failing Cargo guard outside the repository. The
-guard proves that the tested normal command cannot accidentally invoke Cargo.
+Extract the candidate release archive and use the matching Incan checkout for the harness and its fixtures; those
+benchmark assets are deliberately not shipped inside the toolchain archive. Then create a task-specific failing Cargo
+guard outside the repository. The guard proves that the tested normal command cannot accidentally invoke Cargo.
 
 ```bash
 mkdir -p /tmp/incan-oven-cargo-guard
@@ -52,7 +54,7 @@ when recording a different policy.
 
 - the machine and toolchain identity;
 - `first_materialization` and each `warm_repeat_N` elapsed duration and exit status;
-- whether a failing Cargo guard was active;
+- the required Cargo-guard probe status and verdict that successful normal stages did not launch Cargo;
 - bounded-store inspection with physical allocation separate from logical artifact bytes, reclaimable bytes, and
   lease-protected bytes; and
 - one log file per phase, including verbose Oven timing for a test workload.

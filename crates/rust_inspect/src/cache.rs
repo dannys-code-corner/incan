@@ -3759,6 +3759,21 @@ fn extract_in_workspace_set(
     timing_enabled: bool,
     policy: ExtractionPolicy,
 ) -> Result<RustItemMetadata, RustMetadataError> {
+    // A marked Oven root is a complete, compiler-authored `rust-project.json` graph. A complete refresh needs the
+    // direct graph's semantic result, but ordinary extraction must first retain the no-Cargo source and generated
+    // `OUT_DIR` routes below. Those routes preserve public re-export spelling and intentionally partial metadata
+    // without asking rust-analyzer to rediscover a Cargo graph.
+    let direct_oven = RustWorkspace::oven_direct_inspection_active(root);
+    if direct_oven && policy == ExtractionPolicy::Complete {
+        return extract_from_workspace_route(
+            inner,
+            root,
+            canonical_path,
+            WorkspaceExtractionRoute::Primary,
+            progress,
+            timing_enabled,
+        );
+    }
     let crate_name = crate_name_for_path(canonical_path);
     let dep_resolve_started = Instant::now();
     let dep_root = resolve_dependency_manifest_dir(inner, root, crate_name, registry_src_roots)
@@ -3933,6 +3948,18 @@ fn extract_in_workspace_set(
         }
         if policy == ExtractionPolicy::FastOnly {
             return Err(RustMetadataError::PathNotResolved(canonical_path.to_string()));
+        }
+        if direct_oven {
+            // The source and generated fallbacks above are already Cargo-free. If neither can answer a full Oven
+            // request, use only the sealed root `rust-project.json`; never load a dependency Cargo workspace.
+            return extract_from_workspace_route(
+                inner,
+                root,
+                canonical_path,
+                WorkspaceExtractionRoute::Primary,
+                progress,
+                timing_enabled,
+            );
         }
         match extract_from_workspace_route(
             inner,

@@ -4,7 +4,7 @@
 #
 # A release archive supplies the supported native units. This harness starts with an empty Oven store, records the
 # first normal command (seed materialization plus its caller-owned native bake), then records unchanged warm commands.
-# An optional failing-Cargo directory may be prepended to PATH to make a consumer-side Cargo launch fail the evidence.
+# A deterministic failing Cargo guard is mandatory: a successful normal stage proves that it did not launch Cargo.
 
 set -euo pipefail
 
@@ -13,14 +13,14 @@ usage() {
 Usage:
   bash scripts/bench_oven_alpha.sh \
     --incan PATH --workload build|run|test --source PATH \
-    --incan-home PATH --output PATH [options]
+  --incan-home PATH --output PATH --cargo-guard-dir PATH [options]
 
 The selected source must be in the documented compiler-shipped Oven Alpha envelope. The harness requires an empty
 INCAN_HOME, records the first normal command separately from unchanged warm repeats, and never invokes Cargo.
 
 Options:
   --repetitions N                 Unchanged warm repeats after first materialization (default: 2; minimum: 1)
-  --cargo-guard-dir PATH          Directory containing a failing `cargo` executable to prepend to PATH
+  --cargo-guard-dir PATH          Directory containing a `cargo` executable that exits exactly 97 (required)
   --max-physical-bytes BYTES      Aggregate Oven physical-store policy (default: 2147483648)
   --max-domain-physical-bytes N   Per-domain Oven physical-store policy (default: 1073741824)
   --max-domain-logical-bytes N    Per-domain Oven logical-artifact policy (default: 805306368)
@@ -56,7 +56,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-for required in incan workload source_path incan_home output_dir; do
+for required in incan workload source_path incan_home output_dir cargo_guard_dir; do
     if [ -z "${!required}" ]; then
         echo "missing required --${required//_/-}" >&2
         usage >&2
@@ -81,10 +81,14 @@ fi
 [ -e "$source_path" ] || { echo "--source does not exist: $source_path" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "required executable is unavailable: python3" >&2; exit 2; }
 command -v uname >/dev/null 2>&1 || { echo "required executable is unavailable: uname" >&2; exit 2; }
-if [ -n "$cargo_guard_dir" ]; then
-    [ -d "$cargo_guard_dir" ] || { echo "--cargo-guard-dir is not a directory: $cargo_guard_dir" >&2; exit 2; }
-    [ -x "$cargo_guard_dir/cargo" ] || { echo "--cargo-guard-dir must contain an executable cargo guard" >&2; exit 2; }
-fi
+[ -d "$cargo_guard_dir" ] || { echo "--cargo-guard-dir is not a directory: $cargo_guard_dir" >&2; exit 2; }
+[ -x "$cargo_guard_dir/cargo" ] || { echo "--cargo-guard-dir must contain an executable cargo guard" >&2; exit 2; }
+set +e
+"$cargo_guard_dir/cargo" --version >/dev/null 2>&1
+cargo_guard_probe_status=$?
+set -e
+[ "$cargo_guard_probe_status" -eq 97 ] \
+    || { echo "--cargo-guard-dir/cargo must exit exactly 97 when probed; got $cargo_guard_probe_status" >&2; exit 2; }
 
 case "$max_physical_bytes:$max_domain_physical_bytes:$max_domain_logical_bytes" in
     *[!0-9:]*|::*|:*|*:) echo "storage limits must be whole-byte integers" >&2; exit 2 ;;
@@ -118,7 +122,16 @@ run_stage() {
     local started finished status
     started=$(now_ms)
     set +e
-    INCAN_HOME="$incan_home" \
+    # The measured consumer must use the selected compiler's shipped runtime and native units. Developer-shell
+    # source overrides intentionally remain supported elsewhere, but inheriting one from a different checkout would
+    # turn this packaged-toolchain benchmark into an ambient-state measurement and make its receipt incompatible
+    # with the compiler-owned seed.
+    env -u INCAN_SOURCE_ROOT -u INCAN_STDLIB -u INCAN_STDLIB_DIR -u INCAN_STDLIB_PATH \
+        -u INCAN_TOOLCHAIN_CRATES_DIR -u INCAN_SDK_INVENTORY \
+        -u INCAN_INTERNAL_SDK_PROVIDER_STORE -u INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE \
+        -u INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT -u INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION \
+        -u INCAN_INTERNAL_OVEN_RUNTIME_ROOT \
+        INCAN_HOME="$incan_home" \
         INCAN_OVEN_MAX_PHYSICAL_BYTES="$max_physical_bytes" \
         INCAN_OVEN_MAX_DOMAIN_PHYSICAL_BYTES="$max_domain_physical_bytes" \
         INCAN_OVEN_MAX_DOMAIN_LOGICAL_BYTES="$max_domain_logical_bytes" \
@@ -154,7 +167,7 @@ run_stage store_inspect "$incan" oven store inspect --store "$store_root" --form
 "$incan" --version >"$output_dir/incan-version.txt"
 uname -a >"$output_dir/uname.txt"
 
-python3 - "$output_dir" "$workload" "$source_path" "$store_root" "$cargo_guard_dir" \
+python3 - "$output_dir" "$workload" "$source_path" "$store_root" "$cargo_guard_dir" "$cargo_guard_probe_status" \
     "$max_physical_bytes" "$max_domain_physical_bytes" "$max_domain_logical_bytes" <<'PY'
 import json
 import pathlib
@@ -167,17 +180,22 @@ for line in (output / "phases.tsv").read_text().splitlines():
     phases.append({"name": name, "duration_ms": int(duration_ms), "exit_code": int(exit_code)})
 
 report = {
-    "schema_version": 2,
+    "schema_version": 3,
     "purpose": "Oven Alpha packaged-unit first-materialization and warm normal-command evidence",
     "machine": {"uname": (output / "uname.txt").read_text().strip()},
     "toolchain": {"incan": (output / "incan-version.txt").read_text().strip()},
     "workload": {"kind": sys.argv[2], "source": sys.argv[3]},
-    "cargo_guard": {"enabled": bool(sys.argv[5]), "directory": sys.argv[5] or None},
+    "cargo_guard": {
+        "required": True,
+        "directory": sys.argv[5],
+        "probe_exit_code": int(sys.argv[6]),
+        "verdict": "successful normal stages imply that Cargo was not launched",
+    },
     "store": {
         "root": sys.argv[4],
-        "max_physical_bytes": int(sys.argv[6]),
-        "max_domain_physical_bytes": int(sys.argv[7]),
-        "max_domain_logical_bytes": int(sys.argv[8]),
+        "max_physical_bytes": int(sys.argv[7]),
+        "max_domain_physical_bytes": int(sys.argv[8]),
+        "max_domain_logical_bytes": int(sys.argv[9]),
         "inspection": json.loads((output / "store_inspect.log").read_text()),
     },
     "phases": phases,

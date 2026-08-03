@@ -26,14 +26,13 @@ use crate::lockfile::CargoFeatureSelection;
 use crate::manifest::DependencySpec;
 use crate::oven::native_test::{OvenNativeTestRequest, run_native_test_batch};
 use crate::oven::native_unit::{
-    OvenNativeUnitSelection, OvenToolchainNativeUnit, materialize_toolchain_native_unit, resolve_toolchain_native_unit,
-    resolve_toolchain_registry_leaf_authority, runtime_build_unit_inputs,
+    OvenNativeUnitSelection, OvenToolchainNativeUnit, materialize_toolchain_native_unit_for_registry_dependencies,
+    resolve_toolchain_native_unit_for_registry_dependencies, runtime_build_unit_inputs,
 };
 use crate::oven::rustc::{
-    OvenRustcError, OvenStoredDirectRustcTestRequest, OvenTrustedDirectRustcTargetRequest,
-    attach_caller_owned_rustc_libraries, bake_stored_direct_rustc_test_with_libraries, bake_trusted_direct_rustc_test,
-    materialize_declared_rust_libraries, resolve_active_rustc, rustc_host_target, rustc_identity,
-    select_direct_rustc_plan_identity,
+    OvenTrustedDirectRustcTargetRequest, attach_caller_owned_rustc_libraries, bake_trusted_direct_rustc_test,
+    materialize_declared_rust_libraries_with_selected_path_authority, resolve_active_rustc, rustc_host_target,
+    rustc_identity, trusted_artifact_plan_for_source_evidence,
 };
 use crate::oven::{
     OvenGeneratedProjectRequest, default_receipt_path, digest_dependency_specs, receipt_generated_project,
@@ -63,8 +62,10 @@ pub(super) struct TestExecutionOptions {
 /// A compiler-suite child receives a parent-leased immutable compiler-data root. It uses that seed directly instead
 /// of publishing a duplicate closure into its output-owned store; ordinary tests keep the bounded-store path.
 enum OvenTestPlanSelection {
-    Stored(String),
-    CompilerSuiteNative(OvenToolchainNativeUnit),
+    /// The receipt-selected store payload and its active lease, retained through materialization, baking, and test
+    /// execution. A plan identity alone would reopen a prune race between those steps.
+    Stored(Box<crate::cli::commands::build::OvenStoredDirectRustcExecutionPlan>),
+    CompilerSuiteNative(Box<OvenToolchainNativeUnit>),
 }
 
 /// Validate strict Incan lock policy once before Oven schedules any generated native test harnesses.
@@ -2154,13 +2155,6 @@ fn run_file_tests_batch_oven(
                 .to_string(),
         );
     }
-    if options.timeout.is_some() {
-        return failure(
-            "Oven Alpha normal test execution does not yet enforce --timeout; remove it rather than assuming a timeout was applied"
-                .to_string(),
-        );
-    }
-
     let mut source_parts = Vec::new();
     let mut batch_parse_sources = Vec::new();
     let mut sources_by_file = Vec::new();
@@ -2553,9 +2547,13 @@ fn run_file_tests_batch_oven(
                 );
             }
         };
-        match resolve_toolchain_native_unit(&receipt, OvenNativeUnitSelection::CompilerOwnedProviderSuperset) {
+        match resolve_toolchain_native_unit_for_registry_dependencies(
+            &receipt,
+            OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
+            &inline_path_dependencies,
+        ) {
             Ok(Some(native)) if native.artifact_root.starts_with(&toolchain_data_root) => {
-                OvenTestPlanSelection::CompilerSuiteNative(native)
+                OvenTestPlanSelection::CompilerSuiteNative(Box::new(native))
             }
             Ok(Some(_)) => {
                 return failure(
@@ -2572,14 +2570,28 @@ fn run_file_tests_batch_oven(
             Err(error) => return failure(error.to_string()),
         }
     } else {
-        match select_direct_rustc_plan_identity(&store, &receipt) {
-            Ok(identity) => OvenTestPlanSelection::Stored(identity),
-            Err(OvenRustcError::PlanSelection { .. }) => match materialize_toolchain_native_unit(
+        let select_stored = || {
+            crate::cli::commands::build::select_receipt_direct_rustc_execution_plan(&store, &receipt)
+                .map(|selected| selected.map(|selected| OvenTestPlanSelection::Stored(Box::new(selected))))
+        };
+        match select_stored() {
+            Ok(Some(selection)) => selection,
+            Ok(None) => match materialize_toolchain_native_unit_for_registry_dependencies(
                 &store,
                 &receipt,
                 OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
+                &inline_path_dependencies,
             ) {
-                Ok(Some(identity)) => OvenTestPlanSelection::Stored(identity),
+                Ok(Some(_)) => match select_stored() {
+                    Ok(Some(selection)) => selection,
+                    Ok(None) => {
+                        return failure(
+                            "the receipt-compatible Oven native unit was reclaimed before test execution acquired its lease"
+                                .to_string(),
+                        );
+                    }
+                    Err(error) => return failure(error.message),
+                },
                 Ok(None) => {
                     return failure(format!(
                         "Oven Alpha has no compatible native test provider/dependency unit. Generated harness: {}; receipt: {}. `incan test` will not invoke Cargo; the active toolchain does not ship a compatible Oven-native unit",
@@ -2589,57 +2601,51 @@ fn run_file_tests_batch_oven(
                 }
                 Err(error) => return failure(error.to_string()),
             },
-            Err(error) => return failure(error.to_string()),
+            Err(error) => return failure(error.message),
         }
     };
     let selection_elapsed = selection_start.elapsed();
 
-    // A selected immutable plan owns its registry externs. Only registry dependencies absent from that plan reach
-    // the caller-owned materializer; a path dependency remains explicit even when it uses the same crate name.
-    let selected_externs = match &plan_selection {
-        OvenTestPlanSelection::Stored(plan_identity) => {
-            let selected = match crate::cli::commands::build::select_stored_direct_rustc_execution_plan(
-                &store,
-                plan_identity,
-                &receipt,
-            ) {
-                Ok(selected) => selected,
-                Err(error) => return failure(error.message),
-            };
-            selected
-                .artifact_plan
-                .externs
-                .into_iter()
-                .map(|(crate_name, _)| crate_name)
-                .collect::<BTreeSet<_>>()
+    // Classify caller declarations against the source projection, while retaining full-plan path authority for an
+    // exact compiler-owned dependency. The complete plan may include private compiler helpers whose names overlap
+    // ordinary caller dependencies such as serde_json.
+    let full_artifact_plan = match &plan_selection {
+        OvenTestPlanSelection::Stored(selected) => &selected.artifact_plan,
+        OvenTestPlanSelection::CompilerSuiteNative(native) => &native.artifact_plan,
+    };
+    let artifact_plan = match &plan_selection {
+        OvenTestPlanSelection::Stored(selected) => {
+            trusted_artifact_plan_for_source_evidence(&selected.artifact_plan, &selected.artifacts, "generated-root")
         }
-        OvenTestPlanSelection::CompilerSuiteNative(native) => native
-            .artifact_plan
-            .externs
-            .iter()
-            .map(|(crate_name, _)| crate_name.clone())
-            .collect::<BTreeSet<_>>(),
+        OvenTestPlanSelection::CompilerSuiteNative(native) => {
+            trusted_artifact_plan_for_source_evidence(&native.artifact_plan, &native.artifacts, "generated-root")
+        }
+    };
+    let artifact_plan = match artifact_plan {
+        Ok(plan) => plan,
+        Err(error) => return failure(error.to_string()),
     };
     let inline_libraries_to_materialize =
         crate::cli::commands::build::declared_rust_libraries_missing_from_selected_plan(
             &inline_path_dependencies,
-            &selected_externs,
+            &artifact_plan,
         );
 
-    let stored_caller_owned_plan = if !crate::cli::commands::build::has_caller_owned_project_libraries(&provider_plan) {
-        None
-    } else {
-        match &plan_selection {
-            OvenTestPlanSelection::Stored(plan_identity) => {
-                let selected = match crate::cli::commands::build::select_stored_direct_rustc_execution_plan(
-                    &store,
-                    plan_identity,
-                    &receipt,
-                ) {
-                    Ok(selected) => selected,
-                    Err(error) => return failure(error.message),
-                };
-                let re_materialized = match crate::cli::commands::build::rematerialize_caller_owned_libraries(
+    let registry_authority = match &plan_selection {
+        OvenTestPlanSelection::Stored(selected) => selected
+            .artifacts
+            .registry_leaf_authority(&selected.artifact_root, &selected.artifact_plan),
+        OvenTestPlanSelection::CompilerSuiteNative(native) => native
+            .artifacts
+            .registry_leaf_authority(&native.artifact_root, &native.artifact_plan),
+    };
+    let selected_path_authority =
+        crate::cli::commands::build::compiler_selected_path_authority(full_artifact_plan, Some(&provider_plan));
+
+    if crate::cli::commands::build::has_caller_owned_project_libraries(&provider_plan) {
+        let re_materialized = match &plan_selection {
+            OvenTestPlanSelection::Stored(selected) => {
+                match crate::cli::commands::build::rematerialize_caller_owned_libraries(
                     &provider_plan,
                     "debug",
                     &selected.artifacts,
@@ -2647,14 +2653,14 @@ fn run_file_tests_batch_oven(
                     &selected.artifact_plan,
                     &rustc,
                     &generated_root,
+                    registry_authority.as_ref(),
                 ) {
                     Ok(libraries) => libraries,
                     Err(error) => return failure(error.message),
-                };
-                Some((selected, re_materialized))
+                }
             }
             OvenTestPlanSelection::CompilerSuiteNative(native) => {
-                let re_materialized = match crate::cli::commands::build::rematerialize_caller_owned_libraries(
+                match crate::cli::commands::build::rematerialize_caller_owned_libraries(
                     &provider_plan,
                     "debug",
                     &native.artifacts,
@@ -2662,44 +2668,29 @@ fn run_file_tests_batch_oven(
                     &native.artifact_plan,
                     &rustc,
                     &generated_root,
+                    registry_authority.as_ref(),
                 ) {
                     Ok(libraries) => libraries,
                     Err(error) => return failure(error.message),
-                };
-                if let Err(error) = crate::cli::commands::build::replace_caller_owned_package_libraries(
-                    &mut caller_owned_libraries,
-                    re_materialized,
-                ) {
-                    return failure(error.message);
                 }
-                None
             }
-        }
-    };
-    if let Some((_, re_materialized)) = stored_caller_owned_plan.as_ref() {
+        };
         if let Err(error) = crate::cli::commands::build::replace_caller_owned_package_libraries(
             &mut caller_owned_libraries,
-            re_materialized.clone(),
+            re_materialized,
         ) {
             return failure(error.message);
         }
     }
 
-    let registry_authority = match resolve_toolchain_registry_leaf_authority(
-        &receipt,
-        OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
-    ) {
-        Ok(authority) => authority,
-        Err(error) => return failure(error.to_string()),
-    };
-
-    let inline_libraries = match materialize_declared_rust_libraries(
+    let inline_libraries = match materialize_declared_rust_libraries_with_selected_path_authority(
         &generated_root.join("oven").join("inline-rust"),
         &rustc,
         &receipt.intent.target,
         "debug",
         &inline_libraries_to_materialize,
         registry_authority.as_ref(),
+        selected_path_authority.as_ref(),
     ) {
         Ok(libraries) => libraries,
         Err(error) => {
@@ -2717,23 +2708,43 @@ fn run_file_tests_batch_oven(
         return failure("Oven Alpha resolved duplicate caller-owned Rust library crate names".to_string());
     }
     let bake_start = Instant::now();
-    let bake = match plan_selection {
-        OvenTestPlanSelection::Stored(plan_identity) => bake_stored_direct_rustc_test_with_libraries(
-            &OvenStoredDirectRustcTestRequest {
-                store: &store,
-                plan_identity,
-                receipt: receipt.clone(),
-                rustc: rustc.clone(),
-                source: generator.crate_root_path(),
-                output: generated_root.join("oven/debug").join(&native_output_name),
-                crate_name: runner_crate_name.clone(),
-                edition: "2024".to_string(),
-                source_evidence_key: "generated-root".to_string(),
-            },
-            &caller_owned_libraries,
-        ),
+    let bake = match &plan_selection {
+        OvenTestPlanSelection::Stored(selected) => {
+            let mut artifact_plan = match trusted_artifact_plan_for_source_evidence(
+                &selected.artifact_plan,
+                &selected.artifacts,
+                "generated-root",
+            ) {
+                Ok(plan) => plan,
+                Err(error) => return failure(error.to_string()),
+            };
+            if let Err(error) = attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries) {
+                return failure(format!("Oven direct-rustc test compilation failed: {error}"));
+            }
+            bake_trusted_direct_rustc_test(&OvenTrustedDirectRustcTargetRequest {
+                receipt: &receipt,
+                artifacts: &selected.artifacts,
+                artifact_root: &selected.artifact_root,
+                artifact_plan: Some(&artifact_plan),
+                rustc: &rustc,
+                source: &generator.crate_root_path(),
+                output: &generated_root.join("oven/debug").join(&native_output_name),
+                crate_name: &runner_crate_name,
+                edition: "2024",
+                source_evidence_key: "generated-root",
+                features: &receipt.intent.features,
+                prefer_dynamic: false,
+            })
+        }
         OvenTestPlanSelection::CompilerSuiteNative(native) => {
-            let mut artifact_plan = native.artifact_plan.clone();
+            let mut artifact_plan = match trusted_artifact_plan_for_source_evidence(
+                &native.artifact_plan,
+                &native.artifacts,
+                "generated-root",
+            ) {
+                Ok(plan) => plan,
+                Err(error) => return failure(error.to_string()),
+            };
             if let Err(error) = attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries) {
                 return failure(format!("Oven direct-rustc test compilation failed: {error}"));
             }
@@ -2776,6 +2787,7 @@ fn run_file_tests_batch_oven(
         executable: bake.output,
         exact_names,
         environment: BTreeMap::new(),
+        timeout: options.timeout,
     }) {
         Ok(report) => report,
         Err(error) => return failure(error.to_string()),
@@ -2814,43 +2826,15 @@ fn oven_test_build_unit_inputs(
     requirements: &ProjectRequirements,
     resolved: &ResolvedDependencies,
 ) -> Result<BTreeMap<String, String>, String> {
-    let direct_sdk_link_roots = provider_plan
-        .sdk_link_roots()
-        .into_iter()
-        .map(|provider| provider.identity.stable_key())
-        .collect::<BTreeSet<_>>();
-    let records = provider_plan
-        .active_sdk_records()
-        .map(|provider| {
-            let modules = provider_plan
-                .used_modules(provider)
-                .into_iter()
-                .map(|module| module.join("."))
-                .collect::<Vec<_>>()
-                .join(",");
-            let facets = provider_plan
-                .selected_implementation_facets(provider)
-                .into_iter()
-                .map(|facet| facet.id.as_str())
-                .collect::<Vec<_>>()
-                .join(",");
-            let direct_link = if direct_sdk_link_roots.contains(&provider.identity.stable_key()) {
-                "link"
-            } else {
-                "none"
-            };
-            format!("{}|{modules}|{facets}|{direct_link}", provider.identity.stable_key())
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let records = crate::cli::commands::build::oven_native_provider_records(
+        provider_plan,
+        &common::semantic_sdk_path_dependencies(requirements),
+    )
+    .map_err(|error| error.message)?;
     let mut dependencies = resolved.dependencies.clone();
     dependencies.extend(resolved.dev_dependencies.clone());
     let dependency_digest = digest_dependency_specs(&dependencies).map_err(|error| error.to_string())?;
-    runtime_build_unit_inputs(
-        records.lines().map(str::to_string).collect(),
-        &requirements.stdlib_features,
-        dependency_digest,
-    )
+    runtime_build_unit_inputs(records, &requirements.stdlib_features, dependency_digest)
 }
 
 /// Select only caller-imported Rust dependencies for the direct path-crate materializer.
@@ -2895,25 +2879,61 @@ fn extract_assertion_error(stderr: &str) -> String {
     stderr.to_string()
 }
 
-/// Extract a panic message from stdout.
-fn extract_panic_message(stdout: &str) -> String {
+/// Extract every libtest panic payload from a combined native-test transcript.
+///
+/// Libtest writes the location on its `panicked at` line and the actual payload on subsequent unindented lines.
+/// Keeping only indented lines therefore turns an Incan assertion or fixture teardown failure into an empty report.
+/// A batched harness can contain several failures, so retain every payload rather than assigning later cases the
+/// first failure's location-only header.
+fn extract_panic_message(output: &str) -> String {
+    let mut messages = Vec::new();
+    let mut payload_lines = Vec::new();
     let mut in_panic = false;
-    let mut msg = String::new();
 
-    for line in stdout.lines() {
-        if line.contains("panicked at") {
-            in_panic = true;
-            msg.push_str(line.trim());
-            msg.push('\n');
-        } else if in_panic && line.starts_with("  ") {
-            msg.push_str(line);
-            msg.push('\n');
-        } else if in_panic && line.is_empty() {
-            break;
+    let mut finish_panic = |payload_lines: &mut Vec<String>| {
+        let payload = payload_lines.join("\n");
+        if !payload.is_empty() {
+            messages.push(payload);
         }
+        payload_lines.clear();
+    };
+
+    for line in output.lines() {
+        if line.contains("panicked at") {
+            if in_panic {
+                finish_panic(&mut payload_lines);
+            }
+            in_panic = true;
+            continue;
+        }
+        if !in_panic {
+            continue;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !payload_lines.is_empty() {
+                finish_panic(&mut payload_lines);
+                in_panic = false;
+            }
+            continue;
+        }
+        if trimmed.starts_with("note:") || trimmed.starts_with("---- ") || trimmed.starts_with("failures:") {
+            finish_panic(&mut payload_lines);
+            in_panic = false;
+            continue;
+        }
+        payload_lines.push(trimmed.to_string());
+    }
+    if in_panic {
+        finish_panic(&mut payload_lines);
     }
 
-    if msg.is_empty() { stdout.to_string() } else { msg }
+    if messages.is_empty() {
+        output.to_string()
+    } else {
+        messages.join("\n")
+    }
 }
 
 #[cfg(test)]
@@ -2928,7 +2948,7 @@ mod tests {
     use crate::provider::{NamespaceAuthority, ProviderIdentity, ProviderProvenance, ProviderRecord};
 
     #[test]
-    fn oven_test_seed_compatibility_excludes_caller_owned_provider_records() -> Result<(), Box<dyn std::error::Error>> {
+    fn oven_test_seed_compatibility_records_only_used_sdk_capabilities() -> Result<(), Box<dyn std::error::Error>> {
         let sdk = ProviderRecord {
             identity: ProviderIdentity {
                 name: "incan_stdlib_testing".to_string(),
@@ -2970,7 +2990,11 @@ mod tests {
             artifact: None,
             implementation_facets: Vec::new(),
         };
-        let provider_plan = ProviderPlan::new(LibraryManifestIndex::default(), vec![sdk, project], [])?;
+        let provider_plan = ProviderPlan::new(
+            LibraryManifestIndex::default(),
+            vec![sdk, project],
+            [vec!["std".to_string(), "testing".to_string()]],
+        )?;
         let inputs = oven_test_build_unit_inputs(
             &provider_plan,
             &ProjectRequirements::default(),
@@ -2999,13 +3023,15 @@ mod tests {
         let test_file = tests.join("test_lock.incn");
         fs::write(&test_file, "def test_lock() -> None:\n  assert True\n")?;
 
-        let error = validate_oven_test_lock_policy(
+        let error = match validate_oven_test_lock_policy(
             &test_file,
             &CargoPolicy::explicit(false, false, true, Vec::new()),
             &FeatureSelection::default(),
             None,
-        )
-        .expect_err("a frozen Oven test must not create an incan.lock through Cargo");
+        ) {
+            Ok(()) => return Err("a frozen Oven test created an incan.lock through Cargo".into()),
+            Err(error) => error,
+        };
 
         assert!(error.message.contains("incan.lock is missing; run `incan lock`"));
         Ok(())
@@ -3139,6 +3165,28 @@ test test_runner_76001490ba86f677::__incan_file_tests::incan_harness_1_b ... FAI
         let m = parse_libtest_outcomes(out);
         assert_eq!(m.get("__incan_file_tests::incan_harness_0_a"), Some(&true));
         assert_eq!(m.get("__incan_file_tests::incan_harness_1_b"), Some(&false));
+    }
+
+    #[test]
+    fn extracts_unindented_libtest_panic_payloads_from_a_batch() {
+        let transcript = r#"
+thread 'test_runner::__incan_file_tests::incan_harness_0_message' panicked at src/lib.rs:17:13:
+AssertionError: custom boom
+
+thread 'test_runner::__incan_file_tests::incan_harness_1_teardown' panicked at src/lib.rs:41:9:
+fixture teardown failed:
+child teardown failed
+parent teardown failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+"#;
+
+        let detail = extract_panic_message(transcript);
+
+        assert!(detail.contains("AssertionError: custom boom"));
+        assert!(detail.contains("fixture teardown failed:"));
+        assert!(detail.contains("child teardown failed"));
+        assert!(detail.contains("parent teardown failed"));
+        assert!(!detail.contains("panicked at"));
     }
 
     #[test]

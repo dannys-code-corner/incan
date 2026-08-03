@@ -85,6 +85,7 @@ impl Drop for GeneratedCacheLease {
 
 impl GeneratedCacheLease {
     /// Finish one compiler-owned Cargo operation before user code may continue outside the cache lease.
+    #[cfg(test)]
     pub(crate) fn finish(mut self) -> io::Result<()> {
         self.release_activity_lock();
         let result = self
@@ -256,6 +257,7 @@ pub(crate) fn resolve_generated_cargo_target(
 /// This is kept test-only so production callers cannot accidentally bypass `INCAN_HOME`, opt-out, explicit-target,
 /// or configured size-limit policy while proving higher-level lease ownership deterministically.
 #[cfg(all(test, feature = "rust_inspect"))]
+#[allow(dead_code)] // The LSP-only resolver is exercised by feature-gated integration fixtures.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_generated_cargo_target_in_cache_root(
     cache_root: &Path,

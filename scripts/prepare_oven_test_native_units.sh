@@ -17,8 +17,8 @@ Usage:
   bash scripts/prepare_oven_test_native_units.sh \
     --incan PATH --output PATH [--max-bytes BYTES]
 
-Builds broad compiler-owned standard-library and encoding debug/release foundations, then verifies normal core,
-testing, hashing, utility, encoding, and library Alpha envelopes. The output must be under a compiler toolchain layout (the
+Builds bounded compiler-owned standard-library, encoding, and runtime-surface debug/release foundations, then verifies
+normal core, testing, hashing, utility, encoding, runtime-surface, and library Alpha envelopes. The output must be under a compiler toolchain layout (the
 regular test target uses target/share/incan/oven/native-units). `--max-bytes` is the aggregate physical policy;
 each native-unit domain is independently limited to 768 MiB logical bytes and 1 GiB physical bytes.
 EOF
@@ -73,12 +73,16 @@ visible_output="$compiler_root/target/share/incan/oven/native-units"
     exit 2
 }
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/incan-oven-test-seeds.XXXXXX")"
-trap 'rm -rf "$scratch"' EXIT
-
-# Test preparation owns this exact ignored fixture directory. A stale unit must never be reused across a rebuilt
-# compiler because receipt build-unit identity includes the active runtime sources and lockfile.
-rm -rf "$output"
-mkdir -p "$output"
+# This fixture directory is compiler-visible, so two overlapping publishers could otherwise each remove or append
+# seed identities while the other is validating them. Refuse the second publisher rather than producing a mixed
+# compatibility set. A stale lock is intentionally a loud recovery condition: it is safer to remove one known lock
+# after confirming its owner stopped than to guess that an active publisher can be interrupted.
+native_unit_lock="$output_parent/.oven-test-native-units.lock"
+if ! mkdir "$native_unit_lock" 2>/dev/null; then
+    echo "another Oven native-unit test publisher owns $native_unit_lock; wait for it or remove this stale lock after confirming no publisher is active" >&2
+    exit 1
+fi
+trap 'rm -rf "$scratch" "$native_unit_lock"' EXIT
 
 prepare_seed() {
     local name=$1
@@ -93,8 +97,9 @@ prepare_seed() {
         testing|core)
             # This is the complete compiler-owned module envelope currently exercised by the normal CLI integration
             # suite. It deliberately imports one checked symbol per module so the receipt records an explicit
-            # provider capability. The compiler suite also directly exercises the exact registry dependency
-            # `bitflags = "=1.3.2"`; it is compiled here only by the named publisher into the immutable seed catalog.
+            # provider capability. The compiler suite also directly exercises exact registry dependencies
+            # `bitflags = "=1.3.2"` and `uuid = "1.0"` with source-visible v4/serde features; they are compiled
+            # here only by the named publisher into the immutable seed catalog.
             # This is a bounded test compatibility envelope, not a normal-command Cargo or cache fallback.
             printf '%s\n' \
                 'from std.async import spawn' \
@@ -126,12 +131,14 @@ prepare_seed() {
                 'from std.web.routing import GET, route' \
                 'import std.async' \
                 'from rust::bitflags import bitflags' \
+                'from rust::uuid import Uuid' \
                 '' \
                 '@route("/oven-seed", methods=[GET])' \
                 'async def oven_seed_route() -> Response:' \
                 '    return Response.ok()' \
                 '' \
                 'def main() -> None:' \
+                '    value = Uuid.new_v4()' \
                 '    pass' > "$source"
             printf '%s\n' \
                 '[project]' \
@@ -140,6 +147,7 @@ prepare_seed() {
                 '' \
                 '[rust-dependencies]' \
                 'bitflags = "=1.3.2"' \
+                'uuid = { version = "1.0", features = ["v4", "serde"] }' \
                 > "$scratch/incan.toml"
             ;;
         encoding)
@@ -157,6 +165,38 @@ prepare_seed() {
                 'from std.fs import Path' \
                 'from std.io import BytesIO' \
                 'from std.traits.error import Error' \
+                '' \
+                'def main() -> None:' \
+                '    pass' > "$source"
+            printf '%s\n' \
+                '[project]' \
+                "name = \"oven_${name}_seed\"" \
+                'version = "0.1.0"' > "$scratch/incan.toml"
+            ;;
+        surfaces)
+            # The integration suite deliberately exercises the public module roots as well as individual child
+            # modules. Keep that compatibility envelope separate from the core foundation: it includes optional
+            # compression and observability providers, yet remains small enough to be governed as its own native-unit
+            # domain. These imports are capability declarations, not a fallback resolver; ordinary commands select
+            # this immutable direct-rustc closure only when their receipt is a provider subset.
+            printf '%s\n' \
+                'from std.checksum import crc32' \
+                'from std.collections import OrdinalKey' \
+                'from std.compression import Codec' \
+                'from std.compression.snappy.raw import compress as raw_snappy_compress' \
+                'from std.datetime import Date' \
+                'from std.encoding import base32, base58, base64, base85, bech32, hex, EncodingError' \
+                'from std.fs import Path' \
+                'from std.io import BytesIO' \
+                'from std.interop import c' \
+                'from std.logging import get_logger' \
+                'import std.math' \
+                'from std.regex import Regex' \
+                'from std.result import map as result_map' \
+                'from std.telemetry.core import TelemetryValue' \
+                'from std.tempfile import TemporaryDirectory' \
+                'from std.testing import assert_true' \
+                'from std.uuid import UUID' \
                 '' \
                 'def main() -> None:' \
                 '    pass' > "$source"
@@ -266,7 +306,9 @@ verify_utility_consumer() {
     local oven_home="$scratch/utility-consumer-home"
     local cargo_guard="$scratch/utility-cargo-guard"
 
-    printf 'from std.fs import Path\nfrom std.json import JsonValue\n\ndef main() -> None:\n    _ = Path(".").exists()\n' > "$source"
+    # Keep the JSON provider semantically live. An import that code generation proves unused does not exercise its
+    # provider identity, and could let a stale seed survive reuse even though a normal JSON command would reject it.
+    printf 'from std.fs import Path\nfrom std.json import JsonValue\n\ndef main() -> None:\n    exists = Path(".").exists()\n    parsed = JsonValue.parse("{}")\n' > "$source"
     mkdir -p "$cargo_guard"
     printf '#!/bin/sh\nexit 97\n' > "$cargo_guard/cargo"
     chmod +x "$cargo_guard/cargo"
@@ -274,6 +316,23 @@ verify_utility_consumer() {
         INCAN_SOURCE_ROOT="$compiler_root" \
         INCAN_HOME="$oven_home" PATH="$cargo_guard:$PATH" \
         "$incan" run "$source" >/dev/null
+}
+
+verify_json_build_consumer() {
+    local source="$scratch/oven_json_build_consumer.incn"
+    local oven_home="$scratch/json-build-consumer-home"
+    local cargo_guard="$scratch/json-build-cargo-guard"
+
+    # The debug utility probe above proves run selection. This release build probe prevents a stale core-profile
+    # seed from passing reuse after the active SDK's JSON provider identity changes.
+    printf 'from std.json import JsonValue\n\ndef main() -> None:\n    parsed = JsonValue.parse("{}")\n' > "$source"
+    mkdir -p "$cargo_guard"
+    printf '#!/bin/sh\nexit 97\n' > "$cargo_guard/cargo"
+    chmod +x "$cargo_guard/cargo"
+    env -u INCAN_STDLIB -u INCAN_STDLIB_DIR \
+        INCAN_SOURCE_ROOT="$compiler_root" \
+        INCAN_HOME="$oven_home" PATH="$cargo_guard:$PATH" \
+        "$incan" build "$source" >/dev/null
 }
 
 verify_encoding_consumer() {
@@ -291,6 +350,21 @@ verify_encoding_consumer() {
         "$incan" run "$source" >/dev/null
 }
 
+verify_runtime_surfaces_consumer() {
+    local source="$scratch/oven_runtime_surfaces_consumer.incn"
+    local oven_home="$scratch/runtime-surfaces-consumer-home"
+    local cargo_guard="$scratch/runtime-surfaces-cargo-guard"
+
+    printf 'from std.checksum import crc32\nfrom std.collections import OrdinalKey\nfrom std.datetime import Date\nfrom std.encoding import hex\nfrom std.io import BytesIO\nfrom std.logging import get_logger\nimport std.math\nfrom std.regex import Regex\nfrom std.result import map as result_map\nfrom std.testing import assert_true\nfrom std.uuid import UUID\n\ndef main() -> None:\n    pass\n' > "$source"
+    mkdir -p "$cargo_guard"
+    printf '#!/bin/sh\nexit 97\n' > "$cargo_guard/cargo"
+    chmod +x "$cargo_guard/cargo"
+    env -u INCAN_STDLIB -u INCAN_STDLIB_DIR \
+        INCAN_SOURCE_ROOT="$compiler_root" \
+        INCAN_HOME="$oven_home" PATH="$cargo_guard:$PATH" \
+        "$incan" run "$source" >/dev/null
+}
+
 verify_library_consumer() {
     local project="$scratch/oven_library_consumer"
     local oven_home="$scratch/library-consumer-home"
@@ -299,6 +373,23 @@ verify_library_consumer() {
     mkdir -p "$project/src" "$cargo_guard"
     printf '[project]\nname = "oven_library_consumer"\nversion = "0.1.0"\n' > "$project/incan.toml"
     printf 'pub def value() -> int:\n    return 1\n' > "$project/src/lib.incn"
+    printf '#!/bin/sh\nexit 97\n' > "$cargo_guard/cargo"
+    chmod +x "$cargo_guard/cargo"
+    env -u INCAN_STDLIB -u INCAN_STDLIB_DIR \
+        INCAN_SOURCE_ROOT="$compiler_root" \
+        INCAN_HOME="$oven_home" PATH="$cargo_guard:$PATH" \
+        "$incan" build --lib "$project" >/dev/null
+}
+
+verify_vocab_desugarer_consumer() {
+    local project="$compiler_root/examples/pro/vocab_querykit/producer"
+    local oven_home="$scratch/vocab-desugarer-consumer-home"
+    local cargo_guard="$scratch/vocab-desugarer-cargo-guard"
+
+    # This must compile the companion's Wasm `cdylib` through the publisher-sealed wasm32-wasip1 closure. The
+    # companion's metadata alone is insufficient proof: a previous implementation copied host extraction support
+    # but rejected the actual desugarer artifact and could therefore still hide a Cargo fallback behind a cache.
+    mkdir -p "$cargo_guard"
     printf '#!/bin/sh\nexit 97\n' > "$cargo_guard/cargo"
     chmod +x "$cargo_guard/cargo"
     env -u INCAN_STDLIB -u INCAN_STDLIB_DIR \
@@ -332,26 +423,101 @@ verify_registry_leaf_consumer() {
         "$incan" build --lib "$project" >/dev/null
 }
 
-prepare_seed testing debug
-prepare_seed core release
-prepare_seed encoding debug
-prepare_seed encoding release
-verify_core_consumer
-verify_std_testing_consumer
-verify_std_hash_test_consumer
-verify_web_route_consumer
-verify_utility_consumer
-verify_encoding_consumer
-verify_library_consumer
-verify_registry_leaf_consumer
+verify_uuid_registry_leaf_consumer() {
+    local project="$scratch/oven_uuid_registry_leaf_consumer"
+    local oven_home="$scratch/uuid-registry-leaf-consumer-home"
+    local cargo_guard="$scratch/uuid-registry-leaf-cargo-guard"
+
+    mkdir -p "$project/src" "$cargo_guard"
+    printf '%s\n' \
+        '[project]' \
+        'name = "oven_uuid_registry_leaf_consumer"' \
+        'version = "0.1.0"' \
+        '' \
+        '[rust-dependencies]' \
+        'uuid = { version = "1.0", features = ["v4", "serde"] }' > "$project/incan.toml"
+    # Deliberately import sibling registry roots from the same declared caller surface. UUID's metadata closure uses
+    # serde/rand, so this catches a false "leaf exists" implementation that mixes a UUID artifact from one seed with
+    # serde or serde_json roots from another compatibility domain.
+    printf 'from rust::rand import thread_rng\nfrom rust::serde import Deserialize\nfrom rust::serde_json import from_str as json_parse\nfrom rust::uuid import Uuid\n\ndef main() -> None:\n    value = Uuid.new_v4()\n    _ = thread_rng()\n    println(value.to_string())\n' > "$project/src/main.incn"
+    printf '#!/bin/sh\nexit 97\n' > "$cargo_guard/cargo"
+    chmod +x "$cargo_guard/cargo"
+    env -u INCAN_STDLIB -u INCAN_STDLIB_DIR \
+        INCAN_SOURCE_ROOT="$compiler_root" \
+        INCAN_HOME="$oven_home" PATH="$cargo_guard:$PATH" \
+        "$incan" run "$project/src/main.incn" >/dev/null
+}
+
+# The selection checks below prove that the checked compiler, its current runtime sources, and each selected
+# profile still match the immutable seeds.  A receipt mismatch, corrupt materialized file, missing seed, or Cargo
+# fallback makes one of these commands fail and forces a complete rebuild.  This preserves the publisher boundary
+# while avoiding six unnecessary transient Cargo compilations on every `make test`.
+reuse_existing_native_units() {
+    [ -d "$output" ] || return 1
+    local seed_count
+    seed_count="$(find "$output" -name seed.json -type f | wc -l | tr -d ' ')"
+    [ "$seed_count" = 6 ] || return 1
+
+    local seed
+    while IFS= read -r seed; do
+        grep -F '"schema_version": 10' "$seed" >/dev/null || return 1
+    done < <(find "$output" -name seed.json -type f | sort)
+
+    # This function is evaluated in an `if`, where Bash suppresses `set -e` for its body. Every verifier must
+    # therefore explicitly fail the reuse decision; otherwise one stale compatibility probe can be hidden by a later
+    # successful probe and the next normal command observes a surprise seed-selection miss.
+    verify_core_consumer || return 1
+    verify_std_testing_consumer || return 1
+    verify_std_hash_test_consumer || return 1
+    verify_web_route_consumer || return 1
+    verify_utility_consumer || return 1
+    verify_json_build_consumer || return 1
+    verify_encoding_consumer || return 1
+    verify_runtime_surfaces_consumer || return 1
+    verify_library_consumer || return 1
+    verify_vocab_desugarer_consumer || return 1
+    verify_registry_leaf_consumer || return 1
+    verify_uuid_registry_leaf_consumer || return 1
+}
+
+native_unit_action="Prepared"
+if reuse_existing_native_units; then
+    native_unit_action="Reused verified"
+else
+    # Test preparation owns this exact ignored fixture directory. A stale unit must never survive a failed
+    # compatibility check: receipt build-unit identity includes the active runtime sources and lockfile.
+    rm -rf "$output"
+    mkdir -p "$output"
+
+    prepare_seed testing debug
+    prepare_seed core release
+    prepare_seed encoding debug
+    prepare_seed encoding release
+    prepare_seed surfaces debug
+    prepare_seed surfaces release
+    verify_core_consumer
+    verify_std_testing_consumer
+    verify_std_hash_test_consumer
+    verify_web_route_consumer
+    verify_utility_consumer
+    verify_json_build_consumer
+    verify_encoding_consumer
+    verify_runtime_surfaces_consumer
+    verify_library_consumer
+    verify_vocab_desugarer_consumer
+    verify_registry_leaf_consumer
+    verify_uuid_registry_leaf_consumer
+fi
 
 seed_count="$(find "$output" -name seed.json -type f | wc -l | tr -d ' ')"
-[ "$seed_count" = 4 ] || { echo "expected debug and release broad and encoding Oven foundation seeds, found $seed_count" >&2; exit 1; }
+[ "$seed_count" = 6 ] || { echo "expected debug and release broad, encoding, and runtime-surface Oven foundation seeds, found $seed_count" >&2; exit 1; }
 aggregate_physical_bytes=0
 aggregate_logical_bytes=0
 while IFS= read -r seed; do
     seed_root="$(dirname "$seed")"
-    logical_bytes="$(find "$seed_root" -type f -exec wc -c {} + | awk '{ total += $1 } END { print total + 0 }')"
+    # `wc` emits one trailing `total` line for each `find -exec` batch. Excluding those summaries keeps logical
+    # artifact bytes distinct from physical allocation instead of counting every file payload twice.
+    logical_bytes="$(find "$seed_root" -type f -exec wc -c {} + | awk '$2 != "total" { total += $1 } END { print total + 0 }')"
     physical_bytes="$(du -sk "$seed_root" | awk '{ print $1 * 1024 }')"
     [ "$logical_bytes" -le "$domain_max_logical_bytes" ] \
         || { echo "Oven native-unit domain $seed_root has $logical_bytes logical bytes; policy is $domain_max_logical_bytes" >&2; exit 1; }
@@ -362,5 +528,5 @@ while IFS= read -r seed; do
 done < <(find "$output" -name seed.json -type f | sort)
 [ "$aggregate_physical_bytes" -le "$max_bytes" ] \
     || { echo "Oven native-unit aggregate has $aggregate_physical_bytes physical bytes; policy is $max_bytes" >&2; exit 1; }
-printf 'Prepared %s Oven foundation seeds (%s logical bytes, %s physical bytes, aggregate physical policy %s bytes)\n' \
-    "$seed_count" "$aggregate_logical_bytes" "$aggregate_physical_bytes" "$max_bytes"
+printf '%s %s Oven foundation seeds (%s logical bytes, %s physical bytes, aggregate physical policy %s bytes)\n' \
+    "$native_unit_action" "$seed_count" "$aggregate_logical_bytes" "$aggregate_physical_bytes" "$max_bytes"

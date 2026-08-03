@@ -2196,6 +2196,9 @@ fn prepare_library_dependency_artifacts(
                     )));
                 }
                 actual_features != &expected_features
+                    || matches!(preparation, LibraryDependencyPreparation::OvenDirectRustc)
+                        && has_source_manifest
+                        && !oven_library_dependency_has_verified_profile_receipts(&dependency.path)
             }
             Some(LibraryManifestIndexEntry::Failed(failure)) => {
                 failure.kind == LibraryManifestFailureKind::ArtifactMissing
@@ -2212,6 +2215,22 @@ fn prepare_library_dependency_artifacts(
     }
 
     Ok(())
+}
+
+/// Return whether a materialized local `pub::` library is authorized for both normal Oven profiles.
+///
+/// A legacy generated artifact is not enough: consumers re-materialize the provider source through their selected
+/// direct-Rustc cohort, which requires an identity-verified producer receipt for the debug and release profiles.
+/// A local source manifest permits the existing nested Oven build to refresh either missing or malformed receipt.
+fn oven_library_dependency_has_verified_profile_receipts(dependency_root: &Path) -> bool {
+    let release = crate::oven::default_receipt_path(dependency_root);
+    let debug = release.with_file_name("library-debug-receipt.json");
+    [release, debug].iter().all(|path| {
+        fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<crate::oven::OvenReceipt>(&bytes).ok())
+            .is_some_and(|receipt| receipt.verify_identity().is_ok())
+    })
 }
 
 /// Prepare one missing `pub::` dependency artifact through the existing library-mode compiler path.
@@ -3139,6 +3158,18 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
 /// Collect canonical rust-inspect query paths from parsed `rust::` imports.
 #[cfg(feature = "rust_inspect")]
 pub(crate) fn collect_rust_inspect_query_paths(modules: &[ParsedModule]) -> Vec<String> {
+    collect_rust_inspect_query_paths_from_programs(modules.iter().map(|module| &module.ast))
+}
+
+/// Collect canonical rust-inspect query paths from parsed programs.
+///
+/// Native-unit publication also parses compiler-owned provider source that is metadata-only in the consumer module
+/// graph. Keeping the import walk program-based lets that explicit publisher preserve Rust ownership signatures
+/// without making normal Oven consumers re-emit provider source.
+#[cfg(feature = "rust_inspect")]
+pub(crate) fn collect_rust_inspect_query_paths_from_programs<'a>(
+    programs: impl IntoIterator<Item = &'a Program>,
+) -> Vec<String> {
     fn env_flag_enabled(name: &str) -> bool {
         std::env::var_os(name).is_some_and(|value| {
             let value = value.to_string_lossy();
@@ -3154,8 +3185,8 @@ pub(crate) fn collect_rust_inspect_query_paths(modules: &[ParsedModule]) -> Vec<
     // Set `INCAN_RUST_INSPECT_PREWARM_ALL=1` to restore full eager prewarm for debugging/regressions.
     let prewarm_all = env_flag_enabled("INCAN_RUST_INSPECT_PREWARM_ALL");
     let mut paths: BTreeSet<String> = BTreeSet::new();
-    for module in modules {
-        for decl in &module.ast.declarations {
+    for program in programs {
+        for decl in &program.declarations {
             let crate::frontend::ast::Declaration::Import(import) = &decl.node else {
                 continue;
             };
@@ -3238,6 +3269,31 @@ fn print_rust_inspect_prewarm_progress(message: String) {
     }
 }
 
+/// Marker understood by `rust_inspect` that selects its build-system-neutral `rust-project.json` loader.
+///
+/// The generated projection still carries a manifest as structured dependency input, but a normal Oven command must
+/// never ask Cargo to interpret or build that projection.
+#[cfg(feature = "rust_inspect")]
+const OVEN_DIRECT_RUST_INSPECT_MARKER: &str = ".incan_oven_direct_rust_project";
+
+/// Mark one compiler-authored Rust inspection projection for receipt-bound direct-Rustc loading.
+#[cfg(feature = "rust_inspect")]
+pub(crate) fn mark_oven_direct_rust_inspection(manifest_dir: &Path) -> CliResult<()> {
+    let marker = manifest_dir.join(OVEN_DIRECT_RUST_INSPECT_MARKER);
+    fs::write(&marker, b"receipt-bound direct-rustc inspection\n").map_err(|error| {
+        CliError::failure(format!(
+            "failed to mark Oven Rust inspection projection {}: {error}",
+            marker.display()
+        ))
+    })
+}
+
+#[cfg(feature = "rust_inspect")]
+/// Return whether this generated manifest carries the direct-Oven rust-inspect marker.
+fn oven_direct_rust_inspection_marked(manifest_dir: &Path) -> bool {
+    manifest_dir.join(OVEN_DIRECT_RUST_INSPECT_MARKER).is_file()
+}
+
 /// Prepare rust-inspect metadata access before typechecking/codegen hot paths.
 ///
 /// Metadata extraction now defaults to lazy lookup because eager rust-analyzer extraction across every imported Rust
@@ -3250,7 +3306,26 @@ pub(crate) fn prewarm_rust_inspect_workspace(
     manifest_dir: &Path,
     target_dir: &Path,
     query_paths: &[String],
+    force_direct_prewarm: bool,
 ) -> CliResult<()> {
+    if oven_direct_rust_inspection_marked(manifest_dir) {
+        // The direct loader consumes the compiler-authored source graph without Cargo. It also has no valid
+        // build-script OUT_DIR discovery route, so ignore the legacy eager-OUT_DIR knob rather than letting a normal
+        // Oven command regain a Cargo subprocess through an inspection side path.
+        if !query_paths.is_empty() && (force_direct_prewarm || rust_inspect_prewarm_enabled()) {
+            let inspector = Inspector::new(InspectorConfig::new(manifest_dir.to_path_buf()));
+            inspector
+                .prewarm(query_paths.iter().cloned(), &print_rust_inspect_prewarm_progress)
+                .map_err(|err| {
+                    CliError::failure(format!(
+                        "failed to prewarm direct Oven rust-inspect cache from {}: {err}",
+                        manifest_dir.display()
+                    ))
+                })?;
+        }
+        return Ok(());
+    }
+
     configure_rust_inspect_cargo_target(manifest_dir, target_dir)?;
     if query_paths.is_empty() {
         return Ok(());
@@ -3575,12 +3650,19 @@ fn is_unselected_package_entrypoint(source_root: &Path, source_file: &Path, sele
 }
 
 /// Recursively collect authored `.incn` files without following directory symlinks.
-fn collect_incan_source_files(directory: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+pub(crate) fn collect_incan_source_files(directory: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            collect_incan_source_files(&entry.path(), files)?;
+            let name = entry.file_name();
+            let name = name.to_str().unwrap_or("");
+            // Broad source collection is used for package libraries and generated test batches. Compiler, editor,
+            // and user tools all place non-source state below hidden directories; treating that state as an Incan
+            // module can emit invalid Rust such as `pub mod .incan;`.
+            if !name.starts_with('.') && name != "target" && name != "node_modules" {
+                collect_incan_source_files(&entry.path(), files)?;
+            }
         } else if file_type.is_file() && entry.path().extension().is_some_and(|extension| extension == "incn") {
             files.push(entry.path());
         }
@@ -5002,6 +5084,14 @@ from rust::std::primitive import i64 as RustI64
                 "std::fs::metadata".to_string(),
             ]
         );
+
+        let program_paths = collect_rust_inspect_query_paths_from_programs([&parsed_module_for_test(
+            r#"
+from rust::rustix::fs import flock
+"#,
+        )?
+        .ast]);
+        assert_eq!(program_paths, vec!["rustix::fs::flock".to_string()]);
         Ok(())
     }
 
@@ -6984,6 +7074,42 @@ def main() -> None:
     }
 
     #[test]
+    fn oven_library_dependency_requires_verified_debug_and_release_receipts() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path();
+        let generated_source = project_root.join("target/lib/src/lib.rs");
+        fs::create_dir_all(generated_source.parent().ok_or("generated source has no parent")?)?;
+        fs::write(&generated_source, "pub fn provider() {}\n")?;
+
+        let receipt = |profile| {
+            crate::oven::receipt_generated_project(
+                &crate::oven::OvenGeneratedProjectRequest::new(
+                    project_root,
+                    "provider",
+                    "0.1.0",
+                    "aarch64-apple-darwin",
+                    "rustc test",
+                    profile,
+                    Vec::new(),
+                )
+                .with_generated_source("generated-root", &generated_source),
+            )
+        };
+        let release_path = crate::oven::default_receipt_path(project_root);
+        crate::oven::write_receipt(&receipt("release")?, &release_path)?;
+        assert!(!oven_library_dependency_has_verified_profile_receipts(project_root));
+
+        let debug_path = release_path.with_file_name("library-debug-receipt.json");
+        crate::oven::write_receipt(&receipt("debug")?, &debug_path)?;
+        assert!(oven_library_dependency_has_verified_profile_receipts(project_root));
+
+        fs::write(&debug_path, "not a receipt")?;
+        assert!(!oven_library_dependency_has_verified_profile_receipts(project_root));
+        Ok(())
+    }
+
+    #[test]
     fn compilation_session_analysis_bundles_lowering_inputs_with_semantic_facts()
     -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
@@ -7063,6 +7189,33 @@ def main() -> None:
 
         assert!(analysis.type_info_for_module_path(&["first".to_string()]).is_some());
         assert!(analysis.type_info_for_module_path(&["second".to_string()]).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn broad_source_collection_ignores_hidden_and_generated_directories() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        fs::write(tmp.path().join("root.incn"), "def root() -> None:\n  pass\n")?;
+        fs::create_dir_all(tmp.path().join("nested"))?;
+        fs::write(tmp.path().join("nested/module.incn"), "def nested() -> None:\n  pass\n")?;
+        for directory in [".ralph-cache", ".incan", "target", "node_modules"] {
+            let hidden = tmp.path().join(directory);
+            fs::create_dir_all(&hidden)?;
+            fs::write(hidden.join("not_source.incn"), "def ignored() -> None:\n  pass\n")?;
+        }
+
+        let mut files = Vec::new();
+        collect_incan_source_files(tmp.path(), &mut files)?;
+        files.sort();
+        let relative = files
+            .iter()
+            .map(|path| path.strip_prefix(tmp.path()).map(Path::to_path_buf))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        assert_eq!(
+            relative,
+            vec![PathBuf::from("nested/module.incn"), PathBuf::from("root.incn")]
+        );
         Ok(())
     }
 }

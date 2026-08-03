@@ -385,15 +385,19 @@ while IFS= read -r native_unit_file; do
 done < <(find "$native_unit_seed_root" -type f ! -name seed.json -print | LC_ALL=C sort)
 rm -f "$native_unit_dedup_index"
 
-tar -C "$package_dir" -czf "$archive" .
-shasum -a 256 "$archive" | awk '{print $1}' > "${archive}.sha256"
 sdk_component_count="$(find "$sdk_seed_root/components" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-sdk_payload_bytes="$(find "$sdk_seed_root" -type f -exec wc -c {} + | awk '{ total += $1 } END { print total + 0 }')"
+sdk_payload_bytes="$(find "$sdk_seed_root" -type f -exec wc -c {} + | awk '$2 != "total" { total += $1 } END { print total + 0 }')"
 native_unit_seed_count="$(find "$native_unit_seed_root" -name seed.json -type f | wc -l | tr -d ' ')"
-native_unit_payload_bytes="$(find "$native_unit_seed_root" -type f -exec wc -c {} + | awk '{ total += $1 } END { print total + 0 }')"
+native_unit_payload_bytes="$(find "$native_unit_seed_root" -type f -exec wc -c {} + | awk '$2 != "total" { total += $1 } END { print total + 0 }')"
 native_unit_physical_bytes="$(du -sk "$native_unit_seed_root" | awk '{ print $1 * 1024 }')"
 [ "$native_unit_payload_bytes" -le "$native_unit_max_bytes" ] \
   || fail "compiler-shipped Oven native-unit logical payload ${native_unit_payload_bytes} exceeds policy ${native_unit_max_bytes} bytes"
+
+# Do not publish even a partial archive when its immutable native closure violates policy. The count intentionally
+# happens after hard-link deduplication so physical accounting describes the shipped tree, while the logical cap still
+# counts every declared path. Only a policy-compliant package receives an archive, checksum, and profile evidence.
+tar -C "$package_dir" -czf "$archive" .
+shasum -a 256 "$archive" | awk '{print $1}' > "${archive}.sha256"
 archive_bytes="$(wc -c < "$archive" | tr -d ' ')"
 cat > "${archive}.profile.json" <<PROFILE_EVIDENCE
 {

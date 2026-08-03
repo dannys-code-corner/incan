@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -34,6 +36,11 @@ pub struct OvenNativeTestRequest {
     /// These are applied after inherited Cargo variables are removed. They let a receipt-bound suite pin paths such
     /// as its source checkout without making ambient shell configuration part of test correctness.
     pub environment: BTreeMap<String, String>,
+    /// Maximum wall-clock duration for one generated native execution group.
+    ///
+    /// The generated group remains one libtest process so session-scoped fixture behaviour is preserved. When this
+    /// deadline expires Oven terminates that child and returns its captured partial transcript plus a timeout record.
+    pub timeout: Option<Duration>,
 }
 
 /// Successful native-test execution record.
@@ -45,6 +52,20 @@ pub struct OvenNativeTestReport {
     pub passed: Vec<String>,
 }
 
+/// Terminal libtest case counts reported by one native batch.
+///
+/// These are parsed from the batch process output already captured for diagnostics. Oven does not launch another
+/// process or scan retained caller files merely to report green coverage.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct OvenNativeTestCaseCounts {
+    /// Cases that completed successfully.
+    pub passed: usize,
+    /// Cases that completed with an assertion or harness failure.
+    pub failed: usize,
+    /// Cases intentionally ignored by libtest.
+    pub ignored: usize,
+}
+
 /// One verified all-in-one native libtest execution used when fixture scope requires a shared process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OvenNativeTestBatchReport {
@@ -52,6 +73,13 @@ pub struct OvenNativeTestBatchReport {
     pub inventory: OvenNativeTestInventory,
     /// Whether libtest reported an all-green result.
     pub success: bool,
+    /// Whether Oven terminated the native execution group after its configured deadline.
+    pub timed_out: bool,
+    /// Case counts from libtest's final summary when it emitted one.
+    ///
+    /// A native test executable may exit before libtest can produce a summary, so absence is represented explicitly
+    /// rather than fabricating green counts from its inventory.
+    pub case_counts: Option<OvenNativeTestCaseCounts>,
     /// Combined libtest transcript retained for per-test result mapping by the caller.
     pub output: String,
 }
@@ -167,14 +195,23 @@ pub fn run_native_test_batch(
     command.args(["--test-threads=1", "--nocapture"]);
     clear_inherited_cargo_environment(&mut command);
     command.envs(&request.environment);
-    let output = command.output().map_err(|source| OvenNativeTestError::Io {
-        path: executable,
-        source,
-    })?;
+    let (output, timed_out) = run_native_batch_child(command, &executable, request.timeout)?;
+    let mut transcript = combined_output(&output.stdout, &output.stderr);
+    if let Some(timeout) = timed_out.then_some(request.timeout).flatten() {
+        if !transcript.ends_with('\n') && !transcript.is_empty() {
+            transcript.push('\n');
+        }
+        transcript.push_str(&format!(
+            "Oven native test execution group timed out after {}\n",
+            format_timeout(timeout)
+        ));
+    }
     Ok(OvenNativeTestBatchReport {
         inventory,
-        success: output.status.success(),
-        output: combined_output(&output.stdout, &output.stderr),
+        success: output.status.success() && !timed_out,
+        timed_out,
+        case_counts: parse_libtest_case_counts(&transcript),
+        output: transcript,
     })
 }
 
@@ -213,11 +250,93 @@ pub fn run_native_test_batch_all_in_directory(
         path: executable,
         source,
     })?;
+    let transcript = combined_output(&output.stdout, &output.stderr);
     Ok(OvenNativeTestBatchReport {
         inventory,
         success: output.status.success(),
-        output: combined_output(&output.stdout, &output.stderr),
+        timed_out: false,
+        case_counts: parse_libtest_case_counts(&transcript),
+        output: transcript,
     })
+}
+
+/// Spawn one captured native libtest child and enforce an optional execution-group deadline.
+///
+/// `Command::output` cannot supervise a running child. Keeping this small polling loop here ensures the same
+/// Cargo-free environment and output capture apply to a terminated child as to a normally completed libtest process.
+fn run_native_batch_child(
+    mut command: Command,
+    executable: &Path,
+    timeout: Option<Duration>,
+) -> Result<(std::process::Output, bool), OvenNativeTestError> {
+    let timeout = match timeout {
+        Some(timeout) => timeout,
+        None => {
+            let output = command.output().map_err(|source| OvenNativeTestError::Io {
+                path: executable.to_path_buf(),
+                source,
+            })?;
+            return Ok((output, false));
+        }
+    };
+
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|source| OvenNativeTestError::Io {
+        path: executable.to_path_buf(),
+        source,
+    })?;
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    loop {
+        match child.try_wait().map_err(|source| OvenNativeTestError::Io {
+            path: executable.to_path_buf(),
+            source,
+        })? {
+            Some(_) => break,
+            None if Instant::now() >= deadline => match child.kill() {
+                Ok(()) => {
+                    timed_out = true;
+                    break;
+                }
+                Err(source) => {
+                    if child
+                        .try_wait()
+                        .map_err(|source| OvenNativeTestError::Io {
+                            path: executable.to_path_buf(),
+                            source,
+                        })?
+                        .is_some()
+                    {
+                        break;
+                    }
+                    return Err(OvenNativeTestError::Io {
+                        path: executable.to_path_buf(),
+                        source,
+                    });
+                }
+            },
+            None => thread::sleep(Duration::from_millis(1)),
+        }
+    }
+    let output = child.wait_with_output().map_err(|source| OvenNativeTestError::Io {
+        path: executable.to_path_buf(),
+        source,
+    })?;
+    Ok((output, timed_out))
+}
+
+/// Use a compact, stable diagnostic spelling while preserving sub-millisecond values when supplied by the API.
+fn format_timeout(timeout: Duration) -> String {
+    let nanos = timeout.as_nanos();
+    if timeout.as_secs() > 0 && nanos.is_multiple_of(1_000_000_000) {
+        format!("{}s", timeout.as_secs())
+    } else if timeout.as_millis() > 0 && nanos.is_multiple_of(1_000_000) {
+        format!("{}ms", timeout.as_millis())
+    } else if timeout.as_micros() > 0 && nanos.is_multiple_of(1_000) {
+        format!("{}us", timeout.as_micros())
+    } else {
+        format!("{nanos}ns")
+    }
 }
 
 /// Reject symlink and non-file execution paths before creating a child process.
@@ -297,6 +416,35 @@ fn combined_output(stdout: &[u8], stderr: &[u8]) -> String {
     format!("{}{}", String::from_utf8_lossy(stdout), String::from_utf8_lossy(stderr))
 }
 
+/// Parse libtest's final `test result` line without treating diagnostic text as a result.
+///
+/// Test bodies can run nested programs that also print libtest summaries. The outer native batch always emits its
+/// own summary last, so scan backwards and preserve `None` when a process dies before doing so.
+fn parse_libtest_case_counts(output: &str) -> Option<OvenNativeTestCaseCounts> {
+    let summary = output
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("test result: "))?;
+    let mut counts = OvenNativeTestCaseCounts::default();
+    let mut saw_passed = false;
+    let mut saw_failed = false;
+    let mut saw_ignored = false;
+    for segment in summary.split(';').map(str::trim) {
+        if let Some(value) = segment.strip_suffix(" passed") {
+            counts.passed = value.split_whitespace().last()?.parse().ok()?;
+            saw_passed = true;
+        } else if let Some(value) = segment.strip_suffix(" failed") {
+            counts.failed = value.split_whitespace().last()?.parse().ok()?;
+            saw_failed = true;
+        } else if let Some(value) = segment.strip_suffix(" ignored") {
+            counts.ignored = value.split_whitespace().last()?.parse().ok()?;
+            saw_ignored = true;
+        }
+    }
+    (saw_passed && saw_failed && saw_ignored).then_some(counts)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -305,8 +453,26 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        OvenNativeTestError, OvenNativeTestRequest, run_native_test_batch, run_native_test_batch_all, run_native_tests,
+        OvenNativeTestCaseCounts, OvenNativeTestError, OvenNativeTestRequest, parse_libtest_case_counts,
+        run_native_test_batch, run_native_test_batch_all, run_native_tests,
     };
+
+    #[test]
+    fn terminal_case_counts_use_the_outermost_libtest_summary() {
+        let counts = parse_libtest_case_counts(
+            "nested test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\
+             test result: FAILED. 7 passed; 2 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s\n",
+        );
+        assert_eq!(
+            counts,
+            Some(OvenNativeTestCaseCounts {
+                passed: 7,
+                failed: 2,
+                ignored: 1,
+            })
+        );
+        assert_eq!(parse_libtest_case_counts("process aborted\n"), None);
+    }
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenStoredDirectRustcTestRequest,
         bake_stored_direct_rustc_test,
@@ -344,7 +510,9 @@ mod tests {
             native_search_paths: Vec::new(),
             externs: Vec::new(),
             entrypoint_externs: BTreeMap::new(),
+            registry_leaves: Vec::new(),
             compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
             supporting_artifacts: Vec::new(),
         };
         let store = OvenStore::new(
@@ -374,12 +542,14 @@ mod tests {
             executable: bake.output.clone(),
             exact_names: vec!["absent".to_string()],
             environment: BTreeMap::new(),
+            timeout: None,
         });
         assert!(matches!(missing, Err(OvenNativeTestError::MissingExactTest { .. })));
         let report = run_native_tests(&OvenNativeTestRequest {
             executable: bake.output,
             exact_names: vec!["selected".to_string()],
             environment: BTreeMap::new(),
+            timeout: None,
         })?;
         assert_eq!(report.inventory.names, ["other", "selected"]);
         assert_eq!(report.passed, ["selected"]);
@@ -435,9 +605,42 @@ mod tests {
             executable,
             exact_names: vec!["generated::case".to_string()],
             environment: BTreeMap::new(),
+            timeout: None,
         })?;
         assert!(report.success, "{report:#?}");
         assert_eq!(report.inventory.names, ["generated::case"]);
+        Ok(())
+    }
+
+    #[test]
+    fn generated_batch_timeout_terminates_a_native_test_child() -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::Duration;
+
+        let output = tempfile::tempdir()?;
+        let source = output.path().join("slow-native-test.rs");
+        let executable = output.path().join("slow-native-test");
+        fs::write(
+            &source,
+            "#[test]\nfn generated_case() { std::thread::sleep(std::time::Duration::from_secs(1)); }\n",
+        )?;
+        let status = Command::new(rustc_path()?)
+            .arg("--test")
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .status()?;
+        assert!(status.success());
+
+        let report = run_native_test_batch(&OvenNativeTestRequest {
+            executable,
+            exact_names: vec!["generated_case".to_string()],
+            environment: BTreeMap::new(),
+            timeout: Some(Duration::from_millis(10)),
+        })?;
+        assert!(!report.success, "{report:#?}");
+        assert!(report.timed_out, "{report:#?}");
+        assert!(report.output.contains("timed out after 10ms"), "{report:#?}");
+        assert_eq!(report.case_counts, None);
         Ok(())
     }
 

@@ -444,6 +444,23 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), Box<dyn s
     Ok(())
 }
 
+/// Sum each regular file exactly once for release-profile accounting assertions.
+fn directory_logical_file_bytes(root: &Path) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut total = 0_u64;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            total = total.saturating_add(directory_logical_file_bytes(&entry.path())?);
+        } else if file_type.is_file() {
+            total = total.saturating_add(fs::metadata(entry.path())?.len());
+        } else {
+            return Err(format!("release fixture contains unsupported path: {}", entry.path().display()).into());
+        }
+    }
+    Ok(total)
+}
+
 fn package_fixture_archive(
     root: &Path,
     target: &str,
@@ -681,12 +698,19 @@ fn toolchain_archive_packager_writes_archive_checksum_and_release_metadata() -> 
     assert_eq!(evidence["sdk_profile"], serde_json::json!("full"));
     assert_eq!(evidence["sdk_component_count"], serde_json::json!(9));
     assert_eq!(evidence["archive_bytes"].as_u64(), Some(fs::metadata(&archive)?.len()));
-    assert!(evidence["sdk_payload_bytes"].as_u64().is_some_and(|bytes| bytes > 0));
+    let package_root = out_dir
+        .join("dist")
+        .join(format!("incan-{}-x86_64-unknown-linux-gnu", release.trim()));
+    assert_eq!(
+        evidence["sdk_payload_bytes"].as_u64(),
+        Some(directory_logical_file_bytes(&package_root.join("share/incan/sdk"))?)
+    );
     assert_eq!(evidence["oven_native_unit_seed_count"].as_u64(), Some(2));
-    assert!(
-        evidence["oven_native_unit_payload_bytes"]
-            .as_u64()
-            .is_some_and(|bytes| bytes > 0)
+    assert_eq!(
+        evidence["oven_native_unit_payload_bytes"].as_u64(),
+        Some(directory_logical_file_bytes(
+            &package_root.join("share/incan/oven/native-units"),
+        )?)
     );
     assert_eq!(
         evidence["oven_native_unit_logical_bytes"],
@@ -788,6 +812,114 @@ fn toolchain_archive_packager_writes_archive_checksum_and_release_metadata() -> 
             String::from_utf8_lossy(&metadata.stderr)
         );
     }
+    Ok(())
+}
+
+#[test]
+fn toolchain_archive_packager_rejects_an_over_cap_native_seed_before_publication()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tmp = ToolchainTestStaging::new()?;
+    let out_dir = tmp.path().join("over-cap-toolchain");
+    let (incan, incan_lsp) = write_fixture_toolchain_commands(tmp.path())?;
+    let seed = write_fixture_sdk_provider_seed(tmp.path(), "full")?;
+    let native_unit_seeds = write_fixture_native_unit_seeds(tmp.path())?;
+
+    let output = Command::new("bash")
+        .arg(toolchain_package_archive_script())
+        .arg("x86_64-unknown-linux-gnu")
+        .args(["--out-dir", out_dir.to_str().ok_or("output path is not UTF-8")?])
+        .env("INCAN_BIN", &incan)
+        .env("INCAN_LSP_BIN", &incan_lsp)
+        .env("INCAN_SDK_PROVIDER_SEED_DIR", seed)
+        .env("INCAN_OVEN_NATIVE_UNIT_SEED_DIR", native_unit_seeds)
+        .env("INCAN_SDK_DISTRIBUTION_PROFILE", "full")
+        .env("INCAN_OVEN_NATIVE_UNIT_MAX_BYTES", "1")
+        .current_dir(repo_root())
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "over-cap native seed unexpectedly packaged\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("native-unit logical payload"),
+        "unexpected over-cap diagnostic:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let published_files = fs::read_dir(&out_dir)?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(
+        !published_files.iter().any(|name| name.ends_with(".tar.gz")),
+        "over-cap package must not leave an archive: {published_files:?}"
+    );
+    assert!(
+        !published_files.iter().any(|name| name.ends_with(".tar.gz.sha256")),
+        "over-cap package must not leave a checksum: {published_files:?}"
+    );
+    assert!(
+        !published_files
+            .iter()
+            .any(|name| name.ends_with(".tar.gz.profile.json")),
+        "over-cap package must not leave profile evidence: {published_files:?}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = ToolchainTestStaging::new()?;
+    let source = tmp.path().join("supported.incn");
+    fs::write(&source, "def main() -> None:\n    pass\n")?;
+    let incan = tmp.path().join("fixture-incan");
+    write_executable(
+        &incan,
+        "#!/usr/bin/env sh\nif [ \"$1\" = \"oven\" ]; then printf '{}\\n'; elif [ \"$1\" = \"--version\" ]; then printf 'incan fixture\\n'; fi\n",
+    )?;
+    let guard_dir = tmp.path().join("cargo-guard");
+    fs::create_dir_all(&guard_dir)?;
+    write_executable(&guard_dir.join("cargo"), "#!/usr/bin/env sh\nexit 97\n")?;
+    let output_dir = tmp.path().join("benchmark-evidence");
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/bench_oven_alpha.sh"))
+        .args([
+            "--incan",
+            incan.to_str().ok_or("fixture incan path is not UTF-8")?,
+            "--workload",
+            "build",
+            "--source",
+            source.to_str().ok_or("fixture source path is not UTF-8")?,
+            "--incan-home",
+            tmp.path()
+                .join("incan-home")
+                .to_str()
+                .ok_or("fixture home path is not UTF-8")?,
+            "--output",
+            output_dir.to_str().ok_or("fixture output path is not UTF-8")?,
+            "--cargo-guard-dir",
+            guard_dir.to_str().ok_or("fixture guard path is not UTF-8")?,
+            "--repetitions",
+            "1",
+        ])
+        .current_dir(repo_root())
+        .output()?;
+    assert!(
+        output.status.success(),
+        "guarded benchmark fixture failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_str(&fs::read_to_string(output_dir.join("report.json"))?)?;
+    assert_eq!(report["cargo_guard"]["required"], serde_json::json!(true));
+    assert_eq!(report["cargo_guard"]["probe_exit_code"], serde_json::json!(97));
+    assert_eq!(
+        report["cargo_guard"]["verdict"],
+        serde_json::json!("successful normal stages imply that Cargo was not launched")
+    );
     Ok(())
 }
 

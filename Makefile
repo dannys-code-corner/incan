@@ -17,19 +17,26 @@ INCAN_TEST_OVEN_NATIVE_UNIT_MAX_BYTES ?= 2147483648
 TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
 	INCAN_GENERATED_CARGO_TARGET_DIR="$(INCAN_TEST_GENERATED_CARGO_TARGET_DIR)" \
 	INCAN_INTERNAL_SDK_PROVIDER_STORE="$(INCAN_TEST_SDK_PROVIDER_STORE)" \
-	INCAN_HOME="$(INCAN_TEST_OVEN_HOME)"
+	INCAN_HOME="$(INCAN_TEST_OVEN_HOME)" \
+	INCAN_SOURCE_ROOT="$(CURDIR)" \
+	INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
+	INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
+	INCAN_TOOLCHAIN_CRATES_DIR="$(CURDIR)/crates"
+TEST_RUNTIME_ENV = $(TEST_ENV) \
+	INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)" \
+	INCAN_SDK_INVENTORY="$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json"
 
 ifeq ($(strip $(NEXTEST)),)
 ifeq ($(TEST_VERBOSE),1)
-TEST_CMD = $(TEST_ENV) cargo test --all --features lsp --verbose
+TEST_CMD = $(TEST_RUNTIME_ENV) cargo test --all --features lsp --verbose
 else
-TEST_CMD = $(TEST_ENV) cargo test --all --features lsp
+TEST_CMD = $(TEST_RUNTIME_ENV) cargo test --all --features lsp
 endif
 else
 ifeq ($(TEST_VERBOSE),1)
-TEST_CMD = $(TEST_ENV) cargo nextest run --all --features lsp --status-level all
+TEST_CMD = $(TEST_RUNTIME_ENV) cargo nextest run --all --features lsp --status-level all
 else
-TEST_CMD = $(TEST_ENV) cargo nextest run --all --features lsp --status-level slow --final-status-level slow
+TEST_CMD = $(TEST_RUNTIME_ENV) cargo nextest run --all --features lsp --status-level slow --final-status-level slow
 endif
 endif
 
@@ -220,7 +227,7 @@ pre-commit-full-gate:
 	echo "\033[32mDONE\033[0m"; \
 	t2=$$(date +%s); \
 	echo "\033[1mRunning tests...\033[0m"; \
-	$(MAKE) -s test-prewarm-sdk; \
+	$(MAKE) -s test-prewarm-oven-native-units; \
 	$(TEST_CMD); \
 	echo "\033[32mDONE\033[0m"; \
 	t3=$$(date +%s); \
@@ -245,7 +252,7 @@ pre-commit:
 .PHONY: ci-full  ## quality - Full CI check: fmt, lint, udeps, test, and release build
 ci-full: fmt lint udeps
 	@echo "\033[1mRunning tests...\033[0m"
-	@$(MAKE) -s test-prewarm-sdk
+	@$(MAKE) -s test-prewarm-oven-native-units
 	@$(TEST_CMD)
 	@echo "\033[1mBuilding release...\033[0m"
 	@cargo build --release --quiet
@@ -339,37 +346,37 @@ smoke-test-require-release-bin:
 smoke-test-canary:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mRunning Incan assertion canary...\033[0m"
-	@INCAN_NO_BANNER=1 ./target/release/incan test tests/fixtures/test_assert_canary.incn
+	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 ./target/release/incan test tests/fixtures/test_assert_canary.incn
 	@echo "\033[32m✓ Incan assertion canary passed\033[0m"
 
 .PHONY: smoke-test-web-example
 smoke-test-web-example:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mBuilding web example (build-only)...\033[0m"
-	@INCAN_NO_BANNER=1 ./target/release/incan build examples/web/hello_web.incn
+	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 ./target/release/incan build examples/web/hello_web.incn
 	@echo "\033[32m✓ Web example built\033[0m"
 
 .PHONY: smoke-test-nested-project-example
 smoke-test-nested-project-example:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mBuilding nested_project example (build-only)...\033[0m"
-	@INCAN_NO_BANNER=1 ./target/release/incan build examples/advanced/nested_project/src/main.incn
+	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 ./target/release/incan build examples/advanced/nested_project/src/main.incn
 	@echo "\033[32m✓ Nested project example built\033[0m"
 
 .PHONY: smoke-test-examples
 smoke-test-examples:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mRunning examples...\033[0m"
-	@INCAN_NO_BANNER=1 INCAN_EXAMPLES_TIMEOUT=$${INCAN_EXAMPLES_TIMEOUT:-30} bash scripts/run_examples.sh
+	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 INCAN_EXAMPLES_TIMEOUT=$${INCAN_EXAMPLES_TIMEOUT:-30} bash scripts/run_examples.sh
 
 .PHONY: smoke-test-benchmarks-incan
 smoke-test-benchmarks-incan:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mChecking benchmarks (Incan build only)...\033[0m"
-	@INCAN_NO_BANNER=1 bash workspaces/benchmarks/check_incan.sh
+	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 bash workspaces/benchmarks/check_incan.sh
 
 .PHONY: smoke-test-core
-smoke-test-core:
+smoke-test-core: test-prewarm-oven-native-units
 	@$(MAKE) smoke-test-release
 	@$(MAKE) smoke-test-canary
 	@$(MAKE) smoke-test-web-example
@@ -397,12 +404,12 @@ verify:
 .PHONY: test-verbose  ## test - Run tests with output
 test-verbose: test-prewarm-oven-native-units
 	@echo "\033[1mRunning tests (verbose)...\033[0m"
-	@cargo nextest run --all --no-capture 2>/dev/null || cargo test --all -- --nocapture
+	@$(TEST_RUNTIME_ENV) cargo nextest run --all --no-capture 2>/dev/null || $(TEST_RUNTIME_ENV) cargo test --all -- --nocapture
 
 .PHONY: test-diagnose  ## test - Run tests with live output (use if pre-commit hangs to find culprit)
 test-diagnose: test-prewarm-oven-native-units
 	@echo "\033[1mRunning tests with live output (Ctrl+C when stuck to see last test)...\033[0m"
-	@cargo test --all --no-fail-fast -- --nocapture --test-threads=1
+	@$(TEST_RUNTIME_ENV) cargo test --all --no-fail-fast -- --nocapture --test-threads=1
 
 .PHONY: test-timings  ## test - Generate cargo compile-timing report (target/cargo-timings)
 test-timings:
@@ -414,7 +421,7 @@ test-timings:
 test-one: test-prewarm-oven-native-units
 ifdef TEST
 	@echo "\033[1mRunning test: $(TEST)\033[0m"
-	@cargo nextest run -E "test($(TEST))" --no-capture 2>/dev/null || cargo test $(TEST) -- --nocapture
+	@$(TEST_RUNTIME_ENV) cargo nextest run -E "test($(TEST))" --no-capture 2>/dev/null || $(TEST_RUNTIME_ENV) cargo test $(TEST) -- --nocapture
 else
 	@echo "Usage: \033[36mmake test-one TEST=test_name\033[0m"
 	@echo "Example: make test-one TEST=test_run_c_import_this"

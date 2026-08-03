@@ -251,12 +251,12 @@ impl SdkProfileCliFlags {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Compile to Rust and build executable
+    /// Compile to Rust and build an executable through Oven Alpha direct-rustc
     Build {
         /// Source file to compile
         #[arg(value_name = "FILE")]
         file: Option<PathBuf>,
-        /// Enable library mode precondition checks (`src/lib.incn` required)
+        /// Build the `src/lib.incn` library through Oven Alpha direct-rustc
         #[arg(long = "lib", hide = true)]
         lib_mode: bool,
         /// Output directory (default: `target/incan/<name>`)
@@ -268,37 +268,37 @@ pub enum Command {
         /// Select a non-persistent SDK profile for this compilation
         #[command(flatten)]
         sdk_profile: SdkProfileCliFlags,
-        /// Require up-to-date incan.lock and pass --locked to Cargo
+        /// Require up-to-date incan.lock; does not authorize a Cargo command
         #[arg(long, hide = true)]
         locked: bool,
         /// Disable INCAN_LOCKED for this invocation
         #[arg(long = "no-locked", conflicts_with_all = ["locked", "frozen"], hide = true)]
         no_locked: bool,
-        /// Pass --offline to Cargo subprocesses
+        /// Require offline-compatible locked inputs; does not authorize a Cargo command
         #[arg(long, hide = true)]
         offline: bool,
         /// Disable INCAN_OFFLINE for this invocation
         #[arg(long = "no-offline", conflicts_with_all = ["offline", "frozen"], hide = true)]
         no_offline: bool,
-        /// Require up-to-date incan.lock and pass --frozen to Cargo
+        /// Require an up-to-date frozen incan.lock; does not authorize a Cargo command
         #[arg(long, hide = true)]
         frozen: bool,
         /// Disable INCAN_FROZEN for this invocation
         #[arg(long = "no-frozen", conflicts_with = "frozen", hide = true)]
         no_frozen: bool,
-        /// Extra arguments forwarded to Cargo after policy and feature flags
+        /// Retired Cargo argument surface; normal Oven commands reject it
         #[arg(long = "cargo-args", value_name = "ARG", num_args = 1.., allow_hyphen_values = true, hide = true)]
         cargo_args: Vec<String>,
-        /// Cargo features to enable (comma-separated)
+        /// Retired Cargo feature surface; normal Oven commands reject it
         #[arg(long = "cargo-features", value_delimiter = ',', hide = true)]
         cargo_features: Vec<String>,
-        /// Disable Cargo default features
+        /// Retired Cargo feature surface; normal Oven commands reject it
         #[arg(long = "cargo-no-default-features", hide = true)]
         cargo_no_default_features: bool,
-        /// Enable all Cargo features
+        /// Retired Cargo feature surface; normal Oven commands reject it
         #[arg(long = "cargo-all-features", hide = true)]
         cargo_all_features: bool,
-        /// Shared Cargo target directory for generated Rust projects
+        /// Retired generated-Cargo target override; normal Oven commands reject it
         #[arg(long = "generated-cargo-target-dir", value_name = "PATH", hide = true)]
         generated_cargo_target_dir: Option<PathBuf>,
         /// Explicitly request the release build profile. This is the default for `incan build` and exists for
@@ -317,7 +317,7 @@ pub enum Command {
         /// Select one workspace member by name or root-relative path; may be repeated
         #[arg(long = "member", value_name = "NAME_OR_PATH", conflicts_with = "workspace")]
         members: Vec<String>,
-        /// Extra arguments forwarded to Cargo after `--`
+        /// Retired Cargo passthrough surface; normal Oven commands reject it
         #[arg(last = true, hide = true)]
         cargo_passthrough: Vec<String>,
     },
@@ -372,34 +372,34 @@ pub enum Command {
         /// Select a non-persistent SDK profile for this compilation
         #[command(flatten)]
         sdk_profile: SdkProfileCliFlags,
-        /// Require up-to-date incan.lock and pass --locked to Cargo
+        /// Require up-to-date incan.lock; does not authorize a Cargo command
         #[arg(long, hide = true)]
         locked: bool,
         /// Disable INCAN_LOCKED for this invocation
         #[arg(long = "no-locked", conflicts_with_all = ["locked", "frozen"], hide = true)]
         no_locked: bool,
-        /// Pass --offline to Cargo subprocesses
+        /// Require offline-compatible locked inputs; does not authorize a Cargo command
         #[arg(long, hide = true)]
         offline: bool,
         /// Disable INCAN_OFFLINE for this invocation
         #[arg(long = "no-offline", conflicts_with_all = ["offline", "frozen"], hide = true)]
         no_offline: bool,
-        /// Require up-to-date incan.lock and pass --frozen to Cargo
+        /// Require an up-to-date frozen incan.lock; does not authorize a Cargo command
         #[arg(long, hide = true)]
         frozen: bool,
         /// Disable INCAN_FROZEN for this invocation
         #[arg(long = "no-frozen", conflicts_with = "frozen", hide = true)]
         no_frozen: bool,
-        /// Extra arguments forwarded to Cargo after policy and feature flags
+        /// Retired Cargo argument surface; normal Oven commands reject it
         #[arg(long = "cargo-args", value_name = "ARG", num_args = 1.., allow_hyphen_values = true, hide = true)]
         cargo_args: Vec<String>,
-        /// Cargo features to enable (comma-separated)
+        /// Retired Cargo feature surface; normal Oven commands reject it
         #[arg(long = "cargo-features", value_delimiter = ',', hide = true)]
         cargo_features: Vec<String>,
-        /// Disable Cargo default features
+        /// Retired Cargo feature surface; normal Oven commands reject it
         #[arg(long = "cargo-no-default-features", hide = true)]
         cargo_no_default_features: bool,
-        /// Enable all Cargo features
+        /// Retired Cargo feature surface; normal Oven commands reject it
         #[arg(long = "cargo-all-features", hide = true)]
         cargo_all_features: bool,
         /// Build and run with the optimized Oven release profile
@@ -411,7 +411,7 @@ pub enum Command {
         /// Select one workspace member by name or root-relative path
         #[arg(long = "member", value_name = "NAME_OR_PATH", conflicts_with = "workspace")]
         members: Vec<String>,
-        /// Extra arguments forwarded to Cargo after `--`
+        /// Retired Cargo passthrough surface; normal Oven commands reject it
         #[arg(last = true, hide = true)]
         cargo_passthrough: Vec<String>,
     },
@@ -561,34 +561,34 @@ pub enum Command {
         /// Run xfail tests as ordinary tests
         #[arg(long = "run-xfail")]
         run_xfail: bool,
-        /// Require up-to-date incan.lock and pass --locked to Cargo
+        /// Require up-to-date incan.lock; does not authorize a Cargo command
         #[arg(long, hide = true)]
         locked: bool,
         /// Disable INCAN_LOCKED for this invocation
         #[arg(long = "no-locked", conflicts_with_all = ["locked", "frozen"], hide = true)]
         no_locked: bool,
-        /// Pass --offline to Cargo subprocesses
+        /// Require offline-compatible locked inputs; does not authorize a Cargo command
         #[arg(long, hide = true)]
         offline: bool,
         /// Disable INCAN_OFFLINE for this invocation
         #[arg(long = "no-offline", conflicts_with_all = ["offline", "frozen"], hide = true)]
         no_offline: bool,
-        /// Require up-to-date incan.lock and pass --frozen to Cargo
+        /// Require an up-to-date frozen incan.lock; does not authorize a Cargo command
         #[arg(long, hide = true)]
         frozen: bool,
         /// Disable INCAN_FROZEN for this invocation
         #[arg(long = "no-frozen", conflicts_with = "frozen", hide = true)]
         no_frozen: bool,
-        /// Extra arguments forwarded to Cargo after policy and feature flags
+        /// Retired Cargo argument surface; normal Oven commands reject it
         #[arg(long = "cargo-args", value_name = "ARG", num_args = 1.., allow_hyphen_values = true, hide = true)]
         cargo_args: Vec<String>,
-        /// Cargo features to enable (comma-separated)
+        /// Retired Cargo feature surface; normal Oven commands reject it
         #[arg(long = "cargo-features", value_delimiter = ',', hide = true)]
         cargo_features: Vec<String>,
-        /// Disable Cargo default features
+        /// Retired Cargo feature surface; normal Oven commands reject it
         #[arg(long = "cargo-no-default-features", hide = true)]
         cargo_no_default_features: bool,
-        /// Enable all Cargo features
+        /// Retired Cargo feature surface; normal Oven commands reject it
         #[arg(long = "cargo-all-features", hide = true)]
         cargo_all_features: bool,
         /// Select every member in the active workspace
@@ -597,7 +597,7 @@ pub enum Command {
         /// Select one workspace member by name or root-relative path; may be repeated
         #[arg(long = "member", value_name = "NAME_OR_PATH", conflicts_with = "workspace")]
         members: Vec<String>,
-        /// Extra arguments forwarded to Cargo after `--`
+        /// Retired Cargo passthrough surface; normal Oven commands reject it
         #[arg(last = true, hide = true)]
         cargo_passthrough: Vec<String>,
     },

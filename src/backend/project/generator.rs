@@ -1,11 +1,11 @@
-//! ProjectGenerator: high-level API that builds compilation plans and executes them
+//! ProjectGenerator: high-level API that renders compiler-owned Rust source projections
 //!
-//! This is the primary struct for generating runnable Rust projects from Incan code.
+//! This is the primary struct for generating inspectable Rust projections from Incan code.
 //! Its responsibilities are split across sibling modules:
 //!
 //! - **This module** — struct definition, setters, and `generate*()` methods
 //! - [`super::cargo_toml`] — `Cargo.toml` rendering (`generate_cargo_toml`, `format_dependency_spec`)
-//! - [`super::runner`] — `build()`, `run()`, `run_with_cwd()` and result types
+//! - [`super::runner`] — Cargo-lock projection support for the explicit publisher boundary
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -498,7 +498,7 @@ impl ProjectGenerator {
     }
 
     /// Release a managed target lease once compiler-owned Cargo work and local publication are complete.
-    #[cfg(feature = "cli")]
+    #[cfg(all(feature = "cli", test))]
     pub(super) fn finish_generated_cache_lease(&self) -> io::Result<()> {
         let lease = self
             .generated_cache_lease
@@ -512,12 +512,13 @@ impl ProjectGenerator {
     }
 
     /// Keep non-CLI library builds independent from cache-management implementation details.
-    #[cfg(not(feature = "cli"))]
+    #[cfg(all(not(feature = "cli"), test))]
     pub(super) fn finish_generated_cache_lease(&self) -> io::Result<()> {
         Ok(())
     }
 
     /// Return the managed compatibility identity, when the CLI selected one.
+    #[cfg(test)]
     pub(super) fn generated_cache_identity(&self) -> Option<&str> {
         #[cfg(feature = "cli")]
         {
@@ -1215,9 +1216,10 @@ impl ProjectGenerator {
                 .map(|projection| artifact_metadata_identity(&projection.artifact))
                 .collect(),
         );
-        hasher.update([u8::from(self.clear_cargo_lock), u8::from(self.include_dev_dependencies)]);
-        hasher.update(b"\0lock\0");
-        hasher.update(self.cargo_lock_payload.as_deref().unwrap_or_default().as_bytes());
+        // The shared-root identity covers emitted Rust and manifest inputs. A valid caller-local lock projection is
+        // external authority, not generated source: changing only that authority must not rewrite Cargo.toml with a
+        // different target name or invalidate a direct-Rustc Oven consumer.
+        hasher.update([u8::from(self.include_dev_dependencies)]);
         for (path, source) in sources {
             hasher.update(path.as_bytes());
             hasher.update(b"\0");

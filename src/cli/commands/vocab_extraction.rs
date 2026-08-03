@@ -11,7 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::cli::{CliError, CliResult};
 use crate::library_manifest::{SoftKeywordActivation, VocabDesugarerArtifact, VocabExports};
 use crate::manifest::ProjectManifest;
-use crate::oven::rustc::{OvenRustcArtifactPlan, clear_inherited_cargo_environment};
+use crate::oven::rustc::{
+    OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcAuxiliaryTargetPlan, clear_inherited_cargo_environment,
+};
 use crate::version::INCAN_VERSION;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -35,6 +37,14 @@ const OVEN_COMPILER_SUITE_VOCAB_EXTERN_COUNT_ENV: &str = "INCAN_OVEN_COMPILER_SU
 #[derive(Debug)]
 pub(crate) struct OvenVocabDirectRustcContext {
     rustc: PathBuf,
+    dependency_search_paths: Vec<PathBuf>,
+    externs: BTreeMap<String, PathBuf>,
+    auxiliary_targets: BTreeMap<String, OvenVocabAuxiliaryTargetContext>,
+}
+
+/// One target-specific compiler-owned vocabulary support closure.
+#[derive(Debug)]
+struct OvenVocabAuxiliaryTargetContext {
     dependency_search_paths: Vec<PathBuf>,
     externs: BTreeMap<String, PathBuf>,
 }
@@ -174,23 +184,29 @@ fn collect_library_vocab_metadata_with_mode(
         && let Some(desugarer) = metadata.desugarer.as_ref()
         && pending_desugarer_artifact.is_none()
     {
-        if direct_rustc.is_some() {
-            return Err(CliError::failure(format!(
-                "Oven Alpha does not yet support direct-rustc packaging for vocab desugarer target `{}`; normal library builds will not invoke Cargo",
-                desugarer.target
-            )));
+        if let Some(context) = direct_rustc {
+            let desugarer_target_dir = cache_context.cache_dir.join("desugarer-target");
+            pending_desugarer_artifact = build_pending_desugarer_artifact_with_direct_rustc(
+                context,
+                &companion_crate_root,
+                &cargo_manifest_path,
+                &desugarer_target_dir,
+                &package_name,
+                desugarer,
+            )?;
+        } else {
+            ensure_companion_supports_cdylib(&cargo_manifest_path)?;
+            ensure_rust_target_installed(&desugarer.target)?;
+            let desugarer_target_dir = cache_context.cache_dir.join("desugarer-target");
+            run_cargo_build_for_target(
+                &cargo_manifest_path,
+                &desugarer_target_dir,
+                &desugarer.target,
+                &desugarer.profile,
+            )?;
+            pending_desugarer_artifact =
+                build_pending_desugarer_artifact(&desugarer_target_dir, &package_name, metadata.desugarer.as_ref())?;
         }
-        ensure_companion_supports_cdylib(&cargo_manifest_path)?;
-        ensure_rust_target_installed(&desugarer.target)?;
-        let desugarer_target_dir = cache_context.cache_dir.join("desugarer-target");
-        run_cargo_build_for_target(
-            &cargo_manifest_path,
-            &desugarer_target_dir,
-            &desugarer.target,
-            &desugarer.profile,
-        )?;
-        pending_desugarer_artifact =
-            build_pending_desugarer_artifact(&desugarer_target_dir, &package_name, metadata.desugarer.as_ref())?;
     }
     if !cache_hit
         || (mode == VocabExtractionMode::PackageArtifacts
@@ -749,6 +765,7 @@ fn oven_compiler_suite_rustc_context() -> CliResult<Option<OvenVocabDirectRustcC
         rustc,
         dependency_search_paths,
         externs,
+        auxiliary_targets: BTreeMap::new(),
     }))
 }
 
@@ -760,6 +777,8 @@ fn oven_compiler_suite_rustc_context() -> CliResult<Option<OvenVocabDirectRustcC
 pub(crate) fn oven_vocab_direct_rustc_context_from_plan(
     rustc: &Path,
     plan: &OvenRustcArtifactPlan,
+    artifacts: &OvenRustcArtifactManifest,
+    artifact_root: &Path,
 ) -> CliResult<OvenVocabDirectRustcContext> {
     if !rustc.is_absolute() || !rustc.is_file() {
         return Err(CliError::failure(format!(
@@ -802,9 +821,68 @@ pub(crate) fn oven_vocab_direct_rustc_context_from_plan(
             )));
         }
     }
+    let mut auxiliary_targets = BTreeMap::new();
+    for auxiliary in &artifacts.vocab_auxiliary_targets {
+        let auxiliary_plan = artifacts
+            .materialize_trusted_vocab_auxiliary_target(artifact_root, &auxiliary.target)
+            .map_err(|error| CliError::failure(error.to_string()))?
+            .ok_or_else(|| {
+                CliError::failure(format!(
+                    "selected Oven vocabulary closure omitted declared auxiliary target `{}`",
+                    auxiliary.target
+                ))
+            })?;
+        let target_context = oven_vocab_auxiliary_target_context(&auxiliary.target, auxiliary_plan)?;
+        if auxiliary_targets
+            .insert(auxiliary.target.clone(), target_context)
+            .is_some()
+        {
+            return Err(CliError::failure(format!(
+                "selected Oven vocabulary closure repeats auxiliary target `{}`",
+                auxiliary.target
+            )));
+        }
+    }
     Ok(OvenVocabDirectRustcContext {
         rustc: rustc.to_path_buf(),
         dependency_search_paths: plan.dependency_search_paths.clone(),
+        externs,
+        auxiliary_targets,
+    })
+}
+
+/// Verify the exact target-specific roots needed to compile a vocabulary companion without Cargo.
+fn oven_vocab_auxiliary_target_context(
+    target: &str,
+    plan: OvenRustcAuxiliaryTargetPlan,
+) -> CliResult<OvenVocabAuxiliaryTargetContext> {
+    let mut externs = BTreeMap::new();
+    for (crate_name, path) in plan.externs {
+        if crate_name.is_empty()
+            || !crate_name
+                .chars()
+                .all(|character| character == '_' || character.is_ascii_alphanumeric())
+            || !path.is_absolute()
+            || !path.is_file()
+        {
+            return Err(CliError::failure(format!(
+                "selected Oven vocabulary auxiliary target `{target}` has invalid extern `{crate_name}`: {}",
+                path.display()
+            )));
+        }
+        if externs.insert(crate_name.clone(), path).is_some() {
+            return Err(CliError::failure(format!(
+                "selected Oven vocabulary auxiliary target `{target}` repeats extern `{crate_name}`"
+            )));
+        }
+    }
+    if !externs.contains_key("incan_vocab") {
+        return Err(CliError::failure(format!(
+            "selected Oven vocabulary auxiliary target `{target}` lacks required `incan_vocab`"
+        )));
+    }
+    Ok(OvenVocabAuxiliaryTargetContext {
+        dependency_search_paths: plan.dependency_search_paths,
         externs,
     })
 }
@@ -865,6 +943,7 @@ fn extract_vocab_metadata_with_direct_rustc(
             &version,
             &companion_output,
             None,
+            None,
             "compile vocab companion",
         )?;
 
@@ -888,6 +967,7 @@ fn extract_vocab_metadata_with_direct_rustc(
             "0.1.0",
             &helper_output,
             Some(("companion", companion_output.as_path())),
+            None,
             "compile vocab extraction helper",
         )?;
         let mut command = Command::new(&helper_output);
@@ -972,10 +1052,21 @@ fn run_vocab_direct_rustc(
     package_version: &str,
     output: &Path,
     additional_extern: Option<(&str, &Path)>,
+    target: Option<&str>,
     action: &str,
 ) -> CliResult<()> {
+    let (dependency_search_paths, externs) = if let Some(target) = target {
+        let auxiliary = context.auxiliary_targets.get(target).ok_or_else(|| {
+            CliError::failure(format!(
+                "Oven Alpha has no sealed direct-Rustc vocabulary closure for desugarer target `{target}`; normal library builds will not invoke Cargo"
+            ))
+        })?;
+        (&auxiliary.dependency_search_paths, &auxiliary.externs)
+    } else {
+        (&context.dependency_search_paths, &context.externs)
+    };
     if let Some((name, _)) = additional_extern
-        && context.externs.contains_key(name)
+        && externs.contains_key(name)
     {
         return Err(CliError::failure(format!(
             "stored Oven compiler suite direct-Rustc closure conflicts with helper extern `{name}`"
@@ -1005,10 +1096,13 @@ fn run_vocab_direct_rustc(
         .arg(edition)
         .arg("-o")
         .arg(output);
-    for path in &context.dependency_search_paths {
+    if let Some(target) = target {
+        command.arg("--target").arg(target);
+    }
+    for path in dependency_search_paths {
         command.arg("-L").arg(format!("dependency={}", path.display()));
     }
-    for (name, path) in &context.externs {
+    for (name, path) in externs {
         command.arg("--extern").arg(format!("{name}={}", path.display()));
     }
     if let Some((name, path)) = additional_extern {
@@ -1029,6 +1123,48 @@ fn run_vocab_direct_rustc(
         "failed to {action} with the stored Oven direct-Rustc closure:\n{}",
         String::from_utf8_lossy(&output_result.stderr).trim()
     )))
+}
+
+/// Build a declared Wasm desugarer through the receipt-selected cross-target Oven closure.
+fn build_pending_desugarer_artifact_with_direct_rustc(
+    context: &OvenVocabDirectRustcContext,
+    companion_crate_root: &Path,
+    cargo_manifest_path: &Path,
+    target_dir: &Path,
+    package_name: &str,
+    desugarer: &incan_vocab::DesugarerMetadata,
+) -> CliResult<Option<PendingDesugarerArtifact>> {
+    if !matches!(desugarer.artifact_kind, incan_vocab::DesugarerArtifactKind::WasmModule) {
+        return Err(CliError::failure(
+            "unsupported vocab desugarer artifact kind (expected WasmModule)".to_string(),
+        ));
+    }
+    ensure_companion_supports_cdylib(cargo_manifest_path)?;
+    ensure_rust_target_installed(&desugarer.target)?;
+    let (source, edition, version) = vocab_companion_rustc_inputs(companion_crate_root)?;
+    let artifact_file_name = desugarer
+        .file_name
+        .clone()
+        .unwrap_or_else(|| format!("{}.wasm", package_name.replace('-', "_")));
+    let output = target_dir
+        .join(&desugarer.target)
+        .join(&desugarer.profile)
+        .join(&artifact_file_name);
+    run_vocab_direct_rustc(
+        context,
+        companion_crate_root,
+        &source,
+        &package_name.replace('-', "_"),
+        "cdylib",
+        &edition,
+        package_name,
+        &version,
+        &output,
+        None,
+        Some(&desugarer.target),
+        "compile vocab Wasm desugarer",
+    )?;
+    build_pending_desugarer_artifact(target_dir, package_name, Some(desugarer))
 }
 
 fn ensure_supported_vocab_metadata_version(

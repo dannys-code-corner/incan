@@ -16,6 +16,12 @@ const INTERNAL_TOOLCHAIN_DATA_ROOT_ENV: &str = "INCAN_INTERNAL_TOOLCHAIN_DATA_RO
 /// This is deliberately narrower than a general environment override. A scheduler-owned child can inherit test
 /// harness source-path overrides, but its receipt must continue to identify the closure baked by that scheduler.
 const INTERNAL_OVEN_NATIVE_UNIT_EXECUTION_ENV: &str = "INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION";
+/// Internal scheduler handoff for the sealed compiler runtime source closure.
+///
+/// A fixture may deliberately clear `INCAN_SDK_INVENTORY` to exercise cold provider discovery. Its nested normal
+/// Oven command must still derive runtime identity from the suite's receipt-authorized closure rather than from an
+/// ambient checkout. This value is accepted only alongside the scheduler-native execution capability above.
+const INTERNAL_OVEN_RUNTIME_ROOT_ENV: &str = "INCAN_INTERNAL_OVEN_RUNTIME_ROOT";
 /// Explicit SDK inventory selected by an Oven publisher or direct-rustc child.
 ///
 /// When that inventory seals a compact compiler runtime closure, generated publisher manifests must use the same
@@ -60,6 +66,7 @@ pub(crate) fn resolve_toolchain_crate_path(crate_name: &str) -> PathBuf {
 
 /// Resolve one toolchain-relative path through the same layout policy used by generated Cargo and lock semantics.
 pub(crate) fn resolve_toolchain_relative_path(relative_path: &Path) -> PathBuf {
+    let sealed_sdk_runtime_root = sealed_sdk_runtime_root();
     resolve_toolchain_relative_path_in(
         relative_path,
         &ToolchainPathSearchPaths {
@@ -68,25 +75,27 @@ pub(crate) fn resolve_toolchain_relative_path(relative_path: &Path) -> PathBuf {
                     .filter(|path| !path.is_empty())
                     .map(PathBuf::from),
                 scheduler_native_unit_execution(),
+                sealed_sdk_runtime_root.is_some(),
             ),
-            sealed_sdk_runtime_crates: sealed_sdk_runtime_root().map(|root| root.join("crates")),
+            sealed_sdk_runtime_crates: sealed_sdk_runtime_root.map(|root| root.join("crates")),
             development_root: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
             executable_bases: current_executable_search_bases(),
         },
     )
 }
 
-/// Return the externally selected support-crate source only outside scheduler-native execution.
+/// Return the external support-crate override only when no sealed runtime closure is authoritative.
 ///
-/// In ordinary commands `INCAN_TOOLCHAIN_CRATES_DIR` remains an intentional developer/test override. A compiler
-/// suite child instead carries an immutable native-unit receipt and must derive runtime-source digests from the
-/// sealed SDK closure selected by that receipt; honoring a parent test process's checkout path would make the same
-/// closure appear incompatible.
+/// In ordinary commands `INCAN_TOOLCHAIN_CRATES_DIR` remains an intentional developer/test override. A valid
+/// explicit SDK inventory, like a scheduler-owned compiler-suite child, seals the runtime source closure used for
+/// generated manifests and native-unit identities. Honoring a parent checkout override in that situation would make
+/// a seed compatible with neither the inventory nor the compiler suite that consumes it.
 fn external_toolchain_crates_override(
     override_path: Option<PathBuf>,
     scheduler_native_execution: bool,
+    sealed_sdk_runtime_available: bool,
 ) -> Option<PathBuf> {
-    if scheduler_native_execution {
+    if scheduler_native_execution || sealed_sdk_runtime_available {
         None
     } else {
         override_path
@@ -106,9 +115,12 @@ fn scheduler_native_unit_execution() -> bool {
 pub(crate) fn resolve_toolchain_data_path(relative_path: &Path) -> PathBuf {
     resolve_toolchain_data_path_in(
         relative_path,
-        env::var_os(INTERNAL_TOOLCHAIN_DATA_ROOT_ENV)
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from),
+        scheduler_toolchain_data_root(
+            env::var_os(INTERNAL_TOOLCHAIN_DATA_ROOT_ENV)
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
+            scheduler_native_unit_execution(),
+        ),
         current_executable_search_bases(),
     )
 }
@@ -121,11 +133,25 @@ pub(crate) fn resolve_toolchain_data_path(relative_path: &Path) -> PathBuf {
 /// command accepts a data-root argument from a project.
 pub(crate) fn compiler_owned_oven_data_root() -> Option<PathBuf> {
     compiler_owned_oven_data_root_in(
-        env::var_os(INTERNAL_TOOLCHAIN_DATA_ROOT_ENV)
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from),
+        scheduler_toolchain_data_root(
+            env::var_os(INTERNAL_TOOLCHAIN_DATA_ROOT_ENV)
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
+            scheduler_native_unit_execution(),
+        ),
         current_executable_search_bases(),
     )
+}
+
+/// Return the compiler-data handoff only for an explicitly scheduler-owned direct-rustc child.
+///
+/// A bare environment variable is not authority for an ordinary command: otherwise a caller could select a
+/// compiler-suite-only native-unit root without the scheduler's receipt and retained lease.
+fn scheduler_toolchain_data_root(
+    configured_root: Option<PathBuf>,
+    scheduler_native_execution: bool,
+) -> Option<PathBuf> {
+    scheduler_native_execution.then_some(configured_root).flatten()
 }
 
 fn resolve_toolchain_data_path_in(
@@ -148,14 +174,18 @@ fn resolve_toolchain_data_path_in(
     canonical_toolchain_path(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path))
 }
 
+/// Prefer a scheduler-leased compiler data root, then the installed executable layout, when locating native units.
+///
+/// A relative scheduler value is deliberately ignored: it would make a suite child’s sealed compiler closure depend
+/// on its current working directory rather than the explicit receipt-selected toolchain data root.
 fn compiler_owned_oven_data_root_in(
     scheduler_data_root: Option<PathBuf>,
     executable_bases: Vec<PathBuf>,
 ) -> Option<PathBuf> {
-    if let Some(root) = scheduler_data_root.filter(|root| root.is_absolute()) {
-        if root.join(OVEN_NATIVE_UNIT_ROOT).is_dir() {
-            return Some(canonical_toolchain_path(root));
-        }
+    if let Some(root) = scheduler_data_root.filter(|root| root.is_absolute())
+        && root.join(OVEN_NATIVE_UNIT_ROOT).is_dir()
+    {
+        return Some(canonical_toolchain_path(root));
     }
     executable_bases
         .into_iter()
@@ -214,12 +244,25 @@ fn resolve_toolchain_relative_path_in(relative_path: &Path, paths: &ToolchainPat
 /// with all crates generated publisher manifests can name. A malformed or ordinary inventory simply does not alter
 /// toolchain layout selection; higher-level SDK discovery remains responsible for validating the inventory itself.
 fn sealed_sdk_runtime_root() -> Option<PathBuf> {
+    if scheduler_native_unit_execution()
+        && let Some(runtime_root) = env::var_os(INTERNAL_OVEN_RUNTIME_ROOT_ENV)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .and_then(validated_sdk_runtime_root)
+    {
+        return Some(runtime_root);
+    }
     let inventory_path = env::var_os(SDK_INVENTORY_OVERRIDE_ENV).filter(|path| !path.is_empty())?;
     let inventory_path = fs::canonicalize(inventory_path).ok()?;
-    if !inventory_path.is_file() {
-        return None;
-    }
-    let runtime_root = inventory_path.parent()?.join("runtime");
+    inventory_path
+        .parent()
+        .map(|parent| parent.join("runtime"))
+        .and_then(validated_sdk_runtime_root)
+}
+
+/// Confirm that a scheduler-provided or inventory-adjacent directory is a complete compiler runtime closure.
+fn validated_sdk_runtime_root(runtime_root: PathBuf) -> Option<PathBuf> {
+    let runtime_root = fs::canonicalize(runtime_root).ok()?;
     if !runtime_root.join("Cargo.lock").is_file() {
         return None;
     }
@@ -229,7 +272,7 @@ fn sealed_sdk_runtime_root() -> Option<PathBuf> {
             return None;
         }
     }
-    Some(canonical_toolchain_path(runtime_root))
+    Some(runtime_root)
 }
 
 /// Return a canonical path whenever the selected compiler-owned source exists.
@@ -399,7 +442,8 @@ mod tests {
     use super::{
         StdlibSearchPaths, ToolchainPathSearchPaths, compiler_owned_oven_data_root_in, executable_search_bases_for,
         external_toolchain_crates_override, find_stdlib_source_dir_in, resolve_toolchain_data_path_in,
-        resolve_toolchain_relative_path_in, stdlib_source_file_from_dir,
+        resolve_toolchain_relative_path_in, scheduler_toolchain_data_root, stdlib_source_file_from_dir,
+        validated_sdk_runtime_root,
     };
 
     #[test]
@@ -537,17 +581,43 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_native_execution_ignores_an_external_toolchain_crates_override() {
+    fn sealed_runtime_execution_ignores_an_external_toolchain_crates_override() {
         let override_path = PathBuf::from("/test-only/checkout/crates");
 
         assert_eq!(
-            external_toolchain_crates_override(Some(override_path.clone()), false),
+            external_toolchain_crates_override(Some(override_path.clone()), false, false),
             Some(override_path)
         );
         assert_eq!(
-            external_toolchain_crates_override(Some(PathBuf::from("/test-only/checkout/crates")), true),
+            external_toolchain_crates_override(Some(PathBuf::from("/test-only/checkout/crates")), true, false),
             None
         );
+        assert_eq!(
+            external_toolchain_crates_override(Some(PathBuf::from("/test-only/checkout/crates")), false, true),
+            None
+        );
+    }
+
+    #[test]
+    fn sealed_runtime_root_requires_the_complete_compiler_source_closure() -> Result<(), Box<dyn std::error::Error>> {
+        let runtime = tempfile::tempdir()?;
+        fs::write(runtime.path().join("Cargo.lock"), "version = 4\n")?;
+        for crate_name in ["incan_core", "incan_derive", "incan_stdlib", "incan_web_macros"] {
+            let crate_root = runtime.path().join("crates").join(crate_name);
+            fs::create_dir_all(&crate_root)?;
+            fs::write(
+                crate_root.join("Cargo.toml"),
+                format!("[package]\nname = \"{crate_name}\"\n"),
+            )?;
+        }
+
+        assert_eq!(
+            validated_sdk_runtime_root(runtime.path().to_path_buf()),
+            Some(runtime.path().canonicalize()?)
+        );
+        fs::remove_file(runtime.path().join("crates/incan_web_macros/Cargo.toml"))?;
+        assert!(validated_sdk_runtime_root(runtime.path().to_path_buf()).is_none());
+        Ok(())
     }
 
     #[test]
@@ -627,6 +697,14 @@ mod tests {
 
         assert_eq!(resolved, fs::canonicalize(seed)?);
         Ok(())
+    }
+
+    #[test]
+    fn ordinary_commands_ignore_the_scheduler_data_root_environment_value() {
+        let configured = Some(PathBuf::from("/compiler-suite-only-data"));
+        assert_eq!(scheduler_toolchain_data_root(configured.clone(), false), None);
+        assert_eq!(scheduler_toolchain_data_root(configured.clone(), true), configured);
+        assert_eq!(scheduler_toolchain_data_root(None, true), None);
     }
 
     #[test]

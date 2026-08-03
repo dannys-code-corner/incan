@@ -7993,7 +7993,10 @@ async def main() -> None:
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "std.ordinal_map ok");
 
-        let generated_main = fs::read_to_string("target/incan/std_ordinal_map_surface/src/main.rs")
+        // Normal Oven output is project-local. This fixture is its own project root, so do not accidentally assert
+        // the old Cargo-era process-working-directory target path when the direct-rustc consumer is correct.
+        let generated_project = Path::new("tests/fixtures/valid/target/incan/std_ordinal_map_surface");
+        let generated_main = fs::read_to_string(generated_project.join("src/main.rs"))
             .map_err(|error| format!("failed to read generated std.ordinal_map consumer: {error}"))?;
         assert!(
             generated_main.contains("__incan_ordinal_require_str("),
@@ -8004,13 +8007,10 @@ async def main() -> None:
             "OrdinalMap should be supplied through the stable compiled-provider facade:\n{generated_main}"
         );
         assert!(
-            !std::path::Path::new("target/incan/std_ordinal_map_surface/src/__incan_std/collections.rs").exists(),
+            !generated_project.join("src/__incan_std/collections.rs").exists(),
             "a compiled std.collections module must not be materialized in the consumer"
         );
-        let artifact_root = compiled_sdk_provider_artifact_root(
-            Path::new("target/incan/std_ordinal_map_surface"),
-            "incan_stdlib_data",
-        )?;
+        let artifact_root = compiled_sdk_provider_artifact_root(generated_project, "incan_stdlib_data")?;
         let generated_collections = fs::read_to_string(artifact_root.join("src/collections.rs"))
             .map_err(|error| format!("failed to read compiled std.collections artifact: {error}"))?;
         assert!(
@@ -8020,9 +8020,12 @@ async def main() -> None:
         Ok(())
     }
 
-    fn assert_std_regex_surface_from_cold_sdk_provider(
-        fresh_cargo_home: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    /// Exercise `std.regex` through the immutable SDK inventory injected for the Oven suite.
+    ///
+    /// The provider inventory is the normal-command authority here. A former “fresh Cargo home” lane re-published
+    /// the provider while testing the consumer, which both weakened this boundary and contradicted Oven Alpha's
+    /// no-Cargo normal-command contract.
+    fn assert_std_regex_surface_from_sealed_sdk_inventory() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
         let source = tmp.path().join("std_regex_surface.incn");
         fs::copy(
@@ -8030,10 +8033,11 @@ async def main() -> None:
             &source,
         )?;
         let generated_project = tmp.path().join("target/incan/std_regex_surface");
-        let provider_store = crate::support::cold_sdk_provider_store_or(&tmp.path().join("sdk-provider-store"));
-        let generated_cargo_target =
-            crate::support::generated_cargo_target_dir_or(&tmp.path().join("generated-cargo-target"));
-        let cargo_home = tmp.path().join("cargo-home");
+        let oven_home = tmp.path().join("oven-home");
+        let inventory = std::env::var_os("INCAN_SDK_INVENTORY")
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .ok_or("std.regex Oven regression requires the sealed SDK inventory from test prewarm")?;
 
         let mut command = incan_command();
         command
@@ -8044,17 +8048,11 @@ async def main() -> None:
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib"),
             )
             .env_remove("INCAN_STDLIB_DIR")
-            .env_remove("INCAN_SDK_INVENTORY")
-            .env_remove("INCAN_HOME")
-            .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", &provider_store)
-            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_HOME", &oven_home)
+            .env("INCAN_SDK_INVENTORY", &inventory)
+            .env_remove("INCAN_INTERNAL_SDK_PROVIDER_STORE")
             .arg("run")
             .arg(&source);
-        if fresh_cargo_home {
-            // The explicit acceptance lane starts without a Cargo registry or crate cache, so it permits Cargo to
-            // populate the isolated home while resolving the generated std.regex consumer's direct dependency.
-            command.env("CARGO_HOME", &cargo_home).env_remove("CARGO_NET_OFFLINE");
-        }
         let output = command.output()?;
 
         assert!(
@@ -8121,10 +8119,10 @@ async def main() -> None:
             &generated_project,
             "incan_stdlib_data",
         )?)?;
-        let provider_store = fs::canonicalize(&provider_store)?;
+        let provider_root = inventory.parent().ok_or("SDK inventory has no provider root")?;
         assert!(
-            artifact_root.starts_with(&provider_store),
-            "std.regex should be compiled from the isolated cold SDK provider store: {}",
+            artifact_root.starts_with(provider_root),
+            "Oven std.regex child must use the scheduler-injected immutable SDK inventory rather than an ambient provider store: {}",
             artifact_root.display()
         );
         let generated_core = fs::read_to_string(artifact_root.join("src/regex/_core.rs"))?;
@@ -8190,14 +8188,8 @@ async def main() -> None:
     }
 
     #[test]
-    fn test_run_std_regex_rfc059_surface_from_cold_sdk_provider() -> Result<(), Box<dyn std::error::Error>> {
-        assert_std_regex_surface_from_cold_sdk_provider(false)
-    }
-
-    #[test]
-    #[ignore = "requires an online crates.io registry to populate a genuinely fresh Cargo home"]
-    fn test_run_std_regex_rfc059_surface_from_fresh_cargo_home() -> Result<(), Box<dyn std::error::Error>> {
-        assert_std_regex_surface_from_cold_sdk_provider(true)
+    fn test_run_std_regex_rfc059_surface_from_sealed_sdk_inventory() -> Result<(), Box<dyn std::error::Error>> {
+        assert_std_regex_surface_from_sealed_sdk_inventory()
     }
 
     #[test]
@@ -12935,7 +12927,13 @@ def test_borrowed_slice_callbacks() -> None:
 
     fn test_runner_batch_manifest_path(project_root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let harness_root = project_root.join("target/incan_tests");
-        let manifests = std::fs::read_dir(&harness_root)?
+        let manifests = std::fs::read_dir(&harness_root)
+            .map_err(|err| {
+                format!(
+                    "failed reading generated test harness root {}: {err}",
+                    harness_root.display()
+                )
+            })?
             .filter_map(Result::ok)
             .map(|entry| entry.path().join("Cargo.toml"))
             .filter(|path| path.is_file())
@@ -19122,8 +19120,13 @@ def main() -> None:
             String::from_utf8_lossy(&test_output.stderr)
         );
 
-        let build_toml = std::fs::read_to_string(build_out_dir.join("Cargo.toml"))?;
-        let lock_toml = std::fs::read_to_string(project_root.join("target/incan_lock/Cargo.toml"))?;
+        let build_manifest_path = build_out_dir.join("Cargo.toml");
+        let build_toml = std::fs::read_to_string(&build_manifest_path).map_err(|err| {
+            format!(
+                "failed reading generated build Cargo.toml at {}: {err}",
+                build_manifest_path.display()
+            )
+        })?;
         let test_manifest_path = test_runner_batch_manifest_path(project_root)?;
         let test_toml = std::fs::read_to_string(&test_manifest_path).map_err(|err| {
             std::io::Error::new(
@@ -19135,7 +19138,7 @@ def main() -> None:
             )
         })?;
 
-        for cargo_toml in [&build_toml, &lock_toml, &test_toml] {
+        for cargo_toml in [&build_toml, &test_toml] {
             assert!(
                 cargo_toml.contains(r#"axum = "0.8""#),
                 "expected provider dependency in generated Cargo.toml, got:\n{cargo_toml}"
@@ -19149,6 +19152,49 @@ def main() -> None:
                 "expected provider stdlib feature in generated Cargo.toml, got:\n{cargo_toml}"
             );
         }
+
+        let lock_path = project_root.join("incan.lock");
+        let initial_lock = incan::lockfile::IncanLock::load(&lock_path)?;
+        assert!(
+            initial_lock.deps_fingerprint.starts_with("sha256:"),
+            "expected the semantic lock to retain a SHA-256 dependency fingerprint, got: {}",
+            initial_lock.deps_fingerprint
+        );
+        assert_eq!(
+            initial_lock.cargo_lock_payload, "version = 4\n",
+            "normal Oven lock files retain an inert legacy Cargo payload"
+        );
+        assert!(
+            !project_root.join("target/incan_lock/Cargo.toml").exists(),
+            "normal Oven locking must not recreate a Cargo workspace projection"
+        );
+
+        write_pub_library_with_provider_requirements_and_assert_keyword(
+            project_root,
+            "widgets",
+            "widgets_core",
+            vec![incan_vocab::CargoDependency {
+                crate_name: "axum".to_string(),
+                source: incan_vocab::CargoDependencySource::Version("=0.8.9".to_string()),
+            }],
+            vec!["web"],
+        )?;
+        let refreshed_lock_output = run_lock(&main_path)?;
+        assert!(
+            refreshed_lock_output.status.success(),
+            "expected lock after provider requirement update to succeed.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&refreshed_lock_output.stdout),
+            String::from_utf8_lossy(&refreshed_lock_output.stderr)
+        );
+        let refreshed_lock = incan::lockfile::IncanLock::load(&lock_path)?;
+        assert_eq!(
+            refreshed_lock.cargo_lock_payload, "version = 4\n",
+            "normal Oven lock files retain an inert legacy Cargo payload"
+        );
+        assert_ne!(
+            initial_lock.deps_fingerprint, refreshed_lock.deps_fingerprint,
+            "provider requirements must participate in the semantic lock fingerprint"
+        );
 
         Ok(())
     }

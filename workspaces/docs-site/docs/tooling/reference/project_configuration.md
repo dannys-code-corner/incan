@@ -35,7 +35,7 @@ requires-incan = ">=0.2"
 
 `requires-incan` is enforced by project-aware execution commands. If the active compiler does not satisfy the requirement, `incan run` in project mode, `incan build`, `incan test`, `incan lock`, and `incan env run` fail before compiling, locking, or launching scripts. Single-file or inline commands without a discovered project manifest do not infer a toolchain requirement.
 
-Declared `version` and `license` values are preserved in the generated compatibility manifest used by the explicit Oven publisher transition. The plural Incan `license-files` field remains source-package metadata and is not translated to Cargo's singular `license-file` field. `incan build --lib` remains a distinct compiler library-artifact workflow; it is not the Oven Alpha normal executable consumer path, and ordinary `incan build`, `incan run`, and `incan test` never fall back to it.
+Declared `version` and `license` values are preserved in the generated compatibility manifest used by the explicit Oven publisher transition. The plural Incan `license-files` field remains source-package metadata and is not translated to Cargo's singular `license-file` field. `incan build --lib` is the Oven Alpha caller-owned library-artifact workflow: it uses a receipt-selected direct-`rustc` plan, emits `.incnlib` metadata and debug/release `rlib` outputs, and ordinary executable `incan build`, `incan run`, and `incan test` never fall back to it.
 
 ### `[project.scripts]`
 
@@ -282,15 +282,15 @@ Use this only for library projects that export vocab entries. Projects without c
 | ------- | ------ | ------------------------------------------------------------------------------------- |
 | `crate` | string | Path to the vocab companion crate directory, relative to project root unless absolute |
 
-In the legacy library-publishing workflow, the compiler:
+For an Oven Alpha library build, the compiler:
 
 1. resolves `[vocab].crate`
 2. validates that the directory contains `Cargo.toml` and `src/lib.rs`
-3. runs `cargo build` for that companion crate
+3. reads the companion crate's checked registration through compiler-owned vocabulary support in the selected direct-`rustc` plan
 4. derives the vocab payload from the companion crate's `library_vocab()` registration
 5. packages the resulting metadata into the built `.incnlib` artifact
 
-If the companion crate registers a desugarer via `incan_vocab::DesugarerRegistration`, `incan build --lib` also packages the matching Wasm artifact from the companion crate's build output. Any intermediate serialized metadata is a tooling concern (rather than part of the author-facing contract).
+If the companion crate registers a desugarer via `incan_vocab::DesugarerRegistration`, `incan build --lib` also packages the matching Wasm artifact from the compiler-owned direct-`rustc` output. Any intermediate serialized metadata is a tooling concern (rather than part of the author-facing contract).
 
 ## `[dependencies]`
 

@@ -4,16 +4,25 @@
 //! Used by both `incan lock` and the build pipeline.
 
 use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
+use std::fs;
+#[cfg(test)]
+use std::fs::OpenOptions;
+#[cfg(test)]
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::process::{Command, Stdio};
+#[cfg(test)]
 use std::thread;
+#[cfg(test)]
 use std::time::{Duration, Instant, SystemTime};
 
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
 use crate::backend::ProjectGenerator;
+#[cfg(test)]
 use crate::backend::project::runner::{cargo_command, configure_cargo_target, sanitize_cargo_environment};
 use crate::cli::prelude::ParsedModule;
 use crate::cli::{CliError, CliResult, ExitCode};
@@ -43,14 +52,22 @@ use super::common::{
 #[cfg(feature = "rust_inspect")]
 use super::common::{
     collect_rust_inspect_query_paths, ensure_rust_inspect_workspace_with_cargo_package_name,
-    prewarm_rust_inspect_workspace,
+    mark_oven_direct_rust_inspection, prewarm_rust_inspect_workspace,
 };
 
+#[cfg(test)]
+#[allow(dead_code)]
 const LOCK_DEPENDENCY_PREHEAT_STALE_LOCK_SECS: u64 = 30 * 60;
+#[cfg(test)]
+#[allow(dead_code)]
 const LIBRARY_DEPENDENCY_PREHEAT_FINGERPRINT_FILE: &str = ".incan_library_dependency_preheat_fingerprint";
+#[cfg(test)]
+#[allow(dead_code)]
 const LIBRARY_DEPENDENCY_PREHEAT_LOCK_FILE: &str = ".incan_library_dependency_preheat.lock";
 
 /// Inputs needed to preheat generated-library dependencies into the real generated-library Cargo target domain.
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) struct GeneratedLibraryDependencyPreheatRequest<'a> {
     /// Generated project directory used by both dependency preheat and the real Cargo build.
     pub cargo_working_dir: &'a Path,
@@ -77,6 +94,8 @@ pub(crate) struct GeneratedLibraryDependencyPreheatRequest<'a> {
 }
 
 /// Dependency graph and Cargo policy shared by generated lock-workspace preheat consumers.
+#[cfg(test)]
+#[allow(dead_code)]
 struct DependencyPreheatContext<'a> {
     project_name: &'a str,
     rust_edition: Option<&'a str>,
@@ -296,6 +315,11 @@ pub(crate) struct RustInspectWorkspaceRequest<'a> {
     pub cargo_target_dir: &'a Path,
     pub rust_inspect_query_paths: &'a [String],
     pub prepare_when_empty: bool,
+    /// Select rust-analyzer's direct source graph before any inspection action can run Cargo.
+    pub direct_oven_inspection: bool,
+    /// The named native-unit publisher must materialize provider-source metadata even when ordinary lazy prewarm is
+    /// off.
+    pub force_direct_prewarm: bool,
 }
 
 /// Prepare and prewarm the generated Rust workspace used for rust-inspect metadata queries.
@@ -315,6 +339,8 @@ pub(crate) fn prepare_rust_inspect_workspace(request: RustInspectWorkspaceReques
         cargo_target_dir,
         rust_inspect_query_paths,
         prepare_when_empty,
+        direct_oven_inspection,
+        force_direct_prewarm,
     } = request;
     if rust_inspect_query_paths.is_empty() && !prepare_when_empty {
         return Ok(None);
@@ -333,7 +359,15 @@ pub(crate) fn prepare_rust_inspect_workspace(request: RustInspectWorkspaceReques
         cargo_target_dir,
         &cargo_policy_flags,
     )?;
-    prewarm_rust_inspect_workspace(&rust_inspect_manifest_dir, cargo_target_dir, rust_inspect_query_paths)?;
+    if direct_oven_inspection {
+        mark_oven_direct_rust_inspection(&rust_inspect_manifest_dir)?;
+    }
+    prewarm_rust_inspect_workspace(
+        &rust_inspect_manifest_dir,
+        cargo_target_dir,
+        rust_inspect_query_paths,
+        force_direct_prewarm,
+    )?;
     Ok(Some(rust_inspect_manifest_dir))
 }
 
@@ -415,6 +449,12 @@ pub(crate) fn prepare_rust_inspect_typecheck_workspace(
         cargo_target_dir: &cargo_target_dir,
         rust_inspect_query_paths: &metadata_query_paths,
         prepare_when_empty: false,
+        // This workspace supports ordinary `incan check` metadata queries. It is an inspectable projection only:
+        // Rust-analyzer must load its receipt-derived `rust-project.json`, not rediscover a Cargo workspace from a
+        // path dependency. Besides respecting the normal Oven boundary, that avoids Cargo's global package-name
+        // ambiguity for independently selected workspace members.
+        direct_oven_inspection: true,
+        force_direct_prewarm: false,
     })?;
     Ok(manifest_dir.map(|manifest_dir| PreparedRustInspectTypecheckWorkspace {
         manifest_dir,
@@ -1235,10 +1275,14 @@ fn collect_project_lock_context(
     }))
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 struct LockDependencyPreheatGuard {
     path: PathBuf,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 impl Drop for LockDependencyPreheatGuard {
     /// Remove the cooperative dependency-preheat lock file when the writer exits.
     fn drop(&mut self) {
@@ -1247,16 +1291,22 @@ impl Drop for LockDependencyPreheatGuard {
 }
 
 /// Return whether lock-generation dependency preheat should run for the supplied environment value.
+#[cfg(test)]
+#[allow(dead_code)]
 fn parse_lock_dependency_preheat_env(raw: Option<&str>) -> bool {
     !matches!(raw.map(str::trim), Some("0" | "false" | "no" | "off"))
 }
 
 /// Return whether dependency preheat is enabled for this process.
+#[cfg(test)]
+#[allow(dead_code)]
 fn lock_dependency_preheat_enabled() -> bool {
     parse_lock_dependency_preheat_env(std::env::var("INCAN_LOCK_PREHEAT").ok().as_deref())
 }
 
 /// Return the age after which an abandoned dependency-preheat lock may be reclaimed.
+#[cfg(test)]
+#[allow(dead_code)]
 fn stale_lock_dependency_preheat_after() -> Duration {
     std::env::var("INCAN_LOCK_PREHEAT_STALE_LOCK_SECS")
         .ok()
@@ -1266,6 +1316,8 @@ fn stale_lock_dependency_preheat_after() -> Duration {
 }
 
 /// Try to become the single dependency-preheat writer for one lock workspace.
+#[cfg(test)]
+#[allow(dead_code)]
 fn try_acquire_lock_dependency_preheat(lock_path: &Path) -> io::Result<Option<LockDependencyPreheatGuard>> {
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)?;
@@ -1283,6 +1335,8 @@ fn try_acquire_lock_dependency_preheat(lock_path: &Path) -> io::Result<Option<Lo
 }
 
 /// Return whether an existing cooperative dependency-preheat lock is old enough to discard.
+#[cfg(test)]
+#[allow(dead_code)]
 fn lock_dependency_preheat_is_stale(lock_path: &Path, stale_after: Duration) -> bool {
     let Ok(metadata) = fs::metadata(lock_path) else {
         return false;
@@ -1296,6 +1350,8 @@ fn lock_dependency_preheat_is_stale(lock_path: &Path, stale_after: Duration) -> 
 }
 
 /// Return whether the recorded dependency-preheat fingerprint matches the current lock workspace.
+#[cfg(test)]
+#[allow(dead_code)]
 fn lock_dependency_preheat_stamp_matches(stamp_path: &Path, fingerprint: &str) -> bool {
     fs::read_to_string(stamp_path)
         .map(|existing| existing.trim() == fingerprint)
@@ -1303,6 +1359,8 @@ fn lock_dependency_preheat_stamp_matches(stamp_path: &Path, fingerprint: &str) -
 }
 
 /// Run a Cargo preheat command with inherited output so long dependency builds remain visible.
+#[cfg(test)]
+#[allow(dead_code)]
 fn run_streamed_cargo_preheat(mut command: Command, context: &str) -> CliResult<()> {
     command.stdout(Stdio::inherit());
     command.stderr(Stdio::inherit());
@@ -1318,6 +1376,8 @@ fn run_streamed_cargo_preheat(mut command: Command, context: &str) -> CliResult<
 }
 
 /// Add one lock-workspace input file to the dependency-preheat fingerprint.
+#[cfg(test)]
+#[allow(dead_code)]
 fn hash_lock_dependency_preheat_file(hasher: &mut Sha256, base: &Path, path: &Path) -> io::Result<()> {
     let relative = path.strip_prefix(base).unwrap_or(path);
     hasher.update(relative.to_string_lossy().as_bytes());
@@ -1328,6 +1388,8 @@ fn hash_lock_dependency_preheat_file(hasher: &mut Sha256, base: &Path, path: &Pa
 }
 
 /// Compute the fingerprint that decides whether a dependency preheat can be reused.
+#[cfg(test)]
+#[allow(dead_code)]
 fn compute_dependency_preheat_fingerprint(
     lock_dir: &Path,
     cargo_flags: &[String],
@@ -1354,6 +1416,8 @@ fn compute_dependency_preheat_fingerprint(
 }
 
 /// Compute the fingerprint that decides whether generated-library dependency preheat can be reused.
+#[cfg(test)]
+#[allow(dead_code)]
 fn compute_library_dependency_preheat_fingerprint(
     lock_dir: &Path,
     cargo_flags: &[String],
@@ -1371,6 +1435,8 @@ fn compute_library_dependency_preheat_fingerprint(
 }
 
 /// Compile the lock workspace dependency graph into the generated-library target/profile domain when stale.
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn run_generated_library_dependency_preheat(
     request: GeneratedLibraryDependencyPreheatRequest<'_>,
 ) -> CliResult<()> {
@@ -1503,6 +1569,8 @@ pub(crate) fn run_generated_library_dependency_preheat(
 
 /// Materialize the dependency-only generated lock workspace from the current dependency graph and committed lock
 /// payload.
+#[cfg(test)]
+#[allow(dead_code)]
 fn materialize_dependency_preheat_workspace(
     lock_dir: &Path,
     context: &DependencyPreheatContext<'_>,

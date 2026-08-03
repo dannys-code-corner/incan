@@ -119,7 +119,7 @@ fn direct_oven_native_consumer_test(
     let sdk_components = inputs
         .sdk_inventory
         .parent()
-        .expect("stored SDK inventory must have a provider root")
+        .ok_or("stored SDK inventory must have a provider root")?
         .join("components");
     let stdlib_core_source = sdk_components.join("stdlib-core/src/lib.rs");
     assert!(

@@ -21,16 +21,23 @@ use super::legacy_cargo::{
 };
 use super::rustc::{
     OvenRegistryLeafAuthority, OvenRustcArtifactExtern, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
-    OvenRustcError, OvenRustcRegistryLeaf, OvenRustcSupportingArtifact, clear_inherited_cargo_environment,
+    OvenRustcAuxiliaryTarget, OvenRustcError, OvenRustcRegistryLeaf, OvenRustcSupportingArtifact,
+    clear_inherited_cargo_environment, validate_sealed_registry_leaf,
 };
 use super::store::{
     OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreError,
 };
-use super::{OvenReceipt, digest_bytes, digest_source_tree};
+use super::{OvenReceipt, digest_bytes};
+use crate::manifest::{DependencySource, DependencySpec};
 use crate::version::{INCAN_VERSION, SDK_PROVIDER_CODEGEN_REVISION};
 
 /// Current wire format for one compiler-shipped Oven native-unit seed.
-pub const OVEN_NATIVE_UNIT_SEED_SCHEMA_VERSION: u32 = 8;
+pub const OVEN_NATIVE_UNIT_SEED_SCHEMA_VERSION: u32 = 10;
+/// Internal marker enabled only while the named legacy publisher creates a compiler-owned native-unit seed.
+///
+/// This is deliberately distinct from normal Oven command selection: it grants compiler source emission the same
+/// trusted standard-provider identity as the SDK publisher, but it never authorizes Cargo for a caller command.
+pub(crate) const OVEN_NATIVE_UNIT_SEED_ENV: &str = "INCAN_OVEN_NATIVE_UNIT_SEED";
 const TOOLCHAIN_SEED_RELATIVE_ROOT: &str = "share/incan/oven/native-units";
 const BASE_UNIT_MAX_PHYSICAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const BASE_UNIT_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
@@ -130,8 +137,13 @@ pub struct OvenToolchainNativeUnit {
 
 impl OvenToolchainNativeUnit {
     #[must_use]
+    /// Expose this unit's registry leaves with only its verified transitive metadata directories.
     pub(crate) fn registry_leaf_authority(&self) -> OvenRegistryLeafAuthority {
-        OvenRegistryLeafAuthority::new(self.artifact_root.clone(), self.registry_leaves.clone())
+        OvenRegistryLeafAuthority::new_with_trusted_dependency_search_paths(
+            self.artifact_root.clone(),
+            self.registry_leaves.clone(),
+            self.artifact_plan.dependency_search_paths.clone(),
+        )
     }
 }
 
@@ -383,7 +395,7 @@ pub fn runtime_build_unit_inputs(
         ("runtime-source-incan-stdlib", "incan_stdlib"),
     ] {
         let path = crate::toolchain_layout::resolve_toolchain_crate_path(crate_name);
-        let digest = digest_source_tree(&path).map_err(|error| error.to_string())?;
+        let digest = digest_runtime_crate_source(&path)?;
         inputs.insert(name.to_string(), digest);
     }
     let lock_path = crate::toolchain_layout::resolve_toolchain_runtime_lockfile();
@@ -403,6 +415,107 @@ pub fn runtime_build_unit_inputs(
     );
     inputs.insert("rust-dependencies".to_string(), rust_dependencies_digest);
     Ok(inputs)
+}
+
+/// Digest exactly the compiler runtime source closure retained by a suite publisher.
+///
+/// Runtime compatibility is determined by the package manifest and Rust sources that a generated provider can
+/// compile against. Test fixtures, documentation, and nested build output are not runtime inputs and the suite
+/// publisher deliberately does not retain them. Hashing the whole checkout crate here would make a native seed
+/// incompatible with the publisher's smaller immutable closure even when the compiled runtime is identical.
+pub(crate) fn digest_runtime_crate_source(root: &Path) -> Result<String, String> {
+    let root_metadata = fs::symlink_metadata(root)
+        .map_err(|error| format!("failed to read runtime crate root {}: {error}", root.display()))?;
+    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "runtime crate root {} must be a directory without symlink indirection",
+            root.display()
+        ));
+    }
+    let manifest = root.join("Cargo.toml");
+    let manifest_metadata = fs::symlink_metadata(&manifest)
+        .map_err(|error| format!("failed to read runtime manifest {}: {error}", manifest.display()))?;
+    if !manifest_metadata.is_file() || manifest_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "runtime manifest {} must be a regular file without symlink indirection",
+            manifest.display()
+        ));
+    }
+    let source_root = root.join("src");
+    let source_metadata = fs::symlink_metadata(&source_root).map_err(|error| {
+        format!(
+            "failed to read runtime source directory {}: {error}",
+            source_root.display()
+        )
+    })?;
+    if !source_metadata.is_dir() || source_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "runtime source directory {} must be a directory without symlink indirection",
+            source_root.display()
+        ));
+    }
+
+    let mut records = BTreeMap::new();
+    records.insert(
+        "Cargo.toml".to_string(),
+        digest_bytes(
+            &fs::read(&manifest)
+                .map_err(|error| format!("failed to read runtime manifest {}: {error}", manifest.display()))?,
+        ),
+    );
+    collect_runtime_source_records(&source_root, &source_root, &mut records)?;
+    serde_json::to_vec(&records)
+        .map(|payload| digest_bytes(&payload))
+        .map_err(|error| {
+            format!(
+                "failed to serialize runtime source digest for {}: {error}",
+                root.display()
+            )
+        })
+}
+
+/// Add the regular files below one runtime crate's `src/` tree to its portable source digest.
+fn collect_runtime_source_records(
+    source_root: &Path,
+    current: &Path,
+    records: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| format!("failed to read runtime source directory {}: {error}", current.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to read runtime source directory {}: {error}", current.display()))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to inspect runtime source {}: {error}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!("runtime source {} must not contain symlinks", path.display()));
+        }
+        if metadata.is_dir() {
+            collect_runtime_source_records(source_root, &path, records)?;
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(format!(
+                "runtime source {} must contain only regular files",
+                path.display()
+            ));
+        }
+        let relative = path
+            .strip_prefix(source_root)
+            .map_err(|_| format!("runtime source {} escaped {}", path.display(), source_root.display()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let key = format!("src/{relative}");
+        let digest = digest_bytes(
+            &fs::read(&path).map_err(|error| format!("failed to read runtime source {}: {error}", path.display()))?,
+        );
+        if records.insert(key.clone(), digest).is_some() {
+            return Err(format!("runtime source contains duplicate portable path {key}"));
+        }
+    }
+    Ok(())
 }
 
 /// Export one compiler-owned native-unit seed from an already receipted generated Incan project.
@@ -471,8 +584,8 @@ pub fn prepare_native_unit_seed_from_generated_project(
         &store,
         &publication.plan_identity,
         &receipt,
-        &cargo,
-        &rustc,
+        cargo,
+        rustc,
         publication.registry_leaves,
         &output_directory,
     )
@@ -534,7 +647,9 @@ fn export_native_unit_seed(
         }
     })?;
     discard_seed_metadata_sidecars(&mut plan);
-    promote_compiler_derive_extern(&mut plan)?;
+    record_generated_root_externs(&mut plan);
+    promote_compiler_runtime_externs(&mut plan)?;
+    plan.registry_leaves = registry_leaves.clone();
     let materialized_files = plan.materialized_artifacts(&artifact_root, &receipt.intent)?;
     let parent = output_directory
         .parent()
@@ -594,44 +709,79 @@ fn export_native_unit_seed(
     })
 }
 
-/// Promote the compiler's bundled derive macro from a seed support artifact to a direct extern.
+/// Preserve the publisher-selected generated-root dependency set before the seed adds compiler-only helpers.
 ///
-/// The tiny source program used to publish a reusable native foundation need not declare a model, while an ordinary
-/// compatible caller may. Generated model Rust names `incan_derive` explicitly, so leaving the verified macro only
-/// on `-L dependency` makes normal direct-`rustc` library builds accidentally depend on Cargo's implicit extern
-/// selection. A seed always publishes the compiler-owned macro as a direct input instead.
-fn promote_compiler_derive_extern(plan: &mut OvenRustcArtifactManifest) -> Result<(), OvenNativeUnitError> {
-    const INCAN_DERIVE: &str = "incan_derive";
+/// The ordinary native unit is published from a minimal generated program, so its original direct externs are the
+/// roots that generated caller code may receive. Later preparation adds compiler runtime and vocabulary capabilities
+/// to the same immutable closure. Runtime roots are promoted into every declared entrypoint below, but the vocabulary
+/// helper roots must remain private to vocabulary extraction: passing their independently built `serde` closure to a
+/// generated library would make Rustc see two incompatible `serde` identities.
+fn record_generated_root_externs(plan: &mut OvenRustcArtifactManifest) {
+    plan.entrypoint_externs
+        .entry("generated-root".to_string())
+        .or_insert_with(|| {
+            let mut crate_names = plan
+                .externs
+                .iter()
+                .map(|artifact| artifact.crate_name.clone())
+                .collect::<Vec<_>>();
+            crate_names.sort();
+            crate_names.dedup();
+            crate_names
+        });
+}
 
-    if plan.externs.iter().any(|artifact| artifact.crate_name == INCAN_DERIVE) {
+/// Promote compiler runtime artifacts required by generated provider libraries to direct externs.
+///
+/// The minimal seed program need not use models or provider metadata, while generated caller-owned libraries do.
+/// `incan_derive` and `incan_core` are therefore promoted from the verified support closure. Leaving either only on
+/// `-L dependency` relies on Cargo's implicit extern selection and makes a normal direct-Rustc consumer recompile
+/// compiler source instead of linking the selected immutable plan.
+fn promote_compiler_runtime_externs(plan: &mut OvenRustcArtifactManifest) -> Result<(), OvenNativeUnitError> {
+    promote_compiler_runtime_extern(plan, "incan_derive", is_incan_derive_artifact)?;
+    promote_compiler_runtime_extern(plan, "incan_core", |relative_path| {
+        is_named_rlib(relative_path, "incan_core")
+    })
+}
+
+/// Promote one exact compiler-owned support artifact after confirming the seed is unambiguous.
+fn promote_compiler_runtime_extern(
+    plan: &mut OvenRustcArtifactManifest,
+    crate_name: &str,
+    matches_artifact: impl Fn(&str) -> bool,
+) -> Result<(), OvenNativeUnitError> {
+    if plan.externs.iter().any(|artifact| artifact.crate_name == crate_name) {
         return Ok(());
     }
     let candidates = plan
         .supporting_artifacts
         .iter()
         .enumerate()
-        .filter(|(_, artifact)| is_incan_derive_artifact(&artifact.relative_path))
+        .filter(|(_, artifact)| matches_artifact(&artifact.relative_path))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     let [index] = candidates.as_slice() else {
         return Err(OvenNativeUnitError::Preparation {
             message: format!(
-                "native foundation must declare exactly one compiler `{INCAN_DERIVE}` procedural-macro artifact; found {}",
+                "native foundation must declare exactly one compiler `{crate_name}` direct-Rustc artifact; found {}",
                 candidates.len()
             ),
         });
     };
     let artifact = plan.supporting_artifacts.remove(*index);
     plan.externs.push(OvenRustcArtifactExtern {
-        crate_name: INCAN_DERIVE.to_string(),
+        crate_name: crate_name.to_string(),
         relative_path: artifact.relative_path,
         digest: artifact.digest,
     });
     plan.externs
         .sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
     for crate_names in plan.entrypoint_externs.values_mut() {
-        if !crate_names.iter().any(|crate_name| crate_name == INCAN_DERIVE) {
-            crate_names.push(INCAN_DERIVE.to_string());
+        if !crate_names
+            .iter()
+            .any(|entrypoint_extern| entrypoint_extern == crate_name)
+        {
+            crate_names.push(crate_name.to_string());
             crate_names.sort();
         }
     }
@@ -643,8 +793,9 @@ fn promote_compiler_derive_extern(plan: &mut OvenRustcArtifactManifest) -> Resul
 /// A generated Incan program need not use JSON, while the compiler's vocab contract always serializes metadata.
 /// Consequently, this compiler-owned closure cannot be inferred from a caller program's provider features. The
 /// explicit `legacy_cargo` publisher builds only `incan_vocab` against the repository lockfile, copies its small
-/// target-specific Rust closure into the immutable seed, and records the two helper roots explicitly. Consumers
-/// receive those files only through direct `rustc`; no normal command can re-run this Cargo operation.
+/// target-specific Rust closure into the immutable seed, and records the two helper roots explicitly. Vocabulary
+/// extraction receives those roots from the selected full plan; generated roots do not, because their entrypoint
+/// projection is fixed before this compiler-only closure is added. No normal command can re-run this Cargo operation.
 fn bake_compiler_vocab_support(
     plan: &mut OvenRustcArtifactManifest,
     seed_staging: &Path,
@@ -653,6 +804,7 @@ fn bake_compiler_vocab_support(
 ) -> Result<(), OvenNativeUnitError> {
     const INCAN_VOCAB: &str = "incan_vocab";
     const SERDE_JSON: &str = "serde_json";
+    const VOCAB_DESUGARER_TARGET: &str = "wasm32-wasip1";
     let required_externs = [INCAN_VOCAB, SERDE_JSON];
     if plan
         .externs
@@ -723,6 +875,43 @@ fn bake_compiler_vocab_support(
         });
     }
 
+    // Vocabulary companions may ship a Wasm desugarer. Build its compiler-owned dependency closure here at the
+    // explicit publisher boundary; a normal `incan build --lib` later invokes only direct Rustc against the copied,
+    // digest-verified files. Keep this as a separate target directory so host artifacts can never be selected for
+    // a Wasm command by accident.
+    let mut wasm_command = Command::new(cargo);
+    wasm_command
+        .current_dir(&crate_root)
+        .arg("build")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .arg("--target")
+        .arg(VOCAB_DESUGARER_TARGET)
+        .arg("--target-dir")
+        .arg(&cargo_target)
+        .arg("--locked")
+        .arg("--offline");
+    if plan.intent.profile == "release" {
+        wasm_command.arg("--release");
+    }
+    clear_inherited_cargo_environment(&mut wasm_command);
+    wasm_command.env("RUSTC", rustc).env("CARGO_NET_OFFLINE", "true");
+    if plan.intent.profile == "debug" {
+        wasm_command.env("CARGO_PROFILE_DEV_DEBUG", "0");
+    }
+    let wasm_compile = wasm_command.output().map_err(|source| OvenNativeUnitError::Io {
+        path: cargo.to_path_buf(),
+        source,
+    })?;
+    if !wasm_compile.status.success() {
+        return Err(OvenNativeUnitError::Preparation {
+            message: format!(
+                "native vocabulary Wasm support publisher failed:\n{}",
+                String::from_utf8_lossy(&wasm_compile.stderr).trim()
+            ),
+        });
+    }
+
     let profile = if plan.intent.profile == "release" {
         "release"
     } else {
@@ -735,6 +924,13 @@ fn bake_compiler_vocab_support(
     let host_artifact_directory = cargo_target.join(profile).join("deps");
     let seed_directory = support_root.join("deps");
     copy_compiler_vocab_support_artifacts(&artifact_directory, &host_artifact_directory, &seed_directory, plan)?;
+    let wasm_artifact_directory = cargo_target.join(VOCAB_DESUGARER_TARGET).join(profile).join("deps");
+    copy_compiler_vocab_auxiliary_target_artifacts(
+        &wasm_artifact_directory,
+        &support_root.join(VOCAB_DESUGARER_TARGET).join("deps"),
+        VOCAB_DESUGARER_TARGET,
+        plan,
+    )?;
     discard_compiler_vocab_build_state(&cargo_target)?;
     plan.externs
         .sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
@@ -755,7 +951,14 @@ fn discard_compiler_vocab_build_state(cargo_target: &Path) -> Result<(), OvenNat
     })
 }
 
-/// Copy and declare every direct Rustc input produced by the compiler-owned vocab package build.
+/// Copy the sealed `incan_vocab` direct-Rustc support set produced by the compiler-owned package build.
+///
+/// The named publisher starts from an empty target directory, builds only `incan_vocab` against the checked lockfile,
+/// and retains every target- and host-side Rust library artifact that this single invocation produced. The two roots
+/// selected by vocabulary extraction (`incan_vocab` and `serde_json`) are explicit externs; the remaining digested
+/// artifacts are sealed support inputs, including host procedural macros. This is deliberately a bounded publisher
+/// support set rather than a resolver for caller dependencies. The normal guarded library-vocab regression exercises
+/// that sealed set and fails if a consumer attempts to launch Cargo.
 fn copy_compiler_vocab_support_artifacts(
     target_artifact_directory: &Path,
     host_artifact_directory: &Path,
@@ -881,6 +1084,125 @@ fn copy_compiler_vocab_support_artifacts(
     }
     plan.supporting_artifacts
         .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(())
+}
+
+/// Copy the target-only vocabulary support closure used to produce Wasm desugarers without Cargo.
+///
+/// The host closure remains an auxiliary search path because Rustc may need host procedural macros while compiling
+/// target code. The target rlibs are retained separately and named explicitly, which prevents host and Wasm copies
+/// of the same crate from occupying one ambiguous direct-Rustc search directory.
+fn copy_compiler_vocab_auxiliary_target_artifacts(
+    target_artifact_directory: &Path,
+    seed_directory: &Path,
+    target: &str,
+    plan: &mut OvenRustcArtifactManifest,
+) -> Result<(), OvenNativeUnitError> {
+    const INCAN_VOCAB: &str = "incan_vocab";
+    const SERDE_JSON: &str = "serde_json";
+    if !target_artifact_directory.is_dir() {
+        return Err(OvenNativeUnitError::Preparation {
+            message: format!(
+                "native vocabulary publisher produced no {target} dependency directory: {}",
+                target_artifact_directory.display()
+            ),
+        });
+    }
+    fs::create_dir_all(seed_directory).map_err(|source| OvenNativeUnitError::Io {
+        path: seed_directory.to_path_buf(),
+        source,
+    })?;
+    let mut artifacts = BTreeMap::new();
+    let mut source_paths = fs::read_dir(target_artifact_directory)
+        .map_err(|source| OvenNativeUnitError::Io {
+            path: target_artifact_directory.to_path_buf(),
+            source,
+        })?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| OvenNativeUnitError::Io {
+            path: target_artifact_directory.to_path_buf(),
+            source,
+        })?;
+    source_paths.sort();
+    for source in source_paths {
+        let metadata = fs::symlink_metadata(&source).map_err(|source_error| OvenNativeUnitError::Io {
+            path: source.clone(),
+            source: source_error,
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || !is_rust_library_artifact(&source) {
+            continue;
+        }
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| OvenNativeUnitError::Preparation {
+                message: format!("native vocabulary artifact has no filename: {}", source.display()),
+            })?
+            .to_string_lossy()
+            .to_string();
+        let bytes = fs::read(&source).map_err(|source_error| OvenNativeUnitError::Io {
+            path: source.clone(),
+            source: source_error,
+        })?;
+        let digest = digest_bytes(&bytes);
+        if artifacts.insert(file_name.clone(), digest.clone()).is_some() {
+            return Err(OvenNativeUnitError::Preparation {
+                message: format!("native vocabulary {target} closure duplicates artifact `{file_name}`"),
+            });
+        }
+        let destination = seed_directory.join(&file_name);
+        fs::write(&destination, bytes).map_err(|source_error| OvenNativeUnitError::Io {
+            path: destination,
+            source: source_error,
+        })?;
+    }
+    if artifacts.is_empty() {
+        return Err(OvenNativeUnitError::Preparation {
+            message: format!(
+                "native vocabulary publisher retained no Rust artifacts from {}",
+                target_artifact_directory.display()
+            ),
+        });
+    }
+    let relative_directory = format!("compiler-support/{target}/deps");
+    let mut externs = Vec::new();
+    for crate_name in [INCAN_VOCAB, SERDE_JSON] {
+        let matches = artifacts
+            .iter()
+            .filter(|(file_name, _)| is_named_rlib(file_name, crate_name))
+            .collect::<Vec<_>>();
+        let [(file_name, digest)] = matches.as_slice() else {
+            return Err(OvenNativeUnitError::Preparation {
+                message: format!(
+                    "native vocabulary {target} publisher must retain exactly one `{crate_name}` rlib; found {}",
+                    matches.len()
+                ),
+            });
+        };
+        externs.push(OvenRustcArtifactExtern {
+            crate_name: crate_name.to_string(),
+            relative_path: format!("{relative_directory}/{file_name}"),
+            digest: digest.to_string(),
+        });
+    }
+    for (file_name, digest) in artifacts {
+        let relative_path = format!("{relative_directory}/{file_name}");
+        if externs.iter().any(|artifact| artifact.relative_path == relative_path) {
+            continue;
+        }
+        plan.supporting_artifacts
+            .push(OvenRustcSupportingArtifact { relative_path, digest });
+    }
+    // `compiler-support/deps` holds host proc macros that Rustc may load while expanding the target closure.
+    let mut dependency_search_paths = vec![relative_directory, "compiler-support/deps".to_string()];
+    dependency_search_paths.sort();
+    plan.vocab_auxiliary_targets.push(OvenRustcAuxiliaryTarget {
+        target: target.to_string(),
+        dependency_search_paths,
+        externs,
+    });
+    plan.vocab_auxiliary_targets
+        .sort_by(|left, right| left.target.cmp(&right.target));
     Ok(())
 }
 
@@ -1027,6 +1349,80 @@ pub fn materialize_toolchain_native_unit(
     .map(Some)
 }
 
+/// Materialize the narrowest receipt-compatible seed whose own registry catalog satisfies every caller-selected
+/// registry dependency.
+///
+/// Direct Rust metadata is a feature-unified graph, not a set of interchangeable package filenames. When a caller
+/// imports a registry leaf absent from the narrowest provider-only seed, selecting that seed and borrowing an
+/// arbitrary compatible catalog can combine incompatible `serde`/`rand` instances. This selector stays within the
+/// compiler-shipped seeds, but chooses one coherent closure before any normal direct-rustc process starts.
+pub fn materialize_toolchain_native_unit_for_registry_dependencies(
+    store: &OvenStore,
+    receipt: &OvenReceipt,
+    selection: OvenNativeUnitSelection,
+    dependencies: &[DependencySpec],
+) -> Result<Option<String>, OvenNativeUnitError> {
+    let registry_dependencies = dependencies
+        .iter()
+        .filter(|dependency| matches!(dependency.source, DependencySource::Registry))
+        .collect::<Vec<_>>();
+    if registry_dependencies.is_empty() {
+        return materialize_toolchain_native_unit(store, receipt, selection);
+    }
+
+    let seed_path = toolchain_native_unit_seed_path(receipt);
+    if seed_path.is_file() {
+        let native = native_unit_from_seed(receipt, &seed_path, selection)?;
+        return registry_dependencies_supported_by_native_unit(
+            &native,
+            &registry_dependencies,
+            &receipt.intent.profile,
+        )
+        .then(|| materialize_native_unit_from_seed_with_selection(store, receipt, &seed_path, selection))
+        .transpose();
+    }
+    if selection == OvenNativeUnitSelection::Exact {
+        return Ok(None);
+    }
+
+    let seed_root = crate::toolchain_layout::resolve_toolchain_data_path(Path::new(TOOLCHAIN_SEED_RELATIVE_ROOT));
+    let candidates = compatible_seed_paths(&seed_root, receipt)?;
+    let mut supported = Vec::new();
+    for candidate in candidates {
+        let native = native_unit_from_seed(
+            receipt,
+            &candidate.path,
+            OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
+        )?;
+        if registry_dependencies_supported_by_native_unit(&native, &registry_dependencies, &receipt.intent.profile) {
+            supported.push(candidate);
+        }
+    }
+    let Some(candidate) = select_most_specific_compatible_seed(supported) else {
+        return Ok(None);
+    };
+    materialize_native_unit_from_seed_with_selection(
+        store,
+        receipt,
+        &candidate.path,
+        OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
+    )
+    .map(Some)
+}
+
+/// Check whether one already validated compiler-native seed can supply all caller-visible registry imports from its
+/// own exact catalog. A missing or incompatible leaf disqualifies this seed; it never widens the caller to Cargo.
+fn registry_dependencies_supported_by_native_unit(
+    native: &OvenToolchainNativeUnit,
+    dependencies: &[&DependencySpec],
+    profile: &str,
+) -> bool {
+    let authority = native.registry_leaf_authority();
+    dependencies
+        .iter()
+        .all(|dependency| validate_sealed_registry_leaf(dependency, Some(&authority), profile).is_ok())
+}
+
 /// Resolve a compiler-native seed for scheduler-owned direct execution without copying it into a mutable Oven store.
 ///
 /// This is deliberately narrower than [`materialize_toolchain_native_unit`]. Callers must use it only for immutable
@@ -1057,37 +1453,60 @@ pub fn resolve_toolchain_native_unit(
     .map(Some)
 }
 
-/// Resolve every sealed registry catalog whose compiler-native seed independently authorizes `receipt`.
+/// Resolve a scheduler-held compiler-native seed whose own catalog satisfies every caller-selected registry root.
 ///
-/// Code-plan selection stays narrow and deterministic, but registry leaves are a separate receipt-bound capability:
-/// a compatible broad seed may be the only shipped owner of an exact registry package version. Every catalog is
-/// validated against its own immutable plan before the combined authority is returned.
-pub(crate) fn resolve_toolchain_registry_leaf_authority(
+/// This is the immutable-suite counterpart to
+/// [`materialize_toolchain_native_unit_for_registry_dependencies`]. It keeps nested suite children on the parent
+/// lease while preserving the same single compatibility-domain rule as ordinary bounded-store consumers.
+pub fn resolve_toolchain_native_unit_for_registry_dependencies(
     receipt: &OvenReceipt,
     selection: OvenNativeUnitSelection,
-) -> Result<Option<OvenRegistryLeafAuthority>, OvenNativeUnitError> {
+    dependencies: &[DependencySpec],
+) -> Result<Option<OvenToolchainNativeUnit>, OvenNativeUnitError> {
+    let registry_dependencies = dependencies
+        .iter()
+        .filter(|dependency| matches!(dependency.source, DependencySource::Registry))
+        .collect::<Vec<_>>();
+    if registry_dependencies.is_empty() {
+        return resolve_toolchain_native_unit(receipt, selection);
+    }
+
     let seed_path = toolchain_native_unit_seed_path(receipt);
     if seed_path.is_file() {
-        return native_unit_from_seed(receipt, &seed_path, OvenNativeUnitSelection::Exact)
-            .map(|native| Some(native.registry_leaf_authority()));
+        let native = native_unit_from_seed(receipt, &seed_path, selection)?;
+        return Ok(registry_dependencies_supported_by_native_unit(
+            &native,
+            &registry_dependencies,
+            &receipt.intent.profile,
+        )
+        .then_some(native));
     }
     if selection == OvenNativeUnitSelection::Exact {
         return Ok(None);
     }
 
     let seed_root = crate::toolchain_layout::resolve_toolchain_data_path(Path::new(TOOLCHAIN_SEED_RELATIVE_ROOT));
-    let authorities = compatible_seed_paths(&seed_root, receipt)?
-        .into_iter()
-        .map(|candidate| {
-            native_unit_from_seed(
-                receipt,
-                &candidate.path,
-                OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
-            )
-            .map(|native| native.registry_leaf_authority())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok((!authorities.is_empty()).then(|| OvenRegistryLeafAuthority::aggregate(authorities)))
+    let candidates = compatible_seed_paths(&seed_root, receipt)?;
+    let mut supported = Vec::new();
+    for candidate in candidates {
+        let native = native_unit_from_seed(
+            receipt,
+            &candidate.path,
+            OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
+        )?;
+        if registry_dependencies_supported_by_native_unit(&native, &registry_dependencies, &receipt.intent.profile) {
+            supported.push(candidate);
+        }
+    }
+    let Some(candidate) = select_most_specific_compatible_seed(supported) else {
+        return Ok(None);
+    };
+    native_unit_from_seed(
+        receipt,
+        &candidate.path,
+        OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
+    )
+    .map(Some)
 }
 
 /// Return every compiler-owned seed that authorizes the narrow runtime-provider subset rule.
@@ -1233,6 +1652,12 @@ fn native_unit_from_seed(
         return Err(OvenNativeUnitError::InvalidSeed {
             path: seed_path.to_path_buf(),
             message: "direct-rustc intent does not authorize the requested receipt".to_string(),
+        });
+    }
+    if seed.plan.registry_leaves != seed.registry_leaves {
+        return Err(OvenNativeUnitError::InvalidSeed {
+            path: seed_path.to_path_buf(),
+            message: "seed registry catalog does not match its copied direct-rustc plan".to_string(),
         });
     }
     validate_registry_leaf_catalog(&seed, seed_path)?;
@@ -1382,15 +1807,46 @@ mod tests {
 
     use super::{
         CompatibleNativeUnitSeed, OVEN_NATIVE_UNIT_SEED_SCHEMA_VERSION, OvenNativeUnitCompatibility,
-        OvenNativeUnitError, OvenNativeUnitSeed, OvenNativeUnitSelection, materialize_native_unit_from_seed,
-        materialize_native_unit_from_seed_with_selection, native_unit_from_seed, select_most_specific_compatible_seed,
+        OvenNativeUnitError, OvenNativeUnitSeed, OvenNativeUnitSelection, digest_runtime_crate_source,
+        materialize_native_unit_from_seed, materialize_native_unit_from_seed_with_selection, native_unit_from_seed,
+        select_most_specific_compatible_seed,
     };
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactExtern, OvenRustcArtifactManifest,
         OvenRustcRegistryLeaf, OvenRustcSupportingArtifact, select_direct_rustc_plan_identity,
     };
     use crate::oven::store::{OvenStore, OvenStoreLimits};
-    use crate::oven::{OvenGeneratedProjectRequest, digest_bytes, receipt_generated_project};
+    use crate::oven::{OvenGeneratedProjectRequest, digest_bytes, digest_source_tree, receipt_generated_project};
+
+    #[test]
+    fn runtime_source_digest_matches_the_staged_minimal_runtime_closure() -> Result<(), Box<dyn std::error::Error>> {
+        let source = tempfile::tempdir()?;
+        fs::create_dir_all(source.path().join("src/nested"))?;
+        fs::create_dir_all(source.path().join("target/temporary"))?;
+        fs::write(
+            source.path().join("Cargo.toml"),
+            "[package]\nname = \"runtime\"\nversion = \"0.1.0\"\n",
+        )?;
+        fs::write(source.path().join("src/lib.rs"), "pub mod nested;\n")?;
+        fs::write(source.path().join("src/nested/mod.rs"), "pub fn value() {}\n")?;
+        fs::write(source.path().join("README.md"), "not a runtime input\n")?;
+        fs::write(source.path().join("target/temporary/artifact"), "not a runtime input\n")?;
+
+        let staged = tempfile::tempdir()?;
+        fs::create_dir_all(staged.path().join("src/nested"))?;
+        for relative in ["Cargo.toml", "src/lib.rs", "src/nested/mod.rs"] {
+            fs::copy(source.path().join(relative), staged.path().join(relative))?;
+        }
+
+        let digest = digest_runtime_crate_source(source.path())?;
+        assert_eq!(digest, digest_source_tree(staged.path())?);
+
+        fs::write(source.path().join("README.md"), "still not a runtime input\n")?;
+        assert_eq!(digest_runtime_crate_source(source.path())?, digest);
+        fs::write(source.path().join("src/nested/mod.rs"), "pub fn changed() {}\n")?;
+        assert_ne!(digest_runtime_crate_source(source.path())?, digest);
+        Ok(())
+    }
 
     #[test]
     fn a_toolchain_seed_materializes_once_and_reuses_across_clean_project_receipts()
@@ -1434,7 +1890,9 @@ mod tests {
                 native_search_paths: Vec::new(),
                 externs: Vec::new(),
                 entrypoint_externs: BTreeMap::new(),
+                registry_leaves: Vec::new(),
                 compile_environment: BTreeMap::new(),
+                vocab_auxiliary_targets: Vec::new(),
                 supporting_artifacts: Vec::new(),
             },
         };
@@ -1489,7 +1947,9 @@ mod tests {
                 native_search_paths: Vec::new(),
                 externs: Vec::new(),
                 entrypoint_externs: BTreeMap::new(),
+                registry_leaves: Vec::new(),
                 compile_environment: BTreeMap::new(),
+                vocab_auxiliary_targets: Vec::new(),
                 supporting_artifacts: Vec::new(),
             },
         };
@@ -1526,21 +1986,23 @@ mod tests {
             relative_path: artifact_relative_path.clone(),
             digest: artifact_digest.clone(),
         });
+        let registry_leaf = OvenRustcRegistryLeaf {
+            package: "fixture-registry".to_string(),
+            version: "1.0.0".to_string(),
+            crate_name: "fixture_registry".to_string(),
+            features: vec!["std".to_string()],
+            artifact: OvenRustcArtifactExtern {
+                crate_name: "fixture_registry".to_string(),
+                relative_path: artifact_relative_path,
+                digest: artifact_digest,
+            },
+        };
+        plan.registry_leaves = vec![registry_leaf.clone()];
         let mut seed = OvenNativeUnitSeed {
             schema_version: OVEN_NATIVE_UNIT_SEED_SCHEMA_VERSION,
             build_unit_identity: receipt.build_unit_identity.clone(),
             compatibility: OvenNativeUnitCompatibility::default(),
-            registry_leaves: vec![OvenRustcRegistryLeaf {
-                package: "fixture-registry".to_string(),
-                version: "1.0.0".to_string(),
-                crate_name: "fixture_registry".to_string(),
-                features: vec!["std".to_string()],
-                artifact: OvenRustcArtifactExtern {
-                    crate_name: "fixture_registry".to_string(),
-                    relative_path: artifact_relative_path,
-                    digest: artifact_digest,
-                },
-            }],
+            registry_leaves: vec![registry_leaf],
             plan,
         };
         let seed_path = seed_root.path().join("seed.json");
@@ -1549,6 +2011,7 @@ mod tests {
         assert_eq!(resolved.registry_leaves.len(), 1);
 
         seed.registry_leaves[0].artifact.relative_path = "deps/libunsealed.rlib".to_string();
+        seed.plan.registry_leaves = seed.registry_leaves.clone();
         fs::write(&seed_path, serde_json::to_vec(&seed)?)?;
         let error = native_unit_from_seed(&receipt, &seed_path, OvenNativeUnitSelection::Exact)
             .expect_err("a registry leaf outside the sealed plan must fail");
@@ -1705,7 +2168,7 @@ mod tests {
     }
 
     #[test]
-    fn native_seed_promotes_the_compiler_derive_macro_for_compatible_callers() -> Result<(), Box<dyn std::error::Error>>
+    fn native_seed_promotes_compiler_runtime_externs_for_compatible_callers() -> Result<(), Box<dyn std::error::Error>>
     {
         let receipt = runtime_receipt_for_plan()?;
         let mut plan = empty_manifest(&receipt);
@@ -1716,24 +2179,31 @@ mod tests {
                 digest: digest_bytes(b"derive macro"),
             },
             crate::oven::rustc::OvenRustcSupportingArtifact {
+                relative_path: "target/deps/libincan_core-verified.rlib".to_string(),
+                digest: digest_bytes(b"compiler runtime"),
+            },
+            crate::oven::rustc::OvenRustcSupportingArtifact {
                 relative_path: "target/deps/libruntime.rlib".to_string(),
                 digest: digest_bytes(b"runtime"),
             },
         ];
 
-        super::promote_compiler_derive_extern(&mut plan)?;
+        super::promote_compiler_runtime_externs(&mut plan)?;
 
         assert_eq!(
             plan.externs
                 .iter()
                 .map(|artifact| artifact.crate_name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["incan_derive"]
+            vec!["incan_core", "incan_derive"]
         );
-        assert_eq!(
-            plan.externs[0].relative_path,
-            "host/deps/libincan_derive-verified.dylib"
-        );
+        assert!(plan.externs.iter().any(|artifact| {
+            artifact.crate_name == "incan_derive"
+                && artifact.relative_path == "host/deps/libincan_derive-verified.dylib"
+        }));
+        assert!(plan.externs.iter().any(|artifact| {
+            artifact.crate_name == "incan_core" && artifact.relative_path == "target/deps/libincan_core-verified.rlib"
+        }));
         assert_eq!(
             plan.supporting_artifacts
                 .iter()
@@ -1743,7 +2213,56 @@ mod tests {
         );
         assert_eq!(
             plan.entrypoint_externs.get("generated-root"),
-            Some(&vec!["incan_derive".to_string()])
+            Some(&vec!["incan_core".to_string(), "incan_derive".to_string()])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_seed_keeps_compiler_vocab_helpers_off_generated_root() -> Result<(), Box<dyn std::error::Error>> {
+        let receipt = runtime_receipt_for_plan()?;
+        let mut plan = empty_manifest(&receipt);
+        plan.externs.push(crate::oven::rustc::OvenRustcArtifactExtern {
+            crate_name: "incan_stdlib".to_string(),
+            relative_path: "target/deps/libincan_stdlib-verified.rlib".to_string(),
+            digest: digest_bytes(b"stdlib runtime"),
+        });
+        plan.supporting_artifacts = vec![
+            crate::oven::rustc::OvenRustcSupportingArtifact {
+                relative_path: "host/deps/libincan_derive-verified.dylib".to_string(),
+                digest: digest_bytes(b"derive macro"),
+            },
+            crate::oven::rustc::OvenRustcSupportingArtifact {
+                relative_path: "target/deps/libincan_core-verified.rlib".to_string(),
+                digest: digest_bytes(b"compiler runtime"),
+            },
+        ];
+
+        super::record_generated_root_externs(&mut plan);
+        super::promote_compiler_runtime_externs(&mut plan)?;
+        plan.externs.extend([
+            crate::oven::rustc::OvenRustcArtifactExtern {
+                crate_name: "incan_vocab".to_string(),
+                relative_path: "compiler-support/deps/libincan_vocab-verified.rlib".to_string(),
+                digest: digest_bytes(b"compiler vocabulary"),
+            },
+            crate::oven::rustc::OvenRustcArtifactExtern {
+                crate_name: "serde_json".to_string(),
+                relative_path: "compiler-support/deps/libserde_json-verified.rlib".to_string(),
+                digest: digest_bytes(b"compiler json"),
+            },
+        ]);
+        plan.externs
+            .sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
+        plan.validate_shape(&receipt.intent)?;
+
+        assert_eq!(
+            plan.entrypoint_externs.get("generated-root"),
+            Some(&vec![
+                "incan_core".to_string(),
+                "incan_derive".to_string(),
+                "incan_stdlib".to_string(),
+            ])
         );
         Ok(())
     }
@@ -1826,7 +2345,9 @@ mod tests {
             native_search_paths: Vec::new(),
             externs: Vec::new(),
             entrypoint_externs: BTreeMap::new(),
+            registry_leaves: Vec::new(),
             compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
             supporting_artifacts: Vec::new(),
         }
     }

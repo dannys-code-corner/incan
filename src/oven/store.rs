@@ -27,6 +27,9 @@ const MATERIALIZED_DIRECTORY: &str = "artifacts";
 const ACCESS_FILE: &str = "last-used";
 const ACTIVE_LOCK_FILE: &str = ".active.lock";
 const MANAGER_LOCK_FILE: &str = ".manager.lock";
+const LEGACY_CARGO_STAGING_DIRECTORY: &str = "legacy-cargo-staging";
+const LEGACY_CARGO_PUBLISHER_LOCK_FILE: &str = ".publisher.lock";
+const LEGACY_CARGO_STAGING_PREFIX: &str = ".legacy-cargo-";
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Policy enforced before an Oven artifact becomes visible in the store.
@@ -179,6 +182,14 @@ pub struct OvenStoreExecutionPayload {
     _lease: OvenStoreLease,
 }
 
+impl OvenStoreExecutionPayload {
+    /// Consume this selected payload while retaining the execution lease for the caller's complete use of it.
+    #[must_use]
+    pub fn into_parts(self) -> (OvenArtifactManifest, PathBuf, Vec<u8>, OvenStoreLease) {
+        (self.manifest, self.artifact_root, self.payload, self._lease)
+    }
+}
+
 impl OvenStoreEntry {
     /// Return the immutable store-owned root containing files materialized with this entry.
     #[must_use]
@@ -245,6 +256,10 @@ pub enum OvenStoreError {
     /// Capacity policy cannot admit an artifact without deleting an active entry or exceeding an allowance.
     #[error("Oven store capacity blocked for domain `{domain}`: {message}")]
     CapacityBlocked { domain: String, message: String },
+    /// The named legacy publisher holds private staging capacity, so an unrelated publication cannot safely grow
+    /// the same bounded store.
+    #[error("Oven store legacy_cargo publisher staging is active at {path}; retry publication after it completes")]
+    LegacyPublisherStagingActive { path: PathBuf },
 }
 
 /// Root handle for a bounded Oven artifact store.
@@ -299,6 +314,27 @@ impl OvenStore {
 
     /// Publish an immutable payload after capacity admission and atomic same-filesystem staging.
     pub fn publish(&self, request: &OvenArtifactPublishRequest) -> Result<OvenArtifactManifest, OvenStoreError> {
+        self.publish_with_legacy_cargo_publisher_permission(request, false)
+    }
+
+    /// Publish one immutable result owned by the explicit `legacy_cargo` transition publisher.
+    ///
+    /// The caller must already have reserved the complete aggregate allowance through
+    /// [`Self::reserve_legacy_cargo_publisher_capacity`]. This narrow entry point lets that owner finish its atomic
+    /// hand-off while ordinary publishers refuse to overlap its private staging allocation.
+    pub(crate) fn publish_from_legacy_cargo(
+        &self,
+        request: &OvenArtifactPublishRequest,
+    ) -> Result<OvenArtifactManifest, OvenStoreError> {
+        self.publish_with_legacy_cargo_publisher_permission(request, true)
+    }
+
+    /// Implement one publication, admitting the active legacy publisher only through its named transition boundary.
+    fn publish_with_legacy_cargo_publisher_permission(
+        &self,
+        request: &OvenArtifactPublishRequest,
+        allow_legacy_cargo_publisher: bool,
+    ) -> Result<OvenArtifactManifest, OvenStoreError> {
         let domain = normalized_domain(&request.domain)?;
         if request.payload.is_empty() {
             return Err(OvenStoreError::InvalidInput {
@@ -326,18 +362,25 @@ impl OvenStore {
             source,
         })?;
         self.reclaim_stale_staging()?;
+        if !allow_legacy_cargo_publisher {
+            self.reject_active_legacy_cargo_publisher()?;
+        }
 
-        let existing = self.entry_root(&manifest.identity);
-        if existing.exists() {
-            let verified = verify_entry(&existing)?;
+        let entry_path = self.entry_root(&manifest.identity);
+        if entry_path.exists() {
+            let verified = verify_entry(&entry_path)?;
             if verified.manifest != manifest {
                 return Err(OvenStoreError::Integrity {
                     identity: manifest.identity,
                     message: "existing identity maps to different immutable manifest content".to_string(),
                 });
             }
-            touch_entry(&existing)?;
+            touch_entry(&entry_path)?;
             return Ok(verified.manifest);
+        }
+        if let Some((existing, existing_path)) = self.reusable_existing_manifest(&manifest)? {
+            touch_entry(&existing_path)?;
+            return Ok(existing);
         }
 
         let estimated_physical = conservative_physical_reservation(&manifest)?;
@@ -386,12 +429,50 @@ impl OvenStore {
             });
         }
         self.prune_for_admission(&staged.manifest.domain, staged.logical_bytes, staged.physical_bytes)?;
-        fs::rename(&staging, &existing).map_err(|source| OvenStoreError::Io {
-            path: existing.clone(),
+        fs::rename(&staging, &entry_path).map_err(|source| OvenStoreError::Io {
+            path: entry_path.clone(),
             source,
         })?;
         sync_directory(self.entries_root())?;
         Ok(manifest)
+    }
+
+    /// Return a content-equivalent reusable entry while the caller holds the manager lock.
+    ///
+    /// A receipt identifies the project invocation that first published an artifact, but direct Rustc selection is
+    /// explicitly authorized by a reusable build unit. Re-publishing identical immutable bytes for another
+    /// compatible receipt would waste the bounded compatibility-domain allowance and create ambiguous candidates.
+    /// The retained manifest preserves the original receipt as provenance; the caller's receipt is independently
+    /// checked before it may select that build unit.
+    fn reusable_existing_manifest(
+        &self,
+        candidate: &OvenArtifactManifest,
+    ) -> Result<Option<(OvenArtifactManifest, PathBuf)>, OvenStoreError> {
+        let root = self.entries_root();
+        if !root.exists() {
+            return Ok(None);
+        }
+        for entry in fs::read_dir(&root).map_err(|source| OvenStoreError::Io {
+            path: root.clone(),
+            source,
+        })? {
+            let entry = entry.map_err(|source| OvenStoreError::Io {
+                path: root.clone(),
+                source,
+            })?;
+            let path = entry.path();
+            if !path.is_dir() {
+                return Err(OvenStoreError::Integrity {
+                    identity: path.display().to_string(),
+                    message: "entries root contains a non-directory item".to_string(),
+                });
+            }
+            let existing = verify_entry_manifest(&path)?;
+            if reusable_manifest_equivalent(&existing, candidate) {
+                return Ok(Some((existing, path)));
+            }
+        }
+        Ok(None)
     }
 
     /// Validate one prospective immutable publication and return its content-addressed manifest without writing it.
@@ -433,6 +514,27 @@ impl OvenStore {
     pub fn publish_batch(
         &self,
         requests: &[OvenArtifactPublishRequest],
+    ) -> Result<Vec<OvenArtifactManifest>, OvenStoreError> {
+        self.publish_batch_with_legacy_cargo_publisher_permission(requests, false)
+    }
+
+    /// Publish a related batch from the explicitly named `legacy_cargo` transition publisher.
+    ///
+    /// This is intentionally not a general bypass: the caller has to reserve the full transient aggregate before
+    /// creating its private staging and ordinary publications are rejected for that interval.
+    pub(crate) fn publish_batch_from_legacy_cargo(
+        &self,
+        requests: &[OvenArtifactPublishRequest],
+    ) -> Result<Vec<OvenArtifactManifest>, OvenStoreError> {
+        self.publish_batch_with_legacy_cargo_publisher_permission(requests, true)
+    }
+
+    /// Implement a related publication while allowing only the active named transition publisher to overlap its
+    /// reserved private staging allocation.
+    fn publish_batch_with_legacy_cargo_publisher_permission(
+        &self,
+        requests: &[OvenArtifactPublishRequest],
+        allow_legacy_cargo_publisher: bool,
     ) -> Result<Vec<OvenArtifactManifest>, OvenStoreError> {
         if requests.is_empty() {
             return Err(OvenStoreError::InvalidInput {
@@ -485,6 +587,9 @@ impl OvenStore {
             source,
         })?;
         self.reclaim_stale_staging()?;
+        if !allow_legacy_cargo_publisher {
+            self.reject_active_legacy_cargo_publisher()?;
+        }
 
         let mut pending = Vec::new();
         for publication in &prepared {
@@ -796,6 +901,88 @@ impl OvenStore {
         Ok(selected)
     }
 
+    /// Select every execution payload whose verified manifest satisfies `matches`, retaining each active lease.
+    ///
+    /// Matching, payload verification, and lease acquisition all occur under one manager lock. This is the safe
+    /// selection primitive for receipt-based cache lookup: a separately returned manifest header has no lease and
+    /// may legitimately be reclaimed by a concurrent bounded-policy publication before a later identity lookup.
+    /// Non-matching entries are never opened or leased.
+    pub fn select_payloads_matching_for_execution<F>(
+        &self,
+        matches: F,
+    ) -> Result<Vec<OvenStoreExecutionPayload>, OvenStoreError>
+    where
+        F: Fn(&OvenArtifactManifest) -> bool,
+    {
+        self.ensure_layout()?;
+        let manager = open_lock(&self.root.join(MANAGER_LOCK_FILE))?;
+        manager.lock().map_err(|source| OvenStoreError::Io {
+            path: self.root.join(MANAGER_LOCK_FILE),
+            source,
+        })?;
+        self.reclaim_stale_staging()?;
+        let root = self.entries_root();
+        if !root.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut selected = Vec::new();
+        for candidate in fs::read_dir(&root).map_err(|source| OvenStoreError::Io {
+            path: root.clone(),
+            source,
+        })? {
+            let candidate = candidate.map_err(|source| OvenStoreError::Io {
+                path: root.clone(),
+                source,
+            })?;
+            let path = candidate.path();
+            if !path.is_dir() {
+                return Err(OvenStoreError::Integrity {
+                    identity: path.display().to_string(),
+                    message: "entries root contains a non-directory item".to_string(),
+                });
+            }
+            let manifest = verify_entry_manifest(&path)?;
+            if !matches(&manifest) {
+                continue;
+            }
+            let payload_path = path.join(PAYLOAD_FILE);
+            let payload = fs::read(&payload_path).map_err(|source| OvenStoreError::Io {
+                path: payload_path,
+                source,
+            })?;
+            if u64::try_from(payload.len()).ok() != Some(manifest.payload.logical_bytes)
+                || digest_bytes(&payload) != manifest.payload.digest
+            {
+                return Err(OvenStoreError::Integrity {
+                    identity: manifest.identity,
+                    message: "manifest payload descriptor disagrees with stored bytes".to_string(),
+                });
+            }
+            let lease_path = path.join(ACTIVE_LOCK_FILE);
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&lease_path)
+                .map_err(|source| OvenStoreError::Io {
+                    path: lease_path.clone(),
+                    source,
+                })?;
+            file.lock_shared().map_err(|source| OvenStoreError::Io {
+                path: lease_path,
+                source,
+            })?;
+            touch_entry(&path)?;
+            selected.push(OvenStoreExecutionPayload {
+                manifest,
+                artifact_root: path.join(MATERIALIZED_DIRECTORY),
+                payload,
+                _lease: OvenStoreLease { file },
+            });
+        }
+        Ok(selected)
+    }
+
     /// Return immutable manifest headers for candidate selection without turning ordinary cache lookup into a full
     /// physical-accounting scan.
     ///
@@ -890,6 +1077,136 @@ impl OvenStore {
             source,
         })?;
         self.prune_to_limits(None, 0, 0, false)
+    }
+
+    /// Reserve the full aggregate allowance for the explicitly named `legacy_cargo` publisher before it starts
+    /// creating private staging files.
+    ///
+    /// A compiler-suite publisher cannot know its final private target size before Cargo has produced it. Reserving
+    /// the whole aggregate therefore prunes every inactive immutable entry now, or fails closed when an active
+    /// lease prevents that. While the publisher lock remains held, ordinary publication is rejected; its staging
+    /// monitor then enforces the same aggregate ceiling rather than merely inspecting it afterwards.
+    pub(crate) fn reserve_legacy_cargo_publisher_capacity(&self) -> Result<OvenStorePruneReport, OvenStoreError> {
+        self.ensure_layout()?;
+        let manager = open_lock(&self.root.join(MANAGER_LOCK_FILE))?;
+        manager.lock().map_err(|source| OvenStoreError::Io {
+            path: self.root.join(MANAGER_LOCK_FILE),
+            source,
+        })?;
+        self.reclaim_stale_staging()?;
+        let reservation = self.limits.max_physical_bytes;
+        let report = self.prune_to_limits(None, 0, reservation, true)?;
+        let entries = self.collect_entries_for_admission()?;
+        if policy_satisfied(&entries, self.limits, None, 0, reservation) {
+            return Ok(report);
+        }
+        Err(OvenStoreError::CapacityBlocked {
+            domain: "legacy-cargo-publisher".to_string(),
+            message: format!(
+                "full transient physical reservation {reservation} cannot be admitted; skipped active entries {:?}",
+                report.skipped_active_entries
+            ),
+        })
+    }
+
+    /// Refuse the named publisher's final hand-off when its live private staging plus every new immutable file would
+    /// exceed the aggregate physical policy.
+    ///
+    /// Materialized files beneath `legacy-cargo-staging` are hard-linked into the atomic entry staging, so they are
+    /// counted once here. Sources outside that private tree are copied by [`write_staged_entry`] and are reserved
+    /// once per digest/executable pair, exactly as the batch writer shares them. The prior full reservation leaves no
+    /// retained entry unless an active lease correctly blocked publication; including entries nevertheless keeps this
+    /// check safe if the method is ever called by another explicit transition owner.
+    pub(crate) fn ensure_legacy_cargo_batch_physical_capacity(
+        &self,
+        staging: &Path,
+        requests: &[OvenArtifactPublishRequest],
+    ) -> Result<(), OvenStoreError> {
+        if requests.is_empty() {
+            return Err(OvenStoreError::InvalidInput {
+                field: "legacy_cargo publication batch",
+                message: "must contain at least one immutable artifact".to_string(),
+            });
+        }
+        self.ensure_layout()?;
+        let manager = open_lock(&self.root.join(MANAGER_LOCK_FILE))?;
+        manager.lock().map_err(|source| OvenStoreError::Io {
+            path: self.root.join(MANAGER_LOCK_FILE),
+            source,
+        })?;
+        self.reclaim_stale_staging()?;
+        let publisher_root = self.root.join(LEGACY_CARGO_STAGING_DIRECTORY);
+        let publisher_root = fs::canonicalize(&publisher_root).map_err(|source| OvenStoreError::Io {
+            path: publisher_root,
+            source,
+        })?;
+        let staging = fs::canonicalize(staging).map_err(|source| OvenStoreError::Io {
+            path: staging.to_path_buf(),
+            source,
+        })?;
+        if !staging.starts_with(&publisher_root) {
+            return Err(OvenStoreError::InvalidInput {
+                field: "legacy_cargo staging",
+                message: format!(
+                    "{} must remain below the private publisher root {}",
+                    staging.display(),
+                    publisher_root.display()
+                ),
+            });
+        }
+        let mut observed_physical = unique_directory_physical_bytes(&staging)?;
+        observed_physical = observed_physical.saturating_add(
+            self.collect_entries_for_admission()?
+                .iter()
+                .map(|entry| entry.physical_bytes)
+                .sum::<u64>(),
+        );
+        let mut copied_materializations = BTreeSet::new();
+        for request in requests {
+            let manifest = self.manifest_for_publication(request)?;
+            observed_physical = observed_physical.saturating_add(round_physical(
+                u64::try_from(request.payload.len()).map_err(|_| OvenStoreError::InvalidInput {
+                    field: "legacy_cargo publication payload",
+                    message: "length does not fit supported physical accounting".to_string(),
+                })?,
+            ));
+            let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| OvenStoreError::Manifest {
+                path: PathBuf::from(MANIFEST_FILE),
+                message: error.to_string(),
+            })?;
+            let manifest_length = u64::try_from(manifest_bytes.len()).map_err(|_| OvenStoreError::Manifest {
+                path: PathBuf::from(MANIFEST_FILE),
+                message: "manifest length does not fit supported physical accounting".to_string(),
+            })?;
+            observed_physical = observed_physical
+                .saturating_add(round_physical(manifest_length))
+                // `write_staged_entry` adds the trailing manifest newline and the mutable access timestamp.
+                .saturating_add(round_physical(1))
+                .saturating_add(round_physical(20));
+            let files = validated_materialized_files(&request.materialized_files)?;
+            for file in files {
+                let source = fs::canonicalize(&file.source_path).map_err(|source_error| OvenStoreError::Io {
+                    path: file.source_path.clone(),
+                    source: source_error,
+                })?;
+                if source.starts_with(&publisher_root)
+                    || !copied_materializations.insert((file.manifest.digest, file.manifest.executable))
+                {
+                    continue;
+                }
+                observed_physical = observed_physical.saturating_add(round_physical(file.manifest.logical_bytes));
+            }
+        }
+        if observed_physical <= self.limits.max_physical_bytes {
+            return Ok(());
+        }
+        Err(OvenStoreError::CapacityBlocked {
+            domain: "legacy-cargo-publisher".to_string(),
+            message: format!(
+                "private staging plus immutable batch reserve {observed_physical} physical bytes, exceeding aggregate allowance {}",
+                self.limits.max_physical_bytes
+            ),
+        })
     }
 
     /// Ensure published entries leave enough capacity for the pending immutable artifact.
@@ -1110,6 +1427,66 @@ impl OvenStore {
             fs::remove_dir_all(&path).map_err(|source| OvenStoreError::Io { path, source })?;
         }
         sync_directory(staging)
+    }
+
+    /// Reject a normal publication while the exclusive legacy publisher owns private staging, reclaiming only
+    /// stale task-owned staging after the advisory publisher lock proves no process still owns it.
+    fn reject_active_legacy_cargo_publisher(&self) -> Result<(), OvenStoreError> {
+        let staging = self.root.join(LEGACY_CARGO_STAGING_DIRECTORY);
+        if !staging.exists() {
+            return Ok(());
+        }
+        let metadata = fs::symlink_metadata(&staging).map_err(|source| OvenStoreError::Io {
+            path: staging.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(OvenStoreError::Integrity {
+                identity: staging.display().to_string(),
+                message: "legacy publisher staging root must be a regular directory".to_string(),
+            });
+        }
+        let lock_path = staging.join(LEGACY_CARGO_PUBLISHER_LOCK_FILE);
+        let lock = open_lock(&lock_path)?;
+        match lock.try_lock() {
+            Ok(()) => {
+                for candidate in fs::read_dir(&staging).map_err(|source| OvenStoreError::Io {
+                    path: staging.clone(),
+                    source,
+                })? {
+                    let candidate = candidate.map_err(|source| OvenStoreError::Io {
+                        path: staging.clone(),
+                        source,
+                    })?;
+                    let name = candidate.file_name();
+                    if !name.to_string_lossy().starts_with(LEGACY_CARGO_STAGING_PREFIX) {
+                        continue;
+                    }
+                    let path = candidate.path();
+                    let metadata = fs::symlink_metadata(&path).map_err(|source| OvenStoreError::Io {
+                        path: path.clone(),
+                        source,
+                    })?;
+                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                        return Err(OvenStoreError::Integrity {
+                            identity: path.display().to_string(),
+                            message: "legacy publisher staging may contain only owned directories".to_string(),
+                        });
+                    }
+                    fs::remove_dir_all(&path).map_err(|source| OvenStoreError::Io { path, source })?;
+                }
+                lock.unlock().map_err(|source| OvenStoreError::Io {
+                    path: lock_path,
+                    source,
+                })?;
+                sync_directory(staging)
+            }
+            Err(TryLockError::WouldBlock) => Err(OvenStoreError::LegacyPublisherStagingActive { path: lock_path }),
+            Err(TryLockError::Error(source)) => Err(OvenStoreError::Io {
+                path: lock_path,
+                source,
+            }),
+        }
     }
 
     /// Return all complete verified entries, skipping only no path and never malformed owned content.
@@ -1790,6 +2167,19 @@ fn artifact_identity_from_manifest(manifest: &OvenArtifactManifest) -> Result<St
     Ok(digest_bytes(&serialized))
 }
 
+/// Return whether two immutable entries carry the same reusable execution content despite distinct publisher receipts.
+fn reusable_manifest_equivalent(left: &OvenArtifactManifest, right: &OvenArtifactManifest) -> bool {
+    left.kind == OvenArtifactKind::DirectRustcPlan
+        && right.kind == OvenArtifactKind::DirectRustcPlan
+        && left.schema_version == right.schema_version
+        && left.build_unit_identity == right.build_unit_identity
+        && left.domain == right.domain
+        && left.kind == right.kind
+        && left.intent == right.intent
+        && left.payload == right.payload
+        && left.materialized_files == right.materialized_files
+}
+
 /// Update the LRU selection time without modifying the immutable manifest or payload.
 fn touch_entry(root: &Path) -> Result<(), OvenStoreError> {
     let access = root.join(ACCESS_FILE);
@@ -1930,6 +2320,18 @@ fn directory_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
             };
             Ok(total.saturating_add(bytes))
         })
+}
+
+/// Measure a private publisher tree by inode so its own hard-linked preparation files are not charged twice.
+#[cfg(unix)]
+fn unique_directory_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
+    directory_unique_physical_bytes(path, &mut BTreeSet::new())
+}
+
+/// Hosts without inode identity retain conservative per-path staging accounting.
+#[cfg(not(unix))]
+fn unique_directory_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
+    directory_physical_bytes(path)
 }
 
 /// Attribute each hard-linked immutable file allocation to the first stable entry identity that references it.
@@ -2252,11 +2654,13 @@ struct ValidatedMaterializedFile {
 #[cfg(test)]
 mod tests {
     use super::{
-        OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreError,
-        OvenStoreLimits,
+        LEGACY_CARGO_PUBLISHER_LOCK_FILE, LEGACY_CARGO_STAGING_DIRECTORY, OvenArtifactKind,
+        OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreError, OvenStoreLimits,
     };
-    use crate::oven::{OvenImportRequest, import_frozen_project};
-    use std::fs;
+    use crate::oven::{
+        OvenGeneratedProjectRequest, OvenImportRequest, import_frozen_project, receipt_generated_project,
+    };
+    use std::fs::{self, OpenOptions};
     use std::path::Path;
 
     #[test]
@@ -2432,6 +2836,168 @@ mod tests {
         let inspection = bounded.inspect()?;
         assert_eq!(inspection.entries.len(), 1);
         assert_eq!(inspection.entries[0].manifest.identity, second.identity);
+        Ok(())
+    }
+
+    #[test]
+    fn matching_execution_selection_holds_the_lease_before_policy_can_prune() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        let permissive = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let first = permissive.publish(&request(project.path(), "engine-one", b"first payload")?)?;
+        let first_physical = permissive.inspect()?.physical_bytes;
+        let bounded = OvenStore::new(
+            temp.path(),
+            OvenStoreLimits::new(first_physical.saturating_add(1), 1_000_000, 1_000_000),
+        );
+
+        let selected =
+            bounded.select_payloads_matching_for_execution(|manifest| manifest.identity == first.identity)?;
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].manifest.identity, first.identity);
+
+        let blocked = bounded.publish(&request(project.path(), "engine-two", b"second payload")?);
+        assert!(matches!(blocked, Err(OvenStoreError::CapacityBlocked { .. })));
+        drop(selected);
+
+        let second = bounded.publish(&request(project.path(), "engine-two", b"second payload")?)?;
+        assert_eq!(bounded.inspect()?.entries[0].manifest.identity, second.identity);
+        Ok(())
+    }
+
+    #[test]
+    fn compatible_receipts_reuse_one_identical_immutable_entry() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let first_project = tempfile::tempdir()?;
+        let second_project = tempfile::tempdir()?;
+        let first_source = first_project.path().join("main.rs");
+        let second_source = second_project.path().join("main.rs");
+        fs::write(&first_source, "fn main() { println!(\"first\"); }\n")?;
+        fs::write(&second_source, "fn main() { println!(\"second\"); }\n")?;
+        let receipt_for = |project: &Path, source: &Path| {
+            receipt_generated_project(
+                &OvenGeneratedProjectRequest::new(
+                    project,
+                    "shared-native-unit",
+                    "0.1.0",
+                    "aarch64-apple-darwin",
+                    "rustc 1.96.0",
+                    "debug",
+                    Vec::new(),
+                )
+                .with_generated_source("generated-root", source)
+                .with_build_unit_input("runtime", "sha256:shared-runtime"),
+            )
+        };
+        let first_receipt = receipt_for(first_project.path(), &first_source)?;
+        let second_receipt = receipt_for(second_project.path(), &second_source)?;
+        assert_ne!(first_receipt.identity, second_receipt.identity);
+        assert_eq!(first_receipt.build_unit_identity, second_receipt.build_unit_identity);
+        let first_request = OvenArtifactPublishRequest {
+            receipt: first_receipt,
+            domain: "shared-native-unit".to_string(),
+            kind: OvenArtifactKind::DirectRustcPlan,
+            payload: b"shared payload".to_vec(),
+            materialized_files: Vec::new(),
+        };
+        let second_request = OvenArtifactPublishRequest {
+            receipt: second_receipt,
+            ..first_request.clone()
+        };
+
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let first = store.publish(&first_request)?;
+        let second = store.publish(&second_request)?;
+
+        assert_eq!(second.identity, first.identity);
+        assert_eq!(store.inspect()?.entries.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_publisher_reservation_prunes_inactive_entries_and_refuses_active_leases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let first = store.publish(&request(project.path(), "engine-one", b"first publisher entry")?)?;
+        let (_entry, lease) = store.select(&first.identity)?;
+
+        let blocked = store.reserve_legacy_cargo_publisher_capacity();
+        assert!(matches!(blocked, Err(OvenStoreError::CapacityBlocked { .. })));
+        assert_eq!(store.inspect()?.entries.len(), 1);
+
+        drop(lease);
+        let report = store.reserve_legacy_cargo_publisher_capacity()?;
+        assert_eq!(report.removed_entries, vec![first.identity]);
+        assert!(store.inspect()?.entries.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn normal_publication_refuses_active_legacy_publisher_staging() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let staging = temp.path().join(LEGACY_CARGO_STAGING_DIRECTORY);
+        fs::create_dir_all(&staging)?;
+        let publisher_lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(staging.join(LEGACY_CARGO_PUBLISHER_LOCK_FILE))?;
+        publisher_lock.lock()?;
+
+        let blocked = store.publish(&request(project.path(), "engine-one", b"blocked")?);
+        assert!(matches!(
+            blocked,
+            Err(OvenStoreError::LegacyPublisherStagingActive { .. })
+        ));
+
+        publisher_lock.unlock()?;
+        assert!(
+            store
+                .publish(&request(project.path(), "engine-one", b"unblocked")?)
+                .is_ok()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_publisher_batch_preflight_counts_private_staging_and_copied_sources()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(60 * 1024, 60 * 1024, 1_000_000));
+        let staging = temp
+            .path()
+            .join(LEGACY_CARGO_STAGING_DIRECTORY)
+            .join(".legacy-cargo-fixture");
+        let staged_source = staging.join("native/staged.rlib");
+        let copied_source = temp.path().join("outside/copied.rlib");
+        fs::create_dir_all(staged_source.parent().ok_or("staged parent missing")?)?;
+        fs::create_dir_all(copied_source.parent().ok_or("copied parent missing")?)?;
+        fs::write(&staged_source, vec![b's'; 32 * 1024])?;
+        fs::write(&copied_source, vec![b'c'; 32 * 1024])?;
+        let mut publication = request(project.path(), "engine-one", b"plan")?;
+        publication.materialized_files = vec![
+            OvenArtifactMaterializedFile {
+                source_path: staged_source,
+                relative_path: "native/staged.rlib".to_string(),
+            },
+            OvenArtifactMaterializedFile {
+                source_path: copied_source,
+                relative_path: "native/copied.rlib".to_string(),
+            },
+        ];
+
+        let result = store.ensure_legacy_cargo_batch_physical_capacity(&staging, &[publication]);
+        assert!(matches!(result, Err(OvenStoreError::CapacityBlocked { .. })));
         Ok(())
     }
 

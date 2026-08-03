@@ -21,7 +21,7 @@ hide:
 [CLI reference](../reference/cli_reference.md){ .md-button }
 </div>
 
-<p class="inc-oven-hero__truth"><strong>Alpha status:</strong> the shipped core and <code>std.testing</code> compatibility units let ordinary <code>incan build</code>, <code>incan test</code>, and <code>incan run</code> use the stored direct-<code>rustc</code> consumer path. A cold unsupported compatibility domain stops with an explicit receipt-bound preparation request; it never falls back to Cargo. The envelope remains deliberately narrow and is not yet release-complete.</p>
+<p class="inc-oven-hero__truth"><strong>Alpha status:</strong> the release-core unit and debug <code>std.testing</code>/<code>std.fs</code>/<code>std.json</code> foundation let ordinary supported <code>incan build</code>, <code>incan test</code>, and <code>incan run</code> use the stored direct-<code>rustc</code> consumer path. A cold unsupported compatibility domain stops with an explicit receipt-bound preparation request; it never falls back to Cargo. The envelope remains deliberately narrow and is not yet release-complete.</p>
 
 </div>
 

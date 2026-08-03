@@ -117,10 +117,11 @@ Projection is intentionally lossy. It preserves logical type name, field order, 
 
 ## Artifact Inspection
 
-The legacy library-publishing workflow embeds publishable model bundles and checked API metadata into the `.incnlib` manifest under `contract_metadata`. This is outside the Oven Alpha normal build path. Tooling can inspect a built artifact without requiring the original source checkout:
+`incan build --lib` embeds publishable model bundles and checked API metadata into the `.incnlib` manifest under
+`contract_metadata` through its receipt-selected direct-`rustc` library path. Tooling can inspect a built artifact
+without requiring the original source checkout:
 
 ```bash
-# explicit legacy library-publishing workflow required; Oven Alpha normal build does not emit .incnlib
 incan tools metadata model target/lib/my_package.incnlib OrderSummary --format incan
 ```
 
