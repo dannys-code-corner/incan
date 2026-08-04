@@ -369,6 +369,8 @@ jobs:
         run: >-
           CARGO_BUILD_JOBS=2
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
+          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
+          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           cargo nextest run
           --archive-file target/nextest-ci/test-suite.tar.zst
@@ -448,6 +450,8 @@ jobs:
           CARGO_BUILD_JOBS=1 \
           INCAN_SDK_INVENTORY="$provider_inventory" \
           INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
+          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1 \
+          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target" \
           INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target" \
           INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
@@ -699,6 +703,8 @@ jobs:
         run: >-
           CARGO_BUILD_JOBS=2
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
+          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
+          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           cargo nextest run
           --archive-file target/nextest-ci/test-suite.tar.zst
@@ -778,6 +784,8 @@ jobs:
           CARGO_BUILD_JOBS=1 \
           INCAN_SDK_INVENTORY="$provider_inventory" \
           INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
+          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1 \
+          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target" \
           INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target" \
           INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
@@ -1059,6 +1067,8 @@ jobs:
         run: >-
           CARGO_BUILD_JOBS=2
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
+          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
+          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           cargo nextest run
           --archive-file target/nextest-ci/test-suite.tar.zst
@@ -1140,6 +1150,8 @@ jobs:
           CARGO_BUILD_JOBS=1 \
           INCAN_SDK_INVENTORY="$provider_inventory" \
           INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
+          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1 \
+          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target" \
           INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target" \
           INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \

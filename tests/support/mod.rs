@@ -12,13 +12,16 @@ pub(crate) fn incan_binary() -> PathBuf {
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/incan"))
 }
 
-/// Return whether this test binary is executing as a stored Oven compiler-suite child.
+/// Return whether this test binary is executing with the scheduler-owned Oven native-unit closure.
 ///
-/// In that mode the scheduler has already injected a sealed SDK inventory and direct-Rustc capability. Test helpers
-/// must not replace those inputs with the legacy generated-Cargo provider store.
+/// A stored compiler-suite child carries a direct-Rustc executable as well as the native-unit capability. Portable
+/// nextest acceptance archives receive the latter directly from their immutable provider artifact. Both forms have
+/// already received a sealed SDK inventory and must not replace it with the legacy generated-Cargo provider store.
 #[allow(dead_code)]
 pub(crate) fn oven_compiler_suite_is_active() -> bool {
     std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC").is_some_and(|value| !value.is_empty())
+        || (std::env::var_os("INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION").is_some_and(|value| value == "1")
+            && std::env::var_os("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT").is_some_and(|value| !value.is_empty()))
 }
 
 /// Return the generated Cargo target selected by the outer test harness.
