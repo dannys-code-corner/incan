@@ -1,0 +1,30 @@
+name: Run bounded Oven compiler suite
+description: Publish and execute the complete receipt-bound compiler suite without a Cargo test harness.
+inputs:
+  lane:
+    description: Stable compatibility-domain suffix for this platform and toolchain lane.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Publish and execute the receipt-bound Oven compiler suite
+      shell: bash
+      run: |
+        set -euo pipefail
+        CARGO_BUILD_JOBS=2 \
+        bash "$GITHUB_WORKSPACE/scripts/run_oven_compiler_suite.sh" \
+          --incan "$GITHUB_WORKSPACE/target/debug/incan" \
+          --compiler-root "$GITHUB_WORKSPACE" \
+          --store "$GITHUB_WORKSPACE/target/oven-compiler-suite-store" \
+          --output "$GITHUB_WORKSPACE/target/oven-compiler-suite-output" \
+          --sdk-provider-path-file "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
+          --sdk-provider-store "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store" \
+          --toolchain-data-root "$GITHUB_WORKSPACE/target" \
+          --generated-cargo-target-dir "$GITHUB_WORKSPACE/target/incan_generated_shared_target" \
+          --domain "ci-compiler-suite-${{ inputs.lane }}" \
+          --max-physical-bytes 3221225472 \
+          --max-domain-physical-bytes 2415919104 \
+          --max-domain-logical-bytes 2684354560 \
+          --feature lsp \
+          --temp-root "$RUNNER_TEMP/incan_oven_tmp"
+        df -h "$GITHUB_WORKSPACE"

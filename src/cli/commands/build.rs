@@ -63,7 +63,9 @@ use crate::oven::rustc::{
     validate_sealed_registry_leaf,
 };
 use crate::oven::store::{OvenArtifactKind, OvenStore, OvenStoreLease};
-use crate::oven::{OvenGeneratedProjectRequest, digest_dependency_specs, receipt_generated_project, write_receipt};
+use crate::oven::{
+    OvenGeneratedProjectRequest, digest_bytes, digest_dependency_specs, receipt_generated_project, write_receipt,
+};
 use crate::provider::{
     FeatureSelection, PackageFeatureGraph, PackageFeaturePlan, ProviderPlan, SDK_PROVIDER_BUILD_ENV,
 };
@@ -1398,9 +1400,16 @@ pub(crate) fn oven_caller_owned_libraries(
             // output into a Cargo fallback or a false prerequisite for a source that is already materialized.
             continue;
         }
+        let digest = digest_bytes(&fs::read(&output).map_err(|source| {
+            CliError::failure(format!(
+                "Oven Alpha cannot read caller-owned Rust library {}: {source}",
+                output.display()
+            ))
+        })?);
         libraries.push(OvenCallerOwnedRustcLibrary {
             crate_name: artifact.dependency_key.clone(),
             output,
+            digest,
             expose_extern: true,
         });
     }
@@ -2203,6 +2212,7 @@ fn rematerialize_caller_owned_provider_graph(
         nested_libraries.push(OvenCallerOwnedRustcLibrary {
             crate_name: artifact.dependency_key.clone(),
             output: bake.output,
+            digest: bake.output_digest,
             expose_extern: true,
         });
         Ok(nested_libraries)
@@ -6944,11 +6954,13 @@ pub model Nested:
             OvenCallerOwnedRustcLibrary {
                 crate_name: "rust_shadow".to_string(),
                 output: output.clone(),
+                digest: "sha256:rust-shadow".to_string(),
                 expose_extern: false,
             },
             OvenCallerOwnedRustcLibrary {
                 crate_name: "rust_shadow".to_string(),
                 output,
+                digest: "sha256:rust-shadow".to_string(),
                 expose_extern: true,
             },
         ];

@@ -415,12 +415,12 @@ impl OvenCompilerTestSuiteArtifactClosure {
     }
 }
 
-/// Split one publisher-verified compiler closure into deterministic, independently policy-addressable foundations.
+/// Split one publisher-verified compiler closure into deterministic foundation entries.
 ///
 /// A foundation owns every byte it declares. Root shards retain the complete logical dependency declaration, but
 /// receive only these exact foundations at execution time; they never recover a Cargo target or a copied composite
-/// directory. The store remains the final authority on payload/manifest overhead and refuses an individual artifact
-/// that still exceeds the configured logical allowance.
+/// directory. Partitions retain their parent suite's one compatibility domain, so the store refuses the complete
+/// closure when its aggregate exceeds the configured allowance rather than treating each label as a separate cache.
 fn compiler_suite_foundation_plans(
     closure: &OvenCompilerTestSuiteArtifactClosure,
     materialized_files: &[OvenArtifactMaterializedFile],
@@ -525,15 +525,15 @@ fn compiler_suite_foundation_plans(
     Ok(foundations)
 }
 
-/// Split installed compiler-native-unit directories into independently bounded suite inputs.
+/// Split installed compiler-native-unit directories into deterministic suite inputs.
 ///
 /// Stored-suite children need the publisher's sealed native-unit data, but placing every provider-family seed in
-/// the small suite index turns a compatibility-domain policy into a suggestion as provider coverage grows. Each
+/// the small suite index turns the entry representation into an oversized payload as provider coverage grows. Each
 /// seed directory remains indivisible and is grouped deterministically only when the aggregate fits with metadata
 /// headroom. Compiler-suite fixture commands exercise ordinary `build`, `run`, and `test` routes, including the
 /// normal release build profile; the suite must therefore retain every installed supported-profile seed rather than
 /// borrow an ambient toolchain or launch Cargo. The executor selects and lease-holds every resulting immutable
-/// partition before it starts a child.
+/// partition before it starts a child. Every resulting input remains in the one suite compatibility domain.
 fn compiler_suite_toolchain_data_plans(
     data_root: &Path,
     max_domain_logical_bytes: u64,
@@ -758,19 +758,6 @@ fn compiler_suite_foundation_closure(
             .collect(),
         supporting_artifacts,
     }
-}
-
-/// Derive a portable compatibility-domain identifier for one independently admitted foundation.
-///
-/// Store domains intentionally are identifiers rather than paths. Keeping the parent domain and immutable label in
-/// one string lets policy and inspection explain the overflowing foundation without creating a nested cache layout.
-fn compiler_suite_foundation_domain(suite_domain: &str, label: &str) -> String {
-    format!("{suite_domain}--{label}")
-}
-
-/// Derive a portable compatibility-domain identifier for one native-unit data partition.
-fn compiler_suite_toolchain_data_domain(suite_domain: &str, label: &str) -> String {
-    format!("{suite_domain}--{label}")
 }
 
 /// Wire payload for the stored full compiler test suite and the CLI fixture it invokes.
@@ -1189,8 +1176,9 @@ pub fn prepare_compiler_test_suite(
     let mut index_materialized_files =
         materialized_files_from_directory(&staged_sdk_root, "providers", "SDK provider inventory")?;
     // Direct-rustc children are written beneath caller output and therefore cannot recover the publisher package
-    // layout from their own executable path. Retain installed native-unit data as individually bounded entries rather
-    // than folding every provider-family seed into the small suite-index compatibility domain.
+    // layout from their own executable path. Retain installed native-unit data as separate immutable entries, but
+    // keep them in the suite compatibility domain: a runner selects every partition as one closure, so labels must
+    // not become separate policy buckets.
     let mut toolchain_data_references = Vec::new();
     let mut toolchain_data_requests = Vec::new();
     if let Some(data_root) = crate::toolchain_layout::compiler_owned_oven_data_root() {
@@ -1203,7 +1191,7 @@ pub fn prepare_compiler_test_suite(
                 .map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?;
             let publication = OvenArtifactPublishRequest {
                 receipt: request.receipt.clone(),
-                domain: compiler_suite_toolchain_data_domain(&request.domain, &partition.payload.label),
+                domain: request.domain.clone(),
                 kind: OvenArtifactKind::CompilerTestSuiteToolchainData,
                 payload,
                 materialized_files: partition.materialized_files,
@@ -1220,9 +1208,8 @@ pub fn prepare_compiler_test_suite(
     toolchain_data_references.dedup();
     // A compiler-suite publisher's private selection target is bounded by the store's aggregate physical ceiling,
     // not charged as retained bytes in one compatibility domain. Prepared foundation inputs are checked against the
-    // same aggregate ceiling as their related atomic publication, while each immutable foundation is independently
-    // admitted below the stricter per-domain allowance. This lets the explicit transition boundary construct and
-    // measure one root without turning a momentary Cargo target into an oversized stored artifact.
+    // same aggregate ceiling as their related immutable publication. The retained suite closure is then admitted
+    // against its one compatibility-domain allowance, so no partition label can hide an oversized suite.
     let publisher_transient_limit = request.store.limits().max_physical_bytes;
     let prepared_related_limit = request.store.limits().max_physical_bytes;
     // Cargo exposes its resolved test-unit graph only at this explicit publisher boundary. The graph is converted
@@ -1321,7 +1308,7 @@ pub fn prepare_compiler_test_suite(
             serde_json::to_vec(&foundation.payload).map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?;
         let foundation_request = OvenArtifactPublishRequest {
             receipt: request.receipt.clone(),
-            domain: compiler_suite_foundation_domain(&request.domain, &foundation.payload.label),
+            domain: request.domain.clone(),
             kind: OvenArtifactKind::CompilerTestSuiteFoundation,
             payload: foundation_payload,
             materialized_files: foundation.materialized_files,
@@ -2873,9 +2860,51 @@ fn compiler_suite_dependency_artifact(
     artifact_index: &BTreeMap<CargoUnitArtifactKey, Vec<PathBuf>>,
     catalog: &CompilerSuiteArtifactCatalog,
     crate_name: &str,
+    direct_rustc_target: Option<&str>,
 ) -> Result<OvenRustcArtifactExtern, OvenLegacyCargoError> {
     let key = cargo_unit_artifact_key(unit)?;
-    let files = if let Some(files) = artifact_index.get(&key) {
+    let wants_dynamic = unit.target.crate_types.iter().any(|kind| kind == "proc-macro");
+    // The unit graph tracks Cargo's own host/target compilation placement.  Oven subsequently recompiles every
+    // regular dependency consumer with the receipt target, including workspace libraries reached by a host-side
+    // proc-macro root.  Selecting that host library merely because the source unit was first seen there can choose
+    // a feature-incompatible rlib (for example Serde without its `derive` re-export).  Dynamic proc macros remain
+    // host inputs; regular libraries must come from the receipt target and fail closed if that exact family is not
+    // among the publisher's emitted artifacts.
+    let files = if let Some(target) = direct_rustc_target.filter(|_| !wants_dynamic) {
+        let mut target_families = artifact_index
+            .iter()
+            .filter(|(candidate, files)| {
+                candidate.package_id == key.package_id
+                    && candidate.target_name == key.target_name
+                    && candidate.source_path == key.source_path
+                    && candidate.platform.as_deref() == Some(target)
+                    && files.iter().any(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.ends_with(".rlib"))
+                    })
+            })
+            .collect::<Vec<_>>();
+        target_families.sort_by_key(|(key, _)| *key);
+        match target_families.as_slice() {
+            [(_, files)] => *files,
+            [] => {
+                return Err(OvenLegacyCargoError::MissingDirectArtifact {
+                    crate_name: crate_name.to_string(),
+                    path: unit.target.src_path.clone(),
+                });
+            }
+            _ => {
+                return Err(OvenLegacyCargoError::InvalidInput {
+                    field: "compiler-suite unit graph",
+                    message: format!(
+                        "dependency `{crate_name}` has {} receipt-target artifact families",
+                        target_families.len()
+                    ),
+                });
+            }
+        }
+    } else if let Some(files) = artifact_index.get(&key) {
         files
     } else {
         // Cargo's unit graph records the dependency edge's test/platform/features mode, while its stable JSON
@@ -2931,7 +2960,6 @@ fn compiler_suite_dependency_artifact(
             }
         }
     };
-    let wants_dynamic = unit.target.crate_types.iter().any(|kind| kind == "proc-macro");
     let mut candidates = files
         .iter()
         .filter(|path| {
@@ -3011,6 +3039,99 @@ fn compiler_suite_workspace_library_key(
     })
 }
 
+/// Add one immutable `--extern` input, refusing a same-name artifact conflict.
+fn compiler_suite_insert_extern(
+    externs_by_name: &mut BTreeMap<String, OvenRustcArtifactExtern>,
+    extern_artifact: OvenRustcArtifactExtern,
+) -> Result<(), OvenLegacyCargoError> {
+    match externs_by_name.get(&extern_artifact.crate_name) {
+        Some(previous) if previous == &extern_artifact => {
+            // Cargo can expose the same resolved dependency through more than one graph edge. `rustc` needs one
+            // `--extern`; accepting this is safe only when the immutable artifact identity is exactly identical.
+        }
+        Some(previous) => {
+            return Err(OvenLegacyCargoError::InvalidInput {
+                field: "compiler-suite unit graph",
+                message: format!(
+                    "root target resolves extern `{}` to conflicting immutable artifacts {} and {}",
+                    extern_artifact.crate_name, previous.relative_path, extern_artifact.relative_path
+                ),
+            });
+        }
+        None => {
+            externs_by_name.insert(extern_artifact.crate_name.clone(), extern_artifact);
+        }
+    }
+    Ok(())
+}
+
+/// Retain only the transitive external proc-macro edges required while rustc expands a direct dependency.
+///
+/// A Cargo library can re-export derive macros without exposing those macros as direct edges of its dependent.
+/// Direct rustc nevertheless needs the host proc-macro dylib as an explicit `--extern`; traversing the publisher-only
+/// unit graph preserves that edge without broadening the plan to every transitive library. Build-script and binary
+/// units are compile-time publisher concerns, not direct-rustc inputs, so their subgraphs are deliberately excluded.
+fn compiler_suite_collect_transitive_proc_macro_externs(
+    unit: &CargoUnitGraphUnit,
+    graph: &CargoUnitGraph,
+    compiler_root: &Path,
+    artifact_index: &BTreeMap<CargoUnitArtifactKey, Vec<PathBuf>>,
+    catalog: &CompilerSuiteArtifactCatalog,
+    externs_by_name: &mut BTreeMap<String, OvenRustcArtifactExtern>,
+    visited_unit_indices: &mut BTreeSet<usize>,
+) -> Result<(), OvenLegacyCargoError> {
+    for dependency in &unit.dependencies {
+        if !visited_unit_indices.insert(dependency.index) {
+            continue;
+        }
+        let dependency_unit = graph.units.get(dependency.index).ok_or_else(|| {
+            OvenLegacyCargoError::Plan(format!(
+                "compiler-suite unit graph dependency index {} is outside its unit list",
+                dependency.index
+            ))
+        })?;
+        if dependency_unit
+            .target
+            .kind
+            .iter()
+            .any(|kind| matches!(kind.as_str(), "bin" | "custom-build"))
+        {
+            continue;
+        }
+        if dependency_unit.target.kind.iter().any(|kind| kind == "proc-macro") {
+            if compiler_suite_unit_is_in_workspace(compiler_root, dependency_unit)? {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "external compiler-suite dependency reaches workspace proc macro {} without a direct workspace edge",
+                    dependency_unit.target.src_path.display()
+                )));
+            }
+            let crate_name = dependency.extern_crate_name.as_deref().ok_or_else(|| {
+                OvenLegacyCargoError::Plan(format!(
+                    "compiler-suite proc-macro dependency {} has no extern crate name",
+                    dependency_unit.target.src_path.display()
+                ))
+            })?;
+            let extern_artifact =
+                compiler_suite_dependency_artifact(dependency_unit, artifact_index, catalog, crate_name, None)?;
+            compiler_suite_insert_extern(externs_by_name, extern_artifact)?;
+            // The dylib is itself the consumer's Rustc input. Its dependency graph was needed only when Cargo built
+            // that dylib, and recursing into it can incorrectly expose a second feature/profile variant of another
+            // macro as a root `--extern`.
+            continue;
+        }
+        compiler_suite_collect_transitive_proc_macro_externs(
+            dependency_unit,
+            graph,
+            compiler_root,
+            artifact_index,
+            catalog,
+            externs_by_name,
+            visited_unit_indices,
+        )?;
+    }
+    Ok(())
+}
+
 /// Resolve external direct externs and direct-Rustc workspace-library edges for one root unit.
 fn compiler_suite_target_externs(
     unit: &CargoUnitGraphUnit,
@@ -3018,9 +3139,11 @@ fn compiler_suite_target_externs(
     compiler_root: &Path,
     artifact_index: &BTreeMap<CargoUnitArtifactKey, Vec<PathBuf>>,
     catalog: &CompilerSuiteArtifactCatalog,
+    direct_rustc_target: &str,
 ) -> Result<(Vec<OvenRustcArtifactExtern>, Vec<OvenCompilerWorkspaceLibraryKey>), OvenLegacyCargoError> {
     let mut externs_by_name: BTreeMap<String, OvenRustcArtifactExtern> = BTreeMap::new();
     let mut workspace_dependencies = BTreeSet::new();
+    let mut visited_transitive_units = BTreeSet::new();
     for dependency in &unit.dependencies {
         let Some(crate_name) = dependency.extern_crate_name.as_deref() else {
             continue;
@@ -3041,25 +3164,23 @@ fn compiler_suite_target_externs(
             workspace_dependencies.insert(compiler_suite_workspace_library_key(compiler_root, dependency_unit)?);
             continue;
         }
-        let extern_artifact = compiler_suite_dependency_artifact(dependency_unit, artifact_index, catalog, crate_name)?;
-        match externs_by_name.get(&extern_artifact.crate_name) {
-            Some(previous) if previous == &extern_artifact => {
-                // Cargo can expose the same resolved dependency through more than one graph edge. `rustc` needs one
-                // `--extern`; accepting this is safe only when the immutable artifact identity is exactly identical.
-            }
-            Some(previous) => {
-                return Err(OvenLegacyCargoError::InvalidInput {
-                    field: "compiler-suite unit graph",
-                    message: format!(
-                        "root target resolves extern `{}` to conflicting immutable artifacts {} and {}",
-                        extern_artifact.crate_name, previous.relative_path, extern_artifact.relative_path
-                    ),
-                });
-            }
-            None => {
-                externs_by_name.insert(extern_artifact.crate_name.clone(), extern_artifact);
-            }
-        }
+        let extern_artifact = compiler_suite_dependency_artifact(
+            dependency_unit,
+            artifact_index,
+            catalog,
+            crate_name,
+            Some(direct_rustc_target),
+        )?;
+        compiler_suite_insert_extern(&mut externs_by_name, extern_artifact)?;
+        compiler_suite_collect_transitive_proc_macro_externs(
+            dependency_unit,
+            graph,
+            compiler_root,
+            artifact_index,
+            catalog,
+            &mut externs_by_name,
+            &mut visited_transitive_units,
+        )?;
     }
     Ok((
         externs_by_name.into_values().collect(),
@@ -3109,20 +3230,23 @@ fn compiler_suite_target_from_unit(
     let mut features = unit.features.clone();
     features.sort();
     features.dedup();
-    let (externs, workspace_library_dependencies) =
-        compiler_suite_target_externs(unit, graph, &compiler_root, artifact_index, catalog).map_err(
-            |error| match error {
-                OvenLegacyCargoError::MissingDirectArtifact { crate_name, path } => {
-                    OvenLegacyCargoError::Plan(format!(
-                        "compiler-suite target `{}` ({}) cannot resolve direct dependency `{crate_name}` from {}",
-                        source_relative_path,
-                        unit.mode,
-                        path.display()
-                    ))
-                }
-                error => error,
-            },
-        )?;
+    let (externs, workspace_library_dependencies) = compiler_suite_target_externs(
+        unit,
+        graph,
+        &compiler_root,
+        artifact_index,
+        catalog,
+        &receipt.intent.target,
+    )
+    .map_err(|error| match error {
+        OvenLegacyCargoError::MissingDirectArtifact { crate_name, path } => OvenLegacyCargoError::Plan(format!(
+            "compiler-suite target `{}` ({}) cannot resolve direct dependency `{crate_name}` from {}",
+            source_relative_path,
+            unit.mode,
+            path.display()
+        )),
+        error => error,
+    })?;
     Ok(OvenCompilerTestSuiteTarget {
         package_name,
         target_name: unit.target.name.clone(),
@@ -3162,8 +3286,15 @@ fn compiler_suite_workspace_library_from_unit(
     }
     let source = verified_regular_file(&unit.target.src_path, "compiler-suite workspace library source")?;
     let compile_environment = direct_rustc_compile_environment(&compiler_root, &source)?;
-    let (externs, dependencies) = compiler_suite_target_externs(unit, graph, &compiler_root, artifact_index, catalog)
-        .map_err(|error| match error {
+    let (externs, dependencies) = compiler_suite_target_externs(
+        unit,
+        graph,
+        &compiler_root,
+        artifact_index,
+        catalog,
+        &receipt.intent.target,
+    )
+    .map_err(|error| match error {
         OvenLegacyCargoError::MissingDirectArtifact { crate_name, path } => OvenLegacyCargoError::Plan(format!(
             "compiler-suite workspace library `{}` cannot resolve direct dependency `{crate_name}` from {}",
             key.source_relative_path,
@@ -4646,9 +4777,11 @@ fn is_dynamic_rustc_artifact(name: &str) -> bool {
         .any(|extension| name.ends_with(extension))
 }
 
-/// Retain only actual compiler/linker inputs, never Cargo's object files, dep-info files, or a prior executable.
+/// Retain only direct Rustc linker inputs, never Cargo's object files, dep-info files, metadata sidecars, or a
+/// prior executable. An `.rlib` embeds the metadata required by a direct-Rustc consumer; retaining its `.rmeta`
+/// sibling duplicates the closure without supplying a link input.
 fn is_direct_rustc_artifact(name: &str) -> bool {
-    [".rlib", ".rmeta", ".dylib", ".so", ".dll", ".a", ".lib"]
+    [".rlib", ".dylib", ".so", ".dll", ".a", ".lib"]
         .iter()
         .any(|extension| name.ends_with(extension))
 }
@@ -5400,9 +5533,9 @@ mod tests {
         compiler_suite_cli_target_from_artifact_index, compiler_suite_direct_cli_plan,
         compiler_suite_direct_target_plan, compiler_suite_direct_target_shard_from_catalog,
         compiler_suite_direct_target_shard_plan, compiler_suite_foundation_dependencies,
-        compiler_suite_foundation_manifest, compiler_suite_foundation_plans, compiler_suite_target_from_unit,
-        compiler_suite_target_runner, compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
-        compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
+        compiler_suite_foundation_manifest, compiler_suite_foundation_plans, compiler_suite_target_externs,
+        compiler_suite_target_from_unit, compiler_suite_target_runner, compiler_suite_target_selection_features,
+        compiler_suite_target_selection_groups, compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
         compiler_suite_workspace_libraries_for_roots, create_publisher_staging, direct_rustc_compile_environment,
         generated_project_direct_dependencies, materialized_files_from_directory,
         reclaim_unmaterialized_compiler_suite_target_files, run_legacy_cargo_invocation,
@@ -6436,6 +6569,206 @@ mod tests {
         assert!(arguments.lines().any(|argument| argument == "--no-run"));
         assert!(!arguments.lines().any(|argument| argument == "--lib"));
         assert!(!arguments.lines().any(|argument| argument == "--bin"));
+        Ok(())
+    }
+
+    #[test]
+    fn publisher_retains_transitive_external_proc_macro_externs() -> Result<(), Box<dyn std::error::Error>> {
+        let compiler_root = tempfile::tempdir()?;
+        let staging = tempfile::tempdir()?;
+        let root_source = compiler_root.path().join("src/lib.rs");
+        fs::create_dir_all(root_source.parent().expect("root source parent"))?;
+        fs::write(&root_source, "pub fn fixture() {}\n")?;
+
+        let serde_source = staging.path().join("registry/serde/src/lib.rs");
+        let serde_core_source = staging.path().join("registry/serde_core/src/lib.rs");
+        let serde_derive_source = staging.path().join("registry/serde_derive/src/lib.rs");
+        let macro_build_input_source = staging.path().join("registry/macro_build_input/src/lib.rs");
+        for source in [
+            &serde_source,
+            &serde_core_source,
+            &serde_derive_source,
+            &macro_build_input_source,
+        ] {
+            fs::create_dir_all(source.parent().expect("registry source parent"))?;
+            fs::write(source, "pub fn fixture() {}\n")?;
+        }
+        let target_dependencies = staging.path().join("target/aarch64-apple-darwin/debug/deps");
+        let host_dependencies = staging.path().join("target/debug/deps");
+        fs::create_dir_all(&target_dependencies)?;
+        fs::create_dir_all(&host_dependencies)?;
+        let serde_artifact = target_dependencies.join("libserde-abc123.rlib");
+        let host_serde_artifact = host_dependencies.join("libserde-host456.rlib");
+        let serde_core_artifact = target_dependencies.join("libserde_core-abc123.rlib");
+        let serde_derive_artifact = host_dependencies.join("libserde_derive-abc123.dylib");
+        let macro_build_input_artifact = host_dependencies.join("libmacro_build_input-abc123.dylib");
+        fs::write(&serde_artifact, "serde library")?;
+        fs::write(&host_serde_artifact, "host serde library")?;
+        fs::write(&serde_core_artifact, "serde core library")?;
+        fs::write(&serde_derive_artifact, "serde derive proc macro")?;
+        fs::write(&macro_build_input_artifact, "proc-macro compiler-only input")?;
+
+        let graph = CargoUnitGraph {
+            version: 1,
+            units: vec![
+                CargoUnitGraphUnit {
+                    pkg_id: "fixture 0.1.0 (path+file:///fixture)".to_string(),
+                    target: CargoUnitGraphTarget {
+                        kind: vec!["lib".to_string()],
+                        crate_types: vec!["lib".to_string()],
+                        name: "fixture".to_string(),
+                        src_path: root_source.clone(),
+                        edition: "2024".to_string(),
+                    },
+                    mode: "test".to_string(),
+                    platform: Some("aarch64-apple-darwin".to_string()),
+                    features: Vec::new(),
+                    dependencies: vec![CargoUnitGraphDependency {
+                        index: 1,
+                        extern_crate_name: Some("serde".to_string()),
+                    }],
+                },
+                CargoUnitGraphUnit {
+                    pkg_id: "serde 1.0.0 (registry+https://example.invalid)".to_string(),
+                    target: CargoUnitGraphTarget {
+                        kind: vec!["lib".to_string()],
+                        crate_types: vec!["lib".to_string()],
+                        name: "serde".to_string(),
+                        src_path: serde_source.clone(),
+                        edition: "2024".to_string(),
+                    },
+                    mode: "build".to_string(),
+                    // Cargo can describe this unit as host-side when it is reached through a proc-macro root even
+                    // though Oven recompiles the workspace library with its explicit receipt target.
+                    platform: None,
+                    features: vec!["derive".to_string()],
+                    dependencies: vec![
+                        CargoUnitGraphDependency {
+                            index: 2,
+                            extern_crate_name: Some("serde_core".to_string()),
+                        },
+                        CargoUnitGraphDependency {
+                            index: 3,
+                            extern_crate_name: Some("serde_derive".to_string()),
+                        },
+                    ],
+                },
+                CargoUnitGraphUnit {
+                    pkg_id: "serde_core 1.0.0 (registry+https://example.invalid)".to_string(),
+                    target: CargoUnitGraphTarget {
+                        kind: vec!["lib".to_string()],
+                        crate_types: vec!["lib".to_string()],
+                        name: "serde_core".to_string(),
+                        src_path: serde_core_source.clone(),
+                        edition: "2024".to_string(),
+                    },
+                    mode: "build".to_string(),
+                    platform: Some("aarch64-apple-darwin".to_string()),
+                    features: Vec::new(),
+                    dependencies: Vec::new(),
+                },
+                CargoUnitGraphUnit {
+                    pkg_id: "serde_derive 1.0.0 (registry+https://example.invalid)".to_string(),
+                    target: CargoUnitGraphTarget {
+                        kind: vec!["proc-macro".to_string()],
+                        crate_types: vec!["proc-macro".to_string()],
+                        name: "serde_derive".to_string(),
+                        src_path: serde_derive_source.clone(),
+                        edition: "2024".to_string(),
+                    },
+                    mode: "build".to_string(),
+                    platform: None,
+                    features: Vec::new(),
+                    dependencies: vec![CargoUnitGraphDependency {
+                        index: 4,
+                        extern_crate_name: Some("macro_build_input".to_string()),
+                    }],
+                },
+                CargoUnitGraphUnit {
+                    pkg_id: "macro_build_input 1.0.0 (registry+https://example.invalid)".to_string(),
+                    target: CargoUnitGraphTarget {
+                        kind: vec!["proc-macro".to_string()],
+                        crate_types: vec!["proc-macro".to_string()],
+                        name: "macro_build_input".to_string(),
+                        src_path: macro_build_input_source.clone(),
+                        edition: "2024".to_string(),
+                    },
+                    mode: "build".to_string(),
+                    platform: None,
+                    features: Vec::new(),
+                    dependencies: Vec::new(),
+                },
+            ],
+            roots: vec![0],
+        };
+        let serde_artifact_message = serde_json::json!({
+            "reason": "compiler-artifact",
+            "package_id": "serde 1.0.0 (registry+https://example.invalid)",
+            "target": { "name": "serde", "src_path": serde_source },
+            "features": ["derive"],
+            "filenames": [serde_artifact],
+            "profile": { "test": false },
+        });
+        let serde_core_artifact_message = serde_json::json!({
+            "reason": "compiler-artifact",
+            "package_id": "serde_core 1.0.0 (registry+https://example.invalid)",
+            "target": { "name": "serde_core", "src_path": serde_core_source },
+            "features": [],
+            "filenames": [serde_core_artifact],
+            "profile": { "test": false },
+        });
+        let host_serde_artifact_message = serde_json::json!({
+            "reason": "compiler-artifact",
+            "package_id": "serde 1.0.0 (registry+https://example.invalid)",
+            "target": { "name": "serde", "src_path": serde_source },
+            "features": ["derive"],
+            "filenames": [host_serde_artifact],
+            "profile": { "test": false },
+        });
+        let serde_derive_artifact_message = serde_json::json!({
+            "reason": "compiler-artifact",
+            "package_id": "serde_derive 1.0.0 (registry+https://example.invalid)",
+            "target": { "name": "serde_derive", "src_path": serde_derive_source },
+            "features": [],
+            "filenames": [serde_derive_artifact],
+            "profile": { "test": false },
+        });
+        let macro_build_input_artifact_message = serde_json::json!({
+            "reason": "compiler-artifact",
+            "package_id": "macro_build_input 1.0.0 (registry+https://example.invalid)",
+            "target": { "name": "macro_build_input", "src_path": macro_build_input_source },
+            "features": [],
+            "filenames": [macro_build_input_artifact],
+            "profile": { "test": false },
+        });
+        let output = CargoInvocationOutput {
+            stdout: format!(
+                "{serde_artifact_message}\n{host_serde_artifact_message}\n{serde_core_artifact_message}\n{serde_derive_artifact_message}\n{macro_build_input_artifact_message}\n"
+            )
+            .into_bytes(),
+        };
+        let artifact_index = compiler_suite_artifact_index(&output, "aarch64-apple-darwin")?;
+        let catalog = compiler_suite_artifact_catalog(staging.path(), &[target_dependencies, host_dependencies], &[])?;
+
+        let (externs, workspace_dependencies) = compiler_suite_target_externs(
+            &graph.units[0],
+            &graph,
+            compiler_root.path(),
+            &artifact_index,
+            &catalog,
+            "aarch64-apple-darwin",
+        )?;
+
+        assert!(workspace_dependencies.is_empty());
+        assert_eq!(
+            externs
+                .iter()
+                .map(|artifact| artifact.crate_name.as_str())
+                .collect::<Vec<_>>(),
+            ["serde", "serde_derive"]
+        );
+        assert!(externs[0].relative_path.ends_with("libserde-abc123.rlib"));
+        assert!(externs[1].relative_path.ends_with("libserde_derive-abc123.dylib"));
         Ok(())
     }
 

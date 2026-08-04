@@ -10,10 +10,6 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   INCAN_NO_BANNER: 1
-  COLD_PROVIDER_TEST_FILTER: >-
-    test(/(concurrent_normal_checks_reuse_sealed_sdk_inventory_without_mutable_publication|cold_rooted_workspace_lock_uses_bounded_native_units_and_strict_library_build_agrees_issue931|test_run_std_regex_rfc059_surface_from_sealed_sdk_inventory)/)
-  GENERATED_CACHE_ACCEPTANCE_TEST_FILTER: >-
-    test(/normal_oven_reuses_sealed_inputs_offline_across_projects/)
 
 jobs:
   changes:
@@ -130,8 +126,8 @@ jobs:
         if: always()
         run: ${SCCACHE_PATH:-sccache} --show-stats || true
 
-  test-linux-archive:
-    name: Test Suite Archive (ubuntu-latest, stable)
+  test-linux-bootstrap:
+    name: Oven Suite Bootstrap (ubuntu-latest, stable)
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
@@ -155,19 +151,10 @@ jobs:
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
-      - uses: taiki-e/install-action@nextest
-      - name: Build portable test archive
-        run: |
-          mkdir -p target/nextest-ci
-          CARGO_BUILD_JOBS=2 cargo nextest archive --workspace --profile ci \
-            --archive-file target/nextest-ci/test-suite.tar.zst
-      - name: Upload portable test archive
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-linux-nextest-archive
-          path: target/nextest-ci/test-suite.tar.zst
-          if-no-files-found: error
-          retention-days: 1
+      - name: Build compiler binaries for the Oven publisher
+        # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
+        # are receipt-bound Oven work, not a Cargo/Nextest harness.
+        run: CARGO_BUILD_JOBS=2 cargo build --bins
       - name: Upload matching Incan CLI
         uses: actions/upload-artifact@v6
         with:
@@ -190,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - changes
-      - test-linux-archive
+      - test-linux-bootstrap
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
@@ -263,34 +250,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  test-linux-shards:
-    name: Test Suite Shard (ubuntu-latest, stable, ${{ matrix.label }})
+  test-linux-oven:
+    name: Oven Compiler Suite (ubuntu-latest, stable)
     runs-on: ubuntu-latest
     needs:
       - changes
-      - test-linux-archive
+      - test-linux-bootstrap
       - test-linux-provider
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: slice 1/4
-            kind: ordinary
-            partition: 1
-          - label: slice 2/4
-            kind: ordinary
-            partition: 2
-          - label: slice 3/4
-            kind: ordinary
-            partition: 3
-          - label: slice 4/4
-            kind: ordinary
-            partition: 4
-          - label: managed generated-cache acceptance
-            kind: generated-cache
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -298,131 +265,26 @@ jobs:
           toolchain: stable
       - name: Install WASI target for vocab desugarers
         run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
+      - name: Restore Cargo sources for the named legacy publisher
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - uses: taiki-e/install-action@nextest
-      - name: Download portable test archive
-        uses: actions/download-artifact@v6
-        with:
-          name: test-linux-nextest-archive
-          path: target/nextest-ci
-      - name: Download compiled SDK provider store
-        uses: actions/download-artifact@v6
-        with:
-          name: test-linux-sdk-provider-store
-          path: target/incan_test_sdk_provider_store
-      - name: Download selected SDK provider inventory
-        # The selection is part of the immutable provider handoff; shards must not rediscover a mutable provider.
-        uses: actions/download-artifact@v6
-        with:
-          name: test-linux-sdk-provider-path
-          path: target
-      - name: Download compiler-owned Oven native units
-        # Every shard includes normal Incan build/run/test coverage. Those consumers must use the matching immutable
-        # direct-rustc catalog, rather than behaving differently from the dedicated generated-cache acceptance lane.
-        uses: actions/download-artifact@v6
-        with:
-          name: test-linux-oven-native-units
-          path: target/share/incan/oven/native-units
-      - name: Report test cache footprint
+      - name: Fetch locked publisher sources
         run: |
-          du -sh target
-          df -h "$GITHUB_WORKSPACE"
-      - name: Run ordinary test shard
-        if: matrix.kind == 'ordinary'
-        # The separate cold-provider job and generated-cache matrix entry own the heavyweight acceptance tests. Four
-        # ordinary shards plus those lanes fit the observed hosted-runner capacity, while the archive avoids rebuilding
-        # the workspace.
-        run: >-
-          CARGO_BUILD_JOBS=2
-          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
-          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
-          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
-          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
-          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          cargo nextest run
-          --archive-file target/nextest-ci/test-suite.tar.zst
-          --workspace-remap "$GITHUB_WORKSPACE"
-          --profile ci
-          --partition slice:${{ matrix.partition }}/4
-          -E "not (($COLD_PROVIDER_TEST_FILTER) | ($GENERATED_CACHE_ACCEPTANCE_TEST_FILTER))"
-      - name: Verify generated-cache acceptance inventory
-        if: matrix.kind == 'generated-cache'
-        run: |
-          selected="$(
-            cargo nextest list \
-              --archive-file target/nextest-ci/test-suite.tar.zst \
-              --workspace-remap "$GITHUB_WORKSPACE" \
-              --profile ci \
-              -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER" \
-              -T oneline
-          )"
-          printf '%s\n' "$selected"
-          count="$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l | tr -d ' ')"
-          if [ "$count" != "1" ]; then
-            echo "expected exactly 1 generated-cache acceptance test, found $count"
-            exit 1
-          fi
-      - name: Run managed generated-cache acceptance
-        if: matrix.kind == 'generated-cache'
-        run: >-
-          CARGO_BUILD_JOBS=2
-          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
-          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
-          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
-          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
-          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          cargo nextest run
-          --archive-file target/nextest-ci/test-suite.tar.zst
-          --workspace-remap "$GITHUB_WORKSPACE"
-          --profile ci
-          -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER"
-
-  test-linux-cold-provider:
-    name: Cold SDK Provider Acceptance (ubuntu-latest, stable)
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - test-linux-archive
-      - test-linux-provider
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-      - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
-          restore-keys: |
-            incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - uses: taiki-e/install-action@nextest
-      - name: Download portable test archive
+          make fetch-locked-cargo-sources
+          make fetch-oven-native-unit-sources
+      - name: Download matching Incan CLI
         uses: actions/download-artifact@v6
         with:
-          name: test-linux-nextest-archive
-          path: target/nextest-ci
+          name: test-linux-incan-cli
+          path: target/debug
+      - name: Restore CLI executable permission
+        run: chmod +x target/debug/incan
       - name: Download sealed SDK provider store
         uses: actions/download-artifact@v6
         with:
@@ -438,68 +300,30 @@ jobs:
         with:
           name: test-linux-oven-native-units
           path: target/share/incan/oven/native-units
-      - name: Verify cold-provider inventory
-        run: |
-          selected="$(
-            cargo nextest list \
-              --archive-file target/nextest-ci/test-suite.tar.zst \
-              --workspace-remap "$GITHUB_WORKSPACE" \
-              --profile ci \
-              -E "$COLD_PROVIDER_TEST_FILTER" \
-              -T oneline
-          )"
-          printf '%s\n' "$selected"
-          count="$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l | tr -d ' ')"
-          if [ "$count" != "3" ]; then
-            echo "expected exactly 3 cold-provider acceptance tests, found $count"
-            exit 1
-          fi
-      - name: Run cold-provider acceptance
-        run: |
-          provider_inventory="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
-          test -f "$provider_inventory"
-          CARGO_BUILD_JOBS=1 \
-          INCAN_SDK_INVENTORY="$provider_inventory" \
-          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
-          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1 \
-          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target" \
-          INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target" \
-          INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
-          cargo nextest run \
-          --archive-file target/nextest-ci/test-suite.tar.zst \
-          --workspace-remap "$GITHUB_WORKSPACE" \
-          --profile ci \
-          -E "$COLD_PROVIDER_TEST_FILTER"
+      - uses: ./.github/actions/run-oven-compiler-suite
+        with:
+          lane: ubuntu-latest-stable
 
   test-linux:
     name: Test Suite (ubuntu-latest, stable)
     runs-on: ubuntu-latest
     needs:
       - changes
-      - test-linux-shards
-      - test-linux-cold-provider
+      - test-linux-oven
     if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
     steps:
-      - name: Verify Ubuntu test shards
+      - name: Verify bounded Oven compiler suite
         run: |
-          if [ "${{ needs.test-linux-shards.result }}" != "success" ]; then
-            echo "test-linux-shards finished with ${{ needs.test-linux-shards.result }}"
+          if [ "${{ needs.test-linux-oven.result }}" != "success" ]; then
+            echo "test-linux-oven finished with ${{ needs.test-linux-oven.result }}"
             exit 1
           fi
-          if [ "${{ needs.test-linux-cold-provider.result }}" != "success" ]; then
-            echo "test-linux-cold-provider finished with ${{ needs.test-linux-cold-provider.result }}"
-            exit 1
-          fi
-          echo "ubuntu test shards passed"
-
-  test-macos-archive:
-    name: Test Suite Archive (macos-latest, stable)
+          echo "bounded Ubuntu Oven compiler suite passed"
+  test-macos-bootstrap:
+    name: Oven Suite Bootstrap (macos-latest, stable)
     runs-on: macos-latest
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -513,24 +337,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
-      - uses: taiki-e/install-action@nextest
-      - name: Build portable test archive
-        run: |
-          mkdir -p target/nextest-ci
-          CARGO_BUILD_JOBS=2 cargo nextest archive --workspace --profile ci \
-            --archive-file target/nextest-ci/test-suite.tar.zst
-      - name: Upload portable test archive
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-macos-nextest-archive
-          path: target/nextest-ci/test-suite.tar.zst
-          if-no-files-found: error
-          retention-days: 1
+      - name: Build compiler binaries for the Oven publisher
+        # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
+        # are receipt-bound Oven work, not a Cargo/Nextest harness.
+        run: CARGO_BUILD_JOBS=2 cargo build --bins
       - name: Upload matching Incan CLI
         uses: actions/upload-artifact@v6
         with:
@@ -544,7 +359,7 @@ jobs:
     runs-on: macos-latest
     needs:
       - changes
-      - test-macos-archive
+      - test-macos-bootstrap
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
@@ -575,9 +390,6 @@ jobs:
         run: chmod +x target/debug/incan
       - uses: ./.github/actions/restore-sdk-provider-store
       - name: Prewarm compiled SDK providers
-        # Ordinary test shards share the immutable SDK inventory and compiler-owned native units. The separate
-        # cold-provider acceptance job does not download either artifact, so it still proves first publication from
-        # an empty provider store rather than inheriting a warmed test fixture.
         run: >-
           CARGO_BUILD_JOBS=2
           CARGO_NET_OFFLINE=true
@@ -610,34 +422,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  test-macos-shards:
-    name: Test Suite Shard (macos-latest, stable, ${{ matrix.label }})
+  test-macos-oven:
+    name: Oven Compiler Suite (macos-latest, stable)
     runs-on: macos-latest
     needs:
       - changes
-      - test-macos-archive
+      - test-macos-bootstrap
       - test-macos-provider
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: slice 1/4
-            kind: ordinary
-            partition: 1
-          - label: slice 2/4
-            kind: ordinary
-            partition: 2
-          - label: slice 3/4
-            kind: ordinary
-            partition: 3
-          - label: slice 4/4
-            kind: ordinary
-            partition: 4
-          - label: managed generated-cache acceptance
-            kind: generated-cache
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -645,130 +437,26 @@ jobs:
           toolchain: stable
       - name: Install WASI target for vocab desugarers
         run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
+      - name: Restore Cargo sources for the named legacy publisher
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - uses: taiki-e/install-action@nextest
-      - name: Download portable test archive
-        uses: actions/download-artifact@v6
-        with:
-          name: test-macos-nextest-archive
-          path: target/nextest-ci
-      - name: Download compiled SDK provider store
-        uses: actions/download-artifact@v6
-        with:
-          name: test-macos-sdk-provider-store
-          path: target/incan_test_sdk_provider_store
-      - name: Download selected SDK provider inventory
-        # The selection is part of the immutable provider handoff; shards must not rediscover a mutable provider.
-        uses: actions/download-artifact@v6
-        with:
-          name: test-macos-sdk-provider-path
-          path: target
-      - name: Download compiler-owned Oven native units
-        # Every shard includes normal Incan build/run/test coverage and needs this platform-matched immutable catalog.
-        uses: actions/download-artifact@v6
-        with:
-          name: test-macos-oven-native-units
-          path: target/share/incan/oven/native-units
-      - name: Report test cache footprint
+      - name: Fetch locked publisher sources
         run: |
-          du -sh target
-          df -h "$GITHUB_WORKSPACE"
-      - name: Run ordinary test shard
-        if: matrix.kind == 'ordinary'
-        # The separate cold-provider job and generated-cache matrix entry own the heavyweight acceptance tests. Four
-        # ordinary shards plus those lanes fit the observed hosted-runner capacity, while the archive avoids rebuilding
-        # the workspace.
-        run: >-
-          CARGO_BUILD_JOBS=2
-          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
-          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
-          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
-          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
-          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          cargo nextest run
-          --archive-file target/nextest-ci/test-suite.tar.zst
-          --workspace-remap "$GITHUB_WORKSPACE"
-          --profile ci
-          --partition slice:${{ matrix.partition }}/4
-          -E "not (($COLD_PROVIDER_TEST_FILTER) | ($GENERATED_CACHE_ACCEPTANCE_TEST_FILTER))"
-      - name: Verify generated-cache acceptance inventory
-        if: matrix.kind == 'generated-cache'
-        run: |
-          selected="$(
-            cargo nextest list \
-              --archive-file target/nextest-ci/test-suite.tar.zst \
-              --workspace-remap "$GITHUB_WORKSPACE" \
-              --profile ci \
-              -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER" \
-              -T oneline
-          )"
-          printf '%s\n' "$selected"
-          count="$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l | tr -d ' ')"
-          if [ "$count" != "1" ]; then
-            echo "expected exactly 1 generated-cache acceptance test, found $count"
-            exit 1
-          fi
-      - name: Run managed generated-cache acceptance
-        if: matrix.kind == 'generated-cache'
-        run: >-
-          CARGO_BUILD_JOBS=2
-          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
-          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
-          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
-          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
-          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          cargo nextest run
-          --archive-file target/nextest-ci/test-suite.tar.zst
-          --workspace-remap "$GITHUB_WORKSPACE"
-          --profile ci
-          -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER"
-
-  test-macos-cold-provider:
-    name: Cold SDK Provider Acceptance (macos-latest, stable)
-    runs-on: macos-latest
-    needs:
-      - changes
-      - test-macos-archive
-      - test-macos-provider
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-      - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
-          restore-keys: |
-            incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - uses: taiki-e/install-action@nextest
-      - name: Download portable test archive
+          make fetch-locked-cargo-sources
+          make fetch-oven-native-unit-sources
+      - name: Download matching Incan CLI
         uses: actions/download-artifact@v6
         with:
-          name: test-macos-nextest-archive
-          path: target/nextest-ci
+          name: test-macos-incan-cli
+          path: target/debug
+      - name: Restore CLI executable permission
+        run: chmod +x target/debug/incan
       - name: Download sealed SDK provider store
         uses: actions/download-artifact@v6
         with:
@@ -784,61 +472,25 @@ jobs:
         with:
           name: test-macos-oven-native-units
           path: target/share/incan/oven/native-units
-      - name: Verify cold-provider inventory
-        run: |
-          selected="$(
-            cargo nextest list \
-              --archive-file target/nextest-ci/test-suite.tar.zst \
-              --workspace-remap "$GITHUB_WORKSPACE" \
-              --profile ci \
-              -E "$COLD_PROVIDER_TEST_FILTER" \
-              -T oneline
-          )"
-          printf '%s\n' "$selected"
-          count="$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l | tr -d ' ')"
-          if [ "$count" != "3" ]; then
-            echo "expected exactly 3 cold-provider acceptance tests, found $count"
-            exit 1
-          fi
-      - name: Run cold-provider acceptance
-        run: |
-          provider_inventory="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
-          test -f "$provider_inventory"
-          CARGO_BUILD_JOBS=1 \
-          INCAN_SDK_INVENTORY="$provider_inventory" \
-          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
-          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1 \
-          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target" \
-          INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target" \
-          INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
-          cargo nextest run \
-          --archive-file target/nextest-ci/test-suite.tar.zst \
-          --workspace-remap "$GITHUB_WORKSPACE" \
-          --profile ci \
-          -E "$COLD_PROVIDER_TEST_FILTER"
+      - uses: ./.github/actions/run-oven-compiler-suite
+        with:
+          lane: macos-latest-stable
 
   test-macos:
     name: Test Suite (macos-latest, stable)
     runs-on: ubuntu-latest
     needs:
       - changes
-      - test-macos-shards
-      - test-macos-cold-provider
+      - test-macos-oven
     if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
     steps:
-      - name: Verify macOS test shards
+      - name: Verify bounded Oven compiler suite
         run: |
-          if [ "${{ needs.test-macos-shards.result }}" != "success" ]; then
-            echo "test-macos-shards finished with ${{ needs.test-macos-shards.result }}"
+          if [ "${{ needs.test-macos-oven.result }}" != "success" ]; then
+            echo "test-macos-oven finished with ${{ needs.test-macos-oven.result }}"
             exit 1
           fi
-          if [ "${{ needs.test-macos-cold-provider.result }}" != "success" ]; then
-            echo "test-macos-cold-provider finished with ${{ needs.test-macos-cold-provider.result }}"
-            exit 1
-          fi
-          echo "macOS test shards passed"
-
+          echo "bounded macOS Oven compiler suite passed"
   msrv-build:
     name: MSRV Build (1.93.0)
     runs-on: ubuntu-latest
@@ -863,13 +515,11 @@ jobs:
         if: always()
         run: ${SCCACHE_PATH:-sccache} --show-stats || true
 
-  msrv-test-archive:
-    name: MSRV Test Archive (1.93.0)
+  msrv-test-bootstrap:
+    name: MSRV Oven Suite Bootstrap (1.93.0)
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust 1.93.0
@@ -885,24 +535,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
-      - uses: taiki-e/install-action@nextest
-      - name: Build portable test archive
-        run: |
-          mkdir -p target/nextest-ci
-          CARGO_BUILD_JOBS=2 cargo nextest archive --locked --workspace --profile ci \
-            --archive-file target/nextest-ci/test-suite.tar.zst
-      - name: Upload portable test archive
-        uses: actions/upload-artifact@v6
-        with:
-          name: msrv-test-nextest-archive
-          path: target/nextest-ci/test-suite.tar.zst
-          if-no-files-found: error
-          retention-days: 1
+      - name: Build compiler binaries for the Oven publisher
+        # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
+        # are receipt-bound Oven work, not a Cargo/Nextest harness.
+        run: CARGO_BUILD_JOBS=2 cargo build --locked --bins
       - name: Upload matching Incan CLI
         uses: actions/upload-artifact@v6
         with:
@@ -916,7 +557,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - changes
-      - msrv-test-archive
+      - msrv-test-bootstrap
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
@@ -949,9 +590,6 @@ jobs:
         run: chmod +x target/debug/incan
       - uses: ./.github/actions/restore-sdk-provider-store
       - name: Prewarm compiled SDK providers
-        # Ordinary test shards share the immutable SDK inventory and compiler-owned native units. The separate
-        # cold-provider acceptance job does not download either artifact, so it still proves first publication from
-        # an empty provider store rather than inheriting a warmed test fixture.
         run: >-
           CARGO_BUILD_JOBS=2
           CARGO_NET_OFFLINE=true
@@ -984,34 +622,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  msrv-test-shards:
-    name: MSRV Test Shard (1.93.0, ${{ matrix.label }})
+  msrv-test-oven:
+    name: MSRV Oven Compiler Suite (1.93.0)
     runs-on: ubuntu-latest
     needs:
       - changes
-      - msrv-test-archive
+      - msrv-test-bootstrap
       - msrv-test-provider
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: slice 1/4
-            kind: ordinary
-            partition: 1
-          - label: slice 2/4
-            kind: ordinary
-            partition: 2
-          - label: slice 3/4
-            kind: ordinary
-            partition: 3
-          - label: slice 4/4
-            kind: ordinary
-            partition: 4
-          - label: managed generated-cache acceptance
-            kind: generated-cache
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust 1.93.0
@@ -1021,132 +639,26 @@ jobs:
           components: clippy
       - name: Install WASI target for vocab desugarers
         run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
+      - name: Restore Cargo sources for the named legacy publisher
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - uses: taiki-e/install-action@nextest
-      - name: Download portable test archive
-        uses: actions/download-artifact@v6
-        with:
-          name: msrv-test-nextest-archive
-          path: target/nextest-ci
-      - name: Download compiled SDK provider store
-        uses: actions/download-artifact@v6
-        with:
-          name: msrv-test-sdk-provider-store
-          path: target/incan_test_sdk_provider_store
-      - name: Download selected SDK provider inventory
-        # The selection is part of the immutable provider handoff; shards must not rediscover a mutable provider.
-        uses: actions/download-artifact@v6
-        with:
-          name: msrv-test-sdk-provider-path
-          path: target
-      - name: Download compiler-owned Oven native units
-        # Every shard includes normal Incan build/run/test coverage and needs this platform-matched immutable catalog.
-        uses: actions/download-artifact@v6
-        with:
-          name: msrv-test-oven-native-units
-          path: target/share/incan/oven/native-units
-      - name: Report test cache footprint
+      - name: Fetch locked publisher sources
         run: |
-          du -sh target
-          df -h "$GITHUB_WORKSPACE"
-      - name: Run ordinary test shard
-        if: matrix.kind == 'ordinary'
-        # The separate cold-provider job and generated-cache matrix entry own the heavyweight acceptance tests. Four
-        # ordinary shards plus those lanes fit the observed hosted-runner capacity, while the archive avoids rebuilding
-        # the workspace.
-        run: >-
-          CARGO_BUILD_JOBS=2
-          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
-          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
-          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
-          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
-          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          cargo nextest run
-          --archive-file target/nextest-ci/test-suite.tar.zst
-          --workspace-remap "$GITHUB_WORKSPACE"
-          --profile ci
-          --partition slice:${{ matrix.partition }}/4
-          -E "not (($COLD_PROVIDER_TEST_FILTER) | ($GENERATED_CACHE_ACCEPTANCE_TEST_FILTER))"
-      - name: Verify generated-cache acceptance inventory
-        if: matrix.kind == 'generated-cache'
-        run: |
-          selected="$(
-            cargo nextest list \
-              --archive-file target/nextest-ci/test-suite.tar.zst \
-              --workspace-remap "$GITHUB_WORKSPACE" \
-              --profile ci \
-              -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER" \
-              -T oneline
-          )"
-          printf '%s\n' "$selected"
-          count="$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l | tr -d ' ')"
-          if [ "$count" != "1" ]; then
-            echo "expected exactly 1 generated-cache acceptance test, found $count"
-            exit 1
-          fi
-      - name: Run managed generated-cache acceptance
-        if: matrix.kind == 'generated-cache'
-        run: >-
-          CARGO_BUILD_JOBS=2
-          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
-          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
-          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
-          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
-          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          cargo nextest run
-          --archive-file target/nextest-ci/test-suite.tar.zst
-          --workspace-remap "$GITHUB_WORKSPACE"
-          --profile ci
-          -E "$GENERATED_CACHE_ACCEPTANCE_TEST_FILTER"
-
-  msrv-test-cold-provider:
-    name: MSRV Cold SDK Provider Acceptance (1.93.0)
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - msrv-test-archive
-      - msrv-test-provider
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Rust 1.93.0
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.93.0
-          components: clippy
-      - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: incan-test-cargo-sources-v2-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
-          restore-keys: |
-            incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - uses: taiki-e/install-action@nextest
-      - name: Download portable test archive
+          make fetch-locked-cargo-sources
+          make fetch-oven-native-unit-sources
+      - name: Download matching Incan CLI
         uses: actions/download-artifact@v6
         with:
-          name: msrv-test-nextest-archive
-          path: target/nextest-ci
+          name: msrv-test-incan-cli
+          path: target/debug
+      - name: Restore CLI executable permission
+        run: chmod +x target/debug/incan
       - name: Download sealed SDK provider store
         uses: actions/download-artifact@v6
         with:
@@ -1162,39 +674,9 @@ jobs:
         with:
           name: msrv-test-oven-native-units
           path: target/share/incan/oven/native-units
-      - name: Verify cold-provider inventory
-        run: |
-          selected="$(
-            cargo nextest list \
-              --archive-file target/nextest-ci/test-suite.tar.zst \
-              --workspace-remap "$GITHUB_WORKSPACE" \
-              --profile ci \
-              -E "$COLD_PROVIDER_TEST_FILTER" \
-              -T oneline
-          )"
-          printf '%s\n' "$selected"
-          count="$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l | tr -d ' ')"
-          if [ "$count" != "3" ]; then
-            echo "expected exactly 3 cold-provider acceptance tests, found $count"
-            exit 1
-          fi
-      - name: Run cold-provider acceptance
-        run: |
-          provider_inventory="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
-          test -f "$provider_inventory"
-          CARGO_BUILD_JOBS=1 \
-          INCAN_SDK_INVENTORY="$provider_inventory" \
-          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
-          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1 \
-          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target" \
-          INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target" \
-          INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
-          cargo nextest run \
-          --archive-file target/nextest-ci/test-suite.tar.zst \
-          --workspace-remap "$GITHUB_WORKSPACE" \
-          --profile ci \
-          -E "$COLD_PROVIDER_TEST_FILTER"
+      - uses: ./.github/actions/run-oven-compiler-suite
+        with:
+          lane: ubuntu-latest-msrv-1-93-0
 
   msrv:
     name: MSRV Build/Test (1.93.0)
@@ -1202,26 +684,20 @@ jobs:
     needs:
       - changes
       - msrv-build
-      - msrv-test-shards
-      - msrv-test-cold-provider
+      - msrv-test-oven
     if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
     steps:
-      - name: Verify MSRV build and test shards
+      - name: Verify MSRV build and bounded Oven compiler suite
         run: |
           if [ "${{ needs.msrv-build.result }}" != "success" ]; then
             echo "msrv-build finished with ${{ needs.msrv-build.result }}"
             exit 1
           fi
-          if [ "${{ needs.msrv-test-shards.result }}" != "success" ]; then
-            echo "msrv-test-shards finished with ${{ needs.msrv-test-shards.result }}"
+          if [ "${{ needs.msrv-test-oven.result }}" != "success" ]; then
+            echo "msrv-test-oven finished with ${{ needs.msrv-test-oven.result }}"
             exit 1
           fi
-          if [ "${{ needs.msrv-test-cold-provider.result }}" != "success" ]; then
-            echo "msrv-test-cold-provider finished with ${{ needs.msrv-test-cold-provider.result }}"
-            exit 1
-          fi
-          echo "MSRV build and test shards passed"
-
+          echo "MSRV build and bounded Oven compiler suite passed"
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -1506,7 +982,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - changes
-      - test-linux-archive
+      - test-linux-bootstrap
       - test-linux-provider
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:

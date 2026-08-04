@@ -1,18 +1,24 @@
 # Incan Programming Language - Makefile
 # =====================================
 
-NEXTEST := $(shell command -v cargo-nextest 2>/dev/null)
-TEST_VERBOSE ?= 0
-# Nested generated-project builds are deliberately constrained so nextest workers do not each consume all cores.
-# Override the Cargo job cap for a specific machine with `make test INCAN_TEST_CARGO_BUILD_JOBS=<n>`.
+# Nested generated-project and named-publisher work is deliberately constrained so one local test command does not
+# consume every core. Override the cap for a specific machine with `make test INCAN_TEST_CARGO_BUILD_JOBS=<n>`.
 INCAN_TEST_CARGO_BUILD_JOBS ?= 2
 INCAN_TEST_GENERATED_CARGO_TARGET_DIR ?= $(CURDIR)/target/incan_generated_shared_target
 INCAN_TEST_SDK_PROVIDER_STORE ?= $(CURDIR)/target/incan_test_sdk_provider_store
 INCAN_TEST_SDK_PROVIDER_PATH_FILE ?= $(CURDIR)/target/incan_test_sdk_provider_path
 INCAN_TEST_OVEN_HOME ?= $(CURDIR)/target/incan_test_oven_home
 INCAN_TEST_OVEN_NATIVE_UNIT_ROOT ?= $(CURDIR)/target/share/incan/oven/native-units
-# Aggregate physical limit for the two compiler-owned native-unit compatibility domains. The script also enforces
-# the ordinary 768 MiB logical and 1 GiB physical allowance for each individual domain.
+INCAN_TEST_OVEN_COMPILER_SUITE_STORE ?= $(CURDIR)/target/oven-compiler-suite-store
+# Caller-owned compiler-suite outputs are one-use. `test-oven` creates a fresh directory below this root and removes
+# it after reporting its physical disk use, so repeated local runs cannot reuse a stale test binary or accumulate it.
+INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT ?= $(CURDIR)/target
+# The complete compiler suite is one compatibility closure, so its aggregate and domain allowances are explicit.
+INCAN_TEST_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES ?= 3221225472
+INCAN_TEST_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES ?= 2415919104
+INCAN_TEST_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES ?= 2684354560
+# Aggregate physical limit for the named compiler-owned native-unit publisher. Its individual seeds retain their own
+# explicit 768 MiB logical and 1 GiB physical allowances.
 INCAN_TEST_OVEN_NATIVE_UNIT_MAX_BYTES ?= 2147483648
 TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
 	INCAN_GENERATED_CARGO_TARGET_DIR="$(INCAN_TEST_GENERATED_CARGO_TARGET_DIR)" \
@@ -25,20 +31,6 @@ TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
 TEST_RUNTIME_ENV = $(TEST_ENV) \
 	INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)" \
 	INCAN_SDK_INVENTORY="$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json"
-
-ifeq ($(strip $(NEXTEST)),)
-ifeq ($(TEST_VERBOSE),1)
-TEST_CMD = $(TEST_RUNTIME_ENV) cargo test --all --features lsp --verbose
-else
-TEST_CMD = $(TEST_RUNTIME_ENV) cargo test --all --features lsp
-endif
-else
-ifeq ($(TEST_VERBOSE),1)
-TEST_CMD = $(TEST_RUNTIME_ENV) cargo nextest run --all --features lsp --status-level all
-else
-TEST_CMD = $(TEST_RUNTIME_ENV) cargo nextest run --all --features lsp --status-level slow --final-status-level slow
-endif
-endif
 
 # After `make build` / `make build-fast`, symlink ~/.cargo/bin/incan → target/debug/incan so `incan` on PATH (IDE run,
 # other repos) matches this checkout. When `incan-lsp` was built (`make build` uses --features lsp), also symlink
@@ -227,8 +219,7 @@ pre-commit-full-gate:
 	echo "\033[32mDONE\033[0m"; \
 	t2=$$(date +%s); \
 	echo "\033[1mRunning tests...\033[0m"; \
-	$(MAKE) -s test-prewarm-oven-native-units; \
-	$(TEST_CMD); \
+	$(MAKE) -s test-oven; \
 	echo "\033[32mDONE\033[0m"; \
 	t3=$$(date +%s); \
 	echo "\033[1mRunning clippy...\033[0m"; \
@@ -252,8 +243,7 @@ pre-commit:
 .PHONY: ci-full  ## quality - Full CI check: fmt, lint, udeps, test, and release build
 ci-full: fmt lint udeps
 	@echo "\033[1mRunning tests...\033[0m"
-	@$(MAKE) -s test-prewarm-oven-native-units
-	@$(TEST_CMD)
+	@$(MAKE) -s test-oven
 	@echo "\033[1mBuilding release...\033[0m"
 	@cargo build --release --quiet
 	@echo "\033[32m✓ Full CI checks passed\033[0m"
@@ -271,10 +261,38 @@ fetch-locked-cargo-sources:
 fetch-oven-native-unit-sources:
 	@cargo fetch --manifest-path tests/fixtures/oven_native_seed_dependencies/Cargo.toml --locked
 
-.PHONY: test  ## test - Run all tests
-test: test-prewarm-oven-native-units
-	@echo "\033[1mRunning tests...\033[0m"
-	@$(TEST_CMD)
+.PHONY: test-oven
+test-oven: test-prewarm-oven-native-units
+	@echo "\033[1mRunning complete compiler suite through Oven...\033[0m"
+	@set -e; \
+		mkdir -p "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)"; \
+		suite_output="$$(mktemp -d "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)/oven-compiler-suite-output.XXXXXX")"; \
+		suite_succeeded=false; \
+		cleanup_suite_output() { \
+			if [ "$$suite_succeeded" = true ]; then rm -rf -- "$$suite_output"; \
+			else echo "Oven suite failed; retaining caller output at $$suite_output" >&2; fi; \
+		}; \
+		trap cleanup_suite_output EXIT; \
+		$(TEST_RUNTIME_ENV) CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
+		bash scripts/run_oven_compiler_suite.sh \
+			--incan "$(CURDIR)/target/debug/incan" \
+			--compiler-root "$(CURDIR)" \
+			--store "$(INCAN_TEST_OVEN_COMPILER_SUITE_STORE)" \
+			--output "$$suite_output" \
+			--sdk-provider-path-file "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)" \
+			--sdk-provider-store "$(INCAN_TEST_SDK_PROVIDER_STORE)" \
+			--toolchain-data-root "$(CURDIR)/target" \
+			--generated-cargo-target-dir "$(INCAN_TEST_GENERATED_CARGO_TARGET_DIR)" \
+			--domain "local-compiler-suite-lsp" \
+			--max-physical-bytes "$(INCAN_TEST_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES)" \
+			--max-domain-physical-bytes "$(INCAN_TEST_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES)" \
+			--max-domain-logical-bytes "$(INCAN_TEST_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES)" \
+			--feature lsp \
+			--temp-root "$(CURDIR)/target/oven_tmp"; \
+		suite_succeeded=true
+
+.PHONY: test  ## test - Run all compiler tests through bounded Oven direct-Rustc execution
+test: test-oven
 
 .PHONY: test-prewarm-sdk
 test-prewarm-sdk:
@@ -405,15 +423,13 @@ smoke-test-fast:
 verify:
 	@$(MAKE) pre-commit
 
-.PHONY: test-verbose  ## test - Run tests with output
-test-verbose: test-prewarm-oven-native-units
-	@echo "\033[1mRunning tests (verbose)...\033[0m"
-	@$(TEST_RUNTIME_ENV) cargo nextest run --all --no-capture 2>/dev/null || $(TEST_RUNTIME_ENV) cargo test --all -- --nocapture
+.PHONY: test-verbose  ## test - Run the complete compiler suite through Oven
+test-verbose: test-oven
+	@echo "\033[32m✓ Oven reports each root and retains the runner transcript on failure\033[0m"
 
-.PHONY: test-diagnose  ## test - Run tests with live output (use if pre-commit hangs to find culprit)
-test-diagnose: test-prewarm-oven-native-units
-	@echo "\033[1mRunning tests with live output (Ctrl+C when stuck to see last test)...\033[0m"
-	@$(TEST_RUNTIME_ENV) cargo test --all --no-fail-fast -- --nocapture --test-threads=1
+.PHONY: test-diagnose  ## test - Run the complete compiler suite through Oven and retain failure evidence
+test-diagnose: test-oven
+	@echo "\033[32m✓ Oven diagnostics are retained in the caller output only when a root fails\033[0m"
 
 .PHONY: test-timings  ## test - Generate cargo compile-timing report (target/cargo-timings)
 test-timings:
@@ -421,15 +437,9 @@ test-timings:
 	@cargo test --all --no-run --timings
 	@echo "\033[32m✓ Timing report generated in target/cargo-timings\033[0m"
 
-.PHONY: test-one  ## test - Run specific test (TEST=name)
-test-one: test-prewarm-oven-native-units
-ifdef TEST
-	@echo "\033[1mRunning test: $(TEST)\033[0m"
-	@$(TEST_RUNTIME_ENV) cargo nextest run -E "test($(TEST))" --no-capture 2>/dev/null || $(TEST_RUNTIME_ENV) cargo test $(TEST) -- --nocapture
-else
-	@echo "Usage: \033[36mmake test-one TEST=test_name\033[0m"
-	@echo "Example: make test-one TEST=test_run_c_import_this"
-endif
+.PHONY: test-one  ## test - Run the complete compiler suite through Oven (function filtering is not an Alpha surface)
+test-one: test-oven
+	@echo "\033[33mOven Alpha currently selects receipt-bound source roots, not individual libtest functions; the full suite above is authoritative.\033[0m"
 
 # =============================================================================
 # Tooling

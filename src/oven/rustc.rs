@@ -141,13 +141,19 @@ pub(crate) struct OvenRustcAuxiliaryTargetPlan {
 /// One caller-owned library or procedural-macro artifact made by an earlier Oven direct-Rustc materialization step.
 ///
 /// This is deliberately an internal compiler-suite bridge, not an artifact-store entry. The library remains below
-/// the caller's output root and is rechecked into the later output's reuse identity.
+/// the caller's output root and carries its already-verified digest into the later output's reuse identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OvenCallerOwnedRustcLibrary {
     /// Rust crate name used by a consuming direct-Rustc root's `--extern` flag.
     pub crate_name: String,
     /// Regular caller-owned `.rlib` or dynamic procedural-macro output from the earlier direct-Rustc step.
     pub output: PathBuf,
+    /// Digest established when Oven baked or revalidated this caller-owned output in the current execution.
+    ///
+    /// The output is created below this invocation's caller-owned directory, then its bytes are read once before it
+    /// becomes a dependency. Later consumers reuse that verified identity rather than re-reading the same large
+    /// workspace library for every downstream target.
+    pub digest: String,
     /// Whether this output is a direct dependency of the current compilation root.
     ///
     /// Transitive caller-owned outputs still need a verified `-L dependency` search path and reuse evidence, but
@@ -426,7 +432,8 @@ pub(crate) fn materialize_declared_rust_libraries_with_selected_path_authority(
                 let output = selected_path_authority
                     .and_then(|authority| authority.matching_sealed_registry_artifact(&sealed))
                     .unwrap_or(sealed);
-                state.record_extern(crate_name, output)?;
+                let digest = digest_regular_file(&output, "sealed registry Rust dependency")?;
+                state.record_extern(crate_name, output, digest)?;
                 continue;
             }
             DependencySource::Git { .. } => {
@@ -450,14 +457,16 @@ pub(crate) fn materialize_declared_rust_libraries_with_selected_path_authority(
             &dependency,
             &mut state,
         )?;
-        state.record_extern(crate_name, output)?;
+        let digest = digest_regular_file(&output, "materialized path Rust library")?;
+        state.record_extern(crate_name, output, digest)?;
     }
     Ok(state
         .externs
         .into_iter()
-        .map(|(crate_name, output)| OvenCallerOwnedRustcLibrary {
+        .map(|(crate_name, (output, digest))| OvenCallerOwnedRustcLibrary {
             crate_name,
             output,
+            digest,
             expose_extern: true,
         })
         .collect())
@@ -669,7 +678,7 @@ fn safe_artifact_path(
 #[derive(Default)]
 struct PathRustcMaterializationState {
     outputs: BTreeMap<PathBuf, PathBuf>,
-    externs: BTreeMap<String, PathBuf>,
+    externs: BTreeMap<String, (PathBuf, String)>,
     active: BTreeSet<PathBuf>,
 }
 
@@ -679,19 +688,21 @@ impl PathRustcMaterializationState {
     /// Rust metadata for an outer rlib names its local path dependencies too, so the final consumer must receive
     /// their explicit `--extern` bindings as well as the top-level import. A name may repeat only when it resolves
     /// to the exact same already-materialized artifact.
-    fn record_extern(&mut self, crate_name: String, output: PathBuf) -> Result<(), OvenRustcError> {
+    fn record_extern(&mut self, crate_name: String, output: PathBuf, digest: String) -> Result<(), OvenRustcError> {
         match self.externs.get(&crate_name) {
-            Some(existing) if existing == &output => Ok(()),
-            Some(existing) => Err(OvenRustcError::InvalidInput {
+            Some((existing_output, existing_digest)) if existing_output == &output && existing_digest == &digest => {
+                Ok(())
+            }
+            Some((existing_output, _)) => Err(OvenRustcError::InvalidInput {
                 field: "path Rust dependency",
                 message: format!(
                     "resolves Rust crate `{crate_name}` to both {} and {}",
-                    existing.display(),
+                    existing_output.display(),
                     output.display()
                 ),
             }),
             None => {
-                self.externs.insert(crate_name, output);
+                self.externs.insert(crate_name, (output, digest));
                 Ok(())
             }
         }
@@ -899,7 +910,8 @@ fn materialize_path_rust_library_inner(
             };
             let child_name = direct_rustc_crate_name(name)?;
             if selected_path_artifact.is_none() {
-                state.record_extern(child_name.clone(), output.clone())?;
+                let digest = digest_regular_file(&output, "path Rust library dependency")?;
+                state.record_extern(child_name.clone(), output.clone(), digest)?;
             }
             child_dependencies.push((child_name, output));
         }
@@ -1216,8 +1228,8 @@ fn direct_rustc_crate_name(name: &str) -> Result<String, OvenRustcError> {
 /// Add direct-Rustc workspace-library outputs to a previously selected immutable artifact plan.
 ///
 /// The immutable plan continues to own third-party and native inputs. These libraries are the caller-owned bridge
-/// between topologically ordered workspace compilation steps, so their regular-file bytes are incorporated into the
-/// consumer output's reuse identity instead of being mistaken for a Cargo target directory.
+/// between topologically ordered workspace compilation steps, so their already-verified digests are incorporated
+/// into the consumer output's reuse identity instead of being mistaken for a Cargo target directory.
 pub(crate) fn attach_caller_owned_rustc_libraries(
     plan: &mut OvenRustcArtifactPlan,
     libraries: &[OvenCallerOwnedRustcLibrary],
@@ -1250,17 +1262,16 @@ pub(crate) fn attach_caller_owned_rustc_libraries(
         if !plan.dependency_search_paths.contains(&parent.to_path_buf()) {
             plan.dependency_search_paths.push(parent.to_path_buf());
         }
-        let bytes = fs::read(&output).map_err(|source| OvenRustcError::Io {
-            path: output.clone(),
-            source,
-        })?;
-        let digest = digest_bytes(&bytes);
         let evidence_key = if library.expose_extern {
             library.crate_name.clone()
         } else {
-            format!("transitive:{}:{digest}", library.crate_name)
+            format!("transitive:{}:{}", library.crate_name, library.digest)
         };
-        if plan.caller_owned_library_digests.insert(evidence_key, digest).is_some() {
+        if plan
+            .caller_owned_library_digests
+            .insert(evidence_key, library.digest.clone())
+            .is_some()
+        {
             return Err(OvenRustcError::InvalidInput {
                 field: "caller-owned library",
                 message: format!("duplicates reuse evidence for `{}`", library.crate_name),
@@ -1593,6 +1604,8 @@ pub struct OvenDirectRustcBake {
     pub source_digest: String,
     /// Final caller-owned test executable path.
     pub output: PathBuf,
+    /// Digest of the regular caller-owned output, established before it is exposed to another direct-Rustc step.
+    pub output_digest: String,
     /// The command cleared all Cargo process variables before starting rustc.
     pub cargo_process_started: bool,
     /// Whether the receipt- and plan-verified caller-owned native output was reused without launching rustc.
@@ -3067,9 +3080,11 @@ fn bake_direct_rustc(
             .unwrap_or_default(),
     };
     if caller_output_is_reusable(&output, &output_receipt) {
+        let output_digest = digest_regular_file(&output, "output")?;
         return Ok(OvenDirectRustcBake {
             source_digest,
             output,
+            output_digest,
             cargo_process_started: false,
             reused: true,
             lease: None,
@@ -3153,10 +3168,12 @@ fn bake_direct_rustc(
         });
     }
     verified_regular_file(&output, "output")?;
+    let output_digest = digest_regular_file(&output, "output")?;
     write_caller_output_receipt(&output, &output_receipt)?;
     Ok(OvenDirectRustcBake {
         source_digest,
         output,
+        output_digest,
         cargo_process_started: false,
         reused: false,
         lease: None,
@@ -3794,6 +3811,16 @@ fn verified_regular_file(path: &Path, kind: &'static str) -> Result<PathBuf, Ove
         });
     }
     Ok(path.to_path_buf())
+}
+
+/// Read a caller-owned regular file once and return its stable direct-Rustc reuse digest.
+fn digest_regular_file(path: &Path, kind: &'static str) -> Result<String, OvenRustcError> {
+    let path = verified_regular_file(path, kind)?;
+    let bytes = fs::read(&path).map_err(|source| OvenRustcError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(digest_bytes(&bytes))
 }
 
 /// Ensure the caller-owned final output cannot become part of the immutable artifact root.
@@ -5008,6 +5035,7 @@ mod tests {
         let output = tempfile::tempdir()?;
         let transitive = output.path().join("libprovider_child.rlib");
         fs::write(&transitive, "receipt-bound child")?;
+        let transitive_digest = digest_bytes(b"receipt-bound child");
         let mut plan = OvenRustcArtifactPlan {
             dependency_search_paths: Vec::new(),
             native_search_paths: Vec::new(),
@@ -5021,6 +5049,7 @@ mod tests {
             &[OvenCallerOwnedRustcLibrary {
                 crate_name: "provider_child".to_string(),
                 output: transitive.clone(),
+                digest: transitive_digest.clone(),
                 expose_extern: false,
             }],
         )?;
@@ -5028,6 +5057,11 @@ mod tests {
         assert!(plan.externs.is_empty());
         assert_eq!(plan.dependency_search_paths, vec![output.path().to_path_buf()]);
         assert_eq!(plan.caller_owned_library_digests.len(), 1);
+        assert_eq!(
+            plan.caller_owned_library_digests
+                .get(&format!("transitive:provider_child:{transitive_digest}")),
+            Some(&transitive_digest),
+        );
         assert!(
             plan.caller_owned_library_digests
                 .keys()
@@ -5099,9 +5133,14 @@ mod tests {
             &[OvenCallerOwnedRustcLibrary {
                 crate_name: "oven_materialized".to_string(),
                 output: library.output.clone(),
+                digest: library.output_digest.clone(),
                 expose_extern: true,
             }],
         )?;
+        assert_eq!(
+            consumer_plan.caller_owned_library_digests.get("oven_materialized"),
+            Some(&library.output_digest),
+        );
         let consumer = bake_trusted_direct_rustc_run(&OvenTrustedDirectRustcTargetRequest {
             receipt: &receipt,
             artifacts: &empty_artifacts,
@@ -5148,6 +5187,7 @@ mod tests {
             &[OvenCallerOwnedRustcLibrary {
                 crate_name: "oven_materialized".to_string(),
                 output: replacement_library.output.clone(),
+                digest: replacement_library.output_digest.clone(),
                 expose_extern: true,
             }],
         )?;
@@ -5227,6 +5267,7 @@ mod tests {
             &[OvenCallerOwnedRustcLibrary {
                 crate_name: "oven_materialized".to_string(),
                 output: dylib.output.clone(),
+                digest: dylib.output_digest.clone(),
                 expose_extern: true,
             }],
         )?;
@@ -5314,6 +5355,7 @@ mod tests {
             &[OvenCallerOwnedRustcLibrary {
                 crate_name: "oven_macros".to_string(),
                 output: proc_macro.output.clone(),
+                digest: proc_macro.output_digest.clone(),
                 expose_extern: true,
             }],
         )?;
@@ -5497,6 +5539,7 @@ mod tests {
             &[OvenCallerOwnedRustcLibrary {
                 crate_name: "oven_doctest_dylib".to_string(),
                 output: dylib.output,
+                digest: dylib.output_digest,
                 expose_extern: true,
             }],
         )?;
@@ -5966,6 +6009,7 @@ mod tests {
             &[OvenCallerOwnedRustcLibrary {
                 crate_name: "serde_json".to_string(),
                 output: caller_serde_json.clone(),
+                digest: digest_bytes(&fs::read(&caller_serde_json)?),
                 expose_extern: true,
             }],
         )?;

@@ -477,7 +477,7 @@ impl OvenStore {
 
     /// Validate one prospective immutable publication and return its content-addressed manifest without writing it.
     ///
-    /// A compiler-suite index must name every independently admitted shard or foundation before the related batch is
+    /// A compiler-suite index must name every required shard or foundation before the related batch is
     /// committed. This applies the same receipt, file-integrity, portable-path, and single-artifact domain checks
     /// as [`Self::publish_batch`], but deliberately makes no layout, lease, or capacity mutation. The final batch
     /// is still the sole admission and visibility decision.
@@ -3097,33 +3097,24 @@ mod tests {
     }
 
     #[test]
-    fn related_batch_admits_individually_bounded_foundation_domains() -> Result<(), Box<dyn std::error::Error>> {
+    fn related_batch_refuses_foundation_partitions_that_overflow_one_compatibility_domain()
+    -> Result<(), Box<dyn std::error::Error>> {
         let temp = tempfile::tempdir()?;
         let project = tempfile::tempdir()?;
         write_project(project.path())?;
-        // Each foundation is below 12 logical bytes, while the related set is deliberately larger. This proves
-        // schema-10 foundations are independently policy-addressable rather than smuggled through one oversized
-        // compatibility domain.
+        // Each partition is below 12 logical bytes, while the complete suite closure is deliberately larger. A
+        // suite selects both foundations, so they share a compatibility domain and fail as one overage.
         let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 12));
         let requests = [
-            request(project.path(), "compiler-suite-foundation-a", b"foundation-a")?,
-            request(project.path(), "compiler-suite-foundation-b", b"foundation-b")?,
+            request(project.path(), "compiler-suite", b"foundation-a")?,
+            request(project.path(), "compiler-suite", b"foundation-b")?,
         ];
 
-        let manifests = store.publish_batch(&requests)?;
-        let entries = store.inspect()?.entries;
-        assert_eq!(manifests.len(), 2);
-        assert_eq!(entries.len(), 2);
-        assert!(
-            entries
-                .iter()
-                .any(|entry| entry.manifest.domain == "compiler-suite-foundation-a")
-        );
-        assert!(
-            entries
-                .iter()
-                .any(|entry| entry.manifest.domain == "compiler-suite-foundation-b")
-        );
+        assert!(matches!(
+            store.publish_batch(&requests),
+            Err(OvenStoreError::CapacityBlocked { .. })
+        ));
+        assert!(store.inspect()?.entries.is_empty());
         Ok(())
     }
 

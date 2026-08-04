@@ -2619,6 +2619,7 @@ fn bake_planned_compiler_suite_workspace_libraries(
             let output = OvenCallerOwnedRustcLibrary {
                 crate_name: library.key.crate_name.clone(),
                 output: bake.output,
+                digest: bake.output_digest,
                 expose_extern: true,
             };
             workspace_library_cache.insert(cache_key.clone(), output.clone());
