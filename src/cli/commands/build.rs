@@ -2955,9 +2955,10 @@ fn select_oven_direct_rustc_plan(
                 native,
             ))));
         }
-        return Err(CliError::failure(
-            "Oven Alpha has no compatible compiler-suite native provider/dependency unit; nested build and run will not materialize a caller-owned store entry or invoke Cargo",
-        ));
+        return Err(CliError::failure(format!(
+            "Oven Alpha has no compatible compiler-suite native provider/dependency unit. Required sealed registry dependencies: {}. Nested build and run will not materialize a caller-owned store entry or invoke Cargo",
+            format_oven_registry_dependency_requirements(registry_dependencies),
+        )));
     }
 
     if let Some(selected) = select_receipt_direct_rustc_execution_plan(store, receipt)? {
