@@ -748,9 +748,11 @@ mod tests {
             let package = registry.join(name);
             fs::create_dir_all(package.join("src"))?;
             let package_name = name.split('-').next().ok_or("registry fixture package name missing")?;
-            let dependencies = (package_name == "demo")
-                .then_some("\n[dependencies]\nleaf = \"1\"\n")
-                .unwrap_or_default();
+            let dependencies = if package_name == "demo" {
+                "\n[dependencies]\nleaf = \"1\"\n"
+            } else {
+                ""
+            };
             fs::write(
                 package.join("Cargo.toml"),
                 format!(
