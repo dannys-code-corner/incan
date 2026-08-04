@@ -154,7 +154,7 @@ jobs:
       - name: Build compiler binaries for the Oven publisher
         # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
         # are receipt-bound Oven work, not a Cargo/Nextest harness.
-        run: CARGO_BUILD_JOBS=2 cargo build --bins
+        run: CARGO_BUILD_JOBS=2 cargo build --features lsp --bins
       - name: Upload matching Incan CLI
         uses: actions/upload-artifact@v6
         with:
@@ -216,6 +216,7 @@ jobs:
         run: >-
           CARGO_BUILD_JOBS=2
           CARGO_NET_OFFLINE=true
+          INCAN_TEST_COMPILER_ALREADY_BUILT=1
           INCAN_SOURCE_ROOT="$GITHUB_WORKSPACE"
           INCAN_STDLIB="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
           INCAN_STDLIB_DIR="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
@@ -345,7 +346,7 @@ jobs:
       - name: Build compiler binaries for the Oven publisher
         # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
         # are receipt-bound Oven work, not a Cargo/Nextest harness.
-        run: CARGO_BUILD_JOBS=2 cargo build --bins
+        run: CARGO_BUILD_JOBS=2 cargo build --features lsp --bins
       - name: Upload matching Incan CLI
         uses: actions/upload-artifact@v6
         with:
@@ -393,6 +394,7 @@ jobs:
         run: >-
           CARGO_BUILD_JOBS=2
           CARGO_NET_OFFLINE=true
+          INCAN_TEST_COMPILER_ALREADY_BUILT=1
           INCAN_SOURCE_ROOT="$GITHUB_WORKSPACE"
           INCAN_STDLIB="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
           INCAN_STDLIB_DIR="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
@@ -543,7 +545,7 @@ jobs:
       - name: Build compiler binaries for the Oven publisher
         # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
         # are receipt-bound Oven work, not a Cargo/Nextest harness.
-        run: CARGO_BUILD_JOBS=2 cargo build --locked --bins
+        run: CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
       - name: Upload matching Incan CLI
         uses: actions/upload-artifact@v6
         with:
@@ -593,6 +595,7 @@ jobs:
         run: >-
           CARGO_BUILD_JOBS=2
           CARGO_NET_OFFLINE=true
+          INCAN_TEST_COMPILER_ALREADY_BUILT=1
           INCAN_SOURCE_ROOT="$GITHUB_WORKSPACE"
           INCAN_STDLIB="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
           INCAN_STDLIB_DIR="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"

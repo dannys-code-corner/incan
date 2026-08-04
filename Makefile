@@ -297,7 +297,11 @@ test: test-oven
 .PHONY: test-prewarm-sdk
 test-prewarm-sdk:
 	@echo "\033[1mPrewarming compiled SDK providers...\033[0m"
-	@$(TEST_ENV) cargo build --features lsp
+	@if [ "$(INCAN_TEST_COMPILER_ALREADY_BUILT)" = "1" ]; then \
+		test -x "$(CURDIR)/target/debug/incan"; \
+	else \
+		$(TEST_ENV) cargo build --features lsp; \
+	fi
 	@$(TEST_ENV) CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
 		INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
 		INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
