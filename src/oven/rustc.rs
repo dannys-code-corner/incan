@@ -4858,7 +4858,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -4915,7 +4915,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -4970,7 +4970,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5057,7 +5057,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5190,7 +5190,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5277,7 +5277,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5355,7 +5355,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5402,7 +5402,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5460,7 +5460,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5539,7 +5539,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5580,7 +5580,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5688,7 +5688,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5756,7 +5756,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),
@@ -5792,7 +5792,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 "rustc deliberately-not-the-selected-compiler",
                 "release",
                 Vec::new(),

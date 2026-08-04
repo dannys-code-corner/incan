@@ -475,7 +475,7 @@ mod tests {
     }
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenStoredDirectRustcTestRequest,
-        bake_stored_direct_rustc_test,
+        bake_stored_direct_rustc_test, rustc_host_target,
     };
     use crate::oven::store::{OvenArtifactKind, OvenArtifactPublishRequest, OvenStore, OvenStoreLimits};
     use crate::oven::{OvenImportRequest, digest_bytes, import_frozen_project};
@@ -496,7 +496,7 @@ mod tests {
         let receipt = import_frozen_project(
             &OvenImportRequest::new(
                 project.path(),
-                "aarch64-apple-darwin",
+                rustc_host_target(&rustc)?,
                 rustc_identity(&rustc)?,
                 "release",
                 Vec::new(),

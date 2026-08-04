@@ -4436,7 +4436,7 @@ fn planned_suite_child_uses_sdk_inventory() -> Result<(), String> {
         let rustc = rustc_path()?;
         oven_import(OvenImportCommandOptions {
             project: project.path().to_path_buf(),
-            target: "aarch64-apple-darwin".to_string(),
+            target: rustc_host_target(&rustc)?,
             toolchain: rustc_identity(&rustc)?,
             profile: "release".to_string(),
             features: Vec::new(),

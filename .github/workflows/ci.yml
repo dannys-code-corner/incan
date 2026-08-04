@@ -320,10 +320,15 @@ jobs:
         with:
           name: test-linux-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+      - name: Download selected SDK provider inventory
+        # The selection is part of the immutable provider handoff; shards must not rediscover a mutable provider.
+        uses: actions/download-artifact@v6
+        with:
+          name: test-linux-sdk-provider-path
+          path: target
       - name: Download compiler-owned Oven native units
-        # Only the generated-cache acceptance fixture exercises the registry-leaf normal-command path. Avoid
-        # transferring this bounded ~1 GiB catalog to the four ordinary shards that do not consume it.
-        if: matrix.kind == 'generated-cache'
+        # Every shard includes normal Incan build/run/test coverage. Those consumers must use the matching immutable
+        # direct-rustc catalog, rather than behaving differently from the dedicated generated-cache acceptance lane.
         uses: actions/download-artifact@v6
         with:
           name: test-linux-oven-native-units
@@ -339,7 +344,11 @@ jobs:
         # the workspace.
         run: >-
           CARGO_BUILD_JOBS=2
+          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
+          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
+          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
+          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           cargo nextest run
           --archive-file target/nextest-ci/test-suite.tar.zst
@@ -368,6 +377,8 @@ jobs:
         if: matrix.kind == 'generated-cache'
         run: >-
           CARGO_BUILD_JOBS=2
+          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
+          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
           INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
@@ -656,8 +667,14 @@ jobs:
         with:
           name: test-macos-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+      - name: Download selected SDK provider inventory
+        # The selection is part of the immutable provider handoff; shards must not rediscover a mutable provider.
+        uses: actions/download-artifact@v6
+        with:
+          name: test-macos-sdk-provider-path
+          path: target
       - name: Download compiler-owned Oven native units
-        if: matrix.kind == 'generated-cache'
+        # Every shard includes normal Incan build/run/test coverage and needs this platform-matched immutable catalog.
         uses: actions/download-artifact@v6
         with:
           name: test-macos-oven-native-units
@@ -673,7 +690,11 @@ jobs:
         # the workspace.
         run: >-
           CARGO_BUILD_JOBS=2
+          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
+          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
+          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
+          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           cargo nextest run
           --archive-file target/nextest-ci/test-suite.tar.zst
@@ -702,6 +723,8 @@ jobs:
         if: matrix.kind == 'generated-cache'
         run: >-
           CARGO_BUILD_JOBS=2
+          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
+          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
           INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
@@ -1020,8 +1043,14 @@ jobs:
         with:
           name: msrv-test-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+      - name: Download selected SDK provider inventory
+        # The selection is part of the immutable provider handoff; shards must not rediscover a mutable provider.
+        uses: actions/download-artifact@v6
+        with:
+          name: msrv-test-sdk-provider-path
+          path: target
       - name: Download compiler-owned Oven native units
-        if: matrix.kind == 'generated-cache'
+        # Every shard includes normal Incan build/run/test coverage and needs this platform-matched immutable catalog.
         uses: actions/download-artifact@v6
         with:
           name: msrv-test-oven-native-units
@@ -1037,7 +1066,11 @@ jobs:
         # the workspace.
         run: >-
           CARGO_BUILD_JOBS=2
+          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
+          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
+          INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
+          INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           cargo nextest run
           --archive-file target/nextest-ci/test-suite.tar.zst
@@ -1066,6 +1099,8 @@ jobs:
         if: matrix.kind == 'generated-cache'
         run: >-
           CARGO_BUILD_JOBS=2
+          INCAN_SDK_INVENTORY="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
+          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION=1
           INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target"
