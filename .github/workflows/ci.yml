@@ -399,13 +399,11 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
+          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
-      - name: Fetch locked Oven native publisher sources
-        run: make fetch-oven-native-unit-sources
       - uses: taiki-e/install-action@nextest
       - name: Download portable test archive
         uses: actions/download-artifact@v6
@@ -731,13 +729,11 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
+          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
-      - name: Fetch locked Oven native publisher sources
-        run: make fetch-oven-native-unit-sources
       - uses: taiki-e/install-action@nextest
       - name: Download portable test archive
         uses: actions/download-artifact@v6
@@ -1095,13 +1091,11 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
+          key: incan-test-cargo-sources-v2-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
-      - name: Fetch locked Oven native publisher sources
-        run: make fetch-oven-native-unit-sources
       - uses: taiki-e/install-action@nextest
       - name: Download portable test archive
         uses: actions/download-artifact@v6
