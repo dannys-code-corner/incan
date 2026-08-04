@@ -920,6 +920,146 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn compiler_suite_runner_retains_each_publisher_reuse_verdict() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = ToolchainTestStaging::new()?;
+    let compiler_root = tmp.path().join("compiler");
+    fs::create_dir_all(compiler_root.join("crates/incan_stdlib/stdlib"))?;
+    let provider_root = tmp.path().join("provider");
+    fs::create_dir_all(&provider_root)?;
+    fs::write(provider_root.join("sdk-inventory.json"), "{}\n")?;
+    let provider_path_file = tmp.path().join("provider-path");
+    fs::write(&provider_path_file, format!("{}\n", provider_root.display()))?;
+    let toolchain_data_root = tmp.path().join("toolchain-data");
+    let generated_cargo_target_dir = tmp.path().join("generated-cargo-target");
+    fs::create_dir_all(&toolchain_data_root)?;
+    fs::create_dir_all(&generated_cargo_target_dir)?;
+
+    let publisher_state = tmp.path().join("publisher-state");
+    let incan = tmp.path().join("fixture-incan");
+    write_executable(
+        &incan,
+        &format!(
+            "#!/usr/bin/env sh\n\
+if [ \"$1\" = \"oven\" ] && [ \"$2\" = \"legacy-cargo\" ]; then\n\
+  if [ -e \"{}\" ]; then\n\
+    printf '%s\\n' '{{\"prepare\":{{\"suite_identity\":\"sha256:fixture\",\"cargo_version\":\"not-run-existing-suite\",\"cargo_manifest_digest\":\"not-run-existing-suite\",\"cargo_lock_digest\":\"not-run-existing-suite\",\"transient_reservation_bytes\":0}},\"receipt\":\"fixture\"}}'\n\
+  else\n\
+    : > \"{}\"\n\
+    printf '%s\\n' '{{\"prepare\":{{\"suite_identity\":\"sha256:fixture\",\"cargo_version\":\"cargo fixture\",\"cargo_manifest_digest\":\"sha256:fixture\",\"cargo_lock_digest\":\"sha256:fixture\",\"transient_reservation_bytes\":1}},\"receipt\":\"fixture\"}}'\n\
+  fi\n\
+elif [ \"$1\" = \"oven\" ] && [ \"$2\" = \"compiler-libtests\" ]; then\n\
+  printf '%s\\n' '{{\"success\":true,\"cargo_process_started\":false,\"native_test_count\":1,\"native_test_case_totals\":{{\"passed\":1,\"failed\":0,\"ignored\":0}},\"native_test_roots\":[],\"doctest_targets\":[],\"test_targets\":[],\"binary_targets\":[],\"shard_count\":1,\"failures\":[]}}'\n\
+elif [ \"$1\" = \"oven\" ] && [ \"$2\" = \"store\" ]; then\n\
+  printf '%s\\n' '{{\"logical_bytes\":1,\"physical_bytes\":4096,\"reclaimable_physical_bytes\":4096,\"active_lease_physical_bytes\":0,\"limits\":{{}},\"entries\":[]}}'\n\
+elif [ \"$1\" = \"--version\" ]; then\n\
+  printf 'fixture incan\\n'\n\
+fi\n",
+            publisher_state.display(),
+            publisher_state.display(),
+        ),
+    )?;
+    let cargo_marker = tmp.path().join("unexpected-cargo-invocation");
+    let cargo = tmp.path().join("cargo");
+    write_executable(
+        &cargo,
+        &format!(
+            "#!/usr/bin/env sh\nprintf '%s\\n' \"$*\" > \"{}\"\nexit 97\n",
+            cargo_marker.display()
+        ),
+    )?;
+    let store = tmp.path().join("store");
+    let cold_output = tmp.path().join("cold-output");
+    let warm_output = tmp.path().join("warm-output");
+
+    let run = |output: &Path| -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        Ok(Command::new("bash")
+            .arg(repo_root().join("scripts/run_oven_compiler_suite.sh"))
+            .args([
+                "--incan",
+                incan.to_str().ok_or("fixture incan path is not UTF-8")?,
+                "--compiler-root",
+                compiler_root.to_str().ok_or("compiler root is not UTF-8")?,
+                "--cargo",
+                cargo.to_str().ok_or("fixture cargo path is not UTF-8")?,
+                "--store",
+                store.to_str().ok_or("store path is not UTF-8")?,
+                "--output",
+                output.to_str().ok_or("output path is not UTF-8")?,
+                "--sdk-provider-path-file",
+                provider_path_file.to_str().ok_or("provider path file is not UTF-8")?,
+                "--sdk-provider-store",
+                provider_root.to_str().ok_or("provider root is not UTF-8")?,
+                "--toolchain-data-root",
+                toolchain_data_root.to_str().ok_or("toolchain data root is not UTF-8")?,
+                "--generated-cargo-target-dir",
+                generated_cargo_target_dir
+                    .to_str()
+                    .ok_or("generated Cargo target path is not UTF-8")?,
+                "--domain",
+                "fixture-domain",
+                "--max-physical-bytes",
+                "1000000",
+                "--max-domain-physical-bytes",
+                "1000000",
+                "--max-domain-logical-bytes",
+                "1000000",
+                "--temp-root",
+                tmp.path()
+                    .join("suite_temp")
+                    .to_str()
+                    .ok_or("suite temp path is not UTF-8")?,
+            ])
+            .current_dir(repo_root())
+            .output()?)
+    };
+
+    let cold = run(&cold_output)?;
+    assert!(
+        cold.status.success(),
+        "cold fixture runner failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&cold.stdout),
+        String::from_utf8_lossy(&cold.stderr)
+    );
+    let warm = run(&warm_output)?;
+    assert!(
+        warm.status.success(),
+        "warm fixture runner failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&warm.stdout),
+        String::from_utf8_lossy(&warm.stderr)
+    );
+    assert!(
+        !cargo_marker.exists(),
+        "reused publisher must not invoke the supplied Cargo executable"
+    );
+
+    let cold_evidence: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(cold_output.join("suite-evidence.json"))?)?;
+    let warm_evidence: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(warm_output.join("suite-evidence.json"))?)?;
+    assert_eq!(
+        cold_evidence["publisher"]["prepare"]["cargo_version"],
+        serde_json::json!("cargo fixture")
+    );
+    assert_eq!(
+        warm_evidence["publisher"]["prepare"]["cargo_version"],
+        serde_json::json!("not-run-existing-suite")
+    );
+    for output in [&cold_output, &warm_output] {
+        let evidence: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(output.join("suite-evidence.json"))?)?;
+        assert_eq!(
+            evidence["reports"]["publisher"],
+            serde_json::json!("publisher-result.json")
+        );
+        let retained: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(output.join("publisher-result.json"))?)?;
+        assert_eq!(evidence["publisher"], retained);
+    }
+    Ok(())
+}
+
 #[test]
 fn minimal_sdk_archive_physically_excludes_non_profile_components() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;

@@ -97,15 +97,18 @@ bash scripts/run_oven_compiler_suite.sh \
 For the reuse measurement, repeat that command unchanged except for a fresh `--output`
 directory such as `/tmp/incan-oven-suite-warm`; do not remove or alter the store.
 
-The resulting `suite-evidence.json` keeps three facts separate:
+The resulting `suite-evidence.json` keeps four facts separate:
 
-- `named_legacy_publisher` is the declared cold preparation cost of the temporary, receipt-bound publisher;
+- `publisher.prepare.cargo_version` is preserved in the caller-owned report alongside
+  `publisher-result.json`: `not-run-existing-suite` proves this invocation reused the compatible immutable suite;
+- `named_legacy_publisher` is the declared cold preparation or receipt-reuse cost of the temporary,
+  receipt-bound publisher;
 - `cargo_free_direct_rustc_replay` is the prepared full-suite result and must report zero Cargo-guard invocations;
 - `store_inspection` records logical artifacts, physical allocation, reclaimability, active leases, limits, and raw
   store/output disk totals.
 
 Repeat the same script with the same store and a fresh caller-output directory. The repeated publisher must select
 the existing receipt-compatible suite rather than start Cargo, while the direct-Rustc replay still executes every
-reported root. Keep both `suite-evidence.json` files and their `phases.tsv` files. Run this cold/reuse pair on the
+reported root. Keep both `suite-evidence.json` and `publisher-result.json` files with their `phases.tsv` files. Run this cold/reuse pair on the
 documented macOS and Linux reference machines; do not combine the publisher duration with the prepared replay or
 present a source-incompatible native-unit refusal as a benchmark result.

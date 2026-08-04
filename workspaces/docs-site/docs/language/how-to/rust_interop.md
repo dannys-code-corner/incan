@@ -1,6 +1,6 @@
 # Rust Interoperability
 
-Incan exposes a Rust interop boundary for crates and Rust types. In the current beta, Incan builds through Cargo/rustc, so `rust::` imports can connect Incan source to Rust crates while keeping the application surface in Incan.
+Incan exposes a Rust interop boundary for crates and Rust types. In the documented Oven Alpha envelope, current beta normal commands consume receipt-bound direct-`rustc` plans; `rust::` imports can therefore connect supported sealed Rust dependencies while keeping the application surface in Incan. Unsupported dependency shapes fail explicitly rather than making Cargo a normal-command fallback.
 
 ## Importing Rust Crates
 

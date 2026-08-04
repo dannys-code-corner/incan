@@ -5622,19 +5622,20 @@ mod tests {
         CargoInvocationOutput, CargoMetadata, CargoMetadataPackage, CargoUnitGraph, CargoUnitGraphDependency,
         CargoUnitGraphTarget, CargoUnitGraphUnit, CompilerSuiteArtifactCatalog, OVEN_COMPILER_TEST_PROFILE,
         OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION, OvenCompilerTestSuiteArtifactClosure,
-        OvenCompilerTestSuitePayload, OvenCompilerTestSuiteShardPayload, OvenCompilerTestSuiteShardReference,
-        OvenCompilerTestSuiteTarget, OvenLegacyCargoInvocationTarget, artifact_closure,
-        compiler_suite_artifact_catalog, compiler_suite_artifact_index, compiler_suite_bootstrap_selection,
-        compiler_suite_cargo_build_output, compiler_suite_cli_target_from_artifact_index,
-        compiler_suite_dependency_artifact, compiler_suite_dependency_directories, compiler_suite_direct_cli_plan,
-        compiler_suite_direct_target_plan, compiler_suite_direct_target_shard_from_catalog,
-        compiler_suite_direct_target_shard_plan, compiler_suite_foundation_dependencies,
-        compiler_suite_foundation_manifest, compiler_suite_foundation_plans, compiler_suite_output_artifact_paths,
-        compiler_suite_target_externs, compiler_suite_target_from_unit, compiler_suite_target_runner,
-        compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
+        OvenCompilerTestSuiteFoundationReference, OvenCompilerTestSuitePayload, OvenCompilerTestSuiteShardPayload,
+        OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteTarget, OvenCompilerTestSuiteToolchainDataReference,
+        OvenLegacyCargoInvocationTarget, OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind,
+        artifact_closure, compiler_suite_artifact_catalog, compiler_suite_artifact_index,
+        compiler_suite_bootstrap_selection, compiler_suite_cargo_build_output,
+        compiler_suite_cli_target_from_artifact_index, compiler_suite_dependency_artifact,
+        compiler_suite_dependency_directories, compiler_suite_direct_cli_plan, compiler_suite_direct_target_plan,
+        compiler_suite_direct_target_shard_from_catalog, compiler_suite_direct_target_shard_plan,
+        compiler_suite_foundation_dependencies, compiler_suite_foundation_manifest, compiler_suite_foundation_plans,
+        compiler_suite_output_artifact_paths, compiler_suite_target_externs, compiler_suite_target_from_unit,
+        compiler_suite_target_runner, compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
         compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
         compiler_suite_workspace_libraries_for_roots, create_publisher_staging, direct_rustc_compile_environment,
-        generated_project_direct_dependencies, materialized_files_from_directory,
+        generated_project_direct_dependencies, materialized_files_from_directory, prepare_compiler_test_suite,
         reclaim_unmaterialized_compiler_suite_target_files, run_legacy_cargo_invocation,
         select_compiler_test_suite_identity, stage_compiler_suite_shard_files, stage_self_contained_sdk_provider_tree,
         validate_compiler_suite_unit_graph,
@@ -5642,12 +5643,13 @@ mod tests {
     use crate::oven::native_unit::{OVEN_NATIVE_UNIT_SEED_SCHEMA_VERSION, OvenNativeUnitSeed};
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenRustcSupportingArtifact,
+        rustc_identity,
     };
     use crate::oven::store::{
         OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreLimits,
     };
     use crate::oven::{OvenBuildIntent, OvenCompilerSuiteRequest, receipt_native_compiler_suite};
-    use std::{collections::BTreeMap, fs};
+    use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
 
     #[test]
     fn compiler_suite_dependency_directories_preserves_a_host_only_foundation() -> Result<(), Box<dyn std::error::Error>>
@@ -5784,7 +5786,7 @@ mod tests {
         let target_dependencies = staging
             .path()
             .join("third-party-foundation-target/x86_64-unknown-linux-gnu/oven-test/deps");
-        fs::create_dir_all(source.parent().expect("registry source parent"))?;
+        fs::create_dir_all(source.parent().ok_or("registry source parent missing")?)?;
         fs::create_dir_all(&target_dependencies)?;
         fs::write(&source, "pub fn fixture() {}\n")?;
         let resolved_library = target_dependencies.join("libblake2-resolved.rlib");
@@ -6617,6 +6619,134 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn compiler_suite_prepare_reuses_a_current_suite_without_invoking_cargo() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let compiler_root = tempfile::tempdir()?;
+        fs::create_dir_all(compiler_root.path().join("src"))?;
+        fs::write(
+            compiler_root.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(compiler_root.path().join("Cargo.lock"), "version = 4\n")?;
+        fs::write(compiler_root.path().join("src/lib.rs"), "pub fn fixture() {}\n")?;
+        fs::write(compiler_root.path().join("src/main.rs"), "fn main() {}\n")?;
+        let rustc_output = Command::new("rustup").args(["which", "rustc"]).output()?;
+        assert!(rustc_output.status.success(), "rustup which rustc failed");
+        let rustc = PathBuf::from(String::from_utf8(rustc_output.stdout)?.trim());
+        let receipt = receipt_native_compiler_suite(&OvenCompilerSuiteRequest::new(
+            compiler_root.path(),
+            "aarch64-apple-darwin",
+            rustc_identity(&rustc)?,
+            "debug",
+            Vec::new(),
+        ))?;
+        let store_root = tempfile::tempdir()?;
+        let store = OvenStore::new(store_root.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let target = OvenCompilerTestSuiteTarget {
+            package_name: "fixture".to_string(),
+            target_name: "fixture".to_string(),
+            target_kind: "lib".to_string(),
+            runner: "rustc-test".to_string(),
+            source_relative_path: "src/lib.rs".to_string(),
+            source_evidence_key: "compiler-suite-source:src/lib.rs".to_string(),
+            crate_name: "fixture".to_string(),
+            edition: "2024".to_string(),
+            features: Vec::new(),
+            compile_environment: Default::default(),
+            binary_dependencies: Vec::new(),
+            workspace_library_dependencies: Vec::new(),
+            externs: Vec::new(),
+        };
+        let empty_closure = OvenCompilerTestSuiteArtifactClosure {
+            dependency_search_paths: Vec::new(),
+            native_search_paths: Vec::new(),
+            supporting_artifacts: Vec::new(),
+        };
+        let suite = OvenCompilerTestSuitePayload {
+            schema_version: 13,
+            test_targets: Vec::new(),
+            shard_references: vec![OvenCompilerTestSuiteShardReference {
+                identity: "sha256:fixture-shard".to_string(),
+                target: target.key(),
+            }],
+            foundation_references: vec![OvenCompilerTestSuiteFoundationReference {
+                identity: "sha256:fixture-foundation".to_string(),
+                label: "foundation-0000".to_string(),
+            }],
+            toolchain_data_references: vec![OvenCompilerTestSuiteToolchainDataReference {
+                identity: "sha256:fixture-toolchain-data".to_string(),
+                label: "toolchain-data-0000".to_string(),
+            }],
+            binary_targets: Vec::new(),
+            test_artifact_closure: None,
+            cli_artifact_closure: Some(empty_closure),
+            cli_foundation_references: Vec::new(),
+            cli_target: Some(target),
+            cli_workspace_libraries: Vec::new(),
+            sdk_inventory_relative_path: "providers/sdk-inventory.json".to_string(),
+            sdk_inventory_digest: "fixture".to_string(),
+            toolchain_data_relative_root: None,
+            warning_check_artifacts: OvenRustcArtifactManifest {
+                schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+                intent: receipt.intent.clone(),
+                dependency_search_paths: Vec::new(),
+                native_search_paths: Vec::new(),
+                externs: Vec::new(),
+                entrypoint_externs: Default::default(),
+                registry_leaves: Vec::new(),
+                compile_environment: Default::default(),
+                vocab_auxiliary_targets: Vec::new(),
+                supporting_artifacts: Vec::new(),
+            },
+        };
+        let stored = store.publish(&OvenArtifactPublishRequest {
+            receipt: receipt.clone(),
+            domain: "compiler-suite".to_string(),
+            kind: OvenArtifactKind::CompilerTestSuite,
+            payload: serde_json::to_vec(&suite)?,
+            materialized_files: Vec::new(),
+        })?;
+        let fixture = tempfile::tempdir()?;
+        let cargo_marker = fixture.path().join("unexpected-cargo-invocation");
+        let cargo = fixture.path().join("cargo");
+        fs::write(
+            &cargo,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"{}\"\nexit 97\n",
+                cargo_marker.display()
+            ),
+        )?;
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
+
+        let result = prepare_compiler_test_suite(&OvenLegacyCargoPrepareRequest {
+            store: &store,
+            receipt,
+            generated_project: fixture.path().join("unused-generated-project"),
+            cargo,
+            rustc,
+            domain: "compiler-suite".to_string(),
+            publication_kind: OvenLegacyCargoPublicationKind::LibraryTests,
+            source_evidence_key: "compiler-libtest-root".to_string(),
+            compile_environment: Default::default(),
+            compact_debug_info: false,
+        })?;
+
+        assert_eq!(result.suite_identity, stored.identity);
+        assert_eq!(result.cargo_version, "not-run-existing-suite");
+        assert_eq!(result.cargo_manifest_digest, "not-run-existing-suite");
+        assert_eq!(result.cargo_lock_digest, "not-run-existing-suite");
+        assert_eq!(result.transient_reservation_bytes, 0);
+        assert!(
+            !cargo_marker.exists(),
+            "a compatible stored suite must return before invoking the supplied Cargo executable"
+        );
+        Ok(())
+    }
+
     #[test]
     fn direct_rustc_environment_captures_generated_package_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let project = tempfile::tempdir()?;
@@ -6791,7 +6921,7 @@ mod tests {
         let compiler_root = tempfile::tempdir()?;
         let staging = tempfile::tempdir()?;
         let root_source = compiler_root.path().join("src/lib.rs");
-        fs::create_dir_all(root_source.parent().expect("root source parent"))?;
+        fs::create_dir_all(root_source.parent().ok_or("root source parent missing")?)?;
         fs::write(&root_source, "pub fn fixture() {}\n")?;
 
         let serde_source = staging.path().join("registry/serde/src/lib.rs");
@@ -6804,7 +6934,7 @@ mod tests {
             &serde_derive_source,
             &macro_build_input_source,
         ] {
-            fs::create_dir_all(source.parent().expect("registry source parent"))?;
+            fs::create_dir_all(source.parent().ok_or("registry source parent missing")?)?;
             fs::write(source, "pub fn fixture() {}\n")?;
         }
         let target_dependencies = staging.path().join("target/aarch64-apple-darwin/debug/deps");
@@ -6993,7 +7123,7 @@ mod tests {
         // dependency must remain admissible while both supported nested build-script `out` layouts are excluded.
         let workspace_root = staging.path().join("workspace/build");
         let serde_source = workspace_root.join("registry/serde/src/lib.rs");
-        fs::create_dir_all(serde_source.parent().expect("serde source parent"))?;
+        fs::create_dir_all(serde_source.parent().ok_or("serde source parent missing")?)?;
         fs::write(&serde_source, "pub fn fixture() {}\n")?;
         let dependency_directory = workspace_root.join("target/x86_64-unknown-linux-gnu/oven-test/deps");
         let build_output_directory =

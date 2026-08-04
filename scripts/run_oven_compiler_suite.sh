@@ -92,6 +92,7 @@ test -f "$rustc_path"
 mkdir -p "$store" "$output"
 phase_tsv="$output/phases.tsv"
 : > "$phase_tsv"
+publisher_result="$output/publisher-result.json"
 
 now_ms() {
     python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
@@ -146,7 +147,7 @@ run_named_legacy_publisher() {
         --max-physical-bytes "$max_physical_bytes" \
         --max-domain-physical-bytes "$max_domain_physical_bytes" \
         --max-domain-logical-bytes "$max_domain_logical_bytes" \
-        --format json > "$store/publish.json"
+        --format json > "$publisher_result"
     status=$?
     set -e
     finished="$(now_ms)"
@@ -252,6 +253,7 @@ guard_invocation_count="$(wc -l < "$guard/invocations.log" | tr -d '[:space:]')"
 jq -n \
     --rawfile phases "$phase_tsv" \
     --rawfile disk_usage "$output/disk-usage-kib.tsv" \
+    --slurpfile publisher "$publisher_result" \
     --slurpfile suite "$output/compiler-suite-report.json" \
     --slurpfile inspection "$store/inspection.json" \
     --arg domain "$domain" \
@@ -262,6 +264,7 @@ jq -n \
         schema_version: 1,
         purpose: "bounded Oven compiler-suite preparation and Cargo-free replay evidence",
         compatibility_domain: $domain,
+        publisher: $publisher[0],
         phases: [
             $phases | split("\n")[] | select(length > 0) | split("\t") |
             {name: .[0], duration_ms: (.[1] | tonumber), exit_code: (.[2] | tonumber)}
@@ -299,13 +302,13 @@ jq -n \
             {path, kib: (.kib | tonumber), bytes: ((.kib | tonumber) * 1024)}
         ],
         reports: {
-            publisher: ($store + "/publish.json"),
+            publisher: "publisher-result.json",
             suite: "compiler-suite-report.json",
             store_inspection: ($store + "/inspection.json"),
             phase_tsv: "phases.tsv"
         }
     }' > "$output/suite-evidence.json"
 
-jq '{phases, cargo_guard, suite, store, raw_disk_usage_kib}' "$output/suite-evidence.json"
+jq '{phases, publisher, cargo_guard, suite, store, raw_disk_usage_kib}' "$output/suite-evidence.json"
 jq '{logical_bytes, physical_bytes, reclaimable_physical_bytes, active_lease_physical_bytes, limits, entry_count: (.entries | length), domains: ([.entries[].manifest.domain] | unique)}' "$store/inspection.json"
 du -sh "$store" "$output"
