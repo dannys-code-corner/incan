@@ -17,7 +17,7 @@ Usage:
     --sdk-provider-path-file PATH --sdk-provider-store PATH \
     --toolchain-data-root PATH --generated-cargo-target-dir PATH --domain NAME \
     --max-physical-bytes BYTES --max-domain-physical-bytes BYTES \
-    --max-domain-logical-bytes BYTES [--feature NAME] [--temp-root PATH]
+    --max-domain-logical-bytes BYTES [--cargo PATH] [--feature NAME] [--temp-root PATH]
 
 Publishes the full compiler test suite through the named legacy Cargo publisher, then runs every stored direct-Rustc
 root under a Cargo guard. The store inspection reports logical artifact bytes separately from physical disk use.
@@ -26,6 +26,7 @@ EOF
 
 incan=""
 compiler_root=""
+cargo_override=""
 store=""
 output=""
 sdk_provider_path_file=""
@@ -43,6 +44,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --incan) incan=${2:?--incan requires a path}; shift 2 ;;
         --compiler-root) compiler_root=${2:?--compiler-root requires a path}; shift 2 ;;
+        --cargo) cargo_override=${2:?--cargo requires a path}; shift 2 ;;
         --store) store=${2:?--store requires a path}; shift 2 ;;
         --output) output=${2:?--output requires a path}; shift 2 ;;
         --sdk-provider-path-file) sdk_provider_path_file=${2:?--sdk-provider-path-file requires a path}; shift 2 ;;
@@ -77,7 +79,11 @@ provider_root="$(cat "$sdk_provider_path_file")"
 provider_inventory="$provider_root/sdk-inventory.json"
 test -f "$provider_inventory"
 
-cargo_path="$(rustup which cargo)"
+if [ -n "$cargo_override" ]; then
+    cargo_path="$cargo_override"
+else
+    cargo_path="$(rustup which cargo)"
+fi
 rustc_path="$(rustup which rustc)"
 test -f "$cargo_path"
 test -f "$rustc_path"

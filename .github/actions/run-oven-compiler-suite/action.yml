@@ -4,6 +4,10 @@ inputs:
   lane:
     description: Stable compatibility-domain suffix for this platform and toolchain lane.
     required: true
+  publisher_toolchain:
+    description: Rustup toolchain that supplies Cargo only for the named legacy publisher.
+    required: false
+    default: nightly
 runs:
   using: composite
   steps:
@@ -11,10 +15,12 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        publisher_cargo="$(rustup which --toolchain "${{ inputs.publisher_toolchain }}" cargo)"
         CARGO_BUILD_JOBS=2 \
         bash "$GITHUB_WORKSPACE/scripts/run_oven_compiler_suite.sh" \
           --incan "$GITHUB_WORKSPACE/target/debug/incan" \
           --compiler-root "$GITHUB_WORKSPACE" \
+          --cargo "$publisher_cargo" \
           --store "$GITHUB_WORKSPACE/target/oven-compiler-suite-store" \
           --output "$GITHUB_WORKSPACE/target/oven-compiler-suite-output" \
           --sdk-provider-path-file "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \

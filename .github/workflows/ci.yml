@@ -268,6 +268,7 @@ jobs:
           toolchain: stable
       - name: Install WASI target for vocab desugarers
         run: rustup target add wasm32-wasip1
+      - uses: ./.github/actions/install-nightly-toolchain
       - name: Restore Cargo sources for the named legacy publisher
         uses: actions/cache/restore@v4
         with:
@@ -441,6 +442,7 @@ jobs:
           toolchain: stable
       - name: Install WASI target for vocab desugarers
         run: rustup target add wasm32-wasip1
+      - uses: ./.github/actions/install-nightly-toolchain
       - name: Restore Cargo sources for the named legacy publisher
         uses: actions/cache/restore@v4
         with:
@@ -644,6 +646,7 @@ jobs:
           components: clippy
       - name: Install WASI target for vocab desugarers
         run: rustup target add wasm32-wasip1
+      - uses: ./.github/actions/install-nightly-toolchain
       - name: Restore Cargo sources for the named legacy publisher
         uses: actions/cache/restore@v4
         with:
