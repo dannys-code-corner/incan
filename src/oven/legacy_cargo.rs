@@ -2702,7 +2702,7 @@ fn insert_compiler_suite_catalog_artifact(
                 field: "compiler-suite Cargo artifact",
                 message: format!("{} has a non-UTF-8 file name", path.display()),
             })?;
-    if !is_direct_rustc_artifact(file_name) {
+    if !is_direct_rustc_artifact(file_name) || compiler_suite_cargo_build_output(path) {
         return Ok(false);
     }
     let source_path = verified_regular_file(path, "compiler-suite Cargo artifact")?;
@@ -2772,7 +2772,10 @@ fn compiler_suite_artifact_index(
                     source,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|path| !compiler_suite_cargo_build_output(path))
+            .collect::<Vec<_>>();
         if !files.is_empty() {
             let mut platforms = files
                 .iter()
@@ -2839,6 +2842,9 @@ fn compiler_suite_output_artifact_paths(output: &CargoInvocationOutput) -> Resul
                 path: path.clone(),
                 source,
             })?;
+            if compiler_suite_cargo_build_output(&path) {
+                continue;
+            }
             paths.insert(path);
         }
     }
@@ -4793,6 +4799,20 @@ fn is_direct_rustc_artifact(name: &str) -> bool {
     [".rlib", ".dylib", ".so", ".dll", ".a", ".lib"]
         .iter()
         .any(|extension| name.ends_with(extension))
+}
+
+/// Cargo build-script output is an implementation detail of the named publisher, never a direct-Rustc crate input.
+///
+/// A compiler-artifact record can name an `.rlib` written below Cargo's `build/<package>/out` layout. It may resemble
+/// a dependency library by filename, but Rustc cannot use it as the package's resolved `--extern`; the compatible
+/// library lives in the sealed `deps` closure. Retaining or selecting it would produce a late E0463 instead of a
+/// deterministic receipt-bound dependency plan. Matching the three-component layout, rather than any directory named
+/// `build`, keeps an otherwise valid checkout path such as `/workspace/build/target/.../deps` admissible.
+fn compiler_suite_cargo_build_output(path: &Path) -> bool {
+    let components = path.components().collect::<Vec<_>>();
+    components
+        .windows(3)
+        .any(|components| components[0].as_os_str() == "build" && components[2].as_os_str() == "out")
 }
 
 /// Read direct dependency aliases from the generated root `Cargo.toml` without asking Cargo for metadata.
@@ -6833,6 +6853,53 @@ mod tests {
         );
         assert!(externs[0].relative_path.ends_with("libserde-abc123.rlib"));
         assert!(externs[1].relative_path.ends_with("libserde_derive-abc123.dylib"));
+        Ok(())
+    }
+
+    #[test]
+    fn publisher_excludes_build_script_output_from_direct_rustc_artifacts() -> Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        // The parent `build` component is deliberately unrelated to Cargo's build-script layout. The direct
+        // dependency must remain admissible while the nested build-script `out` library is excluded.
+        let workspace_root = staging.path().join("workspace/build");
+        let serde_source = workspace_root.join("registry/serde/src/lib.rs");
+        fs::create_dir_all(serde_source.parent().expect("serde source parent"))?;
+        fs::write(&serde_source, "pub fn fixture() {}\n")?;
+        let dependency_directory = workspace_root.join("target/x86_64-unknown-linux-gnu/oven-test/deps");
+        let build_output_directory =
+            workspace_root.join("target/x86_64-unknown-linux-gnu/oven-test/build/serde-fixture/out");
+        fs::create_dir_all(&dependency_directory)?;
+        fs::create_dir_all(&build_output_directory)?;
+        let resolved_library = dependency_directory.join("libserde-resolved.rlib");
+        let build_output_library = build_output_directory.join("libserde-build-output.rlib");
+        fs::write(&resolved_library, "resolved serde library")?;
+        fs::write(&build_output_library, "not a Cargo dependency artifact")?;
+        let artifact_message = serde_json::json!({
+            "reason": "compiler-artifact",
+            "package_id": "serde 1.0.0 (registry+https://example.invalid)",
+            "target": { "name": "serde", "src_path": serde_source },
+            "features": ["derive"],
+            "filenames": [resolved_library, build_output_library],
+            "profile": { "test": false },
+        });
+        let output = CargoInvocationOutput {
+            stdout: format!("{artifact_message}\n").into_bytes(),
+        };
+
+        let artifact_index = compiler_suite_artifact_index(&output, "x86_64-unknown-linux-gnu")?;
+        let indexed = artifact_index.values().flatten().collect::<Vec<_>>();
+        let canonical_resolved_library = fs::canonicalize(&resolved_library)?;
+        assert_eq!(indexed, vec![&canonical_resolved_library]);
+        let reported = compiler_suite_output_artifact_paths(&output)?;
+        assert_eq!(reported, vec![canonical_resolved_library]);
+        let catalog = compiler_suite_artifact_catalog(&workspace_root, &[dependency_directory], &reported)?;
+        assert_eq!(catalog.materialized_files.len(), 1);
+        assert!(
+            catalog
+                .materialized_files
+                .iter()
+                .all(|artifact| !artifact.relative_path.contains("/build/"))
+        );
         Ok(())
     }
 

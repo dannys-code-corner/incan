@@ -1,0 +1,5 @@
+"""A release-core-only Oven Alpha benchmark fixture."""
+
+
+def main() -> None:
+    println("oven alpha release benchmark")

@@ -42,11 +42,12 @@ bash scripts/bench_oven_alpha.sh \
   --repetitions 2
 ```
 
-For build or run, set `--workload build` or `--workload run` and point `--source` at a core-envelope program. On
-Linux, use a task-specific directory below `/tmp`; the store must start empty so its first materialization is
-attributable. The default policy is the normal developer policy: 2 GiB aggregate physical allocation, 1 GiB physical
-allocation per compatibility domain, and 768 MiB logical artifact bytes per domain. Pass explicit byte overrides only
-when recording a different policy.
+For build or run, set `--workload build` or `--workload run` and use the checkout's release-core fixture
+`tests/fixtures/oven_alpha_release_core.incn`; a `std.testing` fixture is debug-only and is intentionally not a
+release-build benchmark. On Linux, use a task-specific directory below `/tmp`; the store must start empty so its first
+materialization is attributable. The default policy is the normal developer policy: 2 GiB aggregate physical
+allocation, 1 GiB physical allocation per compatibility domain, and 768 MiB logical artifact bytes per domain. Pass
+explicit byte overrides only when recording a different policy.
 
 ## Read the report
 
@@ -63,3 +64,48 @@ Use `first_materialization` for the supported compiler-shipped unit's initial us
 for the unchanged normal-command goal. If the first normal command fails, a warm command launches the guard, a plan
 changes unexpectedly, or store reporting loses the physical/logical distinction, treat the result as a failure rather
 than averaging it into a performance claim.
+
+## Measure the complete compiler repository suite
+
+The repository suite uses the same bounded-store policy but has an additional, explicitly named preparation seam:
+`scripts/run_oven_compiler_suite.sh`. Invoke it with the current checkout, prewarmed SDK-provider store, compiler-owned
+native-unit layout, and the limits used by `make test-oven`; the `test-oven` target is the canonical argument list.
+For benchmark evidence, invoke the script directly with a retained, unique `--output` directory instead of the
+Make target's disposable success directory.
+
+After building the debug compiler and running `INCAN_TEST_COMPILER_ALREADY_BUILT=1 make test-prewarm-oven-native-units`,
+the first reference run is:
+
+```bash
+bash scripts/run_oven_compiler_suite.sh \
+  --incan "$PWD/target/debug/incan" \
+  --compiler-root "$PWD" \
+  --store /tmp/incan-oven-suite-store \
+  --output /tmp/incan-oven-suite-cold \
+  --sdk-provider-path-file "$PWD/target/incan_test_sdk_provider_path" \
+  --sdk-provider-store "$PWD/target/incan_test_sdk_provider_store" \
+  --toolchain-data-root "$PWD/target" \
+  --generated-cargo-target-dir "$PWD/target/incan_generated_shared_target" \
+  --domain reference-compiler-suite \
+  --max-physical-bytes 3221225472 \
+  --max-domain-physical-bytes 2415919104 \
+  --max-domain-logical-bytes 2684354560 \
+  --feature lsp \
+  --temp-root /tmp/incan_oven_suite_tmp
+```
+
+For the reuse measurement, repeat that command unchanged except for a fresh `--output`
+directory such as `/tmp/incan-oven-suite-warm`; do not remove or alter the store.
+
+The resulting `suite-evidence.json` keeps three facts separate:
+
+- `named_legacy_publisher` is the declared cold preparation cost of the temporary, receipt-bound publisher;
+- `cargo_free_direct_rustc_replay` is the prepared full-suite result and must report zero Cargo-guard invocations;
+- `store_inspection` records logical artifacts, physical allocation, reclaimability, active leases, limits, and raw
+  store/output disk totals.
+
+Repeat the same script with the same store and a fresh caller-output directory. The repeated publisher must select
+the existing receipt-compatible suite rather than start Cargo, while the direct-Rustc replay still executes every
+reported root. Keep both `suite-evidence.json` files and their `phases.tsv` files. Run this cold/reuse pair on the
+documented macOS and Linux reference machines; do not combine the publisher duration with the prepared replay or
+present a source-incompatible native-unit refusal as a benchmark result.
