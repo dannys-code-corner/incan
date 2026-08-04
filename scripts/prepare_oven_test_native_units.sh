@@ -98,8 +98,8 @@ prepare_seed() {
             # This is the complete compiler-owned module envelope currently exercised by the normal CLI integration
             # suite. It deliberately imports one checked symbol per module so the receipt records an explicit
             # provider capability. The compiler suite also directly exercises exact registry dependencies
-            # `bitflags = "=1.3.2"` and `uuid = "1.0"` with source-visible v4/serde features; they are compiled
-            # here only by the named publisher into the immutable seed catalog.
+            # `bitflags = "=1.3.2"`, `serde_json = "1"`, and `uuid = "1.0"` with source-visible v4/serde
+            # features; they are compiled here only by the named publisher into the immutable seed catalog.
             # This is a bounded test compatibility envelope, not a normal-command Cargo or cache fallback.
             printf '%s\n' \
                 'from std.async import spawn' \
@@ -131,6 +131,7 @@ prepare_seed() {
                 'from std.web.routing import GET, route' \
                 'import std.async' \
                 'from rust::bitflags import bitflags' \
+                'from rust::serde_json import Value' \
                 'from rust::uuid import Uuid' \
                 '' \
                 '@route("/oven-seed", methods=[GET])' \
@@ -147,6 +148,7 @@ prepare_seed() {
                 '' \
                 '[rust-dependencies]' \
                 'bitflags = "=1.3.2"' \
+                'serde_json = "1"' \
                 'uuid = { version = "1.0", features = ["v4", "serde"] }' \
                 > "$scratch/incan.toml"
             ;;
@@ -423,6 +425,30 @@ verify_registry_leaf_consumer() {
         "$incan" build --lib "$project" >/dev/null
 }
 
+verify_serde_json_registry_leaf_consumer() {
+    local project="$scratch/oven_serde_json_registry_leaf_consumer"
+    local oven_home="$scratch/serde-json-registry-leaf-consumer-home"
+    local cargo_guard="$scratch/serde-json-registry-leaf-cargo-guard"
+
+    mkdir -p "$project/src" "$cargo_guard"
+    printf '%s\n' \
+        '[project]' \
+        'name = "oven_serde_json_registry_leaf_consumer"' \
+        'version = "0.1.0"' \
+        '' \
+        '[rust-dependencies]' \
+        'serde_json = "1"' > "$project/incan.toml"
+    # Keep this declaration identical to the generated-cache acceptance fixture: the seed must contain an exact
+    # direct registry leaf, rather than only serde_json as an incidental transitive artifact of another dependency.
+    printf 'from rust::serde_json import Value\n\ndef main() -> None:\n    pass\n' > "$project/src/main.incn"
+    printf '#!/bin/sh\nexit 97\n' > "$cargo_guard/cargo"
+    chmod +x "$cargo_guard/cargo"
+    env -u INCAN_STDLIB -u INCAN_STDLIB_DIR \
+        INCAN_SOURCE_ROOT="$compiler_root" \
+        INCAN_HOME="$oven_home" PATH="$cargo_guard:$PATH" \
+        "$incan" run "$project/src/main.incn" >/dev/null
+}
+
 verify_uuid_registry_leaf_consumer() {
     local project="$scratch/oven_uuid_registry_leaf_consumer"
     local oven_home="$scratch/uuid-registry-leaf-consumer-home"
@@ -477,6 +503,7 @@ reuse_existing_native_units() {
     verify_library_consumer || return 1
     verify_vocab_desugarer_consumer || return 1
     verify_registry_leaf_consumer || return 1
+    verify_serde_json_registry_leaf_consumer || return 1
     verify_uuid_registry_leaf_consumer || return 1
 }
 
@@ -506,6 +533,7 @@ else
     verify_library_consumer
     verify_vocab_desugarer_consumer
     verify_registry_leaf_consumer
+    verify_serde_json_registry_leaf_consumer
     verify_uuid_registry_leaf_consumer
 fi
 

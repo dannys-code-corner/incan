@@ -219,8 +219,9 @@ jobs:
         run: chmod +x target/debug/incan
       - uses: ./.github/actions/restore-sdk-provider-store
       - name: Prewarm compiled SDK providers
-        # Ordinary test shards share this immutable provider store. The separate cold-provider acceptance job does
-        # not download it and therefore continues to prove first publication from an empty store.
+        # Ordinary test shards share the immutable SDK inventory and compiler-owned native units. The separate
+        # cold-provider acceptance job does not download either artifact, so it still proves first publication from
+        # an empty provider store rather than inheriting a warmed test fixture.
         run: >-
           CARGO_BUILD_JOBS=2
           CARGO_NET_OFFLINE=true
@@ -230,13 +231,22 @@ jobs:
           INCAN_TOOLCHAIN_CRATES_DIR="$GITHUB_WORKSPACE/crates"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          ./target/debug/incan check tests/fixtures/test_assert_canary.incn
+          make test-prewarm-oven-native-units
       - name: Upload compiled SDK provider store
         # The provider store is a small immutable product of the matching compiler, not part of the test archive.
         uses: actions/upload-artifact@v6
         with:
           name: test-linux-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload compiler-owned Oven native units
+        # These bounded, digest-verified direct-rustc units are produced only by the named legacy_cargo publisher.
+        # Transferring them lets all normal-command test children run with no Cargo fallback.
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-linux-oven-native-units
+          path: target/share/incan/oven/native-units
           if-no-files-found: error
           retention-days: 1
 
@@ -297,6 +307,14 @@ jobs:
         with:
           name: test-linux-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+      - name: Download compiler-owned Oven native units
+        # Only the generated-cache acceptance fixture exercises the registry-leaf normal-command path. Avoid
+        # transferring this bounded ~1 GiB catalog to the four ordinary shards that do not consume it.
+        if: matrix.kind == 'generated-cache'
+        uses: actions/download-artifact@v6
+        with:
+          name: test-linux-oven-native-units
+          path: target/share/incan/oven/native-units
       - name: Report test cache footprint
         run: |
           du -sh target
@@ -507,8 +525,9 @@ jobs:
         run: chmod +x target/debug/incan
       - uses: ./.github/actions/restore-sdk-provider-store
       - name: Prewarm compiled SDK providers
-        # Ordinary test shards share this immutable provider store. The separate cold-provider acceptance job does
-        # not download it and therefore continues to prove first publication from an empty store.
+        # Ordinary test shards share the immutable SDK inventory and compiler-owned native units. The separate
+        # cold-provider acceptance job does not download either artifact, so it still proves first publication from
+        # an empty provider store rather than inheriting a warmed test fixture.
         run: >-
           CARGO_BUILD_JOBS=2
           CARGO_NET_OFFLINE=true
@@ -518,12 +537,19 @@ jobs:
           INCAN_TOOLCHAIN_CRATES_DIR="$GITHUB_WORKSPACE/crates"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          ./target/debug/incan check tests/fixtures/test_assert_canary.incn
+          make test-prewarm-oven-native-units
       - name: Upload compiled SDK provider store
         uses: actions/upload-artifact@v6
         with:
           name: test-macos-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload compiler-owned Oven native units
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-macos-oven-native-units
+          path: target/share/incan/oven/native-units
           if-no-files-found: error
           retention-days: 1
 
@@ -584,6 +610,12 @@ jobs:
         with:
           name: test-macos-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+      - name: Download compiler-owned Oven native units
+        if: matrix.kind == 'generated-cache'
+        uses: actions/download-artifact@v6
+        with:
+          name: test-macos-oven-native-units
+          path: target/share/incan/oven/native-units
       - name: Report test cache footprint
         run: |
           du -sh target
@@ -822,8 +854,9 @@ jobs:
         run: chmod +x target/debug/incan
       - uses: ./.github/actions/restore-sdk-provider-store
       - name: Prewarm compiled SDK providers
-        # Ordinary test shards share this immutable provider store. The separate cold-provider acceptance job does
-        # not download it and therefore continues to prove first publication from an empty store.
+        # Ordinary test shards share the immutable SDK inventory and compiler-owned native units. The separate
+        # cold-provider acceptance job does not download either artifact, so it still proves first publication from
+        # an empty provider store rather than inheriting a warmed test fixture.
         run: >-
           CARGO_BUILD_JOBS=2
           CARGO_NET_OFFLINE=true
@@ -833,12 +866,19 @@ jobs:
           INCAN_TOOLCHAIN_CRATES_DIR="$GITHUB_WORKSPACE/crates"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          ./target/debug/incan check tests/fixtures/test_assert_canary.incn
+          make test-prewarm-oven-native-units
       - name: Upload compiled SDK provider store
         uses: actions/upload-artifact@v6
         with:
           name: msrv-test-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload compiler-owned Oven native units
+        uses: actions/upload-artifact@v6
+        with:
+          name: msrv-test-oven-native-units
+          path: target/share/incan/oven/native-units
           if-no-files-found: error
           retention-days: 1
 
@@ -901,6 +941,12 @@ jobs:
         with:
           name: msrv-test-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+      - name: Download compiler-owned Oven native units
+        if: matrix.kind == 'generated-cache'
+        uses: actions/download-artifact@v6
+        with:
+          name: msrv-test-oven-native-units
+          path: target/share/incan/oven/native-units
       - name: Report test cache footprint
         run: |
           du -sh target
