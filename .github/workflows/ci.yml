@@ -382,6 +382,7 @@ jobs:
     needs:
       - changes
       - test-linux-archive
+      - test-linux-provider
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -411,6 +412,21 @@ jobs:
         with:
           name: test-linux-nextest-archive
           path: target/nextest-ci
+      - name: Download sealed SDK provider store
+        uses: actions/download-artifact@v6
+        with:
+          name: test-linux-sdk-provider-store
+          path: target/incan_test_sdk_provider_store
+      - name: Download selected SDK provider inventory
+        uses: actions/download-artifact@v6
+        with:
+          name: test-linux-sdk-provider-path
+          path: target
+      - name: Download compiler-owned Oven native units
+        uses: actions/download-artifact@v6
+        with:
+          name: test-linux-oven-native-units
+          path: target/share/incan/oven/native-units
       - name: Verify cold-provider inventory
         run: |
           selected="$(
@@ -428,15 +444,19 @@ jobs:
             exit 1
           fi
       - name: Run cold-provider acceptance
-        run: >-
-          CARGO_BUILD_JOBS=1
-          INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target"
-          INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store"
-          cargo nextest run
-          --archive-file target/nextest-ci/test-suite.tar.zst
-          --workspace-remap "$GITHUB_WORKSPACE"
-          --profile ci
+        run: |
+          provider_inventory="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
+          test -f "$provider_inventory"
+          CARGO_BUILD_JOBS=1 \
+          INCAN_SDK_INVENTORY="$provider_inventory" \
+          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
+          INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target" \
+          INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
+          INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
+          cargo nextest run \
+          --archive-file target/nextest-ci/test-suite.tar.zst \
+          --workspace-remap "$GITHUB_WORKSPACE" \
+          --profile ci \
           -E "$COLD_PROVIDER_TEST_FILTER"
 
   test-linux:
@@ -560,6 +580,13 @@ jobs:
         with:
           name: test-macos-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload selected SDK provider inventory
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-macos-sdk-provider-path
+          path: target/incan_test_sdk_provider_path
           if-no-files-found: error
           retention-days: 1
       - name: Upload compiler-owned Oven native units
@@ -687,6 +714,7 @@ jobs:
     needs:
       - changes
       - test-macos-archive
+      - test-macos-provider
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -716,6 +744,21 @@ jobs:
         with:
           name: test-macos-nextest-archive
           path: target/nextest-ci
+      - name: Download sealed SDK provider store
+        uses: actions/download-artifact@v6
+        with:
+          name: test-macos-sdk-provider-store
+          path: target/incan_test_sdk_provider_store
+      - name: Download selected SDK provider inventory
+        uses: actions/download-artifact@v6
+        with:
+          name: test-macos-sdk-provider-path
+          path: target
+      - name: Download compiler-owned Oven native units
+        uses: actions/download-artifact@v6
+        with:
+          name: test-macos-oven-native-units
+          path: target/share/incan/oven/native-units
       - name: Verify cold-provider inventory
         run: |
           selected="$(
@@ -733,15 +776,19 @@ jobs:
             exit 1
           fi
       - name: Run cold-provider acceptance
-        run: >-
-          CARGO_BUILD_JOBS=1
-          INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target"
-          INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store"
-          cargo nextest run
-          --archive-file target/nextest-ci/test-suite.tar.zst
-          --workspace-remap "$GITHUB_WORKSPACE"
-          --profile ci
+        run: |
+          provider_inventory="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
+          test -f "$provider_inventory"
+          CARGO_BUILD_JOBS=1 \
+          INCAN_SDK_INVENTORY="$provider_inventory" \
+          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
+          INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target" \
+          INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
+          INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
+          cargo nextest run \
+          --archive-file target/nextest-ci/test-suite.tar.zst \
+          --workspace-remap "$GITHUB_WORKSPACE" \
+          --profile ci \
           -E "$COLD_PROVIDER_TEST_FILTER"
 
   test-macos:
@@ -895,6 +942,13 @@ jobs:
           path: target/incan_test_sdk_provider_store
           if-no-files-found: error
           retention-days: 1
+      - name: Upload selected SDK provider inventory
+        uses: actions/upload-artifact@v6
+        with:
+          name: msrv-test-sdk-provider-path
+          path: target/incan_test_sdk_provider_path
+          if-no-files-found: error
+          retention-days: 1
       - name: Upload compiler-owned Oven native units
         uses: actions/upload-artifact@v6
         with:
@@ -1022,6 +1076,7 @@ jobs:
     needs:
       - changes
       - msrv-test-archive
+      - msrv-test-provider
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -1053,6 +1108,21 @@ jobs:
         with:
           name: msrv-test-nextest-archive
           path: target/nextest-ci
+      - name: Download sealed SDK provider store
+        uses: actions/download-artifact@v6
+        with:
+          name: msrv-test-sdk-provider-store
+          path: target/incan_test_sdk_provider_store
+      - name: Download selected SDK provider inventory
+        uses: actions/download-artifact@v6
+        with:
+          name: msrv-test-sdk-provider-path
+          path: target
+      - name: Download compiler-owned Oven native units
+        uses: actions/download-artifact@v6
+        with:
+          name: msrv-test-oven-native-units
+          path: target/share/incan/oven/native-units
       - name: Verify cold-provider inventory
         run: |
           selected="$(
@@ -1070,15 +1140,19 @@ jobs:
             exit 1
           fi
       - name: Run cold-provider acceptance
-        run: >-
-          CARGO_BUILD_JOBS=1
-          INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target"
-          INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store"
-          cargo nextest run
-          --archive-file target/nextest-ci/test-suite.tar.zst
-          --workspace-remap "$GITHUB_WORKSPACE"
-          --profile ci
+        run: |
+          provider_inventory="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")/sdk-inventory.json"
+          test -f "$provider_inventory"
+          CARGO_BUILD_JOBS=1 \
+          INCAN_SDK_INVENTORY="$provider_inventory" \
+          INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path" \
+          INCAN_GENERATED_CARGO_TARGET_DIR="$RUNNER_TEMP/incan_cold_generated_target" \
+          INCAN_TEST_COLD_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
+          INCAN_INTERNAL_SDK_PROVIDER_STORE="$RUNNER_TEMP/incan_cold_provider_store" \
+          cargo nextest run \
+          --archive-file target/nextest-ci/test-suite.tar.zst \
+          --workspace-remap "$GITHUB_WORKSPACE" \
+          --profile ci \
           -E "$COLD_PROVIDER_TEST_FILTER"
 
   msrv:
