@@ -11,7 +11,7 @@ env:
   RUST_BACKTRACE: 1
   INCAN_NO_BANNER: 1
   COLD_PROVIDER_TEST_FILTER: >-
-    test(/(concurrent_sdk_provider_publication_reuses_one_complete_identity|cold_rooted_workspace_lock_publishes_and_strict_library_build_agrees_issue931|test_run_std_regex_rfc059_surface_from_cold_sdk_provider)/)
+    test(/(concurrent_normal_checks_reuse_sealed_sdk_inventory_without_mutable_publication|cold_rooted_workspace_lock_uses_bounded_native_units_and_strict_library_build_agrees_issue931|test_run_std_regex_rfc059_surface_from_sealed_sdk_inventory)/)
   GENERATED_CACHE_ACCEPTANCE_TEST_FILTER: >-
     test(/managed_cache_reuses_offline_across_projects_and_cleans_interrupted_entry/)
 
