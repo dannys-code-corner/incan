@@ -1272,7 +1272,12 @@ pub fn prepare_compiler_test_suite(
         .join("deps");
     let host_deps = foundation_target.join(profile_directory).join("deps");
     let dependency_directories = compiler_suite_dependency_directories(target_deps, host_deps);
-    let foundation_catalog = compiler_suite_artifact_catalog(&staging, &dependency_directories, &[])?;
+    // The private foundation root itself may be the only Cargo-reported direct-Rustc artifact on a compatible
+    // host/profile layout. Keep every exact compiler-artifact path that Cargo reported, rather than relying on
+    // the conventional `deps/` directories to exist. The catalog still rejects paths outside publisher staging.
+    let foundation_direct_artifact_files = compiler_suite_output_artifact_paths(&foundation_output)?;
+    let foundation_catalog =
+        compiler_suite_artifact_catalog(&staging, &dependency_directories, &foundation_direct_artifact_files)?;
     let foundation_artifact_index = compiler_suite_artifact_index(&foundation_output, &request.receipt.intent.target)?;
     let mut root_indices = Vec::new();
     for root_index in &unit_graph.roots {
@@ -2808,12 +2813,11 @@ fn compiler_suite_artifact_index(
     Ok(index)
 }
 
-/// Read the exact compiler/linker files Cargo reported for the dedicated normal-library publisher invocation.
+/// Read the exact compiler/linker files Cargo reported for one named publisher invocation.
 ///
-/// Cargo places a package's primary `.rlib` beside the profile directory, while dependency artifacts live below
-/// `deps/`. The suite catalog scans only `deps/` directories, so this list carries that one explicit root artifact
-/// into the immutable closure without broadening the publisher's trusted filesystem scope.
-#[cfg(test)]
+/// Cargo can place a package's primary `.rlib` beside the profile directory while dependencies appear below `deps/`.
+/// The catalog admits these exact reported files only after verifying that each one is a regular path below publisher
+/// staging, so this does not broaden the trusted filesystem scope to an arbitrary Cargo target.
 fn compiler_suite_output_artifact_paths(output: &CargoInvocationOutput) -> Result<Vec<PathBuf>, OvenLegacyCargoError> {
     let mut paths = BTreeSet::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -5539,8 +5543,8 @@ mod tests {
         compiler_suite_direct_cli_plan, compiler_suite_direct_target_plan,
         compiler_suite_direct_target_shard_from_catalog, compiler_suite_direct_target_shard_plan,
         compiler_suite_foundation_dependencies, compiler_suite_foundation_manifest, compiler_suite_foundation_plans,
-        compiler_suite_target_externs, compiler_suite_target_from_unit, compiler_suite_target_runner,
-        compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
+        compiler_suite_output_artifact_paths, compiler_suite_target_externs, compiler_suite_target_from_unit,
+        compiler_suite_target_runner, compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
         compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
         compiler_suite_workspace_libraries_for_roots, create_publisher_staging, direct_rustc_compile_environment,
         generated_project_direct_dependencies, materialized_files_from_directory,
@@ -5574,6 +5578,41 @@ mod tests {
         assert_eq!(catalog.closure.dependency_search_paths, vec!["target/oven-test/deps"]);
         assert_eq!(catalog.materialized_files.len(), 1);
         assert!(!target_deps.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn compiler_suite_catalog_uses_a_reported_foundation_artifact_without_a_deps_directory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let artifact = staging
+            .path()
+            .join("third-party-foundation-target/aarch64-apple-darwin/oven-test/liboven_compiler_foundation.rlib");
+        fs::create_dir_all(artifact.parent().ok_or("foundation artifact parent missing")?)?;
+        fs::write(&artifact, "foundation artifact")?;
+        let output = CargoInvocationOutput {
+            stdout: format!(
+                "{}\n",
+                serde_json::json!({
+                    "reason": "compiler-artifact",
+                    "package_id": "oven-compiler-foundation 0.0.0",
+                    "target": { "name": "oven_compiler_foundation" },
+                    "filenames": [artifact],
+                })
+            )
+            .into_bytes(),
+        };
+
+        let reported_artifacts = compiler_suite_output_artifact_paths(&output)?;
+        let catalog = compiler_suite_artifact_catalog(staging.path(), &[], &reported_artifacts)?;
+
+        assert_eq!(reported_artifacts, vec![fs::canonicalize(&artifact)?]);
+        assert_eq!(catalog.closure.dependency_search_paths, Vec::<String>::new());
+        assert_eq!(catalog.materialized_files.len(), 1);
+        assert_eq!(
+            catalog.materialized_files[0].relative_path,
+            "third-party-foundation-target/aarch64-apple-darwin/oven-test/liboven_compiler_foundation.rlib"
+        );
         Ok(())
     }
 
