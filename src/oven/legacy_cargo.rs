@@ -2913,10 +2913,7 @@ fn compiler_suite_dependency_artifact(
         match target_families.as_slice() {
             [(_, files)] => *files,
             [] => {
-                return Err(OvenLegacyCargoError::MissingDirectArtifact {
-                    crate_name: crate_name.to_string(),
-                    path: unit.target.src_path.clone(),
-                });
+                return compiler_suite_catalog_target_library(unit, catalog, crate_name, target);
             }
             _ => {
                 return Err(OvenLegacyCargoError::InvalidInput {
@@ -3003,6 +3000,9 @@ fn compiler_suite_dependency_artifact(
     let (relative_path, digest) = match candidates.as_slice() {
         [artifact] => artifact.clone(),
         [] => {
+            if let Some(target) = direct_rustc_target.filter(|_| !wants_dynamic) {
+                return compiler_suite_catalog_target_library(unit, catalog, crate_name, target);
+            }
             return Err(OvenLegacyCargoError::MissingDirectArtifact {
                 crate_name: crate_name.to_string(),
                 path: unit.target.src_path.clone(),
@@ -3018,6 +3018,64 @@ fn compiler_suite_dependency_artifact(
                         .map(|(path, _)| path.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
+                ),
+            });
+        }
+    };
+    Ok(OvenRustcArtifactExtern {
+        crate_name: crate_name.replace('-', "_"),
+        relative_path,
+        digest,
+    })
+}
+
+/// Recover one exact target-library extern from the sealed foundation catalog when Cargo's JSON artifact stream did
+/// not retain an artifact family for the matching unit-graph edge.
+///
+/// The compiler-suite publisher scans the named foundation's target `deps` directory into this immutable catalog
+/// before it creates a direct-Rustc plan. A Cargo build-script output record can be filtered because it is not a
+/// linkable `--extern`, while the corresponding library record is absent or keyed differently in that JSON stream.
+/// In that narrow case the verified target catalog remains sufficient only when it has exactly one target `.rlib`
+/// named for the dependency unit. Multiple candidates remain a deterministic refusal; this is neither source
+/// discovery nor a consumer-side Cargo fallback.
+fn compiler_suite_catalog_target_library(
+    unit: &CargoUnitGraphUnit,
+    catalog: &CompilerSuiteArtifactCatalog,
+    crate_name: &str,
+    direct_rustc_target: &str,
+) -> Result<OvenRustcArtifactExtern, OvenLegacyCargoError> {
+    let crate_prefix = format!("lib{}-", unit.target.name.replace('-', "_"));
+    let target_dependencies = Path::new("third-party-foundation-target")
+        .join(direct_rustc_target)
+        .join("oven-test/deps");
+    let mut candidates = catalog
+        .by_source_path
+        .iter()
+        .filter(|(source_path, (relative_path, _))| {
+            Path::new(relative_path).starts_with(&target_dependencies)
+                && source_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(&crate_prefix) && name.ends_with(".rlib"))
+        })
+        .map(|(_, artifact)| artifact.clone())
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.dedup();
+    let (relative_path, digest) = match candidates.as_slice() {
+        [artifact] => artifact.clone(),
+        [] => {
+            return Err(OvenLegacyCargoError::MissingDirectArtifact {
+                crate_name: crate_name.to_string(),
+                path: unit.target.src_path.clone(),
+            });
+        }
+        _ => {
+            return Err(OvenLegacyCargoError::InvalidInput {
+                field: "compiler-suite unit graph",
+                message: format!(
+                    "dependency `{crate_name}` has {} sealed receipt-target library artifacts after Cargo JSON reconciliation",
+                    candidates.len()
                 ),
             });
         }
@@ -5568,11 +5626,12 @@ mod tests {
         OvenCompilerTestSuiteTarget, OvenLegacyCargoInvocationTarget, artifact_closure,
         compiler_suite_artifact_catalog, compiler_suite_artifact_index, compiler_suite_bootstrap_selection,
         compiler_suite_cargo_build_output, compiler_suite_cli_target_from_artifact_index,
-        compiler_suite_dependency_directories, compiler_suite_direct_cli_plan, compiler_suite_direct_target_plan,
-        compiler_suite_direct_target_shard_from_catalog, compiler_suite_direct_target_shard_plan,
-        compiler_suite_foundation_dependencies, compiler_suite_foundation_manifest, compiler_suite_foundation_plans,
-        compiler_suite_output_artifact_paths, compiler_suite_target_externs, compiler_suite_target_from_unit,
-        compiler_suite_target_runner, compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
+        compiler_suite_dependency_artifact, compiler_suite_dependency_directories, compiler_suite_direct_cli_plan,
+        compiler_suite_direct_target_plan, compiler_suite_direct_target_shard_from_catalog,
+        compiler_suite_direct_target_shard_plan, compiler_suite_foundation_dependencies,
+        compiler_suite_foundation_manifest, compiler_suite_foundation_plans, compiler_suite_output_artifact_paths,
+        compiler_suite_target_externs, compiler_suite_target_from_unit, compiler_suite_target_runner,
+        compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
         compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
         compiler_suite_workspace_libraries_for_roots, create_publisher_staging, direct_rustc_compile_environment,
         generated_project_direct_dependencies, materialized_files_from_directory,
@@ -5714,6 +5773,69 @@ mod tests {
             externs[0].relative_path,
             "target/aarch64-apple-darwin/debug/deps/libfixture-abc.rlib"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn publisher_recovers_one_sealed_target_library_when_cargo_json_omits_its_artifact_family()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let source = staging.path().join("registry/blake2/src/lib.rs");
+        let target_dependencies = staging
+            .path()
+            .join("third-party-foundation-target/x86_64-unknown-linux-gnu/oven-test/deps");
+        fs::create_dir_all(source.parent().expect("registry source parent"))?;
+        fs::create_dir_all(&target_dependencies)?;
+        fs::write(&source, "pub fn fixture() {}\n")?;
+        let resolved_library = target_dependencies.join("libblake2-resolved.rlib");
+        fs::write(&resolved_library, "resolved blake2 library")?;
+        let unit = CargoUnitGraphUnit {
+            pkg_id: "blake2 0.10.6 (registry+https://example.invalid)".to_string(),
+            target: CargoUnitGraphTarget {
+                kind: vec!["lib".to_string()],
+                crate_types: vec!["lib".to_string()],
+                name: "blake2".to_string(),
+                src_path: source.clone(),
+                edition: "2024".to_string(),
+            },
+            mode: "build".to_string(),
+            platform: Some("x86_64-unknown-linux-gnu".to_string()),
+            features: Vec::new(),
+            dependencies: Vec::new(),
+        };
+        let catalog = compiler_suite_artifact_catalog(staging.path(), std::slice::from_ref(&target_dependencies), &[])?;
+        let selected = compiler_suite_dependency_artifact(
+            &unit,
+            &BTreeMap::new(),
+            &catalog,
+            "blake2",
+            Some("x86_64-unknown-linux-gnu"),
+        )?;
+        assert_eq!(
+            selected.relative_path,
+            "third-party-foundation-target/x86_64-unknown-linux-gnu/oven-test/deps/libblake2-resolved.rlib"
+        );
+
+        // The sealed-catalog recovery is deliberately unique: two receipt-target libraries remain an explicit
+        // publisher error rather than an arbitrary direct-Rustc selection.
+        fs::write(
+            target_dependencies.join("libblake2-second.rlib"),
+            "second incompatible blake2 library",
+        )?;
+        let ambiguous_catalog = compiler_suite_artifact_catalog(staging.path(), &[target_dependencies], &[])?;
+        assert!(matches!(
+            compiler_suite_dependency_artifact(
+                &unit,
+                &BTreeMap::new(),
+                &ambiguous_catalog,
+                "blake2",
+                Some("x86_64-unknown-linux-gnu"),
+            ),
+            Err(super::OvenLegacyCargoError::InvalidInput {
+                field: "compiler-suite unit graph",
+                ..
+            })
+        ));
         Ok(())
     }
 
