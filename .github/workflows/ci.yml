@@ -154,7 +154,9 @@ jobs:
       - name: Build compiler binaries for the Oven publisher
         # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
         # are receipt-bound Oven work, not a Cargo/Nextest harness.
-        run: CARGO_BUILD_JOBS=2 cargo build --features lsp --bins
+        run: |
+          CARGO_BUILD_JOBS=2 cargo build --features lsp --bins
+          CARGO_BUILD_JOBS=2 cargo build -p incan_core --bin generate_lang_reference
       - name: Upload matching Incan CLI
         uses: actions/upload-artifact@v6
         with:
