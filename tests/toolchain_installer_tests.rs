@@ -707,15 +707,12 @@ fn toolchain_archive_packager_writes_archive_checksum_and_release_metadata() -> 
     );
     assert_eq!(evidence["oven_native_unit_seed_count"].as_u64(), Some(2));
     assert_eq!(
-        evidence["oven_native_unit_payload_bytes"].as_u64(),
+        evidence["oven_native_unit_logical_bytes"].as_u64(),
         Some(directory_logical_file_bytes(
             &package_root.join("share/incan/oven/native-units"),
         )?)
     );
-    assert_eq!(
-        evidence["oven_native_unit_logical_bytes"],
-        evidence["oven_native_unit_payload_bytes"]
-    );
+    assert!(evidence.get("oven_native_unit_payload_bytes").is_none());
     assert!(
         evidence["oven_native_unit_physical_bytes"]
             .as_u64()

@@ -852,6 +852,7 @@ fn bake_compiler_vocab_support(
         .arg("build")
         .arg("--manifest-path")
         .arg(&manifest)
+        .arg("--message-format=json-render-diagnostics")
         .arg("--target")
         .arg(&plan.intent.target)
         .arg("--target-dir")
@@ -889,6 +890,7 @@ fn bake_compiler_vocab_support(
         .arg("build")
         .arg("--manifest-path")
         .arg(&manifest)
+        .arg("--message-format=json-render-diagnostics")
         .arg("--target")
         .arg(VOCAB_DESUGARER_TARGET)
         .arg("--target-dir")
@@ -927,10 +929,50 @@ fn bake_compiler_vocab_support(
     // derive macro such as `serde_derive`.
     let host_artifact_directory = cargo_target.join(profile).join("deps");
     let seed_directory = support_root.join("deps");
-    copy_compiler_vocab_support_artifacts(&artifact_directory, &host_artifact_directory, &seed_directory, plan)?;
+    let host_artifacts = compiler_artifact_paths_from_cargo_output(
+        &compile.stdout,
+        &cargo_target,
+        &[&artifact_directory, &host_artifact_directory],
+        INCAN_VOCAB,
+        &cargo_target.join(&plan.intent.target).join(profile),
+        "native vocabulary support",
+    )?;
+    copy_compiler_vocab_support_artifacts(
+        &host_artifacts,
+        &artifact_directory,
+        &cargo_target.join(&plan.intent.target).join(profile),
+        &host_artifact_directory,
+        &seed_directory,
+        plan,
+    )?;
     let wasm_artifact_directory = cargo_target.join(VOCAB_DESUGARER_TARGET).join(profile).join("deps");
+    let wasm_artifact_directory_canonical =
+        fs::canonicalize(&wasm_artifact_directory).map_err(|source| OvenNativeUnitError::Io {
+            path: wasm_artifact_directory.clone(),
+            source,
+        })?;
+    let wasm_primary_artifact_directory = cargo_target.join(VOCAB_DESUGARER_TARGET).join(profile);
+    let wasm_primary_artifact_directory_canonical =
+        fs::canonicalize(&wasm_primary_artifact_directory).map_err(|source| OvenNativeUnitError::Io {
+            path: wasm_primary_artifact_directory.clone(),
+            source,
+        })?;
+    let wasm_artifacts = compiler_artifact_paths_from_cargo_output(
+        &wasm_compile.stdout,
+        &cargo_target,
+        &[&wasm_artifact_directory, &host_artifact_directory],
+        INCAN_VOCAB,
+        &wasm_primary_artifact_directory,
+        "native vocabulary Wasm support",
+    )?
+    .into_iter()
+    .filter(|artifact| {
+        artifact.starts_with(&wasm_artifact_directory_canonical)
+            || artifact.parent() == Some(wasm_primary_artifact_directory_canonical.as_path())
+    })
+    .collect::<Vec<_>>();
     copy_compiler_vocab_auxiliary_target_artifacts(
-        &wasm_artifact_directory,
+        &wasm_artifacts,
         &support_root.join(VOCAB_DESUGARER_TARGET).join("deps"),
         VOCAB_DESUGARER_TARGET,
         plan,
@@ -958,13 +1000,15 @@ fn discard_compiler_vocab_build_state(cargo_target: &Path) -> Result<(), OvenNat
 /// Copy the sealed `incan_vocab` direct-Rustc support set produced by the compiler-owned package build.
 ///
 /// The named publisher starts from an empty target directory, builds only `incan_vocab` against the checked lockfile,
-/// and retains every target- and host-side Rust library artifact that this single invocation produced. The two roots
-/// selected by vocabulary extraction (`incan_vocab` and `serde_json`) are explicit externs; the remaining digested
-/// artifacts are sealed support inputs, including host procedural macros. This is deliberately a bounded publisher
-/// support set rather than a resolver for caller dependencies. The normal guarded library-vocab regression exercises
+/// and retains only the exact Rust-library paths in Cargo's `compiler-artifact` records for that invocation. The two
+/// roots selected by vocabulary extraction (`incan_vocab` and `serde_json`) are explicit externs; the remaining
+/// digested artifacts are their declared direct-Rustc support closure, including host procedural macros. A stale or
+/// unrelated Cargo `deps` file is neither scanned nor admitted. The normal guarded library-vocab regression exercises
 /// that sealed set and fails if a consumer attempts to launch Cargo.
 fn copy_compiler_vocab_support_artifacts(
+    source_artifacts: &[PathBuf],
     target_artifact_directory: &Path,
+    primary_artifact_directory: &Path,
     host_artifact_directory: &Path,
     seed_directory: &Path,
     plan: &mut OvenRustcArtifactManifest,
@@ -976,6 +1020,14 @@ fn copy_compiler_vocab_support_artifacts(
             message: format!(
                 "native vocabulary publisher produced no target dependency directory: {}",
                 target_artifact_directory.display()
+            ),
+        });
+    }
+    if !primary_artifact_directory.is_dir() {
+        return Err(OvenNativeUnitError::Preparation {
+            message: format!(
+                "native vocabulary publisher produced no primary artifact directory: {}",
+                primary_artifact_directory.display()
             ),
         });
     }
@@ -991,58 +1043,73 @@ fn copy_compiler_vocab_support_artifacts(
         path: seed_directory.to_path_buf(),
         source,
     })?;
+    let target_artifact_directory =
+        fs::canonicalize(target_artifact_directory).map_err(|source| OvenNativeUnitError::Io {
+            path: target_artifact_directory.to_path_buf(),
+            source,
+        })?;
+    let primary_artifact_directory =
+        fs::canonicalize(primary_artifact_directory).map_err(|source| OvenNativeUnitError::Io {
+            path: primary_artifact_directory.to_path_buf(),
+            source,
+        })?;
+    let host_artifact_directory =
+        fs::canonicalize(host_artifact_directory).map_err(|source| OvenNativeUnitError::Io {
+            path: host_artifact_directory.to_path_buf(),
+            source,
+        })?;
     let mut copied = BTreeMap::new();
     let mut target_copied = BTreeMap::new();
-    for (artifact_directory, target_artifacts) in [(target_artifact_directory, true), (host_artifact_directory, false)]
-    {
-        let mut source_paths = fs::read_dir(artifact_directory)
-            .map_err(|source| OvenNativeUnitError::Io {
-                path: artifact_directory.to_path_buf(),
-                source,
-            })?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|source| OvenNativeUnitError::Io {
-                path: artifact_directory.to_path_buf(),
-                source,
-            })?;
-        source_paths.sort();
-        for source in source_paths {
-            let metadata = fs::symlink_metadata(&source).map_err(|source_error| OvenNativeUnitError::Io {
-                path: source.clone(),
-                source: source_error,
-            })?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() || !is_rust_library_artifact(&source) {
-                continue;
-            }
-            let file_name = source
-                .file_name()
-                .ok_or_else(|| OvenNativeUnitError::Preparation {
-                    message: format!("native vocabulary artifact has no filename: {}", source.display()),
-                })?
-                .to_string_lossy()
-                .to_string();
-            let bytes = fs::read(&source).map_err(|source_error| OvenNativeUnitError::Io {
-                path: source.clone(),
-                source: source_error,
-            })?;
-            let digest = digest_bytes(&bytes);
-            if let Some(existing) = copied.insert(file_name.clone(), digest.clone())
-                && existing != digest
-            {
-                return Err(OvenNativeUnitError::Preparation {
-                    message: format!("native vocabulary target and host closures conflict on artifact `{file_name}`"),
-                });
-            }
-            if target_artifacts {
-                target_copied.insert(file_name.clone(), digest.clone());
-            }
-            let destination = seed_directory.join(&file_name);
-            fs::write(&destination, bytes).map_err(|source_error| OvenNativeUnitError::Io {
-                path: destination,
-                source: source_error,
-            })?;
+    for source in source_artifacts {
+        let target_artifacts = source.starts_with(&target_artifact_directory)
+            || source.parent() == Some(primary_artifact_directory.as_path());
+        if !target_artifacts && !source.starts_with(&host_artifact_directory) {
+            return Err(OvenNativeUnitError::Preparation {
+                message: format!(
+                    "native vocabulary compiler-artifact escaped its declared target or host dependency directory: {}",
+                    source.display()
+                ),
+            });
         }
+        let metadata = fs::symlink_metadata(source).map_err(|source_error| OvenNativeUnitError::Io {
+            path: source.clone(),
+            source: source_error,
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || !is_rust_library_artifact(source) {
+            return Err(OvenNativeUnitError::Preparation {
+                message: format!(
+                    "native vocabulary compiler-artifact is not a regular direct-Rustc library: {}",
+                    source.display()
+                ),
+            });
+        }
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| OvenNativeUnitError::Preparation {
+                message: format!("native vocabulary artifact has no filename: {}", source.display()),
+            })?
+            .to_string_lossy()
+            .to_string();
+        let bytes = fs::read(source).map_err(|source_error| OvenNativeUnitError::Io {
+            path: source.clone(),
+            source: source_error,
+        })?;
+        let digest = digest_bytes(&bytes);
+        if let Some(existing) = copied.insert(file_name.clone(), digest.clone())
+            && existing != digest
+        {
+            return Err(OvenNativeUnitError::Preparation {
+                message: format!("native vocabulary target and host closures conflict on artifact `{file_name}`"),
+            });
+        }
+        if target_artifacts {
+            target_copied.insert(file_name.clone(), digest.clone());
+        }
+        let destination = seed_directory.join(&file_name);
+        fs::write(&destination, bytes).map_err(|source_error| OvenNativeUnitError::Io {
+            path: destination,
+            source: source_error,
+        })?;
     }
     if copied.is_empty() {
         return Err(OvenNativeUnitError::Preparation {
@@ -1091,51 +1158,171 @@ fn copy_compiler_vocab_support_artifacts(
     Ok(())
 }
 
+/// Return only Rust-library files explicitly emitted by one named publisher Cargo invocation.
+///
+/// Cargo's dependency directory is staging state, not an Oven input contract. The publisher requests structured
+/// `compiler-artifact` output and this helper admits only listed regular files beneath the exact target/host
+/// dependency directories supplied by the caller. Cargo reports the primary package's rlib only at the profile root
+/// (with a dependency-directory rmeta): that one exact, named rlib is admitted as an explicit Rustc extern. Every
+/// other Rust-library file outside the dependency directories is refused. A path outside the one publisher target
+/// root is likewise refused. This keeps an unrelated retained `deps` artifact from becoming a silent immutable seed
+/// dependency while still retaining the publisher's real primary artifact.
+fn compiler_artifact_paths_from_cargo_output(
+    cargo_stdout: &[u8],
+    publisher_target_root: &Path,
+    allowed_directories: &[&Path],
+    primary_crate_name: &str,
+    primary_artifact_directory: &Path,
+    publisher: &str,
+) -> Result<Vec<PathBuf>, OvenNativeUnitError> {
+    let publisher_target_root = fs::canonicalize(publisher_target_root).map_err(|source| OvenNativeUnitError::Io {
+        path: publisher_target_root.to_path_buf(),
+        source,
+    })?;
+    let allowed_directories = allowed_directories
+        .iter()
+        .map(|directory| {
+            fs::canonicalize(directory).map_err(|source| OvenNativeUnitError::Io {
+                path: (*directory).to_path_buf(),
+                source,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if allowed_directories.is_empty() {
+        return Err(OvenNativeUnitError::Preparation {
+            message: format!("{publisher} publisher declared no Cargo artifact directories"),
+        });
+    }
+    let primary_artifact_directory =
+        fs::canonicalize(primary_artifact_directory).map_err(|source| OvenNativeUnitError::Io {
+            path: primary_artifact_directory.to_path_buf(),
+            source,
+        })?;
+    let primary_artifact_filename = format!("lib{primary_crate_name}.rlib");
+    let cargo_stdout = std::str::from_utf8(cargo_stdout).map_err(|error| OvenNativeUnitError::Preparation {
+        message: format!("{publisher} publisher emitted non-UTF-8 Cargo JSON: {error}"),
+    })?;
+    let mut artifacts = BTreeSet::new();
+    for (line_number, line) in cargo_stdout.lines().enumerate() {
+        let value =
+            serde_json::from_str::<serde_json::Value>(line).map_err(|error| OvenNativeUnitError::Preparation {
+                message: format!(
+                    "{publisher} publisher emitted invalid Cargo JSON on line {}: {error}",
+                    line_number + 1
+                ),
+            })?;
+        if value.get("reason").and_then(serde_json::Value::as_str) != Some("compiler-artifact") {
+            continue;
+        }
+        let filenames = value
+            .get("filenames")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| OvenNativeUnitError::Preparation {
+                message: format!(
+                    "{publisher} publisher compiler-artifact on line {} has no filenames",
+                    line_number + 1
+                ),
+            })?;
+        let artifact_target_name = value
+            .get("target")
+            .and_then(|target| target.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| OvenNativeUnitError::Preparation {
+                message: format!(
+                    "{publisher} publisher compiler-artifact on line {} has no target name",
+                    line_number + 1
+                ),
+            })?;
+        for filename in filenames {
+            let filename = filename.as_str().ok_or_else(|| OvenNativeUnitError::Preparation {
+                message: format!(
+                    "{publisher} publisher compiler-artifact on line {} has a non-string filename",
+                    line_number + 1
+                ),
+            })?;
+            let source = PathBuf::from(filename);
+            if !is_rust_library_artifact(&source) {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(&source).map_err(|source_error| OvenNativeUnitError::Io {
+                path: source.clone(),
+                source: source_error,
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(OvenNativeUnitError::Preparation {
+                    message: format!(
+                        "{publisher} publisher compiler-artifact is not a regular file: {}",
+                        source.display()
+                    ),
+                });
+            }
+            let source = fs::canonicalize(&source).map_err(|source_error| OvenNativeUnitError::Io {
+                path: source.clone(),
+                source: source_error,
+            })?;
+            let in_dependency_directory = allowed_directories
+                .iter()
+                .any(|directory| source.starts_with(directory));
+            let is_primary_profile_rlib = artifact_target_name == primary_crate_name
+                && source.parent() == Some(primary_artifact_directory.as_path())
+                && source.file_name().and_then(|name| name.to_str()) == Some(primary_artifact_filename.as_str());
+            if in_dependency_directory || is_primary_profile_rlib {
+                artifacts.insert(source);
+            } else if !source.starts_with(&publisher_target_root) {
+                return Err(OvenNativeUnitError::Preparation {
+                    message: format!(
+                        "{publisher} publisher compiler-artifact escaped its target root: {}",
+                        source.display()
+                    ),
+                });
+            } else {
+                return Err(OvenNativeUnitError::Preparation {
+                    message: format!(
+                        "{publisher} publisher compiler-artifact escaped its declared dependency directories: {}",
+                        source.display()
+                    ),
+                });
+            }
+        }
+    }
+    if artifacts.is_empty() {
+        return Err(OvenNativeUnitError::Preparation {
+            message: format!("{publisher} publisher emitted no Rust compiler-artifact files"),
+        });
+    }
+    Ok(artifacts.into_iter().collect())
+}
+
 /// Copy the target-only vocabulary support closure used to produce Wasm desugarers without Cargo.
 ///
 /// The host closure remains an auxiliary search path because Rustc may need host procedural macros while compiling
 /// target code. The target rlibs are retained separately and named explicitly, which prevents host and Wasm copies
 /// of the same crate from occupying one ambiguous direct-Rustc search directory.
 fn copy_compiler_vocab_auxiliary_target_artifacts(
-    target_artifact_directory: &Path,
+    source_artifacts: &[PathBuf],
     seed_directory: &Path,
     target: &str,
     plan: &mut OvenRustcArtifactManifest,
 ) -> Result<(), OvenNativeUnitError> {
     const INCAN_VOCAB: &str = "incan_vocab";
     const SERDE_JSON: &str = "serde_json";
-    if !target_artifact_directory.is_dir() {
-        return Err(OvenNativeUnitError::Preparation {
-            message: format!(
-                "native vocabulary publisher produced no {target} dependency directory: {}",
-                target_artifact_directory.display()
-            ),
-        });
-    }
     fs::create_dir_all(seed_directory).map_err(|source| OvenNativeUnitError::Io {
         path: seed_directory.to_path_buf(),
         source,
     })?;
     let mut artifacts = BTreeMap::new();
-    let mut source_paths = fs::read_dir(target_artifact_directory)
-        .map_err(|source| OvenNativeUnitError::Io {
-            path: target_artifact_directory.to_path_buf(),
-            source,
-        })?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|source| OvenNativeUnitError::Io {
-            path: target_artifact_directory.to_path_buf(),
-            source,
-        })?;
-    source_paths.sort();
-    for source in source_paths {
-        let metadata = fs::symlink_metadata(&source).map_err(|source_error| OvenNativeUnitError::Io {
+    for source in source_artifacts {
+        let metadata = fs::symlink_metadata(source).map_err(|source_error| OvenNativeUnitError::Io {
             path: source.clone(),
             source: source_error,
         })?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() || !is_rust_library_artifact(&source) {
-            continue;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || !is_rust_library_artifact(source) {
+            return Err(OvenNativeUnitError::Preparation {
+                message: format!(
+                    "native vocabulary {target} compiler-artifact is not a regular direct-Rustc library: {}",
+                    source.display()
+                ),
+            });
         }
         let file_name = source
             .file_name()
@@ -1144,7 +1331,7 @@ fn copy_compiler_vocab_auxiliary_target_artifacts(
             })?
             .to_string_lossy()
             .to_string();
-        let bytes = fs::read(&source).map_err(|source_error| OvenNativeUnitError::Io {
+        let bytes = fs::read(source).map_err(|source_error| OvenNativeUnitError::Io {
             path: source.clone(),
             source: source_error,
         })?;
@@ -1162,10 +1349,7 @@ fn copy_compiler_vocab_auxiliary_target_artifacts(
     }
     if artifacts.is_empty() {
         return Err(OvenNativeUnitError::Preparation {
-            message: format!(
-                "native vocabulary publisher retained no Rust artifacts from {}",
-                target_artifact_directory.display()
-            ),
+            message: format!("native vocabulary publisher retained no declared {target} Rust artifacts"),
         });
     }
     let relative_directory = format!("compiler-support/{target}/deps");
@@ -1223,7 +1407,8 @@ fn is_named_rlib(relative_path: &str, crate_name: &str) -> bool {
     let Some(name) = Path::new(relative_path).file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    name.starts_with(&format!("lib{crate_name}-")) && name.ends_with(".rlib")
+    name == format!("lib{crate_name}.rlib")
+        || (name.starts_with(&format!("lib{crate_name}-")) && name.ends_with(".rlib"))
 }
 
 /// Return whether a manifest path is the dynamic compiler-owned `incan_derive` procedural macro.
@@ -2303,6 +2488,129 @@ mod tests {
 
         assert!(!cargo_target.exists());
         assert_eq!(fs::read(direct_closure)?, b"declared direct-rustc input");
+        Ok(())
+    }
+
+    #[test]
+    fn native_vocab_seed_copies_only_cargo_reported_artifact_closure() -> Result<(), Box<dyn std::error::Error>> {
+        let publisher = tempfile::tempdir()?;
+        let target_deps = publisher.path().join("target/deps");
+        let host_deps = publisher.path().join("host/deps");
+        fs::create_dir_all(&target_deps)?;
+        fs::create_dir_all(&host_deps)?;
+        let reported = [
+            ("serde_json", "libserde_json-reported.rlib", b"json".as_slice()),
+            (
+                "required_transitive",
+                "librequired_transitive-reported.rlib",
+                b"transitive".as_slice(),
+            ),
+        ];
+        for (_, name, contents) in reported {
+            fs::write(target_deps.join(name), contents)?;
+        }
+        let unreported = target_deps.join("libunrelated_cargo_residue.rlib");
+        fs::write(&unreported, b"unreported")?;
+        // Cargo reports both the hashed `deps` input and an unhashed convenience
+        // copy at the profile root. The latter is publisher output, not a
+        // direct-rustc input, and must not expand the sealed seed closure.
+        let profile_copy = publisher.path().join("target/libincan_vocab.rlib");
+        fs::write(&profile_copy, b"profile copy")?;
+        let profile_copy_canonical = fs::canonicalize(&profile_copy)?;
+        let mut cargo_output = reported
+            .iter()
+            .map(|(crate_name, name, _)| {
+                serde_json::json!({
+                    "reason": "compiler-artifact",
+                    "target": { "name": crate_name },
+                    "filenames": [target_deps.join(name).display().to_string()],
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        cargo_output.push('\n');
+        cargo_output.push_str(
+            &serde_json::json!({
+                "reason": "compiler-artifact",
+                "target": { "name": "incan_vocab" },
+                "filenames": [profile_copy.display().to_string()],
+            })
+            .to_string(),
+        );
+        let artifacts = super::compiler_artifact_paths_from_cargo_output(
+            cargo_output.as_bytes(),
+            publisher.path(),
+            &[target_deps.as_path(), host_deps.as_path()],
+            "incan_vocab",
+            publisher.path().join("target").as_path(),
+            "native vocabulary fixture",
+        )?;
+        let seed = tempfile::tempdir()?;
+        let receipt = runtime_receipt_for_plan()?;
+        let mut plan = empty_manifest(&receipt);
+
+        super::copy_compiler_vocab_support_artifacts(
+            &artifacts,
+            &target_deps,
+            &publisher.path().join("target"),
+            &host_deps,
+            &seed.path().join("deps"),
+            &mut plan,
+        )?;
+
+        assert!(!seed.path().join("deps/libunrelated_cargo_residue.rlib").exists());
+        assert!(
+            artifacts.iter().any(|artifact| artifact == &profile_copy_canonical),
+            "the named publisher's reported profile-root rlib must enter the direct-rustc closure"
+        );
+        assert!(plan.externs.iter().any(|artifact| artifact.crate_name == "incan_vocab"));
+        assert!(plan.externs.iter().any(|artifact| artifact.crate_name == "serde_json"));
+        assert!(
+            plan.supporting_artifacts
+                .iter()
+                .any(|artifact| artifact.relative_path.ends_with("librequired_transitive-reported.rlib"))
+        );
+        assert!(
+            !plan
+                .supporting_artifacts
+                .iter()
+                .any(|artifact| artifact.relative_path.ends_with("libunrelated_cargo_residue.rlib"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_vocab_seed_rejects_unexpected_profile_root_compiler_artifact() -> Result<(), Box<dyn std::error::Error>> {
+        let publisher = tempfile::tempdir()?;
+        let target_deps = publisher.path().join("target/deps");
+        let host_deps = publisher.path().join("host/deps");
+        fs::create_dir_all(&target_deps)?;
+        fs::create_dir_all(&host_deps)?;
+        let unexpected = publisher.path().join("target/libunrelated.rlib");
+        fs::write(&unexpected, b"must not become a sealed input")?;
+        let cargo_output = serde_json::json!({
+            "reason": "compiler-artifact",
+            "target": { "name": "unrelated" },
+            "filenames": [unexpected.display().to_string()],
+        })
+        .to_string();
+
+        let error = super::compiler_artifact_paths_from_cargo_output(
+            cargo_output.as_bytes(),
+            publisher.path(),
+            &[target_deps.as_path(), host_deps.as_path()],
+            "incan_vocab",
+            publisher.path().join("target").as_path(),
+            "native vocabulary fixture",
+        )
+        .expect_err("unexpected profile-root artifact must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("escaped its declared dependency directories")
+        );
         Ok(())
     }
 

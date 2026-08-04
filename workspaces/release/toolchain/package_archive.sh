@@ -410,7 +410,6 @@ cat > "${archive}.profile.json" <<PROFILE_EVIDENCE
   "oven_native_unit_seed_count": ${native_unit_seed_count},
   "oven_native_unit_logical_bytes": ${native_unit_payload_bytes},
   "oven_native_unit_physical_bytes": ${native_unit_physical_bytes},
-  "oven_native_unit_payload_bytes": ${native_unit_payload_bytes},
   "oven_native_unit_max_bytes": ${native_unit_max_bytes},
   "archive_bytes": ${archive_bytes}
 }
