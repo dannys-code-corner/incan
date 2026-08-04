@@ -267,6 +267,10 @@ fetch-locked-cargo-sources:
 	@cargo fetch --locked
 	@cargo fetch --manifest-path crates/incan_stdlib/stdlib/components/stdlib-interop/vocab_companion/Cargo.toml --locked
 
+.PHONY: fetch-oven-native-unit-sources
+fetch-oven-native-unit-sources:
+	@cargo fetch --manifest-path tests/fixtures/oven_native_seed_dependencies/Cargo.toml --locked
+
 .PHONY: test  ## test - Run all tests
 test: test-prewarm-oven-native-units
 	@echo "\033[1mRunning tests...\033[0m"

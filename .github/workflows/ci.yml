@@ -205,11 +205,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
+      - name: Fetch locked Oven native publisher sources
+        # This publisher-only registry inventory makes the provider job's later offline native-unit publication
+        # reproducible; ordinary Oven consumers never fetch or invoke Cargo.
+        run: make fetch-oven-native-unit-sources
       - name: Download matching Incan CLI
         uses: actions/download-artifact@v6
         with:
@@ -233,11 +237,20 @@ jobs:
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           make test-prewarm-oven-native-units
       - name: Upload compiled SDK provider store
-        # The provider store is a small immutable product of the matching compiler, not part of the test archive.
+        # The provider store is a bounded immutable product of the matching compiler, not part of the test archive.
         uses: actions/upload-artifact@v6
         with:
           name: test-linux-sdk-provider-store
           path: target/incan_test_sdk_provider_store
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload selected SDK provider inventory
+        # The sealed inventory path selects one digest-verified entry inside the immutable provider store.
+        # Downstream normal-command consumers must receive this selection instead of rediscovering a provider.
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-linux-sdk-provider-path
+          path: target/incan_test_sdk_provider_path
           if-no-files-found: error
           retention-days: 1
       - name: Upload compiler-owned Oven native units
@@ -385,11 +398,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
+      - name: Fetch locked Oven native publisher sources
+        run: make fetch-oven-native-unit-sources
       - uses: taiki-e/install-action@nextest
       - name: Download portable test archive
         uses: actions/download-artifact@v6
@@ -511,11 +526,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
+      - name: Fetch locked Oven native publisher sources
+        run: make fetch-oven-native-unit-sources
       - name: Download matching Incan CLI
         uses: actions/download-artifact@v6
         with:
@@ -686,11 +703,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
+      - name: Fetch locked Oven native publisher sources
+        run: make fetch-oven-native-unit-sources
       - uses: taiki-e/install-action@nextest
       - name: Download portable test archive
         uses: actions/download-artifact@v6
@@ -840,11 +859,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
+      - name: Fetch locked Oven native publisher sources
+        run: make fetch-oven-native-unit-sources
       - name: Download matching Incan CLI
         uses: actions/download-artifact@v6
         with:
@@ -1019,11 +1040,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
+      - name: Fetch locked Oven native publisher sources
+        run: make fetch-oven-native-unit-sources
       - uses: taiki-e/install-action@nextest
       - name: Download portable test archive
         uses: actions/download-artifact@v6
@@ -1224,6 +1247,7 @@ jobs:
     needs:
       - changes
       - smoke-release
+      - test-linux-provider
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     strategy:
       fail-fast: false
@@ -1263,8 +1287,42 @@ jobs:
           path: target/release
       - name: Restore executable bit
         run: chmod +x target/release/incan
-      - name: Run smoke shard
-        run: make ${{ matrix.make-target }}
+      - name: Download compiled SDK provider store
+        uses: actions/download-artifact@v6
+        with:
+          name: test-linux-sdk-provider-store
+          path: target/incan_test_sdk_provider_store
+      - name: Download selected SDK provider inventory
+        uses: actions/download-artifact@v6
+        with:
+          name: test-linux-sdk-provider-path
+          path: target
+      - name: Download compiler-owned Oven native units
+        # Smoke commands are normal Oven consumers. They receive the same immutable catalog as the release-compatible
+        # test provider, rather than creating a generated-Cargo cache or materializing a private closure per shard.
+        uses: actions/download-artifact@v6
+        with:
+          name: test-linux-oven-native-units
+          path: target/share/incan/oven/native-units
+      - name: Install Cargo prohibition guard
+        run: |
+          mkdir -p target/ci-cargo-guard
+          cat > target/ci-cargo-guard/cargo <<'EOF'
+          #!/usr/bin/env bash
+          printf '%s\n' "unexpected Cargo invocation during normal Oven smoke command: $*" >> "$CARGO_GUARD_LOG"
+          exit 97
+          EOF
+          chmod +x target/ci-cargo-guard/cargo
+          : > target/ci-cargo-guard/invocations.log
+      - name: Run normal Oven smoke shard without Cargo
+        run: |
+          export PATH="$GITHUB_WORKSPACE/target/ci-cargo-guard:$PATH"
+          export CARGO_GUARD_LOG="$GITHUB_WORKSPACE/target/ci-cargo-guard/invocations.log"
+          make ${{ matrix.make-target }}
+          if [ -s "$CARGO_GUARD_LOG" ]; then
+            cat "$CARGO_GUARD_LOG" >&2
+            exit 1
+          fi
         env:
           INCAN_EXAMPLES_TIMEOUT: ${{ matrix.examples-timeout }}
       - name: Show sccache stats
