@@ -4803,16 +4803,24 @@ fn is_direct_rustc_artifact(name: &str) -> bool {
 
 /// Cargo build-script output is an implementation detail of the named publisher, never a direct-Rustc crate input.
 ///
-/// A compiler-artifact record can name an `.rlib` written below Cargo's `build/<package>/out` layout. It may resemble
-/// a dependency library by filename, but Rustc cannot use it as the package's resolved `--extern`; the compatible
-/// library lives in the sealed `deps` closure. Retaining or selecting it would produce a late E0463 instead of a
-/// deterministic receipt-bound dependency plan. Matching the three-component layout, rather than any directory named
-/// `build`, keeps an otherwise valid checkout path such as `/workspace/build/target/.../deps` admissible.
+/// A compiler-artifact record can name an `.rlib` written below Cargo's `oven-test/build/<package>/.../out` layout.
+/// It may resemble a dependency library by filename, but Rustc cannot use it as the package's resolved `--extern`;
+/// the compatible library lives in the sealed `deps` closure. Retaining or selecting it would produce a late E0463
+/// instead of a deterministic receipt-bound dependency plan. The compiler-suite publisher always uses the named
+/// `oven-test` profile, so fence the match to that profile rather than treating an unrelated checkout component named
+/// `build` as a Cargo implementation detail. Cargo can add an identity directory between the package and `out`, so
+/// require the final parent to be `out` instead of assuming a fixed number of path components.
 fn compiler_suite_cargo_build_output(path: &Path) -> bool {
     let components = path.components().collect::<Vec<_>>();
-    components
-        .windows(3)
-        .any(|components| components[0].as_os_str() == "build" && components[2].as_os_str() == "out")
+    let Some((_, parent_components)) = components.split_last() else {
+        return false;
+    };
+    parent_components
+        .last()
+        .is_some_and(|component| component.as_os_str() == "out")
+        && parent_components
+            .windows(2)
+            .any(|components| components[0].as_os_str() == "oven-test" && components[1].as_os_str() == "build")
 }
 
 /// Read direct dependency aliases from the generated root `Cargo.toml` without asking Cargo for metadata.
@@ -5559,8 +5567,8 @@ mod tests {
         OvenCompilerTestSuitePayload, OvenCompilerTestSuiteShardPayload, OvenCompilerTestSuiteShardReference,
         OvenCompilerTestSuiteTarget, OvenLegacyCargoInvocationTarget, artifact_closure,
         compiler_suite_artifact_catalog, compiler_suite_artifact_index, compiler_suite_bootstrap_selection,
-        compiler_suite_cli_target_from_artifact_index, compiler_suite_dependency_directories,
-        compiler_suite_direct_cli_plan, compiler_suite_direct_target_plan,
+        compiler_suite_cargo_build_output, compiler_suite_cli_target_from_artifact_index,
+        compiler_suite_dependency_directories, compiler_suite_direct_cli_plan, compiler_suite_direct_target_plan,
         compiler_suite_direct_target_shard_from_catalog, compiler_suite_direct_target_shard_plan,
         compiler_suite_foundation_dependencies, compiler_suite_foundation_manifest, compiler_suite_foundation_plans,
         compiler_suite_output_artifact_paths, compiler_suite_target_externs, compiler_suite_target_from_unit,
@@ -6860,7 +6868,7 @@ mod tests {
     fn publisher_excludes_build_script_output_from_direct_rustc_artifacts() -> Result<(), Box<dyn std::error::Error>> {
         let staging = tempfile::tempdir()?;
         // The parent `build` component is deliberately unrelated to Cargo's build-script layout. The direct
-        // dependency must remain admissible while the nested build-script `out` library is excluded.
+        // dependency must remain admissible while both supported nested build-script `out` layouts are excluded.
         let workspace_root = staging.path().join("workspace/build");
         let serde_source = workspace_root.join("registry/serde/src/lib.rs");
         fs::create_dir_all(serde_source.parent().expect("serde source parent"))?;
@@ -6868,18 +6876,35 @@ mod tests {
         let dependency_directory = workspace_root.join("target/x86_64-unknown-linux-gnu/oven-test/deps");
         let build_output_directory =
             workspace_root.join("target/x86_64-unknown-linux-gnu/oven-test/build/serde-fixture/out");
+        let build_output_with_identity_directory =
+            workspace_root.join("target/x86_64-unknown-linux-gnu/oven-test/build/serde-fixture/abc123/out");
         fs::create_dir_all(&dependency_directory)?;
         fs::create_dir_all(&build_output_directory)?;
+        fs::create_dir_all(&build_output_with_identity_directory)?;
         let resolved_library = dependency_directory.join("libserde-resolved.rlib");
         let build_output_library = build_output_directory.join("libserde-build-output.rlib");
+        let build_output_with_identity_library =
+            build_output_with_identity_directory.join("libserde-build-output-with-identity.rlib");
+        let unrelated_build_output = workspace_root.join("fixtures/out/libfixture.rlib");
+        assert!(!compiler_suite_cargo_build_output(&unrelated_build_output));
+        assert!(compiler_suite_cargo_build_output(&build_output_library));
+        assert!(compiler_suite_cargo_build_output(&build_output_with_identity_library));
         fs::write(&resolved_library, "resolved serde library")?;
         fs::write(&build_output_library, "not a Cargo dependency artifact")?;
+        fs::write(
+            &build_output_with_identity_library,
+            "not a Cargo dependency artifact with an identity directory",
+        )?;
         let artifact_message = serde_json::json!({
             "reason": "compiler-artifact",
             "package_id": "serde 1.0.0 (registry+https://example.invalid)",
             "target": { "name": "serde", "src_path": serde_source },
             "features": ["derive"],
-            "filenames": [resolved_library, build_output_library],
+            "filenames": [
+                resolved_library,
+                build_output_library,
+                build_output_with_identity_library,
+            ],
             "profile": { "test": false },
         });
         let output = CargoInvocationOutput {
