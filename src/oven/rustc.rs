@@ -989,7 +989,7 @@ fn materialize_path_rust_library_inner(
     })?;
     if !output_result.status.success() {
         return Err(OvenRustcError::CompilationFailed {
-            report: parse_rustc_diagnostics(&output_result.stdout, &output_result.stderr),
+            report: parse_rustc_diagnostics(&output_result.stdout, &output_result.stderr).with_invocation(&command),
         });
     }
     verified_regular_file(&temporary, "materialized path Rust library")?;
@@ -1547,6 +1547,9 @@ pub struct OvenRustcDiagnosticReport {
     /// Non-JSON rustc output retained verbatim for diagnostics that lack a JSON record.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub unstructured_output: String,
+    /// Bounded direct-Rustc command evidence for a failed Oven compilation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<String>,
 }
 
 impl fmt::Display for OvenRustcDiagnosticReport {
@@ -1555,7 +1558,7 @@ impl fmt::Display for OvenRustcDiagnosticReport {
         const MAX_DIAGNOSTICS: usize = 12;
         const MAX_UNSTRUCTURED_CHARS: usize = 4_000;
 
-        if self.diagnostics.is_empty() && self.unstructured_output.trim().is_empty() {
+        if self.diagnostics.is_empty() && self.unstructured_output.trim().is_empty() && self.invocation.is_none() {
             return formatter.write_str("rustc exited unsuccessfully without emitting diagnostics");
         }
         for (index, diagnostic) in self.diagnostics.iter().take(MAX_DIAGNOSTICS).enumerate() {
@@ -1593,6 +1596,12 @@ impl fmt::Display for OvenRustcDiagnosticReport {
             if unstructured.chars().count() > MAX_UNSTRUCTURED_CHARS {
                 formatter.write_str("\n… rustc unstructured output truncated")?;
             }
+        }
+        if let Some(invocation) = &self.invocation {
+            if !self.diagnostics.is_empty() || !unstructured.is_empty() {
+                formatter.write_str("\n")?;
+            }
+            write!(formatter, "direct rustc invocation: {invocation}")?;
         }
         Ok(())
     }
@@ -3164,7 +3173,7 @@ fn bake_direct_rustc(
     })?;
     if !output_result.status.success() {
         return Err(OvenRustcError::CompilationFailed {
-            report: parse_rustc_diagnostics(&output_result.stdout, &output_result.stderr),
+            report: parse_rustc_diagnostics(&output_result.stdout, &output_result.stderr).with_invocation(&command),
         });
     }
     verified_regular_file(&output, "output")?;
@@ -3991,6 +4000,28 @@ fn parse_rustc_diagnostics(stdout: &[u8], stderr: &[u8]) -> OvenRustcDiagnosticR
     OvenRustcDiagnosticReport {
         diagnostics,
         unstructured_output: unstructured,
+        invocation: None,
+    }
+}
+
+impl OvenRustcDiagnosticReport {
+    /// Attach bounded process evidence to a report after Rustc has exited unsuccessfully.
+    fn with_invocation(mut self, command: &Command) -> Self {
+        const MAX_INVOCATION_CHARS: usize = 12_000;
+
+        // Do not render `Command` itself: its debug format may include explicit compile-time environment values.
+        // Rustc program and argument evidence is enough to replay the artifact closure without exposing that state.
+        let mut rendered = format!("{:?}", command.get_program());
+        for argument in command.get_args() {
+            rendered.push(' ');
+            rendered.push_str(&format!("{argument:?}"));
+        }
+        let mut invocation = rendered.chars().take(MAX_INVOCATION_CHARS).collect::<String>();
+        if rendered.chars().count() > MAX_INVOCATION_CHARS {
+            invocation.push_str(" … invocation truncated");
+        }
+        self.invocation = Some(invocation);
+        self
     }
 }
 
@@ -4067,6 +4098,22 @@ mod tests {
         OVEN_COMPILER_TEST_PROFILE, OvenGeneratedProjectRequest, OvenImportRequest, digest_bytes,
         import_frozen_project, receipt_generated_project,
     };
+
+    #[test]
+    fn failed_direct_rustc_report_keeps_the_bounded_invocation() {
+        let mut command = Command::new("rustc");
+        command.args(["--crate-name", "closure_probe"]);
+        let report = super::parse_rustc_diagnostics(b"", b"").with_invocation(&command);
+
+        assert_eq!(
+            report.invocation.as_deref(),
+            Some("\"rustc\" \"--crate-name\" \"closure_probe\"")
+        );
+        assert_eq!(
+            report.to_string(),
+            "direct rustc invocation: \"rustc\" \"--crate-name\" \"closure_probe\""
+        );
+    }
 
     #[test]
     fn materializes_recursive_path_rust_libraries_without_cargo() -> Result<(), Box<dyn std::error::Error>> {
