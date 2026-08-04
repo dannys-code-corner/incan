@@ -1271,10 +1271,7 @@ pub fn prepare_compiler_test_suite(
         .join(profile_directory)
         .join("deps");
     let host_deps = foundation_target.join(profile_directory).join("deps");
-    let mut dependency_directories = vec![target_deps];
-    if host_deps.is_dir() {
-        dependency_directories.push(host_deps);
-    }
+    let dependency_directories = compiler_suite_dependency_directories(target_deps, host_deps);
     let foundation_catalog = compiler_suite_artifact_catalog(&staging, &dependency_directories, &[])?;
     let foundation_artifact_index = compiler_suite_artifact_index(&foundation_output, &request.receipt.intent.target)?;
     let mut root_indices = Vec::new();
@@ -2659,6 +2656,23 @@ fn compiler_suite_artifact_catalog(
     })
 }
 
+/// Select only dependency directories Cargo actually emitted for one direct-rustc closure.
+///
+/// An explicit target build normally produces `target/<triple>/<profile>/deps` as well as host-side procedural
+/// macro output. A foundation containing only host-built build or procedural-macro dependencies legitimately has no
+/// target directory, however. Treating that absence as publisher I/O failure turns a valid host-only closure into a
+/// CI-only failure. The catalog still rejects an entirely empty closure and every root still validates its exact
+/// artifact records before Oven publishes it.
+fn compiler_suite_dependency_directories(target_deps: PathBuf, host_deps: PathBuf) -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    for directory in [target_deps, host_deps] {
+        if directory.is_dir() && !directories.contains(&directory) {
+            directories.push(directory);
+        }
+    }
+    directories
+}
+
 /// Add one exact Cargo-reported compiler artifact to the immutable suite catalog.
 fn insert_compiler_suite_catalog_artifact(
     staging: &Path,
@@ -3669,10 +3683,7 @@ fn compiler_suite_direct_target_plan(
     let profile_directory = cargo_profile_directory(&receipt.intent.profile)?;
     let target_deps = target.join(&receipt.intent.target).join(profile_directory).join("deps");
     let host_deps = target.join(profile_directory).join("deps");
-    let mut dependency_directories = vec![target_deps];
-    if host_deps.is_dir() {
-        dependency_directories.push(host_deps);
-    }
+    let dependency_directories = compiler_suite_dependency_directories(target_deps, host_deps);
     let cli_direct_artifact_files = compiler_suite_output_artifact_paths(cli_output)?;
     let catalog = compiler_suite_artifact_catalog(staging, &dependency_directories, &cli_direct_artifact_files)?;
     // A root libtest and the normal library used by the direct CLI can legitimately compile the same Cargo unit
@@ -3743,10 +3754,7 @@ fn compiler_suite_direct_cli_plan(
     let profile_directory = cargo_profile_directory(&receipt.intent.profile)?;
     let target_deps = target.join(&receipt.intent.target).join(profile_directory).join("deps");
     let host_deps = target.join(profile_directory).join("deps");
-    let mut dependency_directories = vec![target_deps];
-    if host_deps.is_dir() {
-        dependency_directories.push(host_deps);
-    }
+    let dependency_directories = compiler_suite_dependency_directories(target_deps, host_deps);
     let mut direct_artifact_files = Vec::new();
     for output in cli_outputs {
         direct_artifact_files.extend(compiler_suite_output_artifact_paths(output)?);
@@ -3872,10 +3880,7 @@ fn compiler_suite_direct_target_shard_plan(
     let profile_directory = cargo_profile_directory(&receipt.intent.profile)?;
     let target_deps = target.join(&receipt.intent.target).join(profile_directory).join("deps");
     let host_deps = target.join(profile_directory).join("deps");
-    let mut dependency_directories = vec![target_deps];
-    if host_deps.is_dir() {
-        dependency_directories.push(host_deps);
-    }
+    let dependency_directories = compiler_suite_dependency_directories(target_deps, host_deps);
     let catalog = compiler_suite_artifact_catalog(staging, &dependency_directories, &[])?;
     let artifact_index = compiler_suite_artifact_index(output, &receipt.intent.target)?;
     compiler_suite_direct_target_shard_from_catalog(
@@ -5530,12 +5535,13 @@ mod tests {
         OvenCompilerTestSuitePayload, OvenCompilerTestSuiteShardPayload, OvenCompilerTestSuiteShardReference,
         OvenCompilerTestSuiteTarget, OvenLegacyCargoInvocationTarget, artifact_closure,
         compiler_suite_artifact_catalog, compiler_suite_artifact_index, compiler_suite_bootstrap_selection,
-        compiler_suite_cli_target_from_artifact_index, compiler_suite_direct_cli_plan,
-        compiler_suite_direct_target_plan, compiler_suite_direct_target_shard_from_catalog,
-        compiler_suite_direct_target_shard_plan, compiler_suite_foundation_dependencies,
-        compiler_suite_foundation_manifest, compiler_suite_foundation_plans, compiler_suite_target_externs,
-        compiler_suite_target_from_unit, compiler_suite_target_runner, compiler_suite_target_selection_features,
-        compiler_suite_target_selection_groups, compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
+        compiler_suite_cli_target_from_artifact_index, compiler_suite_dependency_directories,
+        compiler_suite_direct_cli_plan, compiler_suite_direct_target_plan,
+        compiler_suite_direct_target_shard_from_catalog, compiler_suite_direct_target_shard_plan,
+        compiler_suite_foundation_dependencies, compiler_suite_foundation_manifest, compiler_suite_foundation_plans,
+        compiler_suite_target_externs, compiler_suite_target_from_unit, compiler_suite_target_runner,
+        compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
+        compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
         compiler_suite_workspace_libraries_for_roots, create_publisher_staging, direct_rustc_compile_environment,
         generated_project_direct_dependencies, materialized_files_from_directory,
         reclaim_unmaterialized_compiler_suite_target_files, run_legacy_cargo_invocation,
@@ -5551,6 +5557,25 @@ mod tests {
     };
     use crate::oven::{OvenBuildIntent, OvenCompilerSuiteRequest, receipt_native_compiler_suite};
     use std::{collections::BTreeMap, fs};
+
+    #[test]
+    fn compiler_suite_dependency_directories_preserves_a_host_only_foundation() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let staging = tempfile::tempdir()?;
+        let target_deps = staging.path().join("target/aarch64-apple-darwin/oven-test/deps");
+        let host_deps = staging.path().join("target/oven-test/deps");
+        fs::create_dir_all(&host_deps)?;
+        fs::write(host_deps.join("libfixture-abc.dylib"), "host-only foundation")?;
+
+        let directories = compiler_suite_dependency_directories(target_deps.clone(), host_deps.clone());
+
+        assert_eq!(directories, vec![host_deps.clone()]);
+        let catalog = compiler_suite_artifact_catalog(staging.path(), &directories, &[])?;
+        assert_eq!(catalog.closure.dependency_search_paths, vec!["target/oven-test/deps"]);
+        assert_eq!(catalog.materialized_files.len(), 1);
+        assert!(!target_deps.exists());
+        Ok(())
+    }
 
     #[test]
     fn publisher_staging_canonicalizes_a_relative_store_path() -> Result<(), Box<dyn std::error::Error>> {
