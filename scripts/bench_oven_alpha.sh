@@ -12,7 +12,7 @@ usage() {
     cat <<'EOF'
 Usage:
   bash scripts/bench_oven_alpha.sh \
-    --incan PATH --workload build|run|test --source PATH \
+    --incan PATH --release-identity TEXT --checkout-revision TEXT --workload build|run|test --source PATH \
   --incan-home PATH --output PATH --cargo-guard-dir PATH [options]
 
 The selected source must be in the documented compiler-shipped Oven Alpha envelope. The harness requires an empty
@@ -20,6 +20,9 @@ INCAN_HOME, records the first normal command separately from unchanged warm repe
 
 Options:
   --repetitions N                 Unchanged warm repeats after first materialization (default: 2; minimum: 1)
+  --release-identity TEXT         Release archive or CI artifact identity for the selected compiler (required)
+  --checkout-revision TEXT        Revision of the checkout that supplied the benchmark fixture (required)
+  --clean-worktree-source PATH    Identical fixture in a clean checkout for a final reuse run
   --cargo-guard-dir PATH          Directory containing a `cargo` executable that exits exactly 97 (required)
   --max-physical-bytes BYTES      Aggregate Oven physical-store policy (default: 2147483648)
   --max-domain-physical-bytes N   Per-domain Oven physical-store policy (default: 1073741824)
@@ -33,6 +36,9 @@ workload=""
 source_path=""
 incan_home=""
 output_dir=""
+release_identity=""
+checkout_revision=""
+clean_worktree_source=""
 repetitions=2
 cargo_guard_dir=""
 max_physical_bytes=2147483648
@@ -46,6 +52,9 @@ while [ "$#" -gt 0 ]; do
         --source) source_path=${2:?--source requires a path}; shift 2 ;;
         --incan-home) incan_home=${2:?--incan-home requires a path}; shift 2 ;;
         --output) output_dir=${2:?--output requires a path}; shift 2 ;;
+        --release-identity) release_identity=${2:?--release-identity requires text}; shift 2 ;;
+        --checkout-revision) checkout_revision=${2:?--checkout-revision requires text}; shift 2 ;;
+        --clean-worktree-source) clean_worktree_source=${2:?--clean-worktree-source requires a path}; shift 2 ;;
         --repetitions) repetitions=${2:?--repetitions requires a number}; shift 2 ;;
         --cargo-guard-dir) cargo_guard_dir=${2:?--cargo-guard-dir requires a directory}; shift 2 ;;
         --max-physical-bytes) max_physical_bytes=${2:?--max-physical-bytes requires bytes}; shift 2 ;;
@@ -56,7 +65,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-for required in incan workload source_path incan_home output_dir cargo_guard_dir; do
+for required in incan workload source_path incan_home output_dir release_identity checkout_revision cargo_guard_dir; do
     if [ -z "${!required}" ]; then
         echo "missing required --${required//_/-}" >&2
         usage >&2
@@ -83,6 +92,10 @@ command -v python3 >/dev/null 2>&1 || { echo "required executable is unavailable
 command -v uname >/dev/null 2>&1 || { echo "required executable is unavailable: uname" >&2; exit 2; }
 [ -d "$cargo_guard_dir" ] || { echo "--cargo-guard-dir is not a directory: $cargo_guard_dir" >&2; exit 2; }
 [ -x "$cargo_guard_dir/cargo" ] || { echo "--cargo-guard-dir must contain an executable cargo guard" >&2; exit 2; }
+if [ -n "$clean_worktree_source" ] && [ ! -e "$clean_worktree_source" ]; then
+    echo "--clean-worktree-source does not exist: $clean_worktree_source" >&2
+    exit 2
+fi
 set +e
 "$cargo_guard_dir/cargo" --version >/dev/null 2>&1
 cargo_guard_probe_status=$?
@@ -102,15 +115,39 @@ if [ "$max_domain_physical_bytes" -gt "$max_physical_bytes" ]; then
     exit 2
 fi
 
+sha256_file() {
+    python3 - "$1" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+}
+
+source_sha256="$(sha256_file "$source_path")"
+clean_worktree_source_sha256=""
+if [ -n "$clean_worktree_source" ]; then
+    clean_worktree_source_sha256="$(sha256_file "$clean_worktree_source")"
+    if [ "$clean_worktree_source_sha256" != "$source_sha256" ]; then
+        echo "--clean-worktree-source must have identical bytes to --source for a reuse measurement" >&2
+        exit 2
+    fi
+fi
+
 store_root="$incan_home/oven/store/v1"
 if [ -d "$store_root/entries" ] && find "$store_root/entries" -mindepth 1 -maxdepth 1 -type d | grep -q .; then
     echo "--incan-home must start with an empty Oven store so first materialization is attributable: $store_root" >&2
     exit 2
 fi
 
-mkdir -p "$output_dir"
+mkdir -p "$output_dir" "$store_root"
 phase_tsv="$output_dir/phases.tsv"
+junction_tsv="$output_dir/storage-junctions.tsv"
+storage_junctions_dir="$output_dir/storage-junctions"
 : > "$phase_tsv"
+: > "$junction_tsv"
+mkdir -p "$storage_junctions_dir"
 
 now_ms() {
     python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
@@ -144,31 +181,74 @@ run_stage() {
     return "$status"
 }
 
+# Store accounting is a first-class benchmark result, not a final afterthought.  Capture it after every normal
+# command so a retained report distinguishes initial state, first materialization, and each unchanged reuse without
+# treating caller-owned logs as immutable Oven artifacts.
+capture_storage_junction() {
+    local junction=$1
+    local junction_dir="$storage_junctions_dir/$junction"
+    mkdir -p "$junction_dir"
+    if ! run_stage "store_snapshot_$junction" "$incan" oven store inspect --store "$store_root" --format json; then
+        echo "Oven store inspection failed at benchmark junction $junction" >&2
+        return 1
+    fi
+    cp "$output_dir/store_snapshot_$junction.log" "$junction_dir/store-inspection.json"
+    du -sk "$store_root" "$output_dir" > "$junction_dir/disk-usage-kib.tsv"
+    printf '%s\n' "$junction" >> "$junction_tsv"
+}
+
 case "$workload" in
     build) normal_args=(build "$source_path" --report json) ;;
     run) normal_args=(run "$source_path") ;;
     test) normal_args=(test --verbose "$source_path") ;;
 esac
 
+capture_storage_junction initial
+
 if ! run_stage first_materialization "$incan" "${normal_args[@]}"; then
     echo "the first normal command failed; the source is unsupported or the release archive is incomplete" >&2
     sed -n '1,80p' "$output_dir/first_materialization.log" >&2
     exit 1
 fi
+capture_storage_junction after_first_materialization
+
 for run_index in $(seq 1 "$repetitions"); do
     if ! run_stage "warm_repeat_$run_index" "$incan" "${normal_args[@]}"; then
         echo "unchanged warm command $run_index failed" >&2
         sed -n '1,80p' "$output_dir/warm_repeat_$run_index.log" >&2
         exit 1
     fi
+    capture_storage_junction "after_warm_repeat_$run_index"
 done
-run_stage store_inspect "$incan" oven store inspect --store "$store_root" --format json
+
+if [ -n "$clean_worktree_source" ]; then
+    case "$workload" in
+        build) clean_worktree_args=(build "$clean_worktree_source" --report json) ;;
+        run) clean_worktree_args=(run "$clean_worktree_source") ;;
+        test) clean_worktree_args=(test --verbose "$clean_worktree_source") ;;
+    esac
+    if ! run_stage clean_worktree_reuse "$incan" "${clean_worktree_args[@]}"; then
+        echo "clean-worktree reuse command failed" >&2
+        sed -n '1,80p' "$output_dir/clean_worktree_reuse.log" >&2
+        exit 1
+    fi
+    capture_storage_junction after_clean_worktree_reuse
+fi
+
+# Preserve the former final-inspection path for callers that consume the compact store summary while keeping the
+# complete per-junction sequence under `storage-junctions/`.
+final_junction="after_warm_repeat_$repetitions"
+if [ -n "$clean_worktree_source" ]; then
+    final_junction="after_clean_worktree_reuse"
+fi
+cp "$storage_junctions_dir/$final_junction/store-inspection.json" "$output_dir/store_inspect.log"
 
 "$incan" --version >"$output_dir/incan-version.txt"
 uname -a >"$output_dir/uname.txt"
 
 python3 - "$output_dir" "$workload" "$source_path" "$store_root" "$cargo_guard_dir" "$cargo_guard_probe_status" \
-    "$max_physical_bytes" "$max_domain_physical_bytes" "$max_domain_logical_bytes" <<'PY'
+    "$max_physical_bytes" "$max_domain_physical_bytes" "$max_domain_logical_bytes" "$release_identity" \
+    "$checkout_revision" "$source_sha256" "$clean_worktree_source" "$clean_worktree_source_sha256" <<'PY'
 import json
 import pathlib
 import sys
@@ -179,12 +259,41 @@ for line in (output / "phases.tsv").read_text().splitlines():
     name, duration_ms, exit_code = line.split("\t")
     phases.append({"name": name, "duration_ms": int(duration_ms), "exit_code": int(exit_code)})
 
+storage_junctions = []
+for name in (output / "storage-junctions.tsv").read_text().splitlines():
+    junction = output / "storage-junctions" / name
+    raw_disk_usage = []
+    for line in (junction / "disk-usage-kib.tsv").read_text().splitlines():
+        kib, path = line.split(maxsplit=1)
+        raw_disk_usage.append({"path": path, "kib": int(kib), "bytes": int(kib) * 1024})
+    storage_junctions.append({
+        "name": name,
+        "inspection": json.loads((junction / "store-inspection.json").read_text()),
+        "raw_disk_usage_kib": raw_disk_usage,
+        "reports": {
+            "inspection": f"storage-junctions/{name}/store-inspection.json",
+            "disk_usage": f"storage-junctions/{name}/disk-usage-kib.tsv",
+        },
+    })
+
+final_inspection = storage_junctions[-1]["inspection"]
+
 report = {
-    "schema_version": 3,
+    "schema_version": 4,
     "purpose": "Oven Alpha packaged-unit first-materialization and warm normal-command evidence",
     "machine": {"uname": (output / "uname.txt").read_text().strip()},
-    "toolchain": {"incan": (output / "incan-version.txt").read_text().strip()},
-    "workload": {"kind": sys.argv[2], "source": sys.argv[3]},
+    "toolchain": {
+        "incan": (output / "incan-version.txt").read_text().strip(),
+        "release_identity": sys.argv[10],
+    },
+    "provenance": {"checkout_revision": sys.argv[11]},
+    "workload": {
+        "kind": sys.argv[2],
+        "source": sys.argv[3],
+        "source_sha256": sys.argv[12],
+        "clean_worktree_source": sys.argv[13] or None,
+        "clean_worktree_source_sha256": sys.argv[14] or None,
+    },
     "cargo_guard": {
         "required": True,
         "directory": sys.argv[5],
@@ -196,9 +305,10 @@ report = {
         "max_physical_bytes": int(sys.argv[7]),
         "max_domain_physical_bytes": int(sys.argv[8]),
         "max_domain_logical_bytes": int(sys.argv[9]),
-        "inspection": json.loads((output / "store_inspect.log").read_text()),
+        "inspection": final_inspection,
     },
     "phases": phases,
+    "storage_junctions": storage_junctions,
     "logs": {phase["name"]: f"{phase['name']}.log" for phase in phases},
 }
 (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")

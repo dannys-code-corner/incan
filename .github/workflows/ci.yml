@@ -233,6 +233,14 @@ jobs:
         uses: ./.github/actions/run-oven-compiler-suite
         with:
           lane: ubuntu-latest-stable
+      - name: Upload Linux compiler-suite evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: oven-compiler-suite-linux-evidence
+          path: target/oven-compiler-suite-output
+          if-no-files-found: warn
+          retention-days: 14
       - name: Download release compiler for normal Oven smoke commands
         uses: actions/download-artifact@v6
         with:
@@ -245,6 +253,9 @@ jobs:
         # compiler and locally prepared native-unit layout as the smoke set, starts with an empty Oven home, and
         # persists the Linux reference report without transferring the large test-native-unit closure.
         run: |
+          clean_worktree="$RUNNER_TEMP/incan-oven-alpha-clean-worktree"
+          git worktree add --detach "$clean_worktree" "$GITHUB_SHA"
+          trap 'git worktree remove --force "$clean_worktree"' EXIT
           mkdir -p target/ci-benchmark-cargo-guard
           cat > target/ci-benchmark-cargo-guard/cargo <<'EOF'
           #!/usr/bin/env bash
@@ -253,8 +264,11 @@ jobs:
           chmod +x target/ci-benchmark-cargo-guard/cargo
           bash scripts/bench_oven_alpha.sh \
             --incan "$GITHUB_WORKSPACE/target/release/incan" \
+            --release-identity "GitHub Actions incan-release-bin artifact for $GITHUB_SHA" \
+            --checkout-revision "$GITHUB_SHA" \
             --workload build \
             --source "$GITHUB_WORKSPACE/tests/fixtures/oven_alpha_release_core.incn" \
+            --clean-worktree-source "$clean_worktree/tests/fixtures/oven_alpha_release_core.incn" \
             --incan-home "$RUNNER_TEMP/incan-oven-alpha-benchmark-home" \
             --output "$GITHUB_WORKSPACE/target/oven-alpha-linux-benchmark" \
             --cargo-guard-dir "$GITHUB_WORKSPACE/target/ci-benchmark-cargo-guard" \
@@ -430,6 +444,46 @@ jobs:
         uses: ./.github/actions/run-oven-compiler-suite
         with:
           lane: macos-latest-stable
+      - name: Upload macOS compiler-suite evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: oven-compiler-suite-macos-evidence
+          path: target/oven-compiler-suite-output
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Record guarded macOS Oven Alpha build benchmark
+        # The stable test-CLI artifact is identified explicitly in the report. The measured normal command uses Oven;
+        # Cargo only built the compiler in its separate bootstrap job.
+        run: |
+          clean_worktree="$RUNNER_TEMP/incan-oven-alpha-clean-worktree"
+          git worktree add --detach "$clean_worktree" "$GITHUB_SHA"
+          trap 'git worktree remove --force "$clean_worktree"' EXIT
+          mkdir -p target/ci-benchmark-cargo-guard
+          cat > target/ci-benchmark-cargo-guard/cargo <<'EOF'
+          #!/usr/bin/env bash
+          exit 97
+          EOF
+          chmod +x target/ci-benchmark-cargo-guard/cargo
+          bash scripts/bench_oven_alpha.sh \
+            --incan "$GITHUB_WORKSPACE/target/debug/incan" \
+            --release-identity "GitHub Actions test-macos-incan-cli artifact for $GITHUB_SHA" \
+            --checkout-revision "$GITHUB_SHA" \
+            --workload build \
+            --source "$GITHUB_WORKSPACE/tests/fixtures/oven_alpha_release_core.incn" \
+            --clean-worktree-source "$clean_worktree/tests/fixtures/oven_alpha_release_core.incn" \
+            --incan-home "$RUNNER_TEMP/incan-oven-alpha-benchmark-home" \
+            --output "$GITHUB_WORKSPACE/target/oven-alpha-macos-benchmark" \
+            --cargo-guard-dir "$GITHUB_WORKSPACE/target/ci-benchmark-cargo-guard" \
+            --repetitions 2
+          jq . target/oven-alpha-macos-benchmark/report.json
+      - name: Upload macOS Oven Alpha benchmark evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: oven-alpha-macos-benchmark
+          path: target/oven-alpha-macos-benchmark
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload compiled SDK provider store
         uses: actions/upload-artifact@v6
         with:
@@ -593,6 +647,14 @@ jobs:
         uses: ./.github/actions/run-oven-compiler-suite
         with:
           lane: ubuntu-latest-msrv-1-93-0
+      - name: Upload MSRV compiler-suite evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: oven-compiler-suite-msrv-evidence
+          path: target/oven-compiler-suite-output
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload compiled SDK provider store
         uses: actions/upload-artifact@v6
         with:

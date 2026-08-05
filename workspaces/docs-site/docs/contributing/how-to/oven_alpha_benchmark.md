@@ -13,8 +13,10 @@ launch Cargo.
 ## Reference-machine requirements
 
 Run the same supported workload on one documented macOS machine and one documented Linux machine. Record the checkout
-revision, release archive identity, `incan --version`, OS/architecture, exact source fixture, profile, storage limits,
-and whether the store started empty. Keep the generated `report.json` and per-phase logs with the release evidence.
+revision, release archive/artifact identity, `incan --version`, OS/architecture, exact source fixture and digest,
+profile, storage limits, and whether the store started empty. Keep the generated `report.json` and per-phase logs with
+the release evidence. The harness requires an archive or CI-artifact identity rather than silently treating an
+arbitrary local binary as a comparable measurement.
 
 The documented Alpha envelope is intentionally finite. At present the release archive ships exactly two units: a
 release core closure and a debug foundation closure for `std.testing`, `std.fs`, and `std.json` (which may satisfy a
@@ -34,12 +36,23 @@ chmod +x /tmp/incan-oven-cargo-guard/cargo
 
 bash scripts/bench_oven_alpha.sh \
   --incan /path/to/extracted/incan/bin/incan \
+  --release-identity 'incan-VERSION-TARGET.tar.gz sha256:...' \
+  --checkout-revision "$(git rev-parse HEAD)" \
   --workload test \
   --source tests/fixtures/test_assert_canary.incn \
   --incan-home /tmp/incan-oven-test-home \
   --output /tmp/incan-oven-test-evidence \
   --cargo-guard-dir /tmp/incan-oven-cargo-guard \
   --repetitions 2
+```
+
+To prove that reuse is not tied to the original checkout, create a clean worktree at the same revision and pass its
+byte-identical fixture as `--clean-worktree-source`. The harness rejects a different source digest rather than calling
+two unrelated commands a reuse measurement:
+
+```bash
+git worktree add --detach /tmp/incan-oven-benchmark-clean HEAD
+# Add --clean-worktree-source /tmp/incan-oven-benchmark-clean/tests/fixtures/test_assert_canary.incn
 ```
 
 For build or run, set `--workload build` or `--workload run` and use the checkout's release-core fixture
@@ -54,10 +67,12 @@ explicit byte overrides only when recording a different policy.
 `report.json` contains:
 
 - the machine and toolchain identity;
-- `first_materialization` and each `warm_repeat_N` elapsed duration and exit status;
+- `first_materialization`, each `warm_repeat_N`, and (when requested) `clean_worktree_reuse` elapsed duration and
+  exit status;
 - the required Cargo-guard probe status and verdict that successful normal stages did not launch Cargo;
-- bounded-store inspection with physical allocation separate from logical artifact bytes, reclaimable bytes, and
-  lease-protected bytes; and
+- storage junctions before materialization, after first materialization, after every warm repeat, and after the
+  clean-worktree repeat. Each keeps its own bounded-store inspection (physical allocation separate from logical
+  artifact bytes, reclaimable bytes, and lease-protected bytes) plus raw store/output disk totals; and
 - one log file per phase, including verbose Oven timing for a test workload.
 
 Use `first_materialization` for the supported compiler-shipped unit's initial user-machine cost and the warm repeats
@@ -97,18 +112,21 @@ bash scripts/run_oven_compiler_suite.sh \
 For the reuse measurement, repeat that command unchanged except for a fresh `--output`
 directory such as `/tmp/incan-oven-suite-warm`; do not remove or alter the store.
 
-The resulting `suite-evidence.json` keeps four facts separate:
+The resulting `suite-evidence.json` separates compiler revision/toolchain identity from four execution/storage facts:
 
 - `publisher.prepare.cargo_version` is preserved in the caller-owned report alongside
   `publisher-result.json`: `not-run-existing-suite` proves this invocation reused the compatible immutable suite;
 - `named_legacy_publisher` is the declared cold preparation or receipt-reuse cost of the temporary,
   receipt-bound publisher;
 - `cargo_free_direct_rustc_replay` is the prepared full-suite result and must report zero Cargo-guard invocations;
-- `store_inspection` records logical artifacts, physical allocation, reclaimability, active leases, limits, and raw
+- `store_snapshot_initial`, `store_snapshot_after_named_legacy_publisher`, and
+  `store_snapshot_after_cargo_free_direct_rustc_replay` retain the storage state at every junction. Their reports
+  separately record logical artifacts, physical allocation, reclaimability, active leases, limits, and raw
   store/output disk totals.
 
 Repeat the same script with the same store and a fresh caller-output directory. The repeated publisher must select
 the existing receipt-compatible suite rather than start Cargo, while the direct-Rustc replay still executes every
-reported root. Keep both `suite-evidence.json` and `publisher-result.json` files with their `phases.tsv` files. Run this cold/reuse pair on the
-documented macOS and Linux reference machines; do not combine the publisher duration with the prepared replay or
-present a source-incompatible native-unit refusal as a benchmark result.
+reported root. Keep both `suite-evidence.json` and `publisher-result.json`, the `storage-junctions.json` sequence,
+and their `phases.tsv` files. Run this cold/reuse pair on the documented macOS and Linux reference machines; do not
+combine the publisher duration with the prepared replay or present a source-incompatible native-unit refusal as a
+benchmark result.

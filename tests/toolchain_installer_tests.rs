@@ -871,6 +871,13 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
     let tmp = ToolchainTestStaging::new()?;
     let source = tmp.path().join("supported.incn");
     fs::write(&source, "def main() -> None:\n    pass\n")?;
+    let clean_worktree_source = tmp.path().join("clean-checkout/supported.incn");
+    fs::create_dir_all(
+        clean_worktree_source
+            .parent()
+            .ok_or("clean-worktree fixture source has no parent")?,
+    )?;
+    fs::copy(&source, &clean_worktree_source)?;
     let incan = tmp.path().join("fixture-incan");
     write_executable(
         &incan,
@@ -886,6 +893,10 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
         .args([
             "--incan",
             incan.to_str().ok_or("fixture incan path is not UTF-8")?,
+            "--release-identity",
+            "fixture-release-artifact",
+            "--checkout-revision",
+            "fixture-revision",
             "--workload",
             "build",
             "--source",
@@ -897,6 +908,10 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
                 .ok_or("fixture home path is not UTF-8")?,
             "--output",
             output_dir.to_str().ok_or("fixture output path is not UTF-8")?,
+            "--clean-worktree-source",
+            clean_worktree_source
+                .to_str()
+                .ok_or("fixture clean-worktree source path is not UTF-8")?,
             "--cargo-guard-dir",
             guard_dir.to_str().ok_or("fixture guard path is not UTF-8")?,
             "--repetitions",
@@ -917,6 +932,45 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
         report["cargo_guard"]["verdict"],
         serde_json::json!("successful normal stages imply that Cargo was not launched")
     );
+    assert_eq!(
+        report["toolchain"]["release_identity"],
+        serde_json::json!("fixture-release-artifact")
+    );
+    assert_eq!(
+        report["provenance"]["checkout_revision"],
+        serde_json::json!("fixture-revision")
+    );
+    assert_eq!(
+        report["workload"]["source_sha256"],
+        report["workload"]["clean_worktree_source_sha256"]
+    );
+    let storage_junctions = report["storage_junctions"]
+        .as_array()
+        .ok_or("benchmark report is missing storage junctions")?;
+    let junction_names = storage_junctions
+        .iter()
+        .map(|junction| junction["name"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        junction_names,
+        [
+            "initial",
+            "after_first_materialization",
+            "after_warm_repeat_1",
+            "after_clean_worktree_reuse",
+        ]
+    );
+    for junction in storage_junctions {
+        let reports = junction["reports"]
+            .as_object()
+            .ok_or("storage junction is missing report paths")?;
+        for report_path in reports.values().filter_map(serde_json::Value::as_str) {
+            assert!(
+                output_dir.join(report_path).is_file(),
+                "storage junction report is not retained: {report_path}"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -1049,6 +1103,7 @@ fi\n",
     for output in [&cold_output, &warm_output] {
         let evidence: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(output.join("suite-evidence.json"))?)?;
+        assert_eq!(evidence["schema_version"], serde_json::json!(2));
         assert_eq!(
             evidence["reports"]["publisher"],
             serde_json::json!("publisher-result.json")
@@ -1056,6 +1111,41 @@ fi\n",
         let retained: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(output.join("publisher-result.json"))?)?;
         assert_eq!(evidence["publisher"], retained);
+        assert!(
+            evidence["machine"]["compiler_root_revision"].as_str().is_some(),
+            "suite evidence must identify the compiler checkout when available"
+        );
+        assert!(
+            evidence["toolchain"]["rustc"].as_str().is_some(),
+            "suite evidence must record the direct-rustc toolchain"
+        );
+        let storage_junctions = evidence["storage_junctions"]
+            .as_array()
+            .ok_or("suite evidence is missing storage junctions")?;
+        let junction_names = storage_junctions
+            .iter()
+            .map(|junction| junction["name"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            junction_names,
+            [
+                "initial",
+                "after_named_legacy_publisher",
+                "after_cargo_free_direct_rustc_replay",
+            ]
+        );
+        assert_eq!(evidence["store"]["logical_bytes"], serde_json::json!(1));
+        for junction in storage_junctions {
+            let reports = junction["reports"]
+                .as_object()
+                .ok_or("suite storage junction is missing report paths")?;
+            for report_path in reports.values().filter_map(serde_json::Value::as_str) {
+                assert!(
+                    output.join(report_path).is_file(),
+                    "suite storage-junction report is not retained: {report_path}"
+                );
+            }
+        }
     }
     Ok(())
 }

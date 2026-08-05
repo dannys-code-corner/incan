@@ -91,7 +91,11 @@ test -f "$cargo_path"
 test -f "$rustc_path"
 mkdir -p "$store" "$output"
 phase_tsv="$output/phases.tsv"
+junction_tsv="$output/storage-junctions.tsv"
+storage_junctions_dir="$output/storage-junctions"
 : > "$phase_tsv"
+: > "$junction_tsv"
+mkdir -p "$storage_junctions_dir"
 publisher_result="$output/publisher-result.json"
 
 now_ms() {
@@ -102,6 +106,32 @@ record_phase() {
     # The explicit publisher and the Cargo-free replay are deliberately timed separately. A successful replay is
     # the prepared-suite result; the named legacy publisher is the attributable cold/preparation cost.
     printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$phase_tsv"
+}
+
+# The report must make initial, publisher, and replay storage states independently auditable.  Inspection and raw
+# `du` output live in caller-owned output, never inside the immutable policy store they describe.
+capture_store_junction() {
+    local junction=$1
+    local junction_dir="$storage_junctions_dir/$junction"
+    local started finished status
+    mkdir -p "$junction_dir"
+    started="$(now_ms)"
+    set +e
+    "$incan" oven store inspect \
+        --store "$store" \
+        --max-physical-bytes "$max_physical_bytes" \
+        --max-domain-physical-bytes "$max_domain_physical_bytes" \
+        --max-domain-logical-bytes "$max_domain_logical_bytes" \
+        --format json > "$junction_dir/store-inspection.json"
+    status=$?
+    set -e
+    finished="$(now_ms)"
+    record_phase "store_snapshot_$junction" "$((finished - started))" "$status"
+    if [ "$status" -ne 0 ]; then
+        return "$status"
+    fi
+    du -sk "$store" "$output" > "$junction_dir/disk-usage-kib.tsv"
+    printf '%s\n' "$junction" >> "$junction_tsv"
 }
 
 if [ -z "$temp_root" ]; then
@@ -120,6 +150,11 @@ mkdir -p "$temp_root"
 feature_args=()
 if [ -n "$feature" ]; then
     feature_args=(--feature "$feature")
+fi
+
+if ! capture_store_junction initial; then
+    echo "initial Oven store inspection failed; retained timing evidence at $phase_tsv" >&2
+    exit 1
 fi
 
 run_named_legacy_publisher() {
@@ -157,6 +192,11 @@ run_named_legacy_publisher() {
 
 if ! run_named_legacy_publisher; then
     echo "named legacy Cargo publisher failed; retained timing evidence at $phase_tsv" >&2
+    exit 1
+fi
+
+if ! capture_store_junction after_named_legacy_publisher; then
+    echo "post-publisher Oven store inspection failed; retained timing evidence at $phase_tsv" >&2
     exit 1
 fi
 
@@ -214,6 +254,11 @@ if [ -s "$guard/invocations.log" ]; then
     exit 1
 fi
 
+if ! capture_store_junction after_cargo_free_direct_rustc_replay; then
+    echo "post-replay Oven store inspection failed; retained timing evidence at $phase_tsv" >&2
+    exit 1
+fi
+
 jq '{
         success,
         cargo_process_started,
@@ -226,44 +271,72 @@ jq '{
         failures
     }' "$output/compiler-suite-report.json"
 
-run_store_inspection() {
-    local started finished status
-    started="$(now_ms)"
-    set +e
-    "$incan" oven store inspect \
-        --store "$store" \
-        --max-physical-bytes "$max_physical_bytes" \
-        --max-domain-physical-bytes "$max_domain_physical_bytes" \
-        --max-domain-logical-bytes "$max_domain_logical_bytes" \
-        --format json > "$store/inspection.json"
-    status=$?
-    set -e
-    finished="$(now_ms)"
-    record_phase store_inspection "$((finished - started))" "$status"
-    return "$status"
-}
-
-if ! run_store_inspection; then
-    echo "Oven store inspection failed; retained timing evidence at $phase_tsv" >&2
-    exit 1
+"$incan" --version > "$output/incan-version.txt"
+"$rustc_path" --version > "$output/rustc-version.txt"
+uname -a > "$output/uname.txt"
+if git -C "$compiler_root" rev-parse HEAD > "$output/compiler-root-revision.txt" 2>/dev/null; then
+    :
+else
+    printf '%s\n' unavailable > "$output/compiler-root-revision.txt"
 fi
 
-du -sk "$store" "$output" > "$output/disk-usage-kib.tsv"
+python3 - "$output" <<'PY'
+import json
+import pathlib
+import sys
+
+output = pathlib.Path(sys.argv[1])
+junctions = []
+for name in (output / "storage-junctions.tsv").read_text().splitlines():
+    junction = output / "storage-junctions" / name
+    raw_disk_usage = []
+    for line in (junction / "disk-usage-kib.tsv").read_text().splitlines():
+        kib, path = line.split(maxsplit=1)
+        raw_disk_usage.append({"path": path, "kib": int(kib), "bytes": int(kib) * 1024})
+    junctions.append({
+        "name": name,
+        "inspection": json.loads((junction / "store-inspection.json").read_text()),
+        "raw_disk_usage_kib": raw_disk_usage,
+        "reports": {
+            "inspection": f"storage-junctions/{name}/store-inspection.json",
+            "disk_usage": f"storage-junctions/{name}/disk-usage-kib.tsv",
+        },
+    })
+
+(output / "storage-junctions.json").write_text(json.dumps(junctions, indent=2) + "\n")
+PY
+
 guard_invocation_count="$(wc -l < "$guard/invocations.log" | tr -d '[:space:]')"
 jq -n \
     --rawfile phases "$phase_tsv" \
-    --rawfile disk_usage "$output/disk-usage-kib.tsv" \
     --slurpfile publisher "$publisher_result" \
     --slurpfile suite "$output/compiler-suite-report.json" \
-    --slurpfile inspection "$store/inspection.json" \
+    --slurpfile final_inspection "$storage_junctions_dir/after_cargo_free_direct_rustc_replay/store-inspection.json" \
+    --slurpfile storage_junctions "$output/storage-junctions.json" \
+    --rawfile incan_version "$output/incan-version.txt" \
+    --rawfile rustc_version "$output/rustc-version.txt" \
+    --rawfile uname "$output/uname.txt" \
+    --rawfile compiler_root_revision "$output/compiler-root-revision.txt" \
     --arg domain "$domain" \
     --arg guard "$guard/cargo" \
     --arg store "$store" \
+    --arg compiler_root "$compiler_root" \
     --argjson guard_invocation_count "$guard_invocation_count" \
-    '{
-        schema_version: 1,
+    'def final_junction:
+        $storage_junctions[0] | map(select(.name == "after_cargo_free_direct_rustc_replay")) | .[0];
+     {
+        schema_version: 2,
         purpose: "bounded Oven compiler-suite preparation and Cargo-free replay evidence",
         compatibility_domain: $domain,
+        machine: {
+            uname: ($uname | rtrimstr("\n")),
+            compiler_root: $compiler_root,
+            compiler_root_revision: ($compiler_root_revision | rtrimstr("\n"))
+        },
+        toolchain: {
+            incan: ($incan_version | rtrimstr("\n")),
+            rustc: ($rustc_version | rtrimstr("\n"))
+        },
         publisher: $publisher[0],
         phases: [
             $phases | split("\n")[] | select(length > 0) | split("\t") |
@@ -287,7 +360,7 @@ jq -n \
             shard_count,
             failures
         }),
-        store: ($inspection[0] | {
+        store: ($final_inspection[0] | {
             logical_bytes,
             physical_bytes,
             reclaimable_physical_bytes,
@@ -296,19 +369,17 @@ jq -n \
             entry_count: (.entries | length),
             domains: ([.entries[].manifest.domain] | unique)
         }),
-        raw_disk_usage_kib: [
-            $disk_usage | split("\n")[] | select(length > 0) |
-            capture("^(?<kib>[0-9]+)[[:space:]]+(?<path>.*)$") |
-            {path, kib: (.kib | tonumber), bytes: ((.kib | tonumber) * 1024)}
-        ],
+        storage_junctions: $storage_junctions[0],
+        raw_disk_usage_kib: (final_junction | .raw_disk_usage_kib),
         reports: {
             publisher: "publisher-result.json",
             suite: "compiler-suite-report.json",
-            store_inspection: ($store + "/inspection.json"),
+            store_inspection: "storage-junctions/after_cargo_free_direct_rustc_replay/store-inspection.json",
+            storage_junctions: "storage-junctions.json",
             phase_tsv: "phases.tsv"
         }
     }' > "$output/suite-evidence.json"
 
-jq '{phases, publisher, cargo_guard, suite, store, raw_disk_usage_kib}' "$output/suite-evidence.json"
-jq '{logical_bytes, physical_bytes, reclaimable_physical_bytes, active_lease_physical_bytes, limits, entry_count: (.entries | length), domains: ([.entries[].manifest.domain] | unique)}' "$store/inspection.json"
+jq '{machine, toolchain, phases, publisher, cargo_guard, suite, store, storage_junctions, raw_disk_usage_kib}' "$output/suite-evidence.json"
+jq '{logical_bytes, physical_bytes, reclaimable_physical_bytes, active_lease_physical_bytes, limits, entry_count: (.entries | length), domains: ([.entries[].manifest.domain] | unique)}' "$storage_junctions_dir/after_cargo_free_direct_rustc_replay/store-inspection.json"
 du -sh "$store" "$output"
