@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -27,7 +28,8 @@ use crate::oven::legacy_cargo::{
     prepare_direct_rustc_plan,
 };
 use crate::oven::native_test::{
-    OvenNativeTestCaseCounts, OvenNativeTestRequest, run_native_test_batch_all_in_directory, run_native_tests,
+    OvenNativeTestCaseCounts, OvenNativeTestRequest, run_native_test_batch_all_in_directory_with_timeout,
+    run_native_tests,
 };
 use crate::oven::native_unit::prepare_native_unit_seed_from_generated_project;
 use crate::oven::rustc::{
@@ -65,6 +67,11 @@ pub const OVEN_MAX_DOMAIN_PHYSICAL_BYTES_ENV: &str = "INCAN_OVEN_MAX_DOMAIN_PHYS
 pub const OVEN_MAX_DOMAIN_LOGICAL_BYTES_ENV: &str = "INCAN_OVEN_MAX_DOMAIN_LOGICAL_BYTES";
 /// Optional bounded worker count for independent compiler-suite roots after the shared direct-Rustc DAG is ready.
 pub const OVEN_COMPILER_TEST_JOBS_ENV: &str = "INCAN_OVEN_COMPILER_TEST_JOBS";
+/// Maximum wall-clock time for one stored compiler-suite root before the scheduler records a bounded failure.
+///
+/// A root that exceeds this limit is a suite failure with its partial libtest transcript retained; it must not hold
+/// the complete worker pool indefinitely on one host-specific child process.
+const OVEN_COMPILER_TEST_ROOT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Inputs for `incan oven import`.
 #[derive(Debug, Clone)]
@@ -1593,9 +1600,13 @@ fn run_prepared_compiler_suite_child(
             .map_err(oven_error)?;
             let working_directory =
                 compiler_suite_target_working_directory(child.compiler_root, &child.source, child.target)?;
-            let report =
-                run_native_test_batch_all_in_directory(&bake.output, &child.environment, Some(&working_directory))
-                    .map_err(oven_error)?;
+            let report = run_native_test_batch_all_in_directory_with_timeout(
+                &bake.output,
+                &child.environment,
+                Some(&working_directory),
+                Some(OVEN_COMPILER_TEST_ROOT_TIMEOUT),
+            )
+            .map_err(oven_error)?;
             let failures = if report.success {
                 Vec::new()
             } else {
@@ -1758,9 +1769,13 @@ fn run_planned_compiler_suite_children(
                 })
                 .map_err(oven_error)?;
                 let working_directory = compiler_suite_target_working_directory(compiler_root, &source, target)?;
-                let report =
-                    run_native_test_batch_all_in_directory(&bake.output, &target_environment, Some(&working_directory))
-                        .map_err(oven_error)?;
+                let report = run_native_test_batch_all_in_directory_with_timeout(
+                    &bake.output,
+                    &target_environment,
+                    Some(&working_directory),
+                    Some(OVEN_COMPILER_TEST_ROOT_TIMEOUT),
+                )
+                .map_err(oven_error)?;
                 suite_report.native_test_count += report.inventory.names.len();
                 suite_report.native_test_roots.push(CompilerSuiteNativeTestRootReport {
                     package_name: target.package_name.clone(),

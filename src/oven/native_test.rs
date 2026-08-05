@@ -237,6 +237,19 @@ pub fn run_native_test_batch_all_in_directory(
     environment: &BTreeMap<String, String>,
     working_directory: Option<&Path>,
 ) -> Result<OvenNativeTestBatchReport, OvenNativeTestError> {
+    run_native_test_batch_all_in_directory_with_timeout(executable, environment, working_directory, None)
+}
+
+/// Inventory and execute every test from one verified caller-selected package directory with an optional deadline.
+///
+/// The compiler-suite scheduler uses the deadline-bearing form so a platform-specific child cannot hold the whole
+/// bounded worker pool indefinitely. Ordinary callers retain the historical no-deadline wrapper above.
+pub fn run_native_test_batch_all_in_directory_with_timeout(
+    executable: &Path,
+    environment: &BTreeMap<String, String>,
+    working_directory: Option<&Path>,
+    timeout: Option<Duration>,
+) -> Result<OvenNativeTestBatchReport, OvenNativeTestError> {
     let inventory = inventory_native_tests_with_environment(executable, environment, working_directory, true)?;
     let executable = verified_executable(executable)?;
     let mut command = Command::new(&executable);
@@ -246,15 +259,29 @@ pub fn run_native_test_batch_all_in_directory(
     }
     clear_inherited_cargo_environment(&mut command);
     command.envs(environment);
-    let output = command.output().map_err(|source| OvenNativeTestError::Io {
-        path: executable,
-        source,
-    })?;
+    let (output, timed_out) = run_native_batch_child(command, &executable, timeout)?;
     let transcript = combined_output(&output.stdout, &output.stderr);
+    let mut transcript = transcript;
+    if timed_out {
+        if !transcript.ends_with('\n') && !transcript.is_empty() {
+            transcript.push('\n');
+        }
+        if let Some(timeout) = timeout {
+            let working_directory = working_directory
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "inherited".to_string());
+            transcript.push_str(&format!(
+                "Oven native test execution group timed out after {} (executable: {}; working directory: {})\n",
+                format_timeout(timeout),
+                executable.display(),
+                working_directory,
+            ));
+        }
+    }
     Ok(OvenNativeTestBatchReport {
         inventory,
-        success: output.status.success(),
-        timed_out: false,
+        success: output.status.success() && !timed_out,
+        timed_out,
         case_counts: parse_libtest_case_counts(&transcript),
         output: transcript,
     })
@@ -454,7 +481,8 @@ mod tests {
 
     use super::{
         OvenNativeTestCaseCounts, OvenNativeTestError, OvenNativeTestRequest, parse_libtest_case_counts,
-        run_native_test_batch, run_native_test_batch_all, run_native_tests,
+        run_native_test_batch, run_native_test_batch_all, run_native_test_batch_all_in_directory_with_timeout,
+        run_native_tests,
     };
 
     #[test]
@@ -641,6 +669,41 @@ mod tests {
         assert!(report.timed_out, "{report:#?}");
         assert!(report.output.contains("timed out after 10ms"), "{report:#?}");
         assert_eq!(report.case_counts, None);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn all_batch_timeout_terminates_a_stalled_native_test_child() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let output = tempfile::tempdir()?;
+        let executable = output.path().join("stalled-native-test");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--list\" ] && [ \"$2\" = \"--format\" ] && [ \"$3\" = \"terse\" ]; then\n\
+               printf '%s\\n' 'stalled_case: test'\n\
+               exit 0\n\
+             fi\n\
+             sleep 1\n",
+        )?;
+        let mut permissions = fs::metadata(&executable)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions)?;
+
+        let report = run_native_test_batch_all_in_directory_with_timeout(
+            &executable,
+            &BTreeMap::new(),
+            Some(output.path()),
+            Some(Duration::from_millis(10)),
+        )?;
+        let executable_display = executable.display().to_string();
+        assert!(!report.success, "{report:#?}");
+        assert!(report.timed_out, "{report:#?}");
+        assert!(report.output.contains("timed out after 10ms"), "{report:#?}");
+        assert!(report.output.contains(&executable_display), "{report:#?}");
         Ok(())
     }
 
