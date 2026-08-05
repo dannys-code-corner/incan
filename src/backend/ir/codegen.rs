@@ -40,7 +40,7 @@ use crate::frontend::module::canonicalize_source_module_segments;
 use crate::frontend::typechecker::TypeCheckInfo;
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
 use crate::library_manifest::LibraryManifest;
-use crate::oven::native_unit::OVEN_NATIVE_UNIT_SEED_ENV;
+use crate::oven::loaf::OVEN_LOAF_ENV;
 use crate::provider::{ProviderPlan, SDK_PROVIDER_BUILD_ENV};
 use incan_core::lang::{rust_keywords, stdlib};
 
@@ -716,7 +716,7 @@ impl<'a> IrCodegen<'a> {
         // source the same trusted public-stdlib identity as the SDK publisher; normal Oven consumers never set this
         // marker and therefore cannot acquire provider-only lowering behavior.
         lowering.set_sdk_provider_build(
-            env::var_os(SDK_PROVIDER_BUILD_ENV).is_some() || env::var_os(OVEN_NATIVE_UNIT_SEED_ENV).is_some(),
+            env::var_os(SDK_PROVIDER_BUILD_ENV).is_some() || env::var_os(OVEN_LOAF_ENV).is_some(),
         );
         lowering.set_registry_package_identity(self.registry_package_identity.clone());
     }

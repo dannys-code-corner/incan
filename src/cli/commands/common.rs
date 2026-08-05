@@ -528,7 +528,7 @@ fn prepare_sdk_provider_inventory() -> CliResult<Arc<SdkInventory>> {
 /// Build SDK providers into a publisher-owned store rather than the normal SDK cache.
 ///
 /// This is for the explicitly named Oven `legacy_cargo` transition only. The caller is responsible for copying the
-/// resulting immutable inventory into its receipt-bound artifact before the temporary publisher root is reclaimed.
+/// resulting immutable inventory into its receipt-bound artifact before the private publisher root is reclaimed.
 pub(crate) fn prepare_sdk_provider_inventory_in_store(
     publisher_store_root: Option<&Path>,
     source_root_override: Option<&Path>,
@@ -3170,7 +3170,7 @@ pub(crate) fn collect_rust_inspect_query_paths(modules: &[ParsedModule]) -> Vec<
 
 /// Collect canonical rust-inspect query paths from parsed programs.
 ///
-/// Native-unit publication also parses compiler-owned provider source that is metadata-only in the consumer module
+/// Loaf publication also parses compiler-owned provider source that is metadata-only in the consumer module
 /// graph. Keeping the import walk program-based lets that explicit publisher preserve Rust ownership signatures
 /// without making normal Oven consumers re-emit provider source.
 #[cfg(feature = "rust_inspect")]

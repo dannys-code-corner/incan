@@ -34,8 +34,8 @@ impl AstLowering {
         if self.sdk_provider_build || internal_stdlib_source {
             if internal_stdlib_source {
                 // Normal Oven consumers re-emit compiler-owned provider source below the compiler-reserved
-                // `__incan_std` namespace. It has the same callable contract as the publisher seed, even though the
-                // consumer itself must not acquire general SDK-provider lowering privileges.
+                // `__incan_std` namespace. It has the same callable contract as the published Loaf fixture, even though
+                // the consumer itself must not acquire general SDK-provider lowering privileges.
                 module_path[0] = stdlib::STDLIB_ROOT.to_string();
             } else if module_path.first().is_none_or(|segment| segment != stdlib::STDLIB_ROOT) {
                 module_path.insert(0, stdlib::STDLIB_ROOT.to_string());
@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn native_unit_source_callable_module_restores_internal_std_identity() {
+    fn loaf_source_callable_module_restores_internal_std_identity() {
         let mut lowering = AstLowering::new();
         lowering.set_current_source_module_name(Some("__incan_std.traits.callable".to_string()));
         lowering.set_sdk_provider_build(true);

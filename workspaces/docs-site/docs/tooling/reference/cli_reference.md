@@ -57,7 +57,7 @@ Compilation, locking, and semantic inspection commands share these Incan-owned o
 - `--all-features`: Select every public feature declared by the root package.
 - `--sdk-profile <PROFILE>`: Replace the project's base SDK profile for this invocation while preserving explicit component additions and exclusions from `[sdk]`.
 
-They are supported by `build`, `check`, `run`, `test`, and `lock`, plus the `inspect codegraph`, `inspect providers`, `inspect features`, and `inspect bindings` projections. The package-feature flags do not forward names to Cargo. Backend pass-through remains explicitly prefixed as `--cargo-features`, `--cargo-no-default-features`, and `--cargo-all-features` where supported.
+They are supported by `build`, `check`, `run`, `test`, and `lock`, plus the `inspect codegraph`, `inspect providers`, `inspect features`, and `inspect bindings` projections. The package-feature flags do not forward names to Cargo. Cargo-prefixed feature flags remain compatibility inputs only where explicitly documented; normal Oven build/run/test commands do not use them to publish a missing closure.
 
 `incan test --feature <NAME>` is a separate test-runner option for `std.testing.feature("NAME")` collection probes. Use plural `--features` for public package features.
 
@@ -236,11 +236,16 @@ incan oven run --receipt PATH --plan SHA256 --rustc PATH --source PATH
                [--edition 2021|2024] [--store PATH] [--max-physical-bytes BYTES]
                [--max-domain-physical-bytes BYTES] [--max-domain-logical-bytes BYTES]
                [--format text|json] [-- ARG ...]
+incan oven legacy-cargo bake-loafs --compiler-root PATH --output PATH
+               [--suite-store PATH] --envelope release|compiler-suite --sdk-inventory PATH
+               --cargo PATH --rustc PATH [--max-physical-bytes BYTES]
+               [--max-domain-physical-bytes BYTES] [--max-domain-logical-bytes BYTES]
+               [--format text|json]
 ```
 
-Oven is the Alpha normal consumer backend for `incan build`, `incan test`, and `incan run`; the `incan oven` commands expose its receipt and maintenance boundary. `import` reads frozen Cargo declarations only as compatibility evidence and does not run Cargo. The explicitly named `legacy-cargo prepare` command is a temporary publisher transition, never a normal-command fallback. Its `--toolchain` value must be the complete `--version` output of the selected `--rustc`; `test` and `run` recheck that identity and pass the receipt target to that compiler. `plan publish` validates a publisher-provided direct-rustc manifest and copies its declared regular-file closure into one immutable policy-bounded entry. `test` selects that stored plan and closure with an active lease, inventories the produced native libtest binary, and rejects every `--exact` name absent from that inventory before test execution. `run` compiles and executes one caller-owned binary from the same stored closure, retains the entry lease through process completion, and forwards arguments only after `--` to that binary.
+Oven is the Alpha normal consumer backend for `incan build`, `incan test`, and `incan run`; the `incan oven` commands expose its receipt and maintenance boundary. `import` reads frozen Cargo declarations only as compatibility evidence and does not run Cargo. The explicitly named, hidden `legacy-cargo` baker is the sole Cargo-backed compatibility publisher for supported Oven Alpha envelopes, never a normal-command fallback. `bake-loafs` creates or exactly reuses a typed release or compiler-suite envelope of content-addressed `<identity>.loaf/` directories. With `--suite-store`, the compiler-suite bake also prepares or reuses the bounded receipt-compatible suite store in the same invocation. Each `loaf.json` binds the direct-`rustc` plan, declared artifacts, compatibility, provenance, digests, and byte accounting. The explicit publisher Cargo may differ from the consumer `rustc`; the latter defines the Loaf toolchain identity. `plan publish` validates a publisher-provided direct-rustc manifest and copies its declared regular-file closure into one immutable policy-bounded entry. `test` selects that stored plan and closure with an active lease, inventories the produced native libtest binary, and rejects every `--exact` name absent from that inventory before test execution. `run` compiles and executes one caller-owned binary from the same stored closure, retains the entry lease through process completion, and forwards arguments only after `--` to that binary.
 
-The default Oven store is `$INCAN_HOME/oven/store/v1`, or `~/.incan/oven/store/v1` when `INCAN_HOME` is unset. Its everyday-developer policy retains at most 2 GiB of aggregate physical allocation, with a 1 GiB physical and 768 MiB logical allowance per compatibility domain. Physical allocation and logical artifact bytes—plan bytes plus copied manifest-declared files—are distinct report fields. `incan oven store inspect` also reports reclaimable and lease-protected physical allocation; `incan inspect oven --receipt PATH` adds the receipt/build-unit identity plus a `hit`, `miss`, or `ambiguous` selection reason. Environment overrides use whole-byte values: `INCAN_OVEN_MAX_PHYSICAL_BYTES`, `INCAN_OVEN_MAX_DOMAIN_PHYSICAL_BYTES`, and `INCAN_OVEN_MAX_DOMAIN_LOGICAL_BYTES`. Publication is fail-closed when a single domain exceeds its allowance or active leases prevent safe reclamation. Larger compiler-suite or publisher budgets must be explicit rather than silently expanding the normal store. See [Oven Alpha](../explanation/oven_alpha.md) for the compatibility envelope, artifact-plan schema boundary, and exclusions.
+The default Oven store is `$INCAN_HOME/oven/store/v1`, or `~/.incan/oven/store/v1` when `INCAN_HOME` is unset. Its everyday-developer policy retains at most 3 GiB of aggregate physical allocation, with a 1 GiB physical and 768 MiB logical allowance per compatibility domain. The aggregate allowance includes the previous committed Loaf generation while a replacement is staged, so an interrupted update does not require deleting the last valid generation. Physical allocation and logical artifact bytes—plan bytes plus copied manifest-declared files—are distinct report fields. `incan oven store inspect` also reports reclaimable and lease-protected physical allocation; `incan inspect oven --receipt PATH` adds the receipt/build-unit identity plus a `hit`, `miss`, or `ambiguous` selection reason. Environment overrides use whole-byte values: `INCAN_OVEN_MAX_PHYSICAL_BYTES`, `INCAN_OVEN_MAX_DOMAIN_PHYSICAL_BYTES`, and `INCAN_OVEN_MAX_DOMAIN_LOGICAL_BYTES`. Publication is fail-closed when a single domain exceeds its allowance or active leases prevent safe reclamation. Larger compiler-suite or publisher budgets must be explicit rather than silently expanding the normal store. See [Oven Alpha](../explanation/oven_alpha.md) for the compatibility envelope, artifact-plan schema boundary, and exclusions.
 
 ### `incan inspect rust`
 
@@ -395,7 +400,7 @@ incan inspect bindings . --format json --features sqlite --sdk-profile minimal
 Usage:
 
 ```text
-incan run [OPTIONS] [FILE] [-- <CARGO_PASSTHROUGH>...]
+incan run [OPTIONS] [FILE] [-- <PROGRAM_ARG>...]
 ```
 
 Run a file:

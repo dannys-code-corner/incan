@@ -1,9 +1,8 @@
 //! Direct `rustc` execution for Oven Alpha's explicitly supported consumer envelope.
 //!
-//! The executor accepts a verified artifact manifest instead of scanning Cargo
-//! output or reproducing Cargo planning. An explicit publisher-side
-//! `legacy_cargo` step may create the declared inputs, but this consumer path
-//! invokes only the selected Rust compiler and refuses hidden Cargo state.
+//! The executor accepts a verified artifact manifest instead of scanning Cargo output or reproducing Cargo planning.
+//! An explicit publisher-side `legacy_cargo` step may create the declared inputs, but this consumer path invokes only
+//! the selected Rust compiler and refuses hidden Cargo state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -23,7 +22,7 @@ use crate::oven::store::{OvenArtifactKind, OvenStore, OvenStoreError, OvenStoreE
 /// Wire-format version for an Oven-owned direct-rustc artifact manifest.
 /// Version 7 retains the exact registry-leaf catalog alongside the copied direct-rustc closure, so a normal
 /// consumer never combines one leaf's transitive metadata with a different compatibility domain. Older payloads
-/// are intentionally ignored during selection and re-materialized from the active toolchain seed.
+/// are intentionally ignored during selection and re-materialized from the active toolchain Loaf.
 pub const OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION: u32 = 7;
 /// Schema version for caller-owned native-output reuse evidence.
 const OVEN_DIRECT_RUSTC_OUTPUT_RECEIPT_SCHEMA_VERSION: u32 = 2;
@@ -90,7 +89,7 @@ pub struct OvenRustcArtifactManifest {
     pub entrypoint_externs: BTreeMap<String, Vec<String>>,
     /// Exact registry package artifacts whose metadata closure was emitted with this immutable plan.
     ///
-    /// The native-unit seed repeats this catalog for human inspection, while this copy travels with every bounded
+    /// The Loaf repeats this catalog for human inspection, while this copy travels with every bounded
     /// store entry so a selected plan resolves caller `rust::` imports only from its own compatibility domain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registry_leaves: Vec<OvenRustcRegistryLeaf>,
@@ -162,11 +161,11 @@ pub(crate) struct OvenCallerOwnedRustcLibrary {
     pub expose_extern: bool,
 }
 
-/// One publisher-sealed registry package artifact that a native unit may expose to a direct-Rustc consumer.
+/// One publisher-sealed registry package artifact that a Loaf may expose to a direct-Rustc consumer.
 ///
 /// The catalog records an exact package version and the artifact Cargo emitted while the named publisher prepared the
-/// native unit. It is not a general resolver: a consumer may select only one compatible record already copied into
-/// the immutable native-unit closure.
+/// Loaf. It is not a general resolver: a consumer may select only one compatible record already copied into
+/// the immutable Loaf closure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OvenRustcRegistryLeaf {
     /// Registry package name rather than a caller-local dependency alias.
@@ -177,15 +176,15 @@ pub struct OvenRustcRegistryLeaf {
     pub crate_name: String,
     /// Publisher-resolved Cargo features compiled into this exact immutable artifact.
     ///
-    /// A consumer may request only a subset. This represents the already unified native-unit closure; it does not
+    /// A consumer may request only a subset. This represents the already unified Loaf closure; it does not
     /// run a feature resolver or permit a consumer to add a feature absent from the sealed leaf.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
-    /// Digest-verified compiler artifact retained below the native-unit root.
+    /// Digest-verified compiler artifact retained below the Loaf root.
     pub artifact: OvenRustcArtifactExtern,
 }
 
-/// One registry leaf and the immutable native-unit root that seals its relative artifact path.
+/// One registry leaf and the immutable Loaf root that seals its relative artifact path.
 #[derive(Debug, Clone)]
 struct OvenRegistryLeafAuthorityEntry {
     artifact_root: PathBuf,
@@ -198,10 +197,10 @@ struct OvenRegistryLeafAuthorityEntry {
     dependency_search_paths: Vec<PathBuf>,
 }
 
-/// Immutable registry-leaf authority supplied by receipt-compatible native units.
+/// Immutable registry-leaf authority supplied by receipt-compatible Loafs.
 ///
-/// A caller receives this only from compiler seeds that independently authorize the same receipt or the suite
-/// scheduler's leased copies of those seeds. Each entry retains its own root, so a narrow code plan may use a
+/// A caller receives this only from compiler Loafs that independently authorize the same receipt or the suite
+/// scheduler's leased copies of those Loafs. Each entry retains its own root, so a narrow code plan may use a
 /// registry leaf sealed by another compatible unit without treating either catalog as a Cargo-home, registry-index,
 /// or download fallback.
 #[derive(Debug, Clone)]
@@ -306,7 +305,7 @@ impl OvenSelectedPathRustcAuthority {
 
     /// Prefer an equivalent sealed registry artifact already present in this selected plan.
     ///
-    /// A compatible native-unit catalog may live in the read-only toolchain seed while the normal command has copied
+    /// A compatible Loaf catalog may live in the read-only toolchain envelope while the normal command has copied
     /// the same direct-Rustc closure into its actively leased Oven store. Linking the catalog copy as an additional
     /// `--extern` would expose Rustc to two physical copies of one StableCrateId. The caller has already validated
     /// the package, version, features, and digest against the sealed catalog; this method merely reuses the same
@@ -333,7 +332,7 @@ impl OvenSelectedPathRustcAuthority {
 /// Compile declared narrow Rust library closures with direct `rustc`, never with Cargo.
 ///
 /// This bounded caller-dependency seam builds manifest-declared local path libraries and links registry leaves only
-/// from a selected immutable native-unit catalog. It recursively follows only path-to-path edges and incorporates
+/// from a selected immutable Loaf catalog. It recursively follows only path-to-path edges and incorporates
 /// each child output digest into its parent output identity. Git, optional/feature-driven roots, build scripts, and
 /// unsealed registry closures remain explicit unsupported inputs.
 #[cfg(test)]
@@ -472,7 +471,7 @@ pub(crate) fn materialize_declared_rust_libraries_with_selected_path_authority(
         .collect())
 }
 
-/// Resolve one registry dependency from the selected seed's sealed catalog.
+/// Resolve one registry dependency from the selected Loaf's sealed catalog.
 fn resolve_sealed_registry_leaf(
     dependency: &DependencySpec,
     authority: Option<&OvenRegistryLeafAuthority>,
@@ -507,7 +506,7 @@ fn select_sealed_registry_leaf<'a>(
     let authority = authority.ok_or_else(|| OvenRustcError::InvalidInput {
         field: "Oven registry Rust dependency",
         message: format!(
-            "`{}` has no receipt-bound native-unit registry catalog; prepare an explicit Oven-native closure",
+            "`{}` has no receipt-bound Loaf registry catalog; prepare an explicit Oven-native closure",
             dependency.package.as_deref().unwrap_or(&dependency.crate_name)
         ),
     })?;
@@ -544,7 +543,7 @@ fn select_sealed_registry_leaf<'a>(
             .then_with(|| left.leaf.artifact.relative_path.cmp(&right.leaf.artifact.relative_path))
             .then_with(|| left.artifact_root.cmp(&right.artifact_root))
     });
-    // A suite ships separate debug and release native-unit catalogs. Prefer the matching profile whenever its sealed
+    // A suite ships separate debug and release Loaf catalogs. Prefer the matching profile whenever its sealed
     // catalog contains this dependency; fixtures use short synthetic paths, so retain the complete catalog when no
     // profile-qualified artifact exists.
     let profile_marker = format!("/{profile}/deps/");
@@ -559,7 +558,7 @@ fn select_sealed_registry_leaf<'a>(
         return Err(OvenRustcError::InvalidInput {
             field: "Oven registry Rust dependency",
             message: format!(
-                "`{package_name}` requirement `{requirement_text}` has no compatible receipt-bound native-unit registry leaf; prepare an explicit Oven-native closure"
+                "`{package_name}` requirement `{requirement_text}` has no compatible receipt-bound Loaf registry leaf; prepare an explicit Oven-native closure"
             ),
         });
     };
@@ -580,7 +579,7 @@ fn select_sealed_registry_leaf<'a>(
         return Err(OvenRustcError::InvalidInput {
             field: "Oven registry Rust dependency",
             message: format!(
-                "`{package_name}` version `{selected_version}` resolves to multiple receipt-bound native-unit registry leaves; prepare an explicit Oven-native closure"
+                "`{package_name}` version `{selected_version}` resolves to multiple receipt-bound Loaf registry leaves; prepare an explicit Oven-native closure"
             ),
         });
     }
@@ -657,7 +656,7 @@ fn resolve_sealed_registry_leaf_with_search_paths(
     })
 }
 
-/// Resolve one manifest-recorded native-unit artifact without allowing the leaf catalog to escape its sealed root.
+/// Resolve one manifest-recorded Loaf artifact without allowing the leaf catalog to escape its sealed root.
 fn safe_artifact_path(
     artifact_root: &Path,
     relative_path: &str,
@@ -1735,6 +1734,12 @@ pub enum OvenRustcError {
 }
 
 impl OvenRustcArtifactManifest {
+    /// Return the complete artifact file set declared by this immutable plan without reading artifact bytes.
+    pub(crate) fn declared_artifact_paths(&self) -> Result<BTreeSet<String>, OvenRustcError> {
+        self.validate_shape(&self.intent)?;
+        Ok(expected_artifacts(self)?.into_keys().collect())
+    }
+
     /// Verify and materialize exact compiler inputs without scanning Cargo output or resolving dependencies.
     pub fn materialize(
         &self,
@@ -2255,7 +2260,7 @@ impl OvenRustcArtifactManifest {
 
     /// Expose only this plan's copied, digest-verified registry catalog to a direct-rustc consumer.
     ///
-    /// A normal command must not aggregate leaves from a different compiler seed: Rust metadata can bind one direct
+    /// A normal command must not aggregate leaves from a different compiler Loaf: Rust metadata can bind one direct
     /// crate to a particular feature-unified dependency graph even when the package/version names look identical.
     pub(crate) fn registry_leaf_authority(
         &self,
@@ -2984,7 +2989,7 @@ fn trusted_artifact_plan_for_source(
 /// Project a verified, already-materialized direct-Rustc plan onto one receipt-authorized source root.
 ///
 /// Callers that add a caller-owned registry leaf must make that decision against this projection, rather than the
-/// complete seed plan. A complete seed deliberately retains compiler-private helpers such as the vocabulary
+/// complete Loaf plan. A complete Loaf deliberately retains compiler-private helpers such as the vocabulary
 /// serializer; treating one of those helpers as a public caller extern can either hide a declared dependency or
 /// expose a second incompatible Rust crate identity.
 pub(crate) fn trusted_artifact_plan_for_source_evidence(
@@ -4373,7 +4378,7 @@ mod tests {
         );
         assert!(Command::new(consumer_output).status()?.success());
 
-        let error = materialize_declared_rust_libraries(
+        let error = match materialize_declared_rust_libraries(
             &workspace.path().join("default-feature-output"),
             &rustc,
             &target,
@@ -4388,8 +4393,10 @@ mod tests {
                 package: None,
             }],
             None,
-        )
-        .expect_err("a default Cargo feature activation remains unsupported");
+        ) {
+            Ok(_) => return Err("a default Cargo feature activation remains unsupported".into()),
+            Err(error) => error,
+        };
         assert!(error.to_string().contains("activates default Cargo features"));
         Ok(())
     }
@@ -5355,7 +5362,7 @@ mod tests {
         let consumer_source = project.path().join("src/consumer.rs");
         fs::write(
             &macro_source,
-            "use proc_macro::TokenStream;\n#[proc_macro]\npub fn answer(_input: TokenStream) -> TokenStream { \"43\".parse().unwrap() }\n",
+            "use proc_macro::{Literal, TokenStream, TokenTree};\n#[proc_macro]\npub fn answer(_input: TokenStream) -> TokenStream { TokenStream::from(TokenTree::Literal(Literal::u32_unsuffixed(43))) }\n",
         )?;
         fs::write(
             &consumer_source,

@@ -240,7 +240,7 @@ If a document has parse or type errors, the LSP keeps reporting diagnostics and 
 
 ## Artifact and Model Boundaries
 
-`incan tools metadata api` inspects source files or a project directory and emits JSON or generated Markdown. It does not build the project, emit generated Rust, or read a `.incnlib` artifact. This metadata command neither emits library artifacts nor changes Oven's normal `incan build --lib` path; use `incan tools metadata model` for model bundle inspection.
+`incan tools metadata api` inspects source files or a project directory and emits JSON or generated Markdown. It does not build the project, emit generated Rust, or read a `.incnlib` artifact. Use `incan build --lib` for library artifact emission and `incan tools metadata model` for model bundle inspection.
 
 The metadata JSON describes public declarations from checked Incan source and materialized contract models visible to the checked program. Model bundle schema, emit, materialization, and artifact inspection are documented separately in [Checked contract metadata](contract_metadata.md).
 

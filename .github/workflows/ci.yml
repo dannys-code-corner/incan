@@ -193,15 +193,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
       - name: Fetch locked Oven native publisher sources
-        # This publisher-only registry inventory makes the provider job's later offline native-unit publication
+        # This publisher-only registry inventory makes the provider job's later offline Loaf baking
         # reproducible; ordinary Oven consumers never fetch or invoke Cargo.
-        run: make fetch-oven-native-unit-sources
+        run: make fetch-oven-loaf-sources
       - name: Download matching Incan CLI
         uses: actions/download-artifact@v6
         with:
@@ -216,7 +216,7 @@ jobs:
       - name: Install WASI target for pinned Oven publisher
         run: rustup target add wasm32-wasip1 --toolchain nightly-2026-03-24
       - name: Prewarm compiled SDK providers
-        # Ordinary test shards share the immutable SDK inventory and compiler-owned native units. The separate
+        # Ordinary test shards share the immutable SDK inventory and compiler-owned Loafs. The separate
         # cold-provider acceptance job does not download either artifact, so it still proves first publication from
         # an empty provider store rather than inheriting a warmed test fixture.
         run: >-
@@ -229,15 +229,16 @@ jobs:
           INCAN_TOOLCHAIN_CRATES_DIR="$GITHUB_WORKSPACE/crates"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          make test-prewarm-oven-native-units
+          make -s test-prewarm-oven-loafs INCAN_TEST_OVEN_BAKE_FORMAT=json INCAN_TEST_OVEN_BAKE_REPORT="$GITHUB_WORKSPACE/target/oven-baker-result.json"
       - name: Run bounded Oven compiler suite beside its prepared closure
-        # The suite consumes the same locally prepared provider/native-unit closure. Sending roughly 900 MiB through
+        # The suite consumes the same locally prepared provider/Loaf closure. Sending roughly 900 MiB through
         # the artifact service only to download it into another identical runner made the CI critical path transfer-
         # bound and does not exercise a normal Oven consumer any better.
         uses: ./.github/actions/run-oven-compiler-suite
         with:
           lane: ubuntu-latest-stable
           publisher_toolchain: nightly-2026-03-24
+          consumer_toolchain: stable
       - name: Upload Linux compiler-suite evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v6
@@ -253,10 +254,15 @@ jobs:
           path: target/release
       - name: Restore release compiler executable permission
         run: chmod +x target/release/incan
+      - name: Bake the release Loaf envelope for normal-command evidence
+        run: >-
+          INCAN_TEST_COMPILER_ALREADY_BUILT=1
+          INCAN_TEST_OVEN_RELEASE_COMPILER_BIN="$GITHUB_WORKSPACE/target/release/incan"
+          make test-prewarm-oven-release-loafs
       - name: Record guarded release Oven Alpha build benchmark
         # This is a small representative normal command, not the compiler-suite timing.  It uses the same release
-        # compiler and locally prepared native-unit layout as the smoke set, starts with an empty Oven home, and
-        # persists the Linux reference report without transferring the large test-native-unit closure.
+        # compiler and locally prepared Loaf layout as the smoke set, starts with an empty Oven home, and
+        # persists the Linux reference report without transferring the large compiler-suite Loaf closure.
         run: |
           clean_worktree="$RUNNER_TEMP/incan-oven-alpha-clean-worktree"
           git worktree add --detach "$clean_worktree" "$GITHUB_SHA"
@@ -268,12 +274,12 @@ jobs:
           EOF
           chmod +x target/ci-benchmark-cargo-guard/cargo
           bash scripts/bench_oven_alpha.sh \
-            --incan "$GITHUB_WORKSPACE/target/release/incan" \
+            --incan "$GITHUB_WORKSPACE/target/oven-alpha-release-toolchain/bin/incan" \
             --release-identity "GitHub Actions incan-release-bin artifact for $GITHUB_SHA" \
             --checkout-revision "$GITHUB_SHA" \
             --workload build \
-            --source "$GITHUB_WORKSPACE/tests/fixtures/oven_alpha_release_core.incn" \
-            --clean-worktree-source "$clean_worktree/tests/fixtures/oven_alpha_release_core.incn" \
+            --source "$GITHUB_WORKSPACE/src/oven/fixtures/release_core.incn" \
+            --clean-worktree-source "$clean_worktree/src/oven/fixtures/release_core.incn" \
             --incan-home "$RUNNER_TEMP/incan-oven-alpha-benchmark-home" \
             --output "$GITHUB_WORKSPACE/target/oven-alpha-linux-benchmark" \
             --cargo-guard-dir "$GITHUB_WORKSPACE/target/ci-benchmark-cargo-guard" \
@@ -378,7 +384,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
@@ -415,13 +421,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
       - name: Fetch locked Oven native publisher sources
-        run: make fetch-oven-native-unit-sources
+        run: make fetch-oven-loaf-sources
       - name: Download matching Incan CLI
         uses: actions/download-artifact@v6
         with:
@@ -446,14 +452,15 @@ jobs:
           INCAN_TOOLCHAIN_CRATES_DIR="$GITHUB_WORKSPACE/crates"
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          make test-prewarm-oven-native-units
+          make -s test-prewarm-oven-loafs INCAN_TEST_OVEN_BAKE_FORMAT=json INCAN_TEST_OVEN_BAKE_REPORT="$GITHUB_WORKSPACE/target/oven-baker-result.json"
       - name: Run bounded Oven compiler suite beside its prepared closure
-        # Keep the prepared native units local to the consumer. The direct-Rustc suite needs their immutable
+        # Keep the prepared Loafs local to the consumer. The direct-Rustc suite needs their immutable
         # contents, not an artifact-service round trip that can dominate the macOS critical path.
         uses: ./.github/actions/run-oven-compiler-suite
         with:
           lane: macos-latest-stable
           publisher_toolchain: nightly-2026-03-24
+          consumer_toolchain: stable
       - name: Upload macOS compiler-suite evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v6
@@ -475,13 +482,14 @@ jobs:
           exit 97
           EOF
           chmod +x target/ci-benchmark-cargo-guard/cargo
+          INCAN_TEST_COMPILER_ALREADY_BUILT=1 make test-prewarm-oven-release-loafs
           bash scripts/bench_oven_alpha.sh \
-            --incan "$GITHUB_WORKSPACE/target/debug/incan" \
+            --incan "$GITHUB_WORKSPACE/target/oven-alpha-release-toolchain/bin/incan" \
             --release-identity "GitHub Actions test-macos-incan-cli artifact for $GITHUB_SHA" \
             --checkout-revision "$GITHUB_SHA" \
             --workload build \
-            --source "$GITHUB_WORKSPACE/tests/fixtures/oven_alpha_release_core.incn" \
-            --clean-worktree-source "$clean_worktree/tests/fixtures/oven_alpha_release_core.incn" \
+            --source "$GITHUB_WORKSPACE/src/oven/fixtures/release_core.incn" \
+            --clean-worktree-source "$clean_worktree/src/oven/fixtures/release_core.incn" \
             --incan-home "$RUNNER_TEMP/incan-oven-alpha-benchmark-home" \
             --output "$GITHUB_WORKSPACE/target/oven-alpha-macos-benchmark" \
             --cargo-guard-dir "$GITHUB_WORKSPACE/target/ci-benchmark-cargo-guard" \
@@ -584,7 +592,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
@@ -623,13 +631,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_native_seed_dependencies/Cargo.lock') }}
+          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
           restore-keys: |
             incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
       - name: Fetch locked Oven native publisher sources
-        run: make fetch-oven-native-unit-sources
+        run: make fetch-oven-loaf-sources
       - name: Download matching Incan CLI
         uses: actions/download-artifact@v6
         with:
@@ -655,7 +663,9 @@ jobs:
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           INCAN_TEST_PREWARM_TOOLCHAIN=1.93.0
-          make test-prewarm-oven-native-units
+          INCAN_TEST_LOAF_TOOLCHAIN=1.93.0
+          INCAN_TEST_SUITE_TOOLCHAIN=1.93.0
+          make -s test-prewarm-oven-loafs INCAN_TEST_OVEN_BAKE_FORMAT=json INCAN_TEST_OVEN_BAKE_REPORT="$GITHUB_WORKSPACE/target/oven-baker-result.json"
       - name: Run bounded Oven compiler suite beside its prepared closure
         # The MSRV direct-Rustc runner consumes the just-published immutable closure in this job. Keeping it local
         # avoids making a large artifact upload/download the gate for the actual all-root execution.
@@ -663,6 +673,7 @@ jobs:
         with:
           lane: ubuntu-latest-msrv-1-93-0
           publisher_toolchain: nightly-2026-03-24
+          consumer_toolchain: 1.93.0
       - name: Upload MSRV compiler-suite evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v6

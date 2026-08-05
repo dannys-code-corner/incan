@@ -1,9 +1,8 @@
 //! Bounded, lease-aware storage for immutable Oven Alpha artifacts.
 //!
-//! This store is intentionally separate from generated Cargo targets. It owns
-//! versioned Oven artifacts only, reports logical artifact bytes and
-//! measured physical file allocation separately, and refuses publication when
-//! its active leases leave no safe way to satisfy capacity policy.
+//! This store is intentionally separate from generated Cargo targets. It owns versioned Oven artifacts only, reports
+//! logical artifact bytes and measured physical file allocation separately, and refuses publication when its active
+//! leases leave no safe way to satisfy capacity policy.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -71,7 +70,7 @@ pub enum OvenArtifactKind {
     CompilerTestSuiteShard,
     /// One bounded compiler-test dependency foundation composed by receipt-bound root shards.
     CompilerTestSuiteFoundation,
-    /// One independently policy-bounded compiler-native-unit data partition required by a stored suite child.
+    /// One independently policy-bounded compiler-Loaf data partition required by a stored suite child.
     CompilerTestSuiteToolchainData,
 }
 
@@ -269,7 +268,7 @@ pub struct OvenStore {
     limits: OvenStoreLimits,
 }
 
-/// Validated batch member retained only while the store serializes its all-or-nothing publication.
+/// Validated batch member retained while the store serializes one related publication.
 struct PreparedOvenArtifactPublication<'a> {
     request: &'a OvenArtifactPublishRequest,
     manifest: OvenArtifactManifest,
@@ -277,7 +276,7 @@ struct PreparedOvenArtifactPublication<'a> {
     logical_bytes: u64,
 }
 
-/// Fully written but not-yet-visible member of one atomic Oven publication batch.
+/// Fully written but not-yet-visible member of one related Oven publication batch.
 struct StagedOvenArtifactPublication {
     staging: PathBuf,
     manifest: OvenArtifactManifest,
@@ -506,11 +505,12 @@ impl OvenStore {
         artifact_manifest(request, domain, &materialized_files)
     }
 
-    /// Atomically admit a related immutable artifact batch across one or more compatibility domains.
+    /// Admit a related immutable artifact batch across one or more compatibility domains.
     ///
-    /// A compiler-suite index is only useful with its complete shard set. This method therefore stages, measures,
-    /// capacity-admits, and makes every new member visible as one batch. If policy cannot admit the index and all of
-    /// its shards and foundations together, no newly requested entry is retained as an orphaned partial suite.
+    /// A compiler-suite index is only useful with its complete shard set. This method therefore stages, measures, and
+    /// capacity-admits the complete batch before making members visible. Dependencies are synchronized first and the
+    /// index is committed last, so an interrupted process may leave reclaimable unreferenced members but can never
+    /// expose a selectable partial suite.
     pub fn publish_batch(
         &self,
         requests: &[OvenArtifactPublishRequest],
@@ -535,6 +535,23 @@ impl OvenStore {
         &self,
         requests: &[OvenArtifactPublishRequest],
         allow_legacy_cargo_publisher: bool,
+    ) -> Result<Vec<OvenArtifactManifest>, OvenStoreError> {
+        self.publish_batch_with_legacy_cargo_publisher_permission_and_commit_hook(
+            requests,
+            allow_legacy_cargo_publisher,
+            || Ok(()),
+        )
+    }
+
+    /// Implement one related publication with an internal hook at the compiler-suite authority commit point.
+    ///
+    /// Production supplies a no-op hook. Focused tests interrupt this exact boundary after durable members but before
+    /// the index rename, proving that the only executable authority is committed last.
+    fn publish_batch_with_legacy_cargo_publisher_permission_and_commit_hook(
+        &self,
+        requests: &[OvenArtifactPublishRequest],
+        allow_legacy_cargo_publisher: bool,
+        before_authority_commit: impl FnOnce() -> Result<(), OvenStoreError>,
     ) -> Result<Vec<OvenArtifactManifest>, OvenStoreError> {
         if requests.is_empty() {
             return Err(OvenStoreError::InvalidInput {
@@ -709,8 +726,42 @@ impl OvenStore {
             return Err(error);
         }
 
+        let authority_count = staged
+            .iter()
+            .filter(|publication| publication.manifest.kind == OvenArtifactKind::CompilerTestSuite)
+            .count();
+        if authority_count > 1 {
+            cleanup_batch_staging(&staged);
+            return Err(OvenStoreError::InvalidInput {
+                field: "publication batch",
+                message: "must not contain more than one compiler-suite authority index".to_string(),
+            });
+        }
+        // A compiler-suite index is the sole execution authority for its referenced shards, foundations, and
+        // toolchain data. Commit every member first, synchronize those directory entries, and only then expose the
+        // index. A crash can therefore leave reclaimable unreferenced members, never a selectable partial suite.
+        staged.sort_by_key(|publication| publication.manifest.kind == OvenArtifactKind::CompilerTestSuite);
         let mut published = Vec::with_capacity(staged.len());
+        let mut before_authority_commit = Some(before_authority_commit);
         for publication in &staged {
+            if publication.manifest.kind == OvenArtifactKind::CompilerTestSuite {
+                if let Err(error) = sync_directory(self.entries_root()) {
+                    for path in &published {
+                        let _ = fs::remove_dir_all(path);
+                    }
+                    cleanup_batch_staging(&staged);
+                    return Err(error);
+                }
+                if let Some(commit_hook) = before_authority_commit.take()
+                    && let Err(error) = commit_hook()
+                {
+                    for path in &published {
+                        let _ = fs::remove_dir_all(path);
+                    }
+                    cleanup_batch_staging(&staged);
+                    return Err(error);
+                }
+            }
             let destination = self.entry_root(&publication.manifest.identity);
             if let Err(source) = fs::rename(&publication.staging, &destination) {
                 for path in &published {
@@ -2586,14 +2637,14 @@ fn write_synced_file(path: &Path, bytes: &[u8], trailing_newline: bool) -> Resul
 }
 
 /// Synchronize a directory entry after atomic store publication where the host supports directory handles.
-fn sync_directory(path: PathBuf) -> Result<(), OvenStoreError> {
+pub(crate) fn sync_directory(path: PathBuf) -> Result<(), OvenStoreError> {
     File::open(&path)
         .and_then(|directory| directory.sync_all())
         .map_err(|source| OvenStoreError::Io { path, source })
 }
 
 /// Synchronize nested materialized directories from leaves to root before their entry becomes visible.
-fn sync_directory_tree(directory: &Path) -> Result<(), OvenStoreError> {
+pub(crate) fn sync_directory_tree(directory: &Path) -> Result<(), OvenStoreError> {
     for child in fs::read_dir(directory).map_err(|source| OvenStoreError::Io {
         path: directory.to_path_buf(),
         source,
@@ -2880,7 +2931,7 @@ mod tests {
             receipt_generated_project(
                 &OvenGeneratedProjectRequest::new(
                     project,
-                    "shared-native-unit",
+                    "shared-Loaf",
                     "0.1.0",
                     "aarch64-apple-darwin",
                     "rustc 1.96.0",
@@ -2897,7 +2948,7 @@ mod tests {
         assert_eq!(first_receipt.build_unit_identity, second_receipt.build_unit_identity);
         let first_request = OvenArtifactPublishRequest {
             receipt: first_receipt,
-            domain: "shared-native-unit".to_string(),
+            domain: "shared-Loaf".to_string(),
             kind: OvenArtifactKind::DirectRustcPlan,
             payload: b"shared payload".to_vec(),
             materialized_files: Vec::new(),
@@ -3093,6 +3144,47 @@ mod tests {
         assert_eq!(entries[0].manifest.domain, "compiler-suite");
         assert_eq!(entries[1].manifest.domain, "compiler-suite");
         assert!(entries.iter().all(|entry| manifests.contains(&entry.manifest)));
+        Ok(())
+    }
+
+    #[test]
+    fn compiler_suite_batch_commits_its_authority_index_after_durable_members() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::cell::Cell;
+
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let mut index = request(project.path(), "compiler-suite", b"suite index")?;
+        index.kind = OvenArtifactKind::CompilerTestSuite;
+        let mut shard = request(project.path(), "compiler-suite", b"suite shard")?;
+        shard.kind = OvenArtifactKind::CompilerTestSuiteShard;
+        let index_identity = store.manifest_for_publication(&index)?.identity;
+        let shard_identity = store.manifest_for_publication(&shard)?.identity;
+        let reached_commit_point = Cell::new(false);
+
+        let interrupted = store.publish_batch_with_legacy_cargo_publisher_permission_and_commit_hook(
+            &[index.clone(), shard.clone()],
+            false,
+            || {
+                reached_commit_point.set(true);
+                assert!(store.entry_root(&shard_identity).is_dir());
+                assert!(!store.entry_root(&index_identity).exists());
+                Err(OvenStoreError::InvalidInput {
+                    field: "test compiler-suite commit hook",
+                    message: "simulated interruption before authority commit".to_string(),
+                })
+            },
+        );
+
+        assert!(matches!(interrupted, Err(OvenStoreError::InvalidInput { .. })));
+        assert!(reached_commit_point.get());
+        assert!(store.inspect()?.entries.is_empty());
+        let published = store.publish_batch(&[index, shard])?;
+        assert_eq!(published.len(), 2);
+        assert!(store.select(&index_identity).is_ok());
+        assert!(store.select(&shard_identity).is_ok());
         Ok(())
     }
 

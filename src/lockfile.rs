@@ -68,6 +68,7 @@ pub struct IncanLock {
 }
 
 /// Advisory guards retained for one canonical lockfile publication critical section.
+#[derive(Debug)]
 pub(crate) struct PublicationLock {
     _legacy: Option<File>,
     _active: File,

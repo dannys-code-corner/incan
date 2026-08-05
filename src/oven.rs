@@ -1,15 +1,14 @@
 //! Incan-owned Oven receipts for the supported Alpha compatibility envelope.
 //!
-//! This small compiler-owned Rust kernel is temporary implementation debt
-//! scoped to the tracked Oven Alpha (#1005, #975): the present language cannot own
-//! the required process, file-lock, and durable-publication primitives
-//! directly. It must remain a narrow, removable boundary rather than growing
-//! into a Rust orchestration layer for the product workflow.
+//! This small compiler-owned Rust kernel is temporary implementation debt scoped to the tracked Oven Alpha (#1005,
+//! #975): the present language cannot own the required process, file-lock, and durable-publication primitives
+//! directly. It must remain a narrow, removable boundary rather than growing into a Rust orchestration layer for
+//! the product workflow.
 //!
-//! Oven reads frozen Cargo declarations only as compatibility evidence. It does
-//! not invoke Cargo, inspect a target directory, or claim to have performed
-//! native package resolution. Later Oven store and executor stages consume the
-//! receipt's portable identity rather than a project-local build path.
+//! Oven reads frozen Cargo declarations only as compatibility evidence. Receipt and consumer paths do not invoke
+//! Cargo, inspect a target directory, or claim to have performed native package resolution. The explicitly named
+//! `legacy_cargo` baker is the sole Alpha bootstrap boundary that may invoke Cargo. Later Oven store and executor
+//! stages consume portable identities and sealed Loafs rather than project-local build paths.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
@@ -22,8 +21,8 @@ use sha2::{Digest, Sha256};
 use crate::manifest::{DependencySource, DependencySpec, GitReference, ProjectManifest};
 
 pub mod legacy_cargo;
+pub mod loaf;
 pub mod native_test;
-pub mod native_unit;
 pub mod rustc;
 pub mod store;
 
@@ -68,11 +67,17 @@ pub const OVEN_RECEIPT_SCHEMA_VERSION: u32 = 3;
 pub const DEFAULT_RECEIPT_RELATIVE_PATH: &str = ".incan/oven/receipt.json";
 
 /// Default aggregate physical allocation retained by an everyday Alpha Oven store.
-pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 /// Default physical allocation cap for one compatibility domain.
 pub const DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
 /// Default logical artifact-byte cap for one compatibility domain.
 pub const DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES: u64 = 768 * 1024 * 1024;
+/// Aggregate physical allowance for the complete compiler-suite Loaf and repository-test closure.
+pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+/// Physical allowance for the compiler-suite compatibility domain.
+pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+/// Logical artifact-byte allowance for the compiler-suite compatibility domain.
+pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 
 /// Explicit, portable build facts for one frozen-project import.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,15 +500,11 @@ pub fn receipt_native_compiler_suite(request: &OvenCompilerSuiteRequest) -> Resu
     let cargo_lock_digest = digest_content(&cargo_lock);
     let compiler_source_records = compiler_suite_source_records(&request.project_root)?;
     let compiler_source_tree_digest = digest_compiler_suite_source_records(&compiler_source_records)?;
+    let compiler_plan_digest = compiler_suite_plan_digest(&request.project_root, &compiler_source_records)?;
     let mut build_unit_inputs = BTreeMap::new();
     build_unit_inputs.insert("compiler-cargo-manifest".to_string(), cargo_manifest_digest.clone());
     build_unit_inputs.insert("compiler-cargo-lock".to_string(), cargo_lock_digest.clone());
-    // Unlike generated application sources, this is the complete workspace closure that produced the stored native
-    // suite. It must therefore participate in reusable-suite selection, not only the command receipt.
-    build_unit_inputs.insert(
-        "compiler-suite-source-tree".to_string(),
-        compiler_source_tree_digest.clone(),
-    );
+    build_unit_inputs.insert("compiler-suite-plan".to_string(), compiler_plan_digest);
     let mut supplemental_digests = BTreeMap::from([
         (
             "compiler-libtest-root".to_string(),
@@ -515,9 +516,10 @@ pub fn receipt_native_compiler_suite(request: &OvenCompilerSuiteRequest) -> Resu
         ),
         ("compiler-suite-source-tree".to_string(), compiler_source_tree_digest),
     ]);
-    // A full native-suite plan must authorize each root passed to direct rustc, not just `src/lib.rs`. The complete
-    // source-tree digest above remains the reusable-build-unit key; these per-root digests make every Cargo-planned
-    // workspace library, binary, and integration target independently checkable at execution time.
+    // A full native-suite plan must authorize each root passed to direct rustc, not just `src/lib.rs`. Source bytes
+    // belong to the exact command receipt, while the reusable build unit above records only inputs that can change
+    // Cargo's target/dependency plan. Editing an existing Rust module therefore reuses the immutable foundation;
+    // adding a new source path or changing a manifest still requires an explicit rebake.
     for (relative_path, digest) in &compiler_source_records {
         if relative_path.ends_with(".rs") {
             supplemental_digests.insert(compiler_suite_source_evidence_key(relative_path), digest.clone());
@@ -865,6 +867,52 @@ fn compiler_suite_source_records(project_root: &Path) -> Result<BTreeMap<String,
 /// Digest the complete source record map without embedding checkout-specific paths in a receipt.
 fn digest_compiler_suite_source_records(records: &BTreeMap<String, String>) -> Result<String, OvenError> {
     let payload = serde_json::to_vec(records).map_err(|error| OvenError::Serialize(error.to_string()))?;
+    Ok(digest_bytes(&payload))
+}
+
+/// Digest only compiler-workspace inputs that can change the reusable target and dependency plan.
+///
+/// Rust source contents remain exact receipt evidence because direct Rustc compiles the current checkout. Cargo's
+/// automatically discovered target topology does depend on source paths, so the complete portable `.rs` path set is
+/// retained here. Manifest and build-script bytes remain plan inputs; ordinary module edits do not force the hidden
+/// compatibility baker to rebuild an otherwise identical third-party foundation.
+fn compiler_suite_plan_digest(
+    project_root: &Path,
+    source_records: &BTreeMap<String, String>,
+) -> Result<String, OvenError> {
+    let mut records = BTreeMap::new();
+    for (path, digest) in source_records {
+        if path.ends_with("Cargo.toml") || path.ends_with("build.rs") {
+            records.insert(format!("content:{path}"), digest.clone());
+        }
+        if path.ends_with(".rs") {
+            records.insert(format!("source-path:{path}"), String::new());
+        }
+    }
+    for relative in [".cargo/config.toml", ".cargo/config"] {
+        let path = project_root.join(relative);
+        if !path.exists() {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|error| OvenError::InvalidGeneratedSource {
+            path: path.clone(),
+            message: error.to_string(),
+        })?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(OvenError::InvalidGeneratedSource {
+                path,
+                message: "must be a regular non-symlink compiler-suite planning input".to_string(),
+            });
+        }
+        records.insert(
+            format!("content:{relative}"),
+            digest_bytes(&fs::read(&path).map_err(|error| OvenError::InvalidGeneratedSource {
+                path: path.clone(),
+                message: error.to_string(),
+            })?),
+        );
+    }
+    let payload = serde_json::to_vec(&records).map_err(|error| OvenError::Serialize(error.to_string()))?;
     Ok(digest_bytes(&payload))
 }
 
@@ -1246,7 +1294,7 @@ mod tests {
     }
 
     #[test]
-    fn compiler_suite_source_changes_invalidate_its_reusable_build_unit() -> Result<(), Box<dyn std::error::Error>> {
+    fn compiler_suite_source_content_changes_reuse_its_native_foundation() -> Result<(), Box<dyn std::error::Error>> {
         let project = tempfile::tempdir()?;
         write_frozen_project(project.path())?;
         fs::create_dir_all(project.path().join("src"))?;
@@ -1267,7 +1315,11 @@ mod tests {
         let changed = receipt_native_compiler_suite(&request())?;
 
         assert_ne!(first.identity, changed.identity);
-        assert_ne!(first.build_unit_identity, changed.build_unit_identity);
+        assert_eq!(first.build_unit_identity, changed.build_unit_identity);
+
+        fs::write(project.path().join("src/new_target_input.rs"), "pub fn added() {}\n")?;
+        let topology_changed = receipt_native_compiler_suite(&request())?;
+        assert_ne!(changed.build_unit_identity, topology_changed.build_unit_identity);
         Ok(())
     }
 

@@ -111,7 +111,7 @@ Build configuration. All fields are optional.
 
 ```toml
 [build]
-rust-edition = "2021"       # Rust edition for the generated Cargo.toml (default: compiler-chosen)
+rust-edition = "2021"       # Rust edition for generated Rust and compatibility metadata (default: compiler-chosen)
 profile = "release"         # Cargo build profile
 target = "x86_64-unknown-linux-gnu"  # Cross-compilation target
 source-root = "src"         # Source root for module resolution (default: convention-based)
@@ -390,11 +390,7 @@ fancy_logging = { version = "0.3", optional = true }
 metrics = { version = "1.0", features = ["prometheus"], optional = true }
 ```
 
-Optional dependencies generate a Cargo feature gate. Enable them at build time:
-
-```bash
-incan build src/main.incn --cargo-features fancy_logging
-```
+These declarations are Cargo-compatibility inputs, not public Incan package features. Oven Alpha does not ask Cargo to activate an optional Rust dependency during a normal build. The selected toolchain Loaf must already authorize the requested Rust dependency/feature closure; otherwise the command stops with unsupported-envelope guidance. Use `[project.features]` for public Incan features, but do not use `dep:` there to name a Rust dependency: `dep:` activates an optional Incan dependency from `[dependencies]`.
 
 ## Legacy alias tables
 

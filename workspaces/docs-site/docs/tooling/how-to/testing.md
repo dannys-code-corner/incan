@@ -306,7 +306,7 @@ incan test --jobs 4 tests/
 
 `-k` matches the stable test id shown by `--list`, for example `tests/test_math.incn::test_addition` or `tests/test_math.incn::test_add[1-2-3]`.
 
-When a generated Rust test harness is new or its compatibility inputs change, `incan test` writes a new receipt and selects the matching prepared Oven plan. A missing plan fails with its generated harness and receipt path plus the explicit transition command that may prepare the closure; `incan test` does not fall back to Cargo.
+When a generated Rust test harness is new or its compatibility inputs change, `incan test` writes a new receipt and selects the matching prepared Oven plan. A missing plan fails with its generated harness and receipt path, then explains whether to install an Oven-enabled toolchain or remove caller-owned Rust dependencies outside the documented Alpha envelope. The diagnostic names the hidden baker only for maintainers preparing a toolchain; `incan test` neither runs it automatically nor falls back to Cargo.
 
 `-m` matches marker names from decorators such as `@slow` and `@mark("smoke")`, plus default marks from `TEST_MARKS`. Use `TEST_MARKERS` with `--strict-markers` to make unknown marker names a collection error.
 

@@ -207,6 +207,15 @@ pub enum OvenOutputFormat {
     Json,
 }
 
+/// Built-in compiler-owned Loaf envelope selected by the hidden baker.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OvenLoafEnvelopeArgument {
+    /// Minimal Loafs shipped in a release toolchain.
+    Release,
+    /// Complete Loaf set used by the repository compiler suite.
+    CompilerSuite,
+}
+
 /// Incan package-feature selection shared by compilation commands.
 ///
 /// These flags select package-owned semantic features. They are intentionally separate from the explicitly prefixed
@@ -952,7 +961,7 @@ pub enum OvenCommand {
         #[arg(long = "format", value_enum, default_value = "text")]
         format: OvenOutputFormat,
     },
-    /// Explicit temporary Cargo publisher; never used by normal build, run, or test execution
+    /// Hidden `legacy_cargo` publisher; never used by normal build, run, or test execution
     LegacyCargo {
         #[command(subcommand)]
         command: OvenLegacyCargoCommand,
@@ -1062,7 +1071,7 @@ pub enum OvenCommand {
     },
 }
 
-/// Explicit temporary Cargo transition commands for preparing immutable Oven inputs.
+/// Hidden `legacy_cargo` commands for baking immutable Oven inputs.
 #[derive(Subcommand, Debug)]
 pub enum OvenLegacyCargoCommand {
     /// Prepare one receipt-bound direct-rustc closure and retain only the bounded Oven result
@@ -1088,47 +1097,39 @@ pub enum OvenLegacyCargoCommand {
         #[arg(long = "format", value_enum, default_value = "text")]
         format: OvenOutputFormat,
     },
-    /// Prepare the compiler root library-test closure; this is the one explicit Cargo publisher transition
-    PrepareCompilerLibtests {
-        /// Repository root containing the compiler Cargo package and src/lib.rs
+    /// Bake or reuse one complete compiler-owned Alpha Loaf envelope
+    #[command(hide = true)]
+    BakeLoafs {
+        /// Compiler checkout or staged toolchain root used for runtime-source identity
         #[arg(long = "compiler-root", value_name = "PATH", default_value = ".")]
         compiler_root: PathBuf,
-        /// Explicit Cargo executable used only for this publisher transition
-        #[arg(long, value_name = "PATH")]
-        cargo: PathBuf,
-        /// Explicit Rust compiler required to match the receipt
-        #[arg(long, value_name = "PATH")]
-        rustc: PathBuf,
-        /// Root-package feature to include; default Cargo features are always included
-        #[arg(long = "feature", value_name = "NAME")]
-        features: Vec<String>,
-        /// Stable compatibility domain for bounded Oven storage
-        #[arg(long, value_name = "NAME")]
-        domain: String,
-        #[command(flatten)]
-        store: OvenStoreCliFlags,
-        /// Output format
-        #[arg(long = "format", value_enum, default_value = "text")]
-        format: OvenOutputFormat,
-    },
-    /// Internal release-packaging command that emits one compiler-owned base native-unit seed
-    #[command(hide = true)]
-    PrepareNativeUnitSeed {
-        /// Empty destination directory for the immutable compiler-owned seed
+        /// Destination directory for immutable `<identity>.loaf` bundles
         #[arg(long, value_name = "PATH")]
         output: PathBuf,
-        /// Generated-project receipt produced by the compiler-owned packaging probe
-        #[arg(long, value_name = "PATH")]
-        receipt: PathBuf,
-        /// Generated Rust project produced by the compiler-owned packaging probe
-        #[arg(long = "generated-project", value_name = "PATH")]
-        generated_project: PathBuf,
-        /// Explicit Cargo executable used only while packaging the toolchain
+        /// Bounded compiler-suite store baked with the compiler-suite envelope
+        #[arg(long = "suite-store", value_name = "PATH")]
+        suite_store: Option<PathBuf>,
+        /// Built-in release or compiler-suite Loaf envelope
+        #[arg(long, value_enum)]
+        envelope: OvenLoafEnvelopeArgument,
+        /// Exact compiler-owned SDK provider inventory
+        #[arg(long = "sdk-inventory", value_name = "PATH")]
+        sdk_inventory: PathBuf,
+        /// Explicit Cargo executable used only for a genuine Loaf miss
         #[arg(long, value_name = "PATH")]
         cargo: PathBuf,
-        /// Explicit Rust compiler used only while packaging the toolchain
+        /// Explicit Rust compiler recorded by each Loaf receipt
         #[arg(long, value_name = "PATH")]
         rustc: PathBuf,
+        /// Aggregate physical Loaf-envelope allowance
+        #[arg(long = "max-physical-bytes", value_name = "BYTES")]
+        max_physical_bytes: Option<u64>,
+        /// Physical allowance for one Loaf compatibility domain
+        #[arg(long = "max-domain-physical-bytes", value_name = "BYTES")]
+        max_domain_physical_bytes: Option<u64>,
+        /// Logical allowance for one Loaf compatibility domain
+        #[arg(long = "max-domain-logical-bytes", value_name = "BYTES")]
+        max_domain_logical_bytes: Option<u64>,
         /// Output format
         #[arg(long = "format", value_enum, default_value = "text")]
         format: OvenOutputFormat,
@@ -1628,42 +1629,31 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                     store: store.into(),
                     format,
                 }),
-                OvenLegacyCargoCommand::PrepareCompilerLibtests {
+                OvenLegacyCargoCommand::BakeLoafs {
                     compiler_root,
-                    cargo,
-                    rustc,
-                    features,
-                    domain,
-                    store,
-                    format,
-                } => commands::oven_legacy_cargo_prepare_compiler_libtests(
-                    commands::OvenCompilerLibtestsPrepareCommandOptions {
-                        compiler_root,
-                        cargo,
-                        rustc,
-                        features,
-                        domain,
-                        store: store.into(),
-                        format,
-                    },
-                ),
-                OvenLegacyCargoCommand::PrepareNativeUnitSeed {
                     output,
-                    receipt,
-                    generated_project,
+                    suite_store,
+                    envelope,
+                    sdk_inventory,
                     cargo,
                     rustc,
+                    max_physical_bytes,
+                    max_domain_physical_bytes,
+                    max_domain_logical_bytes,
                     format,
-                } => commands::oven_legacy_cargo_prepare_native_unit_seed(
-                    commands::OvenNativeUnitSeedPrepareCommandOptions {
-                        output,
-                        receipt,
-                        generated_project,
-                        cargo,
-                        rustc,
-                        format,
-                    },
-                ),
+                } => commands::oven_legacy_cargo_bake_loafs(commands::OvenLoafBakeCommandOptions {
+                    compiler_root,
+                    output,
+                    suite_store,
+                    envelope,
+                    sdk_inventory,
+                    cargo,
+                    rustc,
+                    max_physical_bytes,
+                    max_domain_physical_bytes,
+                    max_domain_logical_bytes,
+                    format,
+                }),
             },
             OvenCommand::CompilerLibtests {
                 compiler_root,

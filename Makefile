@@ -8,24 +8,24 @@ INCAN_TEST_GENERATED_CARGO_TARGET_DIR ?= $(CURDIR)/target/incan_generated_shared
 INCAN_TEST_SDK_PROVIDER_STORE ?= $(CURDIR)/target/incan_test_sdk_provider_store
 INCAN_TEST_SDK_PROVIDER_PATH_FILE ?= $(CURDIR)/target/incan_test_sdk_provider_path
 INCAN_TEST_OVEN_HOME ?= $(CURDIR)/target/incan_test_oven_home
-INCAN_TEST_OVEN_NATIVE_UNIT_ROOT ?= $(CURDIR)/target/share/incan/oven/native-units
+INCAN_TEST_OVEN_LOAF_ROOT ?= $(CURDIR)/target/share/incan/oven/loafs
+INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT ?= $(CURDIR)/target/oven-alpha-release-toolchain
+INCAN_TEST_OVEN_RELEASE_COMPILER_BIN ?= $(CURDIR)/target/debug/incan
 INCAN_TEST_OVEN_COMPILER_SUITE_STORE ?= $(CURDIR)/target/oven-compiler-suite-store
 # Caller-owned compiler-suite outputs are one-use. `test-oven` creates a fresh directory below this root and removes
 # it after reporting its physical disk use, so repeated local runs cannot reuse a stale test binary or accumulate it.
 INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT ?= $(CURDIR)/target
-# The complete compiler suite is one compatibility closure, so its aggregate and domain allowances are explicit.
-INCAN_TEST_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES ?= 3221225472
-INCAN_TEST_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES ?= 2415919104
-INCAN_TEST_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES ?= 2684354560
-# Aggregate physical limit for the named compiler-owned native-unit publisher. Its individual seeds retain their own
-# explicit 768 MiB logical and 1 GiB physical allowances.
-INCAN_TEST_OVEN_NATIVE_UNIT_MAX_BYTES ?= 2147483648
-# Keep local publisher and suite toolchains aligned with CI: the SDK provider prewarm may use the selected baseline
-# toolchain, while compiler-owned native units must use the same toolchain as the direct-rustc suite. The named
-# legacy publisher remains the only Cargo boundary; normal Oven build/run/test execution remains direct-rustc.
+# Oven owns the release and compiler-suite storage profiles. Make supplies roots and deliberate test inputs only;
+# refusal tests pass explicit tiny CLI limits rather than redefining production policy here.
+INCAN_TEST_OVEN_BAKE_FORMAT ?= text
+INCAN_TEST_OVEN_BAKE_REPORT ?=
+# The pinned publisher Cargo supplies the unstable unit graph only. Loaf receipts and direct-rustc suite execution
+# use the selected consumer toolchain, so stable and MSRV gates prove their advertised compiler rather than nightly.
+# The named legacy publisher remains the only Cargo boundary; normal Oven build/run/test remains direct-rustc.
 INCAN_TEST_PREWARM_TOOLCHAIN ?= stable
-INCAN_TEST_NATIVE_UNIT_TOOLCHAIN ?= nightly-2026-03-24
-INCAN_TEST_SUITE_TOOLCHAIN ?= nightly-2026-03-24
+INCAN_TEST_PUBLISHER_TOOLCHAIN ?= nightly-2026-03-24
+INCAN_TEST_LOAF_TOOLCHAIN ?= stable
+INCAN_TEST_SUITE_TOOLCHAIN ?= stable
 TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
 	INCAN_GENERATED_CARGO_TARGET_DIR="$(INCAN_TEST_GENERATED_CARGO_TARGET_DIR)" \
 	INCAN_INTERNAL_SDK_PROVIDER_STORE="$(INCAN_TEST_SDK_PROVIDER_STORE)" \
@@ -263,12 +263,12 @@ fetch-locked-cargo-sources:
 	@cargo fetch --locked
 	@cargo fetch --manifest-path crates/incan_stdlib/stdlib/components/stdlib-interop/vocab_companion/Cargo.toml --locked
 
-.PHONY: fetch-oven-native-unit-sources
-fetch-oven-native-unit-sources:
-	@cargo fetch --manifest-path tests/fixtures/oven_native_seed_dependencies/Cargo.toml --locked
+.PHONY: fetch-oven-loaf-sources
+fetch-oven-loaf-sources:
+	@cargo fetch --manifest-path tests/fixtures/oven_loaf_dependencies/Cargo.toml --locked
 
 .PHONY: test-oven
-test-oven: test-prewarm-oven-native-units
+test-oven: test-prewarm-oven-loafs
 	@echo "\033[1mRunning complete compiler suite through Oven...\033[0m"
 	@set -e; \
 		mkdir -p "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)"; \
@@ -279,22 +279,21 @@ test-oven: test-prewarm-oven-native-units
 			else echo "Oven suite failed; retaining caller output at $$suite_output" >&2; fi; \
 		}; \
 		trap cleanup_suite_output EXIT; \
-		$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
-		bash scripts/run_oven_compiler_suite.sh \
-			--incan "$(CURDIR)/target/debug/incan" \
-			--compiler-root "$(CURDIR)" \
-			--store "$(INCAN_TEST_OVEN_COMPILER_SUITE_STORE)" \
-			--output "$$suite_output" \
-			--sdk-provider-path-file "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)" \
-			--sdk-provider-store "$(INCAN_TEST_SDK_PROVIDER_STORE)" \
-			--toolchain-data-root "$(CURDIR)/target" \
-			--generated-cargo-target-dir "$(INCAN_TEST_GENERATED_CARGO_TARGET_DIR)" \
-			--domain "local-compiler-suite-lsp" \
-			--max-physical-bytes "$(INCAN_TEST_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES)" \
-			--max-domain-physical-bytes "$(INCAN_TEST_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES)" \
-			--max-domain-logical-bytes "$(INCAN_TEST_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES)" \
-			--feature lsp \
-			--temp-root "$(CURDIR)/target/oven_tmp"; \
+		rustc_path="$$(rustup which --toolchain "$(INCAN_TEST_SUITE_TOOLCHAIN)" rustc)"; \
+		mkdir -p "$$suite_output/cargo-guard" "$(CURDIR)/target/oven_tmp"; \
+		printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "unexpected Cargo invocation: $$*" >> "$$CARGO_GUARD_LOG"' 'exit 97' \
+			> "$$suite_output/cargo-guard/cargo"; \
+		chmod +x "$$suite_output/cargo-guard/cargo"; \
+		: > "$$suite_output/cargo-guard/invocations.log"; \
+		PATH="$$suite_output/cargo-guard:$$PATH" \
+			CARGO_GUARD_LOG="$$suite_output/cargo-guard/invocations.log" TMPDIR="$(CURDIR)/target/oven_tmp" \
+			$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
+			INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$(CURDIR)/target" \
+			./target/debug/incan oven compiler-libtests \
+				--compiler-root "$(CURDIR)" --rustc "$$rustc_path" --feature lsp --output "$$suite_output" \
+				--store "$(INCAN_TEST_OVEN_COMPILER_SUITE_STORE)" \
+				--format text; \
+		test ! -s "$$suite_output/cargo-guard/invocations.log"; \
 		suite_succeeded=true
 
 .PHONY: test  ## test - Run all compiler tests through bounded Oven direct-Rustc execution
@@ -316,17 +315,38 @@ test-prewarm-sdk:
 	@test -s "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)"
 	@test -f "$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json"
 
-.PHONY: test-prewarm-oven-native-units
-test-prewarm-oven-native-units: test-prewarm-sdk
-	@echo "\033[1mPreparing compiler-owned Oven native test units...\033[0m"
-	@$(TEST_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_NATIVE_UNIT_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
+.PHONY: test-prewarm-oven-loafs
+test-prewarm-oven-loafs: test-prewarm-sdk
+	@echo "\033[1mBaking or reusing compiler-suite Oven Loafs...\033[0m" >&2
+	@$(TEST_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_LOAF_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
 		INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
 		INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
-		INCAN_SDK_INVENTORY="$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json" \
-		bash scripts/prepare_oven_test_native_units.sh \
-			--incan "$(CURDIR)/target/debug/incan" \
-			--output "$(INCAN_TEST_OVEN_NATIVE_UNIT_ROOT)" \
-			--max-bytes "$(INCAN_TEST_OVEN_NATIVE_UNIT_MAX_BYTES)"
+		./target/debug/incan oven legacy-cargo bake-loafs \
+			--compiler-root "$(CURDIR)" \
+			--output "$(INCAN_TEST_OVEN_LOAF_ROOT)" \
+			--suite-store "$(INCAN_TEST_OVEN_COMPILER_SUITE_STORE)" \
+			--envelope compiler-suite \
+			--sdk-inventory "$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json" \
+			--cargo "$$(rustup which --toolchain "$(INCAN_TEST_PUBLISHER_TOOLCHAIN)" cargo)" \
+			--rustc "$$(rustup which --toolchain "$(INCAN_TEST_LOAF_TOOLCHAIN)" rustc)" \
+			--format "$(INCAN_TEST_OVEN_BAKE_FORMAT)" $(if $(INCAN_TEST_OVEN_BAKE_REPORT),> "$(INCAN_TEST_OVEN_BAKE_REPORT)",)
+
+.PHONY: test-prewarm-oven-release-loafs
+test-prewarm-oven-release-loafs: test-prewarm-sdk
+	@echo "\033[1mBaking or reusing release Oven Loafs...\033[0m"
+	@test -x "$(INCAN_TEST_OVEN_RELEASE_COMPILER_BIN)"
+	@mkdir -p "$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin"
+	@cp "$(INCAN_TEST_OVEN_RELEASE_COMPILER_BIN)" "$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan"
+	@$(TEST_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_LOAF_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
+		INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
+		INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
+		"$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan" oven legacy-cargo bake-loafs \
+			--compiler-root "$(CURDIR)" \
+			--output "$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/share/incan/oven/loafs" \
+			--envelope release \
+			--sdk-inventory "$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json" \
+			--cargo "$$(rustup which --toolchain "$(INCAN_TEST_PUBLISHER_TOOLCHAIN)" cargo)" \
+			--rustc "$$(rustup which --toolchain "$(INCAN_TEST_LOAF_TOOLCHAIN)" rustc)"
 
 .PHONY: test-rust-inspect  ## test - Run focused rust-inspect regression tests
 test-rust-inspect:
@@ -408,7 +428,7 @@ smoke-test-benchmarks-incan:
 	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 bash workspaces/benchmarks/check_incan.sh
 
 .PHONY: smoke-test-core
-smoke-test-core: test-prewarm-oven-native-units
+smoke-test-core: test-prewarm-oven-loafs
 	@$(MAKE) smoke-test-release
 	@$(MAKE) smoke-test-canary
 	@$(MAKE) smoke-test-web-example
@@ -447,9 +467,34 @@ test-timings:
 	@cargo test --all --no-run --timings
 	@echo "\033[32m✓ Timing report generated in target/cargo-timings\033[0m"
 
-.PHONY: test-one  ## test - Run the complete compiler suite through Oven (function filtering is not an Alpha surface)
-test-one: test-oven
-	@echo "\033[33mOven Alpha currently selects receipt-bound source roots, not individual libtest functions; the full suite above is authoritative.\033[0m"
+.PHONY: test-one  ## test - Run one receipt-bound compiler-suite source root (TEST_ROOT=tests/cli_integration.rs)
+test-one: test-prewarm-oven-loafs
+	@test -n "$(TEST_ROOT)" || { echo "usage: make test-one TEST_ROOT=tests/cli_integration.rs" >&2; exit 2; }
+	@echo "\033[1mRunning $(TEST_ROOT) through Oven...\033[0m"
+	@set -e; \
+		mkdir -p "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)"; \
+		root_output="$$(mktemp -d "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)/oven-test-one.XXXXXX")"; \
+		root_succeeded=false; \
+		cleanup_root_output() { \
+			if [ "$$root_succeeded" = true ]; then rm -rf -- "$$root_output"; \
+			else echo "Oven root failed; retaining caller output at $$root_output" >&2; fi; \
+		}; \
+		trap cleanup_root_output EXIT; \
+		rustc_path="$$(rustup which --toolchain "$(INCAN_TEST_SUITE_TOOLCHAIN)" rustc)"; \
+		mkdir -p "$$root_output/cargo-guard" "$(CURDIR)/target/oven_tmp"; \
+		printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "unexpected Cargo invocation: $$*" >> "$$CARGO_GUARD_LOG"' 'exit 97' \
+			> "$$root_output/cargo-guard/cargo"; \
+		chmod +x "$$root_output/cargo-guard/cargo"; \
+		: > "$$root_output/cargo-guard/invocations.log"; \
+		PATH="$$root_output/cargo-guard:$$PATH" CARGO_GUARD_LOG="$$root_output/cargo-guard/invocations.log" \
+			TMPDIR="$(CURDIR)/target/oven_tmp" $(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" \
+			CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$(CURDIR)/target" \
+			./target/debug/incan oven compiler-libtests \
+				--compiler-root "$(CURDIR)" --rustc "$$rustc_path" --feature lsp --target "$(TEST_ROOT)" \
+				--output "$$root_output" --store "$(INCAN_TEST_OVEN_COMPILER_SUITE_STORE)" \
+				--format text; \
+		test ! -s "$$root_output/cargo-guard/invocations.log"; \
+		root_succeeded=true
 
 # =============================================================================
 # Tooling

@@ -81,11 +81,11 @@ Use `INCAN_SKIP_RUST_INSTALL=1` or `install.sh --skip-rust` only when your envir
 
 ## Builds are slow the first time
 
-The first `incan build`, `incan test`, or generated project run may need a prepared compatible Oven closure. Normal commands never compile one through Cargo; use the explicit transition command reported with a cold-plan miss, then subsequent compatible receipts reuse the stored closure.
+The first `incan build`, `incan test`, or generated project run needs a compatible Loaf supplied by an Oven-enabled toolchain. A miss explains whether to install or reinstall that toolchain or remove caller-owned Rust dependencies outside the documented Alpha envelope. It may name `incan oven legacy-cargo bake-loafs` as the maintainer preparation path, but the normal command never runs the baker or compiles a closure through Cargo automatically.
 
 ## Preparing a compatibility closure needs its publisher inputs
 
-The explicit temporary publisher may need Rust ecosystem inputs that are already available to it. This is not a normal `incan build`, `incan run`, or `incan test` concern.
+The hidden `legacy_cargo` Loaf baker may need Rust ecosystem inputs that are already available to it. This is not a normal `incan build`, `incan run`, or `incan test` concern.
 
 For restricted or offline environments, run the supported preflight before the build:
 

@@ -150,7 +150,7 @@ wat = "1"
 development = ["regex"]
 
 # The named, receipt-bound compatibility profile used only by Oven's explicit compiler-suite publisher. Normal
-# `incan build`, `incan run`, and `incan test` consume the resulting direct-rustc Oven unit and never select this
+# `incan build`, `incan run`, and `incan test` consume the resulting direct-rustc Oven Loaf and never select this
 # Cargo profile. Keep the settings mirrored by Oven's direct-rustc test runner so the transient publisher does not
 # smuggle a different compilation contract into an immutable suite entry.
 [profile.oven-test]

@@ -2,8 +2,8 @@
 
 # Measure one compiler-shipped Oven Alpha workload without making Cargo part of the normal-command benchmark.
 #
-# A release archive supplies the supported native units. This harness starts with an empty Oven store, records the
-# first normal command (seed materialization plus its caller-owned native bake), then records unchanged warm commands.
+# A release archive supplies the supported Loafs. This harness starts with an empty Oven store, records the
+# first normal command (Loaf materialization plus its caller-owned native bake), then records unchanged warm commands.
 # A deterministic failing Cargo guard is mandatory: a successful normal stage proves that it did not launch Cargo.
 
 set -euo pipefail
@@ -24,7 +24,7 @@ Options:
   --checkout-revision TEXT        Revision of the checkout that supplied the benchmark fixture (required)
   --clean-worktree-source PATH    Identical fixture in a clean checkout for a final reuse run
   --cargo-guard-dir PATH          Directory containing a `cargo` executable that exits exactly 97 (required)
-  --max-physical-bytes BYTES      Aggregate Oven physical-store policy (default: 2147483648)
+  --max-physical-bytes BYTES      Aggregate Oven physical-store policy (default: 3221225472)
   --max-domain-physical-bytes N   Per-domain Oven physical-store policy (default: 1073741824)
   --max-domain-logical-bytes N    Per-domain Oven logical-artifact policy (default: 805306368)
   -h, --help                      Show this help
@@ -41,7 +41,7 @@ checkout_revision=""
 clean_worktree_source=""
 repetitions=2
 cargo_guard_dir=""
-max_physical_bytes=2147483648
+max_physical_bytes=3221225472
 max_domain_physical_bytes=1073741824
 max_domain_logical_bytes=805306368
 
@@ -164,14 +164,14 @@ run_stage() {
     local started finished status
     started=$(now_ms)
     set +e
-    # The measured consumer must use the selected compiler's shipped runtime and native units. Developer-shell
+    # The measured consumer must use the selected compiler's shipped runtime and Loafs. Developer-shell
     # source overrides intentionally remain supported elsewhere, but inheriting one from a different checkout would
     # turn this packaged-toolchain benchmark into an ambient-state measurement and make its receipt incompatible
-    # with the compiler-owned seed.
+    # with the compiler-owned Loaf.
     env -u INCAN_SOURCE_ROOT -u INCAN_STDLIB -u INCAN_STDLIB_DIR -u INCAN_STDLIB_PATH \
         -u INCAN_TOOLCHAIN_CRATES_DIR -u INCAN_SDK_INVENTORY \
         -u INCAN_INTERNAL_SDK_PROVIDER_STORE -u INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE \
-        -u INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT -u INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION \
+        -u INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT -u INCAN_INTERNAL_OVEN_LOAF_EXECUTION \
         -u INCAN_INTERNAL_OVEN_RUNTIME_ROOT \
         INCAN_HOME="$incan_home" \
         INCAN_OVEN_MAX_PHYSICAL_BYTES="$max_physical_bytes" \

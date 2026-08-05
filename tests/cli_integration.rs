@@ -323,13 +323,13 @@ fn scheduler_nested_build_and_run_fail_closed_when_the_immutable_native_plan_is_
     let source = tmp.path().join("scheduler-miss.incn");
     fs::write(&source, "def main() -> None:\n    pass\n")?;
     let scheduler_data_root = tmp.path().join("scheduler-toolchain");
-    fs::create_dir_all(scheduler_data_root.join("share/incan/oven/native-units"))?;
+    fs::create_dir_all(scheduler_data_root.join("share/incan/oven/loafs"))?;
     let incan_home = tmp.path().join("scheduler-home");
     let guard_dir = tmp.path().join("cargo-guard");
     let marker = tmp.path().join("cargo-was-started");
     let source_arg = source.to_string_lossy().into_owned();
     let envs = [
-        ("INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION", Path::new("1")),
+        ("INCAN_INTERNAL_OVEN_LOAF_EXECUTION", Path::new("1")),
         ("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT", scheduler_data_root.as_path()),
         ("INCAN_HOME", incan_home.as_path()),
     ];
@@ -2126,7 +2126,7 @@ regex = "1"
 }
 
 #[test]
-fn cold_rooted_workspace_lock_uses_bounded_native_units_and_strict_library_build_agrees_issue931()
+fn cold_rooted_workspace_lock_uses_bounded_loafs_and_strict_library_build_agrees_issue931()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     fs::create_dir_all(root.path().join("src"))?;
@@ -2195,7 +2195,7 @@ hees_ai = { workspace = true }
             .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_target);
         if !support::oven_compiler_suite_is_active() {
             // Exercise an ordinary cold command rather than inheriting the harness's sealed suite inventory. Normal
-            // Oven commands select a compiler-shipped native unit into their bounded store; they must never revive
+            // Oven commands select a compiler-shipped Loaf into their bounded store; they must never revive
             // the mutable SDK provider publication route. A stored compiler-suite child instead retains its
             // receipt-injected inventory and has its own sealed-inventory assertion below.
             command
@@ -2238,7 +2238,7 @@ hees_ai = { workspace = true }
         );
         assert!(
             incan_home.join("oven/store/v1").is_dir(),
-            "cold normal Oven lock did not materialize its selected native unit into the bounded Oven store"
+            "cold normal Oven lock did not materialize its selected Loaf into the bounded Oven store"
         );
     }
 

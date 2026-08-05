@@ -317,7 +317,7 @@ pub(crate) struct RustInspectWorkspaceRequest<'a> {
     pub prepare_when_empty: bool,
     /// Select rust-analyzer's direct source graph before any inspection action can run Cargo.
     pub direct_oven_inspection: bool,
-    /// The named native-unit publisher must materialize provider-source metadata even when ordinary lazy prewarm is
+    /// The named Loaf publisher must materialize provider-source metadata even when ordinary lazy prewarm is
     /// off.
     pub force_direct_prewarm: bool,
 }

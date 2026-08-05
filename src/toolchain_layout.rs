@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 /// Internal scheduler handoff for compiler-owned immutable data when a direct-rustc child is baked outside the
 /// installed toolchain layout.
 const INTERNAL_TOOLCHAIN_DATA_ROOT_ENV: &str = "INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT";
-/// Internal scheduler handoff for children that must select the immutable native-unit closure.
+/// Internal scheduler handoff for children that must select the immutable Loaf closure.
 ///
 /// This is deliberately narrower than a general environment override. A scheduler-owned child can inherit test
 /// harness source-path overrides, but its receipt must continue to identify the closure baked by that scheduler.
-const INTERNAL_OVEN_NATIVE_UNIT_EXECUTION_ENV: &str = "INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION";
+const INTERNAL_OVEN_LOAF_EXECUTION_ENV: &str = "INCAN_INTERNAL_OVEN_LOAF_EXECUTION";
 /// Internal scheduler handoff for the sealed compiler runtime source closure.
 ///
 /// A fixture may deliberately clear `INCAN_SDK_INVENTORY` to exercise cold provider discovery. Its nested normal
@@ -28,7 +28,7 @@ const INTERNAL_OVEN_RUNTIME_ROOT_ENV: &str = "INCAN_INTERNAL_OVEN_RUNTIME_ROOT";
 /// source roots as the provider manifests in the inventory. Otherwise Cargo sees two path packages with the same
 /// name and version: one beneath the immutable inventory and one beneath the compiler checkout.
 const SDK_INVENTORY_OVERRIDE_ENV: &str = "INCAN_SDK_INVENTORY";
-const OVEN_NATIVE_UNIT_ROOT: &str = "share/incan/oven/native-units";
+const OVEN_LOAF_ROOT: &str = "share/incan/oven/loafs";
 
 /// Inputs that determine which built-in stdlib source tree belongs to the active toolchain.
 struct StdlibSearchPaths {
@@ -74,7 +74,7 @@ pub(crate) fn resolve_toolchain_relative_path(relative_path: &Path) -> PathBuf {
                 env::var_os("INCAN_TOOLCHAIN_CRATES_DIR")
                     .filter(|path| !path.is_empty())
                     .map(PathBuf::from),
-                scheduler_native_unit_execution(),
+                scheduler_loaf_execution(),
                 sealed_sdk_runtime_root.is_some(),
             ),
             sealed_sdk_runtime_crates: sealed_sdk_runtime_root.map(|root| root.join("crates")),
@@ -88,8 +88,8 @@ pub(crate) fn resolve_toolchain_relative_path(relative_path: &Path) -> PathBuf {
 ///
 /// In ordinary commands `INCAN_TOOLCHAIN_CRATES_DIR` remains an intentional developer/test override. A valid
 /// explicit SDK inventory, like a scheduler-owned compiler-suite child, seals the runtime source closure used for
-/// generated manifests and native-unit identities. Honoring a parent checkout override in that situation would make
-/// a seed compatible with neither the inventory nor the compiler suite that consumes it.
+/// generated manifests and Loaf identities. Honoring a parent checkout override in that situation would make
+/// a Loaf compatible with neither the inventory nor the compiler suite that consumes it.
 fn external_toolchain_crates_override(
     override_path: Option<PathBuf>,
     scheduler_native_execution: bool,
@@ -103,13 +103,13 @@ fn external_toolchain_crates_override(
 }
 
 /// Return whether this process is an explicitly scheduler-owned direct-rustc child.
-fn scheduler_native_unit_execution() -> bool {
-    env::var_os(INTERNAL_OVEN_NATIVE_UNIT_EXECUTION_ENV).is_some_and(|value| value == "1")
+fn scheduler_loaf_execution() -> bool {
+    env::var_os(INTERNAL_OVEN_LOAF_EXECUTION_ENV).is_some_and(|value| value == "1")
 }
 
 /// Resolve compiler-owned immutable data through the active installed toolchain or development checkout.
 ///
-/// Unlike support crates, immutable Oven unit seeds are ordinary data directories and do not contain a `Cargo.toml`.
+/// Unlike support crates, immutable Oven Loafs are ordinary data directories and do not contain a `Cargo.toml`.
 /// This resolver deliberately accepts only compiler-relative paths; normal commands never accept an artifact-root path
 /// from a project or from a generated Cargo target.
 pub(crate) fn resolve_toolchain_data_path(relative_path: &Path) -> PathBuf {
@@ -119,17 +119,17 @@ pub(crate) fn resolve_toolchain_data_path(relative_path: &Path) -> PathBuf {
             env::var_os(INTERNAL_TOOLCHAIN_DATA_ROOT_ENV)
                 .filter(|path| !path.is_empty())
                 .map(PathBuf::from),
-            scheduler_native_unit_execution(),
+            scheduler_loaf_execution(),
         ),
         current_executable_search_bases(),
     )
 }
 
-/// Return the active compiler-owned data root only when it contains immutable Oven native-unit data.
+/// Return the active compiler-owned data root only when it contains immutable Oven Loaf data.
 ///
 /// The compiler-suite publisher and scheduler use the same internal handoff when an uninstalled development binary
 /// needs to carry its already-selected data into caller-owned direct-rustc output. The override is accepted only
-/// through the internal scheduler environment and must name a complete compiler-owned native-unit layout; no public
+/// through the internal scheduler environment and must name a complete compiler-owned Loaf layout; no public
 /// command accepts a data-root argument from a project.
 pub(crate) fn compiler_owned_oven_data_root() -> Option<PathBuf> {
     compiler_owned_oven_data_root_in(
@@ -137,7 +137,7 @@ pub(crate) fn compiler_owned_oven_data_root() -> Option<PathBuf> {
             env::var_os(INTERNAL_TOOLCHAIN_DATA_ROOT_ENV)
                 .filter(|path| !path.is_empty())
                 .map(PathBuf::from),
-            scheduler_native_unit_execution(),
+            scheduler_loaf_execution(),
         ),
         current_executable_search_bases(),
     )
@@ -146,7 +146,7 @@ pub(crate) fn compiler_owned_oven_data_root() -> Option<PathBuf> {
 /// Return the compiler-data handoff only for an explicitly scheduler-owned direct-rustc child.
 ///
 /// A bare environment variable is not authority for an ordinary command: otherwise a caller could select a
-/// compiler-suite-only native-unit root without the scheduler's receipt and retained lease.
+/// compiler-suite-only Loaf root without the scheduler's receipt and retained lease.
 fn scheduler_toolchain_data_root(
     configured_root: Option<PathBuf>,
     scheduler_native_execution: bool,
@@ -162,7 +162,7 @@ fn resolve_toolchain_data_path_in(
 ) -> PathBuf {
     if let Some(root) = scheduler_data_root.filter(|root| root.is_absolute()) {
         let candidate = root.join(relative_path);
-        if candidate.exists() && root.join(OVEN_NATIVE_UNIT_ROOT).is_dir() {
+        if candidate.exists() && root.join(OVEN_LOAF_ROOT).is_dir() {
             return canonical_toolchain_path(candidate);
         }
     }
@@ -175,7 +175,7 @@ fn resolve_toolchain_data_path_in(
     canonical_toolchain_path(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path))
 }
 
-/// Prefer a scheduler-leased compiler data root, then the installed executable layout, when locating native units.
+/// Prefer a scheduler-leased compiler data root, then the installed executable layout, when locating Loafs.
 ///
 /// A relative scheduler value is deliberately ignored: it would make a suite child’s sealed compiler closure depend
 /// on its current working directory rather than the explicit receipt-selected toolchain data root.
@@ -184,20 +184,20 @@ fn compiler_owned_oven_data_root_in(
     executable_bases: Vec<PathBuf>,
 ) -> Option<PathBuf> {
     if let Some(root) = scheduler_data_root.filter(|root| root.is_absolute())
-        && root.join(OVEN_NATIVE_UNIT_ROOT).is_dir()
+        && root.join(OVEN_LOAF_ROOT).is_dir()
     {
         return Some(canonical_toolchain_path(root));
     }
     executable_bases
         .into_iter()
-        .find(|base| base.join(OVEN_NATIVE_UNIT_ROOT).is_dir())
+        .find(|base| base.join(OVEN_LOAF_ROOT).is_dir())
         .map(canonical_toolchain_path)
 }
 
 /// Resolve the lockfile that belongs to the active compiler runtime closure.
 ///
 /// Release archives keep this below `crates/Cargo.lock`, alongside the checked support-crate sources. Development
-/// checkouts retain the workspace lock at the repository root. Native-unit identity must use the installed
+/// checkouts retain the workspace lock at the repository root. Loaf identity must use the installed
 /// representation when one exists, rather than the checkout from which a compiler binary happened to be built.
 pub(crate) fn resolve_toolchain_runtime_lockfile() -> PathBuf {
     if let Some(runtime_root) = sealed_sdk_runtime_root() {
@@ -245,7 +245,7 @@ fn resolve_toolchain_relative_path_in(relative_path: &Path, paths: &ToolchainPat
 /// with all crates generated publisher manifests can name. A malformed or ordinary inventory simply does not alter
 /// toolchain layout selection; higher-level SDK discovery remains responsible for validating the inventory itself.
 fn sealed_sdk_runtime_root() -> Option<PathBuf> {
-    if scheduler_native_unit_execution()
+    if scheduler_loaf_execution()
         && let Some(runtime_root) = env::var_os(INTERNAL_OVEN_RUNTIME_ROOT_ENV)
             .filter(|path| !path.is_empty())
             .map(PathBuf::from)
@@ -685,18 +685,18 @@ mod tests {
     {
         let tmp = tempfile::tempdir()?;
         let installed_root = tmp.path().join("installed-toolchain");
-        let seed = installed_root.join("share/incan/oven/native-units/unit/seed.json");
-        fs::create_dir_all(seed.parent().ok_or("seed parent missing")?)?;
-        fs::write(&seed, "sealed seed")?;
-        let relative_seed = Path::new("share/incan/oven/native-units/unit/seed.json");
+        let loaf = installed_root.join("share/incan/oven/loafs/unit.loaf/loaf.json");
+        fs::create_dir_all(loaf.parent().ok_or("Loaf parent missing")?)?;
+        fs::write(&loaf, "sealed Loaf")?;
+        let relative_loaf = Path::new("share/incan/oven/loafs/unit.loaf/loaf.json");
 
         let resolved = resolve_toolchain_data_path_in(
-            relative_seed,
+            relative_loaf,
             Some(installed_root.clone()),
             vec![tmp.path().join("absent-executable-root")],
         );
 
-        assert_eq!(resolved, fs::canonicalize(seed)?);
+        assert_eq!(resolved, fs::canonicalize(loaf)?);
         Ok(())
     }
 
@@ -709,11 +709,11 @@ mod tests {
     }
 
     #[test]
-    fn installed_parent_data_root_requires_the_native_unit_layout() -> Result<(), Box<dyn std::error::Error>> {
+    fn installed_parent_data_root_requires_the_loaf_layout() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
         let unrelated_root = tmp.path().join("unrelated");
         let installed_root = tmp.path().join("installed-toolchain");
-        fs::create_dir_all(installed_root.join("share/incan/oven/native-units"))?;
+        fs::create_dir_all(installed_root.join("share/incan/oven/loafs"))?;
 
         let resolved = compiler_owned_oven_data_root_in(None, vec![unrelated_root, installed_root.clone()])
             .ok_or("expected installed parent data root")?;
@@ -728,7 +728,7 @@ mod tests {
         let scheduler_root = tmp.path().join("scheduler-toolchain");
         let executable_root = tmp.path().join("executable-toolchain");
         for root in [&scheduler_root, &executable_root] {
-            fs::create_dir_all(root.join("share/incan/oven/native-units"))?;
+            fs::create_dir_all(root.join("share/incan/oven/loafs"))?;
         }
 
         let resolved = compiler_owned_oven_data_root_in(Some(scheduler_root.clone()), vec![executable_root])
@@ -743,14 +743,14 @@ mod tests {
         let tmp = tempfile::tempdir()?;
         let relative_root = PathBuf::from("relative-toolchain");
         let fallback_root = tmp.path().join("fallback");
-        let seed = fallback_root.join("share/incan/oven/native-units/unit/seed.json");
-        fs::create_dir_all(seed.parent().ok_or("seed parent missing")?)?;
-        fs::write(&seed, "sealed seed")?;
-        let relative_seed = Path::new("share/incan/oven/native-units/unit/seed.json");
+        let loaf = fallback_root.join("share/incan/oven/loafs/unit.loaf/loaf.json");
+        fs::create_dir_all(loaf.parent().ok_or("Loaf parent missing")?)?;
+        fs::write(&loaf, "sealed Loaf")?;
+        let relative_loaf = Path::new("share/incan/oven/loafs/unit.loaf/loaf.json");
 
-        let resolved = resolve_toolchain_data_path_in(relative_seed, Some(relative_root), vec![fallback_root]);
+        let resolved = resolve_toolchain_data_path_in(relative_loaf, Some(relative_root), vec![fallback_root]);
 
-        assert_eq!(resolved, fs::canonicalize(seed)?);
+        assert_eq!(resolved, fs::canonicalize(loaf)?);
         Ok(())
     }
 

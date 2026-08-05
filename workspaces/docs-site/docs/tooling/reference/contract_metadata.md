@@ -122,6 +122,7 @@ Projection is intentionally lossy. It preserves logical type name, field order, 
 without requiring the original source checkout:
 
 ```bash
+incan build --lib
 incan tools metadata model target/lib/my_package.incnlib OrderSummary --format incan
 ```
 

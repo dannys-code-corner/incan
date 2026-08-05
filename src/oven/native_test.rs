@@ -1,13 +1,12 @@
 //! Native test inventory and exact execution for Oven Alpha's direct-rustc consumers.
 //!
-//! Oven executes the libtest binary it built itself. It obtains a real inventory
-//! first and rejects a requested exact test absent from that inventory, so a
-//! zero-match filter can never become a misleading success. Neither collection
+//! Oven executes the libtest binary it built itself. It obtains a real inventory first and rejects a requested exact
+//! test absent from that inventory, so a zero-match filter can never become a misleading success. Neither collection
 //! nor execution launches Cargo or inherits Cargo process state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -308,48 +307,121 @@ fn run_native_batch_child(
     };
 
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // Put each supervised root in its own process group. Nested Incan commands and fixture children inherit this
+        // group, allowing a timeout to close every inherited stdout/stderr writer before reader threads are joined.
+        command.process_group(0);
+    }
     let mut child = command.spawn().map_err(|source| OvenNativeTestError::Io {
         path: executable.to_path_buf(),
         source,
     })?;
+    let mut stdout = child.stdout.take().ok_or_else(|| OvenNativeTestError::Io {
+        path: executable.to_path_buf(),
+        source: io::Error::other("native test child stdout was not piped"),
+    })?;
+    let mut stderr = child.stderr.take().ok_or_else(|| OvenNativeTestError::Io {
+        path: executable.to_path_buf(),
+        source: io::Error::other("native test child stderr was not piped"),
+    })?;
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes)?;
+        Ok::<_, io::Error>(bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes)?;
+        Ok::<_, io::Error>(bytes)
+    });
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
-    loop {
+    let status = loop {
         match child.try_wait().map_err(|source| OvenNativeTestError::Io {
             path: executable.to_path_buf(),
             source,
         })? {
-            Some(_) => break,
-            None if Instant::now() >= deadline => match child.kill() {
-                Ok(()) => {
-                    timed_out = true;
-                    break;
-                }
-                Err(source) => {
-                    if child
-                        .try_wait()
-                        .map_err(|source| OvenNativeTestError::Io {
-                            path: executable.to_path_buf(),
-                            source,
-                        })?
-                        .is_some()
-                    {
-                        break;
-                    }
-                    return Err(OvenNativeTestError::Io {
-                        path: executable.to_path_buf(),
-                        source,
-                    });
-                }
-            },
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                timed_out = true;
+                break terminate_native_batch_child(&mut child, executable)?;
+            }
             None => thread::sleep(Duration::from_millis(1)),
         }
+    };
+    let stdout = join_output_reader(stdout_reader, executable, "stdout")?;
+    let stderr = join_output_reader(stderr_reader, executable, "stderr")?;
+    let output = std::process::Output { status, stdout, stderr };
+    Ok((output, timed_out))
+}
+
+/// Terminate and reap one timed-out root together with descendants that inherited its process group.
+fn terminate_native_batch_child(
+    child: &mut std::process::Child,
+    executable: &Path,
+) -> Result<std::process::ExitStatus, OvenNativeTestError> {
+    #[cfg(unix)]
+    {
+        let process_group = format!("-{}", child.id());
+        let group_kill = Command::new("/bin/kill")
+            .args(["-KILL", "--", &process_group])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if !matches!(group_kill, Ok(status) if status.success())
+            && let Err(source) = child.kill()
+        {
+            if let Some(status) = child.try_wait().map_err(|wait_source| OvenNativeTestError::Io {
+                path: executable.to_path_buf(),
+                source: wait_source,
+            })? {
+                return Ok(status);
+            }
+            return Err(OvenNativeTestError::Io {
+                path: executable.to_path_buf(),
+                source,
+            });
+        }
     }
-    let output = child.wait_with_output().map_err(|source| OvenNativeTestError::Io {
+    #[cfg(not(unix))]
+    if let Err(source) = child.kill() {
+        if let Some(status) = child.try_wait().map_err(|wait_source| OvenNativeTestError::Io {
+            path: executable.to_path_buf(),
+            source: wait_source,
+        })? {
+            return Ok(status);
+        }
+        return Err(OvenNativeTestError::Io {
+            path: executable.to_path_buf(),
+            source,
+        });
+    }
+
+    child.wait().map_err(|source| OvenNativeTestError::Io {
         path: executable.to_path_buf(),
         source,
-    })?;
-    Ok((output, timed_out))
+    })
+}
+
+/// Join one concurrent pipe reader and preserve its failure as an ordinary native-runner error.
+fn join_output_reader(
+    reader: thread::JoinHandle<Result<Vec<u8>, io::Error>>,
+    executable: &Path,
+    stream: &str,
+) -> Result<Vec<u8>, OvenNativeTestError> {
+    reader
+        .join()
+        .map_err(|_| OvenNativeTestError::Io {
+            path: executable.to_path_buf(),
+            source: io::Error::other(format!("native test {stream} reader panicked")),
+        })?
+        .map_err(|source| OvenNativeTestError::Io {
+            path: executable.to_path_buf(),
+            source,
+        })
 }
 
 /// Use a compact, stable diagnostic spelling while preserving sub-millisecond values when supplied by the API.
@@ -676,7 +748,7 @@ mod tests {
     #[test]
     fn all_batch_timeout_terminates_a_stalled_native_test_child() -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::PermissionsExt;
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
 
         let output = tempfile::tempdir()?;
         let executable = output.path().join("stalled-native-test");
@@ -687,12 +759,13 @@ mod tests {
                printf '%s\\n' 'stalled_case: test'\n\
                exit 0\n\
              fi\n\
-             sleep 1\n",
+             sleep 30\n",
         )?;
         let mut permissions = fs::metadata(&executable)?.permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&executable, permissions)?;
 
+        let started = Instant::now();
         let report = run_native_test_batch_all_in_directory_with_timeout(
             &executable,
             &BTreeMap::new(),
@@ -704,6 +777,56 @@ mod tests {
         assert!(report.timed_out, "{report:#?}");
         assert!(report.output.contains("timed out after 10ms"), "{report:#?}");
         assert!(report.output.contains(&executable_display), "{report:#?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "descendant-held pipes outlived the process-group timeout"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn timeout_supervisor_drains_large_child_output_while_it_runs() -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::Duration;
+
+        let output = tempfile::tempdir()?;
+        let source = output.path().join("large-output-native-test.rs");
+        let executable = output.path().join("large-output-native-test");
+        fs::write(
+            &source,
+            "#[test]\n\
+             fn large_output() -> Result<(), Box<dyn std::error::Error>> {\n\
+                 use std::io::Write;\n\
+                 let bytes = vec![b'x'; 1024 * 1024];\n\
+                 std::io::stdout().write_all(&bytes)?;\n\
+                 std::io::stderr().write_all(&bytes)?;\n\
+                 Ok(())\n\
+             }\n",
+        )?;
+        let status = Command::new(rustc_path()?)
+            .arg("--test")
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .status()?;
+        assert!(status.success());
+
+        let report = run_native_test_batch_all_in_directory_with_timeout(
+            &executable,
+            &BTreeMap::new(),
+            Some(output.path()),
+            Some(Duration::from_secs(5)),
+        )?;
+        assert!(report.success, "{report:#?}");
+        assert!(!report.timed_out, "{report:#?}");
+        assert_eq!(
+            report.case_counts,
+            Some(OvenNativeTestCaseCounts {
+                passed: 1,
+                failed: 0,
+                ignored: 0
+            })
+        );
+        assert!(report.output.len() >= 2 * 1024 * 1024, "{}", report.output.len());
         Ok(())
     }
 

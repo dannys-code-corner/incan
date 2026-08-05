@@ -48,10 +48,10 @@ use crate::library_manifest::{
 };
 use crate::lockfile::{CargoFeatureSelection, provider_semantic_identities, semantic_lock_state};
 use crate::manifest::{DependencySource, DependencySpec, ProjectManifest};
-use crate::oven::native_unit::{
-    OVEN_NATIVE_UNIT_SEED_ENV, OvenNativeUnitSelection, OvenToolchainNativeUnit,
-    materialize_toolchain_native_unit_for_registry_dependencies,
-    resolve_toolchain_native_unit_for_registry_dependencies, runtime_build_unit_inputs,
+use crate::oven::loaf::{
+    OVEN_LOAF_ENV, OVEN_LOAF_MISS_GUIDANCE, OvenLoafSelection, OvenToolchainLoaf,
+    materialize_toolchain_loaf_for_registry_dependencies, resolve_toolchain_loaf_for_registry_dependencies,
+    runtime_build_unit_inputs,
 };
 use crate::oven::rustc::{
     OvenCallerOwnedRustcLibrary, OvenRegistryLeafAuthority, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
@@ -197,11 +197,11 @@ struct OvenPreparedLibraryProfile {
 /// Receipt-selected direct-Rustc closure for a normal Oven command.
 ///
 /// Outside a compiler suite, the selection is always a policy-bounded immutable store entry. A suite child may use
-/// the parent-leased, read-only compiler-native seed directly so concurrent fixture commands do not each copy the
+/// the parent-leased, read-only compiler Loaf directly so concurrent fixture commands do not each copy the
 /// same closure into their small mutable home and race policy pruning.
 pub(crate) enum OvenDirectRustcPlanSelection {
     Stored(Box<OvenStoredDirectRustcExecutionPlan>),
-    CompilerSuiteNative(Box<OvenToolchainNativeUnit>),
+    CompilerSuiteNative(Box<OvenToolchainLoaf>),
 }
 
 impl OvenDirectRustcPlanSelection {
@@ -210,7 +210,7 @@ impl OvenDirectRustcPlanSelection {
         match self {
             Self::Stored(selected) => selected.identity.clone(),
             Self::CompilerSuiteNative(native) => {
-                format!("native-unit:{}", native.seed_build_unit_identity)
+                format!("loaf:{}", native.loaf_build_unit_identity)
             }
         }
     }
@@ -1303,8 +1303,8 @@ fn oven_build_unit_inputs(
 ///
 /// The active provider catalog contains every installed SDK component so semantic analysis can resolve imports
 /// deterministically. An enabled but unused component contributes neither a generated Rust extern nor a selected
-/// implementation facet. Retaining its identity in a native-unit receipt would let an unrelated provider relocation
-/// prevent a safe compiler-owned seed match. Direct-link roots remain records even without a module claim because a
+/// implementation facet. Retaining its identity in a Loaf receipt would let an unrelated provider relocation
+/// prevent a safe compiler-owned Loaf match. Direct-link roots remain records even without a module claim because a
 /// checked project-library projection can require their rlib explicitly.
 pub(crate) fn oven_native_provider_records(
     provider_plan: &ProviderPlan,
@@ -1351,7 +1351,7 @@ pub(crate) fn oven_native_provider_records(
 
 /// Resolve the direct-Rustc outputs of materialized caller-owned `pub::` dependencies.
 ///
-/// These libraries are intentionally outside the immutable native-unit plan: they belong to the caller's project
+/// These libraries are intentionally outside the immutable Loaf plan: they belong to the caller's project
 /// graph, whereas that plan is restricted to compiler-owned SDK/runtime inputs. A prior Oven library materialization
 /// establishes the caller-owned source and receipt boundary. Its old rlib is only an optional fast-path attachment:
 /// a consumer can re-materialize that verified source under its selected direct-Rustc cohort when the old output is
@@ -1435,7 +1435,7 @@ pub(crate) fn oven_caller_owned_libraries(
 ///
 /// Compiler-owned private edges must already be part of the selected foundation plan. Public package edges follow
 /// the separately receipt-authorized caller-owned recursion below; treating them as foundation inputs would widen a
-/// selected native unit with arbitrary package artifacts.
+/// selected Loaf with arbitrary package artifacts.
 fn first_unselected_private_provider_edge<'a>(
     manifest: &'a LibraryManifest,
     artifact_plan: &OvenRustcArtifactPlan,
@@ -1966,7 +1966,7 @@ fn caller_owned_library_dependencies_missing_from_selected_plan_with_owned_roots
 
 /// Return the immutable roots supplied by the compiler-suite scheduler.
 fn compiler_suite_owned_roots() -> Vec<PathBuf> {
-    if env::var_os("INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION").is_none_or(|value| value != "1") {
+    if env::var_os("INCAN_INTERNAL_OVEN_LOAF_EXECUTION").is_none_or(|value| value != "1") {
         return Vec::new();
     }
     [
@@ -2494,10 +2494,7 @@ fn prepare_oven_project(
     let mut caller_owned_libraries = oven_caller_owned_libraries(&provider_plan, profile)?;
     let compiled_sdk_modules = CompiledSdkModules::from_provider_plan(&provider_plan);
     extend_requirements_with_provider_plan(&mut project_requirements, &provider_plan)?;
-    ensure_native_unit_seed_stdlib_features(
-        &mut project_requirements.stdlib_features,
-        native_unit_seed_codegen_mode(),
-    );
+    ensure_loaf_stdlib_features(&mut project_requirements.stdlib_features, loaf_codegen_mode());
     let emitted_dep_modules: Vec<&ParsedModule> = dep_modules
         .iter()
         .filter(|module| !compiled_sdk_modules.contains_emission_path(&module.path_segments))
@@ -2531,9 +2528,9 @@ fn prepare_oven_project(
     // can construct public adapter models declared later in the same module even when the root program does not name
     // those adapters directly. Pruning them made a normal Oven source projection ill-formed (`FallibleIterator.map`
     // referenced an omitted `MapFallibleIterator`). A completely dependency-free program can still use the smaller
-    // projection; the named native-unit publisher always retains the complete compiler-owned provider envelope.
+    // projection; the named Loaf publisher always retains the complete compiler-owned provider envelope.
     codegen.set_preserve_dependency_public_items(preserve_source_dependency_public_items(
-        native_unit_seed_codegen_mode(),
+        loaf_codegen_mode(),
         emitted_dep_modules.len(),
     ));
     codegen.set_registry_package_identity(Some(project_name.clone()));
@@ -2575,7 +2572,7 @@ fn prepare_oven_project(
     for module in &emitted_dep_modules {
         let module_imports = collect_rust_dependency_uses(module, false);
         // A source-backed stdlib module has not yet become an installed compiled SDK artifact, but it still belongs to
-        // the compiler-owned provider closure. Its Rust imports may be admitted to the explicit publisher so a seed
+        // the compiler-owned provider closure. Its Rust imports may be admitted to the explicit baker so a Loaf
         // captures their exact direct-rustc inputs. Rust imports from any caller-owned module remain a separate Alpha
         // boundary and cannot be smuggled through the standard-library source path.
         if module.path_segments.first().map(String::as_str) != Some("__incan_std") {
@@ -2626,7 +2623,7 @@ fn prepare_oven_project(
 
     #[cfg(feature = "rust_inspect")]
     let rust_inspect_manifest_dir = {
-        let metadata_query_paths = native_unit_seed_rust_inspect_query_paths(&modules, &compilation_session)?;
+        let metadata_query_paths = loaf_rust_inspect_query_paths(&modules, &compilation_session)?;
         let rust_inspect_manifest_dir = prepare_rust_inspect_workspace(RustInspectWorkspaceRequest {
             project_root: &project_root,
             project_name: project_name.as_str(),
@@ -2642,7 +2639,7 @@ fn prepare_oven_project(
             rust_inspect_query_paths: &metadata_query_paths,
             prepare_when_empty: false,
             direct_oven_inspection: true,
-            force_direct_prewarm: native_unit_seed_codegen_mode(),
+            force_direct_prewarm: loaf_codegen_mode(),
         })?;
         if let Some(manifest_dir) = rust_inspect_manifest_dir.as_ref() {
             codegen.set_rust_inspect_manifest_dir(manifest_dir.clone());
@@ -2730,11 +2727,12 @@ fn prepare_oven_project(
     let required_registry_dependencies = format_oven_registry_dependency_requirements(&inline_path_dependencies);
     let plan_selection = select_oven_direct_rustc_plan(&store, &receipt, &inline_path_dependencies)?.ok_or_else(|| {
         CliError::failure(format!(
-            "Oven Alpha has no compatible native provider/dependency unit for receipt {}. Required sealed registry dependencies: {}. Generated project: {}; receipt: {}. Normal build and run will not invoke Cargo; the active toolchain does not ship a compatible Oven-native unit",
+            "Oven Alpha has no compatible native provider/dependency unit for receipt {}. Required sealed registry dependencies: {}. Generated project: {}; receipt: {}. Normal build and run will not invoke Cargo; the active toolchain does not ship a compatible Oven Loaf. {}",
             receipt.identity,
             required_registry_dependencies,
             generator.output_dir().display(),
             crate::oven::default_receipt_path(&project_root).display(),
+            OVEN_LOAF_MISS_GUIDANCE,
         ))
     })?;
     let registry_authority = registry_leaf_authority_for_plan_selection(&plan_selection)?;
@@ -2850,13 +2848,13 @@ fn oven_crate_name(project_name: &str) -> String {
     crate_name
 }
 
-/// Return whether an explicit native-unit publisher is constructing its compiler-owned source closure.
+/// Return whether an explicit Loaf publisher is constructing its compiler-owned source closure.
 ///
 /// This marker is intentionally not a normal-command fallback: it changes only generated-source retention before
-/// the separately named `legacy_cargo` publisher seals a native unit. Baked normal build/run/test consumers merely
+/// the separately named `legacy_cargo` publisher seals a Loaf. Baked normal build/run/test consumers merely
 /// select that immutable plan and execute direct `rustc`.
-fn native_unit_seed_codegen_mode() -> bool {
-    std::env::var_os(OVEN_NATIVE_UNIT_SEED_ENV).is_some_and(|value| value == "1")
+fn loaf_codegen_mode() -> bool {
+    std::env::var_os(OVEN_LOAF_ENV).is_some_and(|value| value == "1")
 }
 
 /// Preserve public implementation items whenever the Oven projection emits dependency source.
@@ -2864,30 +2862,29 @@ fn native_unit_seed_codegen_mode() -> bool {
 /// A dependency's public protocol methods can construct sibling public adapter models that the root source does not
 /// name directly. Emitting the protocol while pruning those adapters produces invalid Rust, so source-backed
 /// dependencies form an implementation closure rather than a root-reachability-only projection.
-fn preserve_source_dependency_public_items(native_unit_seed: bool, emitted_dependency_count: usize) -> bool {
-    native_unit_seed || emitted_dependency_count > 0
+fn preserve_source_dependency_public_items(loaf: bool, emitted_dependency_count: usize) -> bool {
+    loaf || emitted_dependency_count > 0
 }
 
-/// Include compiler-owned provider Rust imports in the native seed's inspection workspace.
+/// Include compiler-owned provider Rust imports in the Loaf's inspection workspace.
 ///
 /// Provider modules are deliberately metadata-only for ordinary Oven consumers, so their `rust::` imports are absent
-/// from a caller module graph. The named seed publisher compiles the complete provider source closure instead. It
+/// from a caller module graph. The named Loaf baker compiles the complete provider source closure instead. It
 /// must therefore inspect those exact source imports before codegen, or ownership-sensitive Rust calls (for example
 /// `rustix::fs::flock(&impl AsFd, ...)`) degrade to an untyped by-value call. This source walk remains confined to the
 /// explicit release-publishing marker and never runs for normal build, run, or test commands.
 #[cfg(feature = "rust_inspect")]
-fn native_unit_seed_rust_inspect_query_paths(
+fn loaf_rust_inspect_query_paths(
     modules: &[ParsedModule],
     compilation_session: &CompilationSession,
 ) -> CliResult<Vec<String>> {
     let mut query_paths: BTreeSet<String> = collect_rust_inspect_query_paths(modules).into_iter().collect();
-    if !native_unit_seed_codegen_mode() {
+    if !loaf_codegen_mode() {
         return Ok(query_paths.into_iter().collect());
     }
 
-    let stdlib_root = crate::cli::prelude::find_stdlib_dir().ok_or_else(|| {
-        CliError::failure("cannot locate compiler-owned stdlib sources while preparing an Oven native-unit seed")
-    })?;
+    let stdlib_root = crate::cli::prelude::find_stdlib_dir()
+        .ok_or_else(|| CliError::failure("cannot locate compiler-owned stdlib sources while preparing an Oven Loaf"))?;
     let mut source_files = Vec::new();
     collect_incan_source_files(&stdlib_root, &mut source_files).map_err(|error| {
         CliError::failure(format!(
@@ -2914,14 +2911,14 @@ fn native_unit_seed_rust_inspect_query_paths(
     Ok(query_paths.into_iter().collect())
 }
 
-/// Make a compiler-owned native-unit seed internally consistent with its retained provider source.
+/// Make a compiler-owned Loaf internally consistent with its retained provider source.
 ///
 /// The named publisher deliberately retains the complete standard-provider envelope, including modules behind all
 /// optional `incan_stdlib` runtime features. The generated crate must enable the same runtime surface; otherwise the
 /// sealed source refers to cfg-gated `incan_stdlib` modules that Cargo omitted while preparing the one explicit
 /// publisher artifact. This never changes an ordinary Oven project's feature set.
-fn ensure_native_unit_seed_stdlib_features(stdlib_features: &mut Vec<String>, native_unit_seed: bool) {
-    if !native_unit_seed {
+fn ensure_loaf_stdlib_features(stdlib_features: &mut Vec<String>, loaf: bool) {
+    if !loaf {
         return;
     }
 
@@ -2933,7 +2930,7 @@ fn ensure_native_unit_seed_stdlib_features(stdlib_features: &mut Vec<String>, na
 /// Return the receipt-compatible direct-Rustc selection for one normal command.
 ///
 /// The compiler-suite scheduler marks nested commands explicitly and supplies a read-only compiler-data root whose
-/// store partition remains leased by the parent. Those children consume that shared native seed directly; copying it
+/// store partition remains leased by the parent. Those children consume that shared Loaf directly; copying it
 /// into every fixture's small mutable store would consume the same capacity repeatedly and allow policy pruning to
 /// remove a just-selected plan before execution. Every other normal command retains the ordinary bounded-store path.
 pub(crate) fn select_oven_direct_rustc_plan(
@@ -2941,7 +2938,7 @@ pub(crate) fn select_oven_direct_rustc_plan(
     receipt: &crate::oven::OvenReceipt,
     registry_dependencies: &[DependencySpec],
 ) -> CliResult<Option<OvenDirectRustcPlanSelection>> {
-    if std::env::var_os("INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION").is_some_and(|value| value == "1") {
+    if std::env::var_os("INCAN_INTERNAL_OVEN_LOAF_EXECUTION").is_some_and(|value| value == "1") {
         let toolchain_data_root = std::env::var_os("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
@@ -2949,9 +2946,9 @@ pub(crate) fn select_oven_direct_rustc_plan(
             .ok_or_else(|| {
                 CliError::failure("compiler-suite native execution requires a readable immutable toolchain-data root")
             })?;
-        let native = resolve_toolchain_native_unit_for_registry_dependencies(
+        let native = resolve_toolchain_loaf_for_registry_dependencies(
             receipt,
-            OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
+            OvenLoafSelection::CompilerOwnedProviderSuperset,
             registry_dependencies,
         )
         .map_err(|error| CliError::failure(error.to_string()))?;
@@ -2974,17 +2971,17 @@ pub(crate) fn select_oven_direct_rustc_plan(
     if let Some(selected) = select_receipt_direct_rustc_execution_plan(store, receipt)? {
         return Ok(Some(OvenDirectRustcPlanSelection::Stored(Box::new(selected))));
     }
-    match materialize_toolchain_native_unit_for_registry_dependencies(
+    match materialize_toolchain_loaf_for_registry_dependencies(
         store,
         receipt,
-        OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
+        OvenLoafSelection::CompilerOwnedProviderSuperset,
         registry_dependencies,
     ) {
         Ok(Some(_)) => select_receipt_direct_rustc_execution_plan(store, receipt)?
             .map(|selected| Some(OvenDirectRustcPlanSelection::Stored(Box::new(selected))))
             .ok_or_else(|| {
                 CliError::failure(
-                    "the receipt-compatible Oven native unit was reclaimed before normal execution acquired its lease",
+                    "the receipt-compatible Oven Loaf was reclaimed before normal execution acquired its lease",
                 )
             }),
         Ok(None) => Ok(None),
@@ -2992,10 +2989,10 @@ pub(crate) fn select_oven_direct_rustc_plan(
     }
 }
 
-/// Render the registry requirements that made sealed native-unit selection impossible.
+/// Render the registry requirements that made sealed Loaf selection impossible.
 ///
 /// Oven does not invoke Cargo to diagnose an unavailable registry version, so this preserves the manifest-level
-/// dependency identity that a user must correct instead of returning an opaque seed-selection failure.
+/// dependency identity that a user must correct instead of returning an opaque Loaf-selection failure.
 fn format_oven_registry_dependency_requirements(dependencies: &[DependencySpec]) -> String {
     let mut requirements = dependencies
         .iter()
@@ -3018,8 +3015,8 @@ fn format_oven_registry_dependency_requirements(dependencies: &[DependencySpec])
 /// Return the registry catalog copied with the active, receipt-selected direct-rustc plan.
 ///
 /// A registry artifact's metadata is valid only with the feature-unified compatibility domain that published it.
-/// Normal selection therefore chooses a seed that covers every caller-visible registry root, then resolves only the
-/// catalog sealed into that one leased plan—never an aggregate Cargo cache or a second seed's dependency directory.
+/// Normal selection therefore chooses a Loaf that covers every caller-visible registry root, then resolves only the
+/// catalog sealed into that one leased plan—never an aggregate Cargo cache or a second Loaf's dependency directory.
 fn registry_leaf_authority_for_plan_selection(
     selection: &OvenDirectRustcPlanSelection,
 ) -> CliResult<Option<OvenRegistryLeafAuthority>> {
@@ -4046,11 +4043,12 @@ fn prepare_library_project(
             )?
             .ok_or_else(|| {
                 CliError::failure(format!(
-                    "Oven Alpha has no compatible native provider/dependency unit for `{profile}` library receipt {}. Required sealed registry dependencies: {}. Generated project: {}; receipt: {}. Normal build --lib will not invoke Cargo; the active toolchain does not ship a compatible Oven-native unit",
+                    "Oven Alpha has no compatible native provider/dependency unit for `{profile}` library receipt {}. Required sealed registry dependencies: {}. Generated project: {}; receipt: {}. Normal build --lib will not invoke Cargo; the active toolchain does not ship a compatible Oven Loaf. {}",
                     receipt.identity,
                     required_registry_dependencies,
                     generator.output_dir().display(),
                     receipt_path.display(),
+                    OVEN_LOAF_MISS_GUIDANCE,
                 ))
             })?;
             let registry_authority = registry_leaf_authority_for_plan_selection(&plan_selection)?;
@@ -5275,13 +5273,13 @@ mod tests {
     }
 
     #[test]
-    fn native_unit_seed_enables_the_complete_stdlib_runtime_envelope() {
+    fn loaf_enables_the_complete_stdlib_runtime_envelope() {
         let mut seeded = vec!["json".to_string()];
-        ensure_native_unit_seed_stdlib_features(&mut seeded, true);
+        ensure_loaf_stdlib_features(&mut seeded, true);
         assert_eq!(seeded, ["async", "json", "ordinal", "web"]);
 
         let mut ordinary = vec!["json".to_string()];
-        ensure_native_unit_seed_stdlib_features(&mut ordinary, false);
+        ensure_loaf_stdlib_features(&mut ordinary, false);
         assert_eq!(ordinary, ["json"]);
     }
 
@@ -5597,7 +5595,7 @@ mod tests {
             ..runtime.clone()
         };
         let selected_names = BTreeSet::from(["incan_stdlib", "incan_stdlib_core"]);
-        fs::create_dir_all(toolchain_data_root.join("share/incan/oven/native-units"))?;
+        fs::create_dir_all(toolchain_data_root.join("share/incan/oven/loafs"))?;
         let owned_roots = vec![
             fs::canonicalize(&toolchain_data_root)?,
             fs::canonicalize(&runtime_root)?,

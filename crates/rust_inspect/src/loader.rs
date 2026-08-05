@@ -51,8 +51,8 @@ struct OvenProjectCrate {
 
 /// One resolved edge in the source graph used for direct Oven inspection.
 ///
-/// A lockless native seed may safely walk local path dependencies to their full closure, but it must not infer a
-/// transitive registry closure from whichever sources happen to be cached on the machine. Keeping that distinction on
+/// A lockless compiler-owned Loaf may safely walk local path dependencies to their full closure, but it must not infer
+/// a transitive registry closure from whichever sources happen to be cached on the machine. Keeping that distinction on
 /// the edge rather than in a global recursion limit preserves intrinsic traits from local dependencies.
 #[derive(Clone)]
 struct OvenProjectDependency {
@@ -180,7 +180,7 @@ impl RustWorkspace {
 
             let mut dependencies = Vec::new();
             // Direct inspection needs the runtime crate graph. Dev-only and build-script dependencies are neither
-            // linked into the sealed native unit nor available through this no-Cargo projection.
+            // linked into the sealed Loaf nor available through this no-Cargo projection.
             collect(manifest.get("dependencies"), manifest_dir, &mut dependencies);
             if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
                 for target in targets.values() {
@@ -283,10 +283,10 @@ impl RustWorkspace {
 
         /// Locate the best locally-cached source for an unlocked dependency declaration.
         ///
-        /// An explicit native-unit seed is generated before the named publisher creates its final Cargo.lock. This
-        /// source-only fallback is therefore limited to a version requirement already present in the compiler-authored
-        /// manifest and never reaches a registry. The publisher remains responsible for sealing the exact resulting
-        /// lock and native artifact together.
+        /// An explicit Loaf preparation fixture is generated before the named publisher creates its final Cargo.lock.
+        /// This source-only fallback is therefore limited to a version requirement already present in the
+        /// compiler-authored manifest and never reaches a registry. The publisher remains responsible for
+        /// sealing the exact resulting lock and native artifact together.
         fn registry_source_dir_for_requirement(
             cargo_home: Option<&Path>,
             package_name: &str,
@@ -378,10 +378,10 @@ impl RustWorkspace {
                 path: root,
                 message: format!("direct Oven inspection requires a readable library root: {error}"),
             })?;
-            // The full native seed retains the compiler's complete provider envelope, including imports behind
+            // The full compiler-owned Loaf retains the compiler's complete provider envelope, including imports behind
             // optional Rust-provider features. rust-analyzer receives this source graph only for metadata; enabling
             // declared local features makes those conditional public items visible without asking Cargo to solve or
-            // build anything. The named publisher later seals the exact activated feature set with its native unit.
+            // build anything. The named publisher later seals the exact activated feature set with its Loaf.
             let mut cfg = manifest
                 .get("features")
                 .and_then(toml::Value::as_table)
@@ -733,12 +733,12 @@ mod tests {
         fs::create_dir_all(workspace.path().join("src"))?;
         fs::write(
             workspace.path().join("Cargo.toml"),
-            "[package]\nname = \"oven-inspect-seed\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ndemo = \"1\"\n",
+            "[package]\nname = \"oven-inspect-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ndemo = \"1\"\n",
         )?;
         fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n")?;
         fs::write(
             workspace.path().join("Cargo.lock"),
-            "version = 4\n\n[[package]]\nname = \"oven-inspect-seed\"\nversion = \"0.1.0\"\ndependencies = [\"demo 1.0.0 (registry+https://example.invalid/index)\"]\n\n[[package]]\nname = \"demo\"\nversion = \"1.0.0\"\nsource = \"registry+https://example.invalid/index\"\ndependencies = [\"leaf\"]\n\n[[package]]\nname = \"leaf\"\nversion = \"1.0.0\"\nsource = \"registry+https://example.invalid/index\"\n",
+            "version = 4\n\n[[package]]\nname = \"oven-inspect-fixture\"\nversion = \"0.1.0\"\ndependencies = [\"demo 1.0.0 (registry+https://example.invalid/index)\"]\n\n[[package]]\nname = \"demo\"\nversion = \"1.0.0\"\nsource = \"registry+https://example.invalid/index\"\ndependencies = [\"leaf\"]\n\n[[package]]\nname = \"leaf\"\nversion = \"1.0.0\"\nsource = \"registry+https://example.invalid/index\"\n",
         )?;
         let registry = cargo_home.path().join("registry/src/test-index");
         for (name, source) in [
@@ -786,7 +786,7 @@ mod tests {
         assert_eq!(
             unlocked_crates.len(),
             2,
-            "an unlocked publisher seed may inspect direct cached dependencies but must not guess a transitive closure"
+            "an unlocked Loaf fixture may inspect direct cached dependencies but must not guess a transitive closure"
         );
         assert_eq!(unlocked_crates[0]["deps"][0]["name"], "demo");
         assert_eq!(unlocked_crates[1]["display_name"], "demo");

@@ -66,7 +66,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "oven_native_seed_dependencies"
+name = "oven_loaf_dependencies"
 version = "0.1.0"
 dependencies = [
  "bitflags",

@@ -23,8 +23,8 @@ use crate::frontend::vocab_desugar_pass;
 use crate::frontend::{lexer, parser};
 use crate::lockfile::CargoFeatureSelection;
 use crate::manifest::DependencySpec;
+use crate::oven::loaf::{OVEN_LOAF_MISS_GUIDANCE, runtime_build_unit_inputs};
 use crate::oven::native_test::{OvenNativeTestRequest, run_native_test_batch};
-use crate::oven::native_unit::runtime_build_unit_inputs;
 use crate::oven::rustc::{
     OvenTrustedDirectRustcTargetRequest, attach_caller_owned_rustc_libraries, bake_trusted_direct_rustc_test,
     materialize_declared_rust_libraries_with_selected_path_authority, resolve_active_rustc, rustc_host_target,
@@ -55,7 +55,7 @@ pub(super) struct TestExecutionOptions {
 
 /// Receipt-selected direct-Rustc closure for a nested normal test.
 ///
-/// A compiler-suite child receives a parent-leased immutable compiler-data root. It uses that seed directly instead
+/// A compiler-suite child receives a parent-leased immutable compiler-data root. It uses that Loaf directly instead
 /// of publishing a duplicate closure into its output-owned store; ordinary tests keep the bounded-store path.
 type OvenTestPlanSelection = crate::cli::commands::build::OvenDirectRustcPlanSelection;
 
@@ -2532,9 +2532,10 @@ fn run_file_tests_batch_oven(
         Ok(Some(selection)) => selection,
         Ok(None) => {
             return failure(format!(
-                "Oven Alpha has no compatible native test provider/dependency unit. Generated harness: {}; receipt: {}. `incan test` will not invoke Cargo; the active toolchain does not ship a compatible Oven-native unit",
+                "Oven Alpha has no compatible native test provider/dependency unit. Generated harness: {}; receipt: {}. `incan test` will not invoke Cargo; the active toolchain does not ship a compatible Oven Loaf. {}",
                 generated_root.display(),
                 receipt_path.display(),
+                OVEN_LOAF_MISS_GUIDANCE,
             ));
         }
         Err(error) => return failure(error.message),
@@ -2774,7 +2775,7 @@ fn oven_test_build_unit_inputs(
 
 /// Select only caller-imported Rust dependencies for the direct path-crate materializer.
 ///
-/// Compiler-owned standard-library/provider imports are satisfied by the selected native seed. The materializer must
+/// Compiler-owned standard-library/provider imports are satisfied by the selected Loaf. The materializer must
 /// not try to rebuild that sealed closure from the generated test project.
 fn oven_test_inline_dependency_specs(
     resolved: &ResolvedDependencies,

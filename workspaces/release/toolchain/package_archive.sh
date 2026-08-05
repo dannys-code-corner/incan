@@ -15,10 +15,8 @@ Environment:
                  Host incan binary used to prepare the platform-neutral SDK provider seed (default: INCAN_BIN)
   INCAN_SDK_PROVIDER_SEED_DIR
                  Prebuilt SDK provider seed override used by packaging tests and controlled release staging
-  INCAN_OVEN_NATIVE_UNIT_SEED_DIR
-                 Prebuilt compiler-owned Oven native-unit seeds used by packaging tests and controlled staging
-  INCAN_OVEN_NATIVE_UNIT_MAX_BYTES
-                 Maximum logical compiler-shipped native-unit payload (default: 335544320)
+  INCAN_OVEN_LOAF_DIR
+                 Prebuilt compiler-owned Oven Loafs used by packaging tests and controlled staging
   INCAN_SDK_DISTRIBUTION_PROFILE
                  SDK profile whose component payloads are packaged (default: full)
   TOOLCHAIN_RELEASE    Release name override (default: tag name or v<workspace version>)
@@ -85,13 +83,10 @@ incan_bin="${INCAN_BIN:-target/release/incan}"
 incan_lsp_bin="${INCAN_LSP_BIN:-target/release/incan-lsp}"
 stdlib_dir="${INCAN_STDLIB_SOURCE_DIR:-crates/incan_stdlib/stdlib}"
 distribution_profile="${INCAN_SDK_DISTRIBUTION_PROFILE:-full}"
-native_unit_max_bytes="${INCAN_OVEN_NATIVE_UNIT_MAX_BYTES:-335544320}"
 [ -x "$incan_bin" ] || fail "incan binary is not executable: $incan_bin"
 [ -x "$incan_lsp_bin" ] || fail "incan-lsp binary is not executable: $incan_lsp_bin"
 [ -d "$stdlib_dir" ] || fail "stdlib source directory does not exist: $stdlib_dir"
 [ -f "$stdlib_dir/testing.incn" ] || fail "stdlib source directory is missing testing.incn: $stdlib_dir"
-[ "${native_unit_max_bytes#*[!0-9]}" = "$native_unit_max_bytes" ] && [ "$native_unit_max_bytes" -gt 0 ] \
-  || fail "INCAN_OVEN_NATIVE_UNIT_MAX_BYTES must be a positive whole-byte value"
 for support_crate in incan_core incan_derive incan_stdlib incan_vocab incan_web_macros; do
   [ -f "crates/${support_crate}/Cargo.toml" ] || fail "support crate is missing: crates/${support_crate}"
 done
@@ -258,21 +253,18 @@ rm -rf "$package_dir/crates/incan_stdlib/stdlib"
 [ ! -d "$package_dir/crates/incan_stdlib/stdlib" ] \
   || fail "provider-owned stdlib source unexpectedly entered the package"
 
-# Ship one release core closure and one debug foundation closure for `std.testing`, `std.fs`, and `std.json`. The
-# latter explicitly covers the narrower core-debug provider request when all other runtime inputs match, so retaining
-# a duplicate core-debug closure would add bytes without adding an Alpha envelope. There is no release-mode test or
-# utility consumer, so a foundation-release duplicate would be retained without an authorized command. This is a
-# maintainer-only transition boundary: Cargo's transient target lives below a temporary directory and is removed before
-# the archive exists. Everyday `incan build`, `run`, and `test` materialize these seeds without invoking Cargo or
-# inspecting any Cargo target.
-native_unit_seed_root="$package_dir/share/incan/oven/native-units"
-if [ -n "${INCAN_OVEN_NATIVE_UNIT_SEED_DIR:-}" ]; then
-  [ -d "$INCAN_OVEN_NATIVE_UNIT_SEED_DIR" ] \
-    || fail "Oven native-unit seed override does not exist: $INCAN_OVEN_NATIVE_UNIT_SEED_DIR"
-  mkdir -p "$(dirname "$native_unit_seed_root")"
-  cp -R "$INCAN_OVEN_NATIVE_UNIT_SEED_DIR" "$native_unit_seed_root"
+# Ship the typed release envelope through the same explicit baker used by local and CI preparation. The baker owns
+# fixture source, identity, admission, accounting, and atomic publication; this packaging script only stages its output.
+loaf_root="$package_dir/share/incan/oven/loafs"
+if [ -n "${INCAN_OVEN_LOAF_DIR:-}" ]; then
+  [ "${INCAN_OVEN_LOAF_OVERRIDE_TEST_ONLY:-0}" = "1" ] \
+    || fail "INCAN_OVEN_LOAF_DIR is reserved for controlled packaging tests; production archives must invoke the baker"
+  [ -d "$INCAN_OVEN_LOAF_DIR" ] \
+    || fail "Oven Loaf override does not exist: $INCAN_OVEN_LOAF_DIR"
+  mkdir -p "$(dirname "$loaf_root")"
+  cp -R "$INCAN_OVEN_LOAF_DIR" "$loaf_root"
 else
-  cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release-only native-unit publisher"
+  cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release-only Loaf publisher"
   if [ -n "${RUSTC:-}" ]; then
     rustc_bin="$RUSTC"
   elif command -v rustup >/dev/null 2>&1; then
@@ -280,122 +272,29 @@ else
   else
     rustc_bin="$(command -v rustc)"
   fi
-  [ -x "$rustc_bin" ] || fail "could not resolve an executable rustc for the release-only native-unit publisher"
-  native_seed_receipt="$package_dir/.incan/oven/receipt.json"
-  native_seed_home="$package_dir/.oven-base-seed-home"
-  native_seed_probe="$package_dir/oven_base_seed.incn"
-  native_seed_project="$package_dir/target/incan/oven_base_seed"
-  printf 'def main() -> None:\n    pass\n' > "$native_seed_probe"
-  # First let the normal Oven front end generate and receipt this compiler-owned release program. The expected
-  # initial plan miss is not a user-facing fallback: it gives the release publisher the exact provider/dependency
-  # identity that installed normal commands will later select, without launching Cargo.
-  native_seed_probe_log="$package_dir/.oven-base-seed-release.log"
-  INCAN_HOME="$native_seed_home" "$package_dir/bin/incan" build "$native_seed_probe" >"$native_seed_probe_log" 2>&1 \
-    && fail "base release Oven seed probe unexpectedly built before a seed existed"
-  grep -F "Oven Alpha has no compatible native provider/dependency unit" "$native_seed_probe_log" >/dev/null \
-    || fail "base release Oven seed probe failed before its expected native-unit miss: $(sed -n '1,8p' "$native_seed_probe_log")"
-  [ -f "$native_seed_receipt" ] || fail "Oven seed probe did not publish its generated-project receipt"
-  [ -d "$native_seed_project" ] || fail "Oven seed probe did not generate its Rust project"
-  "$package_dir/bin/incan" oven legacy-cargo prepare-native-unit-seed \
-    --output "$native_unit_seed_root" \
-    --receipt "$native_seed_receipt" \
-    --generated-project "$native_seed_project" \
+  [ -x "$rustc_bin" ] || fail "could not resolve an executable rustc for the release-only Loaf publisher"
+  "$package_dir/bin/incan" oven legacy-cargo bake-loafs \
+    --compiler-root "$package_dir" \
+    --output "$loaf_root" \
+    --envelope release \
+    --sdk-inventory "$sdk_seed_root/sdk-inventory.json" \
     --cargo "$cargo_bin" \
     --rustc "$rustc_bin" \
     --format json >/dev/null \
-    || fail "could not prepare the base release Oven native-unit seed"
-  rm -rf "$package_dir/.incan" "$package_dir/target" "$native_seed_home" "$native_seed_probe_log"
-  rm -f "$native_seed_probe"
-
-  # Debug testing and the release-asset utility path have distinct generated compatibility needs from release
-  # build/run. Publish their measured shared foundation; its explicit provider-superset authorization also serves
-  # core debug build/run without retaining a duplicate core unit.
-  native_testing_seed_probe="$package_dir/oven_standard_testing_seed.incn"
-  native_testing_seed_project="$package_dir/target/incan/oven_standard_testing_seed"
-  native_testing_seed_log="$package_dir/.oven-standard-testing-seed-debug.log"
-  printf 'from std.fs import Path\nfrom std.json import JsonValue\nfrom std.testing import assert_true\n\ndef main() -> None:\n    assert_true(Path(".").exists())\n' > "$native_testing_seed_probe"
-  INCAN_HOME="$native_seed_home" "$package_dir/bin/incan" run "$native_testing_seed_probe" >"$native_testing_seed_log" 2>&1 \
-    && fail "debug Oven foundation seed probe unexpectedly ran before its native unit existed"
-  grep -F "Oven Alpha has no compatible native provider/dependency unit" "$native_testing_seed_log" >/dev/null \
-    || fail "debug Oven foundation seed probe failed before its expected native-unit miss: $(sed -n '1,8p' "$native_testing_seed_log")"
-  [ -f "$native_seed_receipt" ] || fail "standard-testing seed probe did not publish its generated-project receipt"
-  [ -d "$native_testing_seed_project" ] || fail "standard-testing seed probe did not generate its Rust project"
-  "$package_dir/bin/incan" oven legacy-cargo prepare-native-unit-seed \
-    --output "$native_unit_seed_root" \
-    --receipt "$native_seed_receipt" \
-    --generated-project "$native_testing_seed_project" \
-    --cargo "$cargo_bin" \
-    --rustc "$rustc_bin" \
-    --format json >/dev/null \
-    || fail "could not prepare the debug Oven foundation native-unit seed"
-  rm -rf "$package_dir/.incan" "$package_dir/target" "$native_seed_home" "$native_testing_seed_log"
-  rm -f "$native_testing_seed_probe"
-
-  # A shadowing Cargo executable makes this a behavioural consumer proof: any accidental normal-command launch of
-  # Cargo exits 97 instead of silently using a cache.
-  native_seed_core_source="$package_dir/oven_core_consumer.incn"
-  native_seed_core_home="$package_dir/.oven-core-consumer-home"
-  native_seed_testing_source="$package_dir/test_oven_standard_testing_consumer.incn"
-  native_seed_testing_home="$package_dir/.oven-standard-testing-consumer-home"
-  native_seed_utility_source="$package_dir/oven_utility_consumer.incn"
-  native_seed_utility_home="$package_dir/.oven-utility-consumer-home"
-  native_seed_cargo_guard="$package_dir/.oven-cargo-guard"
-  printf 'def main() -> None:\n    pass\n' > "$native_seed_core_source"
-  printf 'from std.testing import assert_true\n\ndef test_oven_seed_reuses_testing_unit() -> None:\n    assert_true(True)\n' > "$native_seed_testing_source"
-  printf 'from std.fs import Path\nfrom std.json import JsonValue\n\ndef main() -> None:\n    _ = Path(".").exists()\n' > "$native_seed_utility_source"
-  mkdir -p "$native_seed_cargo_guard"
-  printf '#!/bin/sh\nexit 97\n' > "$native_seed_cargo_guard/cargo"
-  chmod +x "$native_seed_cargo_guard/cargo"
-  PATH="$native_seed_cargo_guard:$PATH" INCAN_HOME="$native_seed_core_home" \
-    "$package_dir/bin/incan" run "$native_seed_core_source" >/dev/null \
-    || fail "core debug did not reuse the compiler-owned std.testing Oven native unit without Cargo"
-  PATH="$native_seed_cargo_guard:$PATH" INCAN_HOME="$native_seed_testing_home" \
-    "$package_dir/bin/incan" test "$native_seed_testing_source" >/dev/null \
-    || fail "std.testing did not reuse the compiler-owned debug Oven native unit without Cargo"
-  PATH="$native_seed_cargo_guard:$PATH" INCAN_HOME="$native_seed_utility_home" \
-    "$package_dir/bin/incan" run "$native_seed_utility_source" >/dev/null \
-    || fail "std.fs/std.json did not reuse the compiler-owned debug Oven foundation unit without Cargo"
-  # The guarded consumer proofs intentionally generate local Oven projects. They validate the shipped seeds but are
-  # not part of the release closure, so remove that exact package-owned generated-project directory before archiving.
-  rm -rf "$native_seed_core_home" "$native_seed_testing_home" "$native_seed_utility_home" "$native_seed_cargo_guard" "$package_dir/target"
-  rm -f "$native_seed_core_source" "$native_seed_testing_source" "$native_seed_utility_source"
+    || fail "could not bake the release Oven Loaf envelope"
 fi
-[ -d "$native_unit_seed_root" ] || fail "release package is missing Oven native-unit seeds"
-[ "$(find "$native_unit_seed_root" -name seed.json -type f | wc -l | tr -d ' ')" = "2" ] \
-  || fail "release package must contain one release core and one debug Oven foundation native-unit seed"
-
-# Compatibility identities remain separate, but many of their immutable Rust inputs are byte-identical. Keep one
-# filesystem object for every verified duplicate in the release layout. `tar` preserves hard-link topology, so the
-# extracted toolchain has the same physical economy. Logical accounting below deliberately still counts every
-# manifest-declared path: a filesystem's compression, deduplication, or hard links must not weaken the release cap.
-native_unit_dedup_index="$package_dir/.oven-native-unit-dedup-index"
-: > "$native_unit_dedup_index"
-while IFS= read -r native_unit_file; do
-  native_unit_digest="$(shasum -a 256 "$native_unit_file" | awk '{print $1}')"
-  native_unit_original="$(awk -F '\t' -v digest="$native_unit_digest" '$1 == digest { print substr($0, length($1) + 2); exit }' "$native_unit_dedup_index")"
-  if [ -n "$native_unit_original" ]; then
-    cmp -s "$native_unit_original" "$native_unit_file" \
-      || fail "native-unit digest collision while deduplicating $native_unit_file"
-    rm -f "$native_unit_file"
-    ln "$native_unit_original" "$native_unit_file" \
-      || fail "could not hard-link duplicate native-unit artifact $native_unit_file"
-  else
-    printf '%s\t%s\n' "$native_unit_digest" "$native_unit_file" >> "$native_unit_dedup_index"
-  fi
-done < <(find "$native_unit_seed_root" -type f ! -name seed.json -print | LC_ALL=C sort)
-rm -f "$native_unit_dedup_index"
+[ -d "$loaf_root" ] || fail "release package is missing Oven Loafs"
+[ "$(find "$loaf_root" -name loaf.json -type f | wc -l | tr -d ' ')" = "2" ] \
+  || fail "release package must contain one release core and one debug Oven foundation Loaf"
 
 sdk_component_count="$(find "$sdk_seed_root/components" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
 sdk_payload_bytes="$(find "$sdk_seed_root" -type f -exec wc -c {} + | awk '$2 != "total" { total += $1 } END { print total + 0 }')"
-native_unit_seed_count="$(find "$native_unit_seed_root" -name seed.json -type f | wc -l | tr -d ' ')"
-native_unit_payload_bytes="$(find "$native_unit_seed_root" -type f -exec wc -c {} + | awk '$2 != "total" { total += $1 } END { print total + 0 }')"
-native_unit_physical_bytes="$(du -sk "$native_unit_seed_root" | awk '{ print $1 * 1024 }')"
-[ "$native_unit_payload_bytes" -le "$native_unit_max_bytes" ] \
-  || fail "compiler-shipped Oven native-unit logical payload ${native_unit_payload_bytes} exceeds policy ${native_unit_max_bytes} bytes"
+loaf_count="$(find "$loaf_root" -name loaf.json -type f | wc -l | tr -d ' ')"
+loaf_payload_bytes="$(find "$loaf_root" -type f -exec wc -c {} + | awk '$2 != "total" { total += $1 } END { print total + 0 }')"
+loaf_physical_bytes="$(du -sk "$loaf_root" | awk '{ print $1 * 1024 }')"
 
-# Do not publish even a partial archive when its immutable native closure violates policy. The count intentionally
-# happens after hard-link deduplication so physical accounting describes the shipped tree, while the logical cap still
-# counts every declared path. Only a policy-compliant package receives an archive, checksum, and profile evidence.
+# The baker has already admitted the complete immutable closure under the central Oven policy. Packaging records both
+# logical and host-physical measurements without redefining that policy.
 tar -C "$package_dir" -czf "$archive" .
 shasum -a 256 "$archive" | awk '{print $1}' > "${archive}.sha256"
 archive_bytes="$(wc -c < "$archive" | tr -d ' ')"
@@ -407,10 +306,9 @@ cat > "${archive}.profile.json" <<PROFILE_EVIDENCE
   "sdk_profile": "${distribution_profile}",
   "sdk_component_count": ${sdk_component_count},
   "sdk_payload_bytes": ${sdk_payload_bytes},
-  "oven_native_unit_seed_count": ${native_unit_seed_count},
-  "oven_native_unit_logical_bytes": ${native_unit_payload_bytes},
-  "oven_native_unit_physical_bytes": ${native_unit_physical_bytes},
-  "oven_native_unit_max_bytes": ${native_unit_max_bytes},
+  "oven_loaf_count": ${loaf_count},
+  "oven_loaf_logical_bytes": ${loaf_payload_bytes},
+  "oven_loaf_physical_bytes": ${loaf_physical_bytes},
   "archive_bytes": ${archive_bytes}
 }
 PROFILE_EVIDENCE

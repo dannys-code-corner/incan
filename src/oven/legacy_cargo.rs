@@ -1,15 +1,16 @@
-//! Explicit, temporary Cargo publisher for Oven Alpha build-unit preparation.
+//! Hidden `legacy_cargo` Loaf baker for Oven Alpha compatibility preparation.
 //!
-//! This is deliberately not an execution backend. It may be invoked only through the named `legacy_cargo` transition
-//! command while direct closure materialization is being completed for #1005/#975. It copies a verified native
-//! closure into the bounded Oven store and removes its Cargo target before returning; normal Oven build, run, and test
-//! code neither calls this module nor receives its target path.
+//! This is deliberately not an execution backend. It may be invoked only through the named `legacy_cargo` command
+//! while direct closure materialization is being completed for #1005/#975. It bakes typed `.loaf/` envelopes and
+//! publishes receipt-bound compiler-suite plans into the bounded Oven store, then removes every private Cargo target
+//! before returning. Normal Oven build, run, and test code neither calls this module nor receives a Cargo target path.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -33,7 +34,7 @@ use super::{
 };
 use crate::version::{INCAN_VERSION, SDK_PROVIDER_CODEGEN_REVISION};
 
-/// Wire format retained as an immutable supporting artifact alongside every temporary Cargo-prepared closure.
+/// Wire format retained as an immutable supporting artifact alongside every `legacy_cargo`-prepared closure.
 pub const OVEN_LEGACY_CARGO_PROVENANCE_SCHEMA_VERSION: u32 = 2;
 /// Wire schema for one independently admitted compiler-suite target shard.
 ///
@@ -43,7 +44,7 @@ pub const OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION: u32 = 2;
 pub(crate) const OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION_V1: u32 = 1;
 /// Wire schema for one independently admitted compiler-suite dependency foundation.
 pub const OVEN_COMPILER_TEST_SUITE_FOUNDATION_SCHEMA_VERSION: u32 = 1;
-/// Wire schema for one independently admitted compiler-native-unit data partition.
+/// Wire schema for one independently admitted compiler-Loaf data partition.
 pub const OVEN_COMPILER_TEST_SUITE_TOOLCHAIN_DATA_SCHEMA_VERSION: u32 = 1;
 /// Reserve payload and manifest headroom when splitting a closure by the logical domain policy.
 ///
@@ -69,7 +70,7 @@ pub enum OvenLegacyCargoPublicationKind {
     LibraryTests,
 }
 
-/// Explicit input to the temporary Cargo publisher.
+/// Explicit input to the hidden `legacy_cargo` publisher.
 pub struct OvenLegacyCargoPrepareRequest<'a> {
     /// Bounded Oven store that will own the immutable result.
     pub store: &'a OvenStore,
@@ -81,6 +82,11 @@ pub struct OvenLegacyCargoPrepareRequest<'a> {
     pub cargo: PathBuf,
     /// Explicit Rust compiler used by Cargo and later direct-rustc execution.
     pub rustc: PathBuf,
+    /// Exact prebuilt SDK inventory supplied by the Loaf baker for compiler-suite publication.
+    ///
+    /// Standalone transitional callers may omit this and use the installed-toolchain discovery contract. Normal
+    /// consumer commands never construct this publisher request.
+    pub sdk_inventory: Option<PathBuf>,
     /// Stable compatibility-domain policy bucket for the stored closure.
     pub domain: String,
     /// Explicit publisher operation; normal Oven consumers never receive this authority.
@@ -89,15 +95,15 @@ pub struct OvenLegacyCargoPrepareRequest<'a> {
     pub source_evidence_key: String,
     /// Deterministic compile-time metadata required by the authorized root after ambient Cargo state is cleared.
     pub compile_environment: BTreeMap<String, String>,
-    /// Whether the named native-unit publisher may omit debug information from a debug-profile dependency closure.
+    /// Whether the named Loaf publisher may omit debug information from a debug-profile dependency closure.
     ///
-    /// This affects only temporary Cargo publisher artifacts; direct-rustc receipt identity and normal command
-    /// semantics remain unchanged. It prevents compiler-shipped sealed seed data from consuming policy capacity with
+    /// This affects only private `legacy_cargo` publisher artifacts; direct-rustc receipt identity and normal command
+    /// semantics remain unchanged. It prevents compiler-shipped sealed Loaf data from consuming policy capacity with
     /// linker-irrelevant debug sections.
     pub compact_debug_info: bool,
 }
 
-/// Outcome from a successful explicit temporary-Cargo publication.
+/// Outcome from a successful explicit `legacy_cargo` publication.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OvenLegacyCargoPrepareResult {
     /// Identity of the immutable direct-rustc Oven plan.
@@ -110,7 +116,7 @@ pub struct OvenLegacyCargoPrepareResult {
     pub cargo_lock_digest: String,
     /// Exact registry package artifacts observed by this named publisher invocation.
     ///
-    /// The native-unit exporter seals this small catalog beside the copied direct-Rustc closure. It is never a
+    /// The Loaf exporter seals this small catalog beside the copied direct-Rustc closure. It is never a
     /// normal-command Cargo resolution result.
     pub registry_leaves: Vec<OvenRustcRegistryLeaf>,
     /// Conservative transient publisher allocation high-water mark; this directory is removed before success returns.
@@ -311,7 +317,7 @@ struct OvenCompilerTestSuiteFoundationPlan {
     materialized_files: Vec<OvenArtifactMaterializedFile>,
 }
 
-/// One immutable compiler-native-unit partition selected by a schema-13 suite before any child starts.
+/// One immutable compiler-Loaf partition selected by a schema-13 suite before any child starts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct OvenCompilerTestSuiteToolchainDataReference {
     /// Content-addressed Oven store identity of the independently bounded partition.
@@ -320,7 +326,7 @@ pub struct OvenCompilerTestSuiteToolchainDataReference {
     pub label: String,
 }
 
-/// Immutable payload for one policy-addressable compiler-native-unit data partition.
+/// Immutable payload for one policy-addressable compiler-Loaf data partition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OvenCompilerTestSuiteToolchainDataPayload {
     /// Toolchain-data wire-schema version.
@@ -329,7 +335,7 @@ pub struct OvenCompilerTestSuiteToolchainDataPayload {
     pub label: String,
 }
 
-/// Publisher-private native-unit partition and its exact staged files, ready for separately bounded admission.
+/// Publisher-private Loaf partition and its exact staged files, ready for separately bounded admission.
 struct OvenCompilerTestSuiteToolchainDataPlan {
     payload: OvenCompilerTestSuiteToolchainDataPayload,
     materialized_files: Vec<OvenArtifactMaterializedFile>,
@@ -525,13 +531,13 @@ fn compiler_suite_foundation_plans(
     Ok(foundations)
 }
 
-/// Split installed compiler-native-unit directories into deterministic suite inputs.
+/// Split installed compiler-Loaf directories into deterministic suite inputs.
 ///
-/// Stored-suite children need the publisher's sealed native-unit data, but placing every provider-family seed in
+/// Stored-suite children need the baker's sealed Loaf data, but placing every provider-family Loaf in
 /// the small suite index turns the entry representation into an oversized payload as provider coverage grows. Each
-/// seed directory remains indivisible and is grouped deterministically only when the aggregate fits with metadata
+/// Loaf directory remains indivisible and is grouped deterministically only when the aggregate fits with metadata
 /// headroom. Compiler-suite fixture commands exercise ordinary `build`, `run`, and `test` routes, including the
-/// normal release build profile; the suite must therefore retain every installed supported-profile seed rather than
+/// normal release build profile; the suite must therefore retain every installed supported-profile Loaf rather than
 /// borrow an ambient toolchain or launch Cargo. The executor selects and lease-holds every resulting immutable
 /// partition before it starts a child. Every resulting input remains in the one suite compatibility domain.
 fn compiler_suite_toolchain_data_plans(
@@ -543,72 +549,81 @@ fn compiler_suite_toolchain_data_plans(
         .checked_sub(COMPILER_TEST_SUITE_FOUNDATION_METADATA_HEADROOM_BYTES)
         .ok_or_else(|| {
             OvenLegacyCargoError::Plan(format!(
-                "compiler native-unit logical allowance {max_domain_logical_bytes} leaves no payload metadata headroom"
+                "compiler Loaf logical allowance {max_domain_logical_bytes} leaves no payload metadata headroom"
             ))
         })?;
-    let native_units = data_root.join("share/incan/oven/native-units");
-    if !native_units.is_dir() {
+    let loafs = data_root.join("share/incan/oven/loafs");
+    if !loafs.is_dir() {
         return Err(OvenLegacyCargoError::InvalidInput {
-            field: "compiler native-unit data",
-            message: format!("{} is not a directory", native_units.display()),
+            field: "compiler Loaf data",
+            message: format!("{} is not a directory", loafs.display()),
         });
     }
-    let mut seed_directories = fs::read_dir(&native_units)
-        .map_err(|source| OvenLegacyCargoError::Io {
-            path: native_units.clone(),
-            source,
+    let committed = crate::oven::loaf::acquire_committed_loaf_generation(&loafs)
+        .map_err(|error| OvenLegacyCargoError::InvalidInput {
+            field: "compiler Loaf data",
+            message: error.to_string(),
         })?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|source| OvenLegacyCargoError::Io {
-            path: native_units.clone(),
-            source,
-        })?;
-    seed_directories.sort_by_key(|entry| entry.file_name());
-    let mut seed_groups = Vec::new();
-    for entry in seed_directories {
-        let seed_name = entry
+        .ok_or_else(|| OvenLegacyCargoError::Plan("compiler Loaf data has no committed envelope".to_string()))?;
+    let mut loaf_groups = Vec::new();
+    for loaf_manifest in committed.paths() {
+        let loaf_directory = loaf_manifest
+            .parent()
+            .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field: "compiler Loaf data",
+                message: format!("{} has no parent directory", loaf_manifest.display()),
+            })?
+            .to_path_buf();
+        let loaf_name = loaf_directory
             .file_name()
-            .into_string()
-            .map_err(|_| OvenLegacyCargoError::InvalidInput {
-                field: "compiler native-unit data",
-                message: format!("{} has a non-UTF-8 seed directory name", entry.path().display()),
-            })?;
-        let seed_directory = entry.path();
-        let metadata = fs::symlink_metadata(&seed_directory).map_err(|source| OvenLegacyCargoError::Io {
-            path: seed_directory.clone(),
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field: "compiler Loaf data",
+                message: format!("{} has a non-UTF-8 Loaf directory name", loaf_directory.display()),
+            })?
+            .to_string();
+        let metadata = fs::symlink_metadata(&loaf_directory).map_err(|source| OvenLegacyCargoError::Io {
+            path: loaf_directory.clone(),
             source,
         })?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(OvenLegacyCargoError::InvalidInput {
-                field: "compiler native-unit data",
-                message: format!("{} must be a non-symlink seed directory", seed_directory.display()),
+                field: "compiler Loaf data",
+                message: format!("{} must be a non-symlink Loaf directory", loaf_directory.display()),
             });
         }
-        let seed_manifest = seed_directory.join("seed.json");
-        let seed_metadata = fs::symlink_metadata(&seed_manifest).map_err(|source| OvenLegacyCargoError::Io {
-            path: seed_manifest.clone(),
+        let loaf_metadata = fs::symlink_metadata(loaf_manifest).map_err(|source| OvenLegacyCargoError::Io {
+            path: loaf_manifest.clone(),
             source,
         })?;
-        if seed_metadata.file_type().is_symlink() || !seed_metadata.is_file() {
+        if loaf_metadata.file_type().is_symlink() || !loaf_metadata.is_file() {
             return Err(OvenLegacyCargoError::InvalidInput {
-                field: "compiler native-unit data",
-                message: format!("{} must contain a regular seed.json", seed_directory.display()),
+                field: "compiler Loaf data",
+                message: format!("{} must contain a regular loaf.json", loaf_directory.display()),
             });
         }
-        let seed = serde_json::from_slice::<crate::oven::native_unit::OvenNativeUnitSeed>(&regular_file_bytes(
-            &seed_manifest,
-        )?)
-        .map_err(|error| OvenLegacyCargoError::InvalidInput {
-            field: "compiler native-unit data",
-            message: format!(
-                "{} is not a valid sealed native-unit seed: {error}",
-                seed_manifest.display()
-            ),
+        let loaf = serde_json::from_slice::<crate::oven::loaf::OvenLoaf>(&regular_file_bytes(loaf_manifest)?).map_err(
+            |error| OvenLegacyCargoError::InvalidInput {
+                field: "compiler Loaf data",
+                message: format!("{} is not a valid sealed Loaf: {error}", loaf_manifest.display()),
+            },
+        )?;
+        crate::oven::loaf::validate_stored_loaf(loaf_manifest, &loaf.build_unit_identity).map_err(|error| {
+            OvenLegacyCargoError::InvalidInput {
+                field: "compiler Loaf data",
+                message: error.to_string(),
+            }
         })?;
-        validate_compiler_suite_native_seed_runtime_inputs(&seed_name, &seed, expected_runtime_inputs)?;
-        let relative_root = format!("share/incan/oven/native-units/{seed_name}");
-        let files =
-            materialized_files_from_directory(&seed_directory, &relative_root, "compiler-owned native-unit data")?;
+        validate_compiler_suite_loaf_runtime_inputs(&loaf_name, &loaf, expected_runtime_inputs)?;
+        let relative_directory =
+            loaf_directory
+                .strip_prefix(data_root)
+                .map_err(|_| OvenLegacyCargoError::InvalidInput {
+                    field: "compiler Loaf data",
+                    message: format!("{} escapes compiler data root", loaf_directory.display()),
+                })?;
+        let relative_root = relative_directory.to_string_lossy().to_string();
+        let files = materialized_files_from_directory(&loaf_directory, &relative_root, "compiler-owned Loaf data")?;
         let logical_bytes = files.iter().try_fold(0_u64, |total, file| {
             let metadata = fs::symlink_metadata(&file.source_path).map_err(|source| OvenLegacyCargoError::Io {
                 path: file.source_path.clone(),
@@ -618,21 +633,40 @@ fn compiler_suite_toolchain_data_plans(
         })?;
         if logical_bytes > content_limit {
             return Err(OvenLegacyCargoError::Plan(format!(
-                "compiler native-unit seed `{seed_name}` is {logical_bytes} bytes, exceeding the {content_limit}-byte logical content allowance"
+                "compiler Loaf `{loaf_name}` is {logical_bytes} bytes, exceeding the {content_limit}-byte logical content allowance"
             )));
         }
-        seed_groups.push((files, logical_bytes));
+        loaf_groups.push((files, logical_bytes));
     }
-    if seed_groups.is_empty() {
+    if loaf_groups.is_empty() {
         return Err(OvenLegacyCargoError::Plan(
-            "compiler native-unit data has no sealed seed directories to partition".to_string(),
+            "compiler Loaf data has no sealed .loaf directories to partition".to_string(),
         ));
     }
+
+    let control_files = [loafs.join("envelope.json"), loafs.join(".envelope.lock")]
+        .into_iter()
+        .map(|source_path| {
+            let relative_path = source_path
+                .strip_prefix(data_root)
+                .map_err(|_| OvenLegacyCargoError::InvalidInput {
+                    field: "compiler Loaf data",
+                    message: format!("{} escapes compiler data root", source_path.display()),
+                })?
+                .to_string_lossy()
+                .to_string();
+            Ok(OvenArtifactMaterializedFile {
+                source_path,
+                relative_path,
+            })
+        })
+        .collect::<Result<Vec<_>, OvenLegacyCargoError>>()?;
+    loaf_groups[0].0.extend(control_files);
 
     let mut plans = Vec::new();
     let mut current_files = Vec::new();
     let mut current_bytes = 0_u64;
-    for (files, logical_bytes) in seed_groups {
+    for (files, logical_bytes) in loaf_groups {
         if !current_files.is_empty() && current_bytes.saturating_add(logical_bytes) > content_limit {
             plans.push(OvenCompilerTestSuiteToolchainDataPlan {
                 payload: OvenCompilerTestSuiteToolchainDataPayload {
@@ -656,10 +690,10 @@ fn compiler_suite_toolchain_data_plans(
     Ok(plans)
 }
 
-/// Derive the native-unit compatibility inputs from the runtime closure sealed in this suite's SDK inventory.
+/// Derive the Loaf compatibility inputs from the runtime closure sealed in this suite's SDK inventory.
 ///
-/// The compiler-suite publisher stages that runtime closure as a self-contained immutable input. Its native-unit
-/// seeds must describe the same lockfile and compiler-runtime source trees; accepting a nearby toolchain's seed
+/// The compiler-suite publisher stages that runtime closure as a self-contained immutable input. Its Loafs must
+/// describe the same lockfile and compiler-runtime source trees; accepting a nearby toolchain's Loaf
 /// would make child selection depend on ambient state and later fail closed only after the suite was admitted.
 fn compiler_suite_staged_runtime_inputs(
     staged_sdk_root: &Path,
@@ -678,7 +712,7 @@ fn compiler_suite_staged_runtime_inputs(
         ("runtime-source-incan-stdlib", "incan_stdlib"),
     ] {
         let source_root = runtime_root.join("crates").join(crate_name);
-        let digest = crate::oven::native_unit::digest_runtime_crate_source(&source_root).map_err(|message| {
+        let digest = crate::oven::loaf::digest_runtime_crate_source(&source_root).map_err(|message| {
             OvenLegacyCargoError::InvalidInput {
                 field: "compiler-suite SDK runtime closure",
                 message,
@@ -691,23 +725,23 @@ fn compiler_suite_staged_runtime_inputs(
     Ok(inputs)
 }
 
-/// Refuse native-unit data from a different compiler runtime than the staged SDK inventory.
+/// Refuse Loaf data from a different compiler runtime than the staged SDK inventory.
 ///
-/// Compatibility is intentionally exact here. Provider modules can be an explicitly authorized seed superset, but
+/// Compatibility is intentionally exact here. Provider modules can be an explicitly authorized Loaf superset, but
 /// a runtime source or lockfile mismatch would combine two compiler/package worlds and cannot be repaired by runtime
-/// selection. The named publisher must regenerate the seed with the sealed SDK inventory instead.
-fn validate_compiler_suite_native_seed_runtime_inputs(
-    seed_name: &str,
-    seed: &crate::oven::native_unit::OvenNativeUnitSeed,
+/// selection. The named baker must regenerate the Loaf with the sealed SDK inventory instead.
+fn validate_compiler_suite_loaf_runtime_inputs(
+    loaf_name: &str,
+    loaf: &crate::oven::loaf::OvenLoaf,
     expected_runtime_inputs: &BTreeMap<String, String>,
 ) -> Result<(), OvenLegacyCargoError> {
-    if seed.compatibility.runtime_inputs == *expected_runtime_inputs {
+    if loaf.compatibility.runtime_inputs == *expected_runtime_inputs {
         return Ok(());
     }
     let mismatched = expected_runtime_inputs
         .iter()
         .filter_map(|(key, expected)| {
-            let actual = seed.compatibility.runtime_inputs.get(key);
+            let actual = loaf.compatibility.runtime_inputs.get(key);
             (actual != Some(expected)).then(|| {
                 format!(
                     "{key}: expected {expected}, found {}",
@@ -716,7 +750,7 @@ fn validate_compiler_suite_native_seed_runtime_inputs(
             })
         })
         .collect::<Vec<_>>();
-    let unexpected = seed
+    let unexpected = loaf
         .compatibility
         .runtime_inputs
         .keys()
@@ -725,7 +759,7 @@ fn validate_compiler_suite_native_seed_runtime_inputs(
         .collect::<Vec<_>>();
     let details = mismatched.into_iter().chain(unexpected).collect::<Vec<_>>().join(", ");
     Err(OvenLegacyCargoError::Plan(format!(
-        "compiler native-unit seed `{seed_name}` is incompatible with the staged SDK runtime closure ({details}); regenerate it through the named legacy-cargo native-unit publisher with the same SDK inventory"
+        "compiler Loaf `{loaf_name}` is incompatible with the staged SDK runtime closure ({details}); regenerate it through the named legacy-cargo Loaf baker with the same SDK inventory"
     )))
 }
 
@@ -766,7 +800,7 @@ pub struct OvenCompilerTestSuitePayload {
     /// Payload schema for the stored compiler-suite runtime.
     pub schema_version: u32,
     /// Receipt-bound native workspace target plan. Schema 8 executes caller-owned direct-rustc and direct-Rustdoc
-    /// shards instead of retaining Cargo-linked test executables, and carries any installed compiler native-unit
+    /// shards instead of retaining Cargo-linked test executables, and carries any installed compiler Loaf
     /// data required by their fixture commands.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub test_targets: Vec<OvenCompilerTestSuiteTarget>,
@@ -782,7 +816,7 @@ pub struct OvenCompilerTestSuitePayload {
     /// every lease before its first child. Individual shards repeat only the foundations they require.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub foundation_references: Vec<OvenCompilerTestSuiteFoundationReference>,
-    /// Schema-13 native-unit data partitions required by stored-suite fixture children.
+    /// Schema-13 Loaf data partitions required by stored-suite fixture children.
     ///
     /// These are separate from direct-rustc foundations because children consume them as compiler data rather than
     /// `--extern` artifacts. Each partition is selected and lease-held before the first child starts.
@@ -819,7 +853,7 @@ pub struct OvenCompilerTestSuitePayload {
     pub sdk_inventory_relative_path: String,
     /// Digest of the immutable SDK provider inventory.
     pub sdk_inventory_digest: String,
-    /// Optional store-relative root of compiler-owned native-unit data copied from the publisher's installed package.
+    /// Optional store-relative root of compiler-owned Loaf data copied from the publisher's installed package.
     ///
     /// A direct-rustc child is baked below caller-owned output, so it cannot infer the parent package layout from its
     /// own executable path. The suite owns this copied data rather than depending on an ambient archive location.
@@ -887,7 +921,7 @@ pub enum OvenLegacyCargoError {
     Plan(String),
 }
 
-/// Prepare and publish exactly one receipt-bound direct-rustc closure through the explicit temporary Cargo boundary.
+/// Prepare and publish exactly one receipt-bound direct-rustc closure through the hidden `legacy_cargo` boundary.
 ///
 /// Publication is idempotent: if a unique compatible Oven plan already exists, no Cargo process starts. If multiple
 /// plans already match the receipt, the publisher refuses to guess, matching normal Oven execution behavior.
@@ -1155,16 +1189,26 @@ pub fn prepare_compiler_test_suite(
     let cleanup = PublisherStagingCleanup { path: staging.clone() };
     // The suite publisher copies an already prepared, read-only SDK inventory into the immutable entry. Rebuilding
     // source components here used the ordinary `incan build --lib` helper, which can recurse into generated-Cargo
-    // work and turn the temporary publisher into an unbounded second build system. A missing inventory is an
+    // work and turn the hidden Loaf baker into an unbounded second build system. A missing inventory is an
     // explicit Oven preparation miss, never authority to launch that helper or create a hidden Cargo cache.
-    let prepared_sdk = discover_active_sdk_inventory()
-        .map_err(|error| OvenLegacyCargoError::Plan(format!("failed to discover active SDK provider inventory: {error}")))?
-        .ok_or_else(|| {
-            OvenLegacyCargoError::Plan(
-                "compiler-suite publication requires a prebuilt compatible SDK provider inventory; set INCAN_SDK_INVENTORY or use an installed Oven toolchain"
-                    .to_string(),
-            )
-        })?;
+    let prepared_sdk = match request.sdk_inventory.as_deref() {
+        Some(inventory) => Arc::new(SdkInventory::read_from_path(inventory).map_err(|error| {
+            OvenLegacyCargoError::Plan(format!(
+                "failed to load explicit compiler-suite SDK provider inventory {}: {error}",
+                inventory.display()
+            ))
+        })?),
+        None => discover_active_sdk_inventory()
+            .map_err(|error| {
+                OvenLegacyCargoError::Plan(format!("failed to discover active SDK provider inventory: {error}"))
+            })?
+            .ok_or_else(|| {
+                OvenLegacyCargoError::Plan(
+                    "compiler-suite publication requires a prebuilt compatible SDK provider inventory; set INCAN_SDK_INVENTORY or use an installed Oven toolchain"
+                        .to_string(),
+                )
+            })?,
+    };
     // The component crates retain path dependencies on compiler runtime crates.  Copying only the provider tree
     // would leave those paths pointing back to the publisher checkout, which is both an SDK leak and a later Cargo
     // failure.  Rebase that small compiler-owned runtime source closure inside the immutable provider tree before
@@ -1176,7 +1220,7 @@ pub fn prepare_compiler_test_suite(
     let mut index_materialized_files =
         materialized_files_from_directory(&staged_sdk_root, "providers", "SDK provider inventory")?;
     // Direct-rustc children are written beneath caller output and therefore cannot recover the publisher package
-    // layout from their own executable path. Retain installed native-unit data as separate immutable entries, but
+    // layout from their own executable path. Retain installed Loaf data as separate immutable entries, but
     // keep them in the suite compatibility domain: a runner selects every partition as one closure, so labels must
     // not become separate policy buckets.
     let mut toolchain_data_references = Vec::new();
@@ -1449,17 +1493,22 @@ pub fn prepare_compiler_test_suite(
             .saturating_add(shard_requests.len())
             .saturating_add(1),
     );
-    batch.push(index_request);
     batch.extend(foundation_requests);
     batch.extend(toolchain_data_requests);
     batch.extend(shard_requests);
+    // The suite index is its sole selection authority. Keep it last in the publisher request as well as the store's
+    // durable commit order so future publication refactors cannot accidentally expose it before its members.
+    batch.push(index_request);
     request
         .store
         .ensure_legacy_cargo_batch_physical_capacity(&staging, &batch)?;
     let artifacts = request.store.publish_batch_from_legacy_cargo(&batch)?;
-    let artifact = artifacts.first().ok_or_else(|| {
-        OvenLegacyCargoError::Plan("compiler-suite batch publication returned no index manifest".to_string())
-    })?;
+    let artifact = artifacts
+        .iter()
+        .find(|artifact| artifact.kind == OvenArtifactKind::CompilerTestSuite)
+        .ok_or_else(|| {
+            OvenLegacyCargoError::Plan("compiler-suite batch publication returned no index manifest".to_string())
+        })?;
     drop(cleanup);
     drop(publisher_lock);
     Ok(OvenLegacyCargoCompilerSuiteResult {
@@ -1480,7 +1529,7 @@ fn cargo_profile_directory(profile: &str) -> Result<&'static str, OvenLegacyCarg
         _ => Err(OvenLegacyCargoError::InvalidInput {
             field: "receipt profile",
             message: format!(
-                "temporary legacy_cargo supports only debug, release, or {OVEN_COMPILER_TEST_PROFILE}, got `{profile}`"
+                "legacy_cargo supports only debug, release, or {OVEN_COMPILER_TEST_PROFILE}, got `{profile}`"
             ),
         }),
     }
@@ -2164,7 +2213,7 @@ struct OvenLegacyCargoProvenance {
     profile: String,
 }
 
-/// Hold a unique temporary publisher directory and delete it on every normal return or error path.
+/// Hold a unique private publisher directory and delete it on every normal return or error path.
 struct PublisherStagingCleanup {
     path: PathBuf,
 }
@@ -2348,7 +2397,7 @@ fn validate_compiler_suite_unit_graph(
 ///
 /// Cargo's unit graph identifies a package by an opaque implementation-specific package ID. Oven derives the
 /// package name from the nearest regular `Cargo.toml` below the receipt-authorized compiler root instead of parsing
-/// that opaque string. This keeps the temporary publisher command stable while preserving a hard source-root
+/// that opaque string. This keeps the hidden publisher command stable while preserving a hard source-root
 /// boundary. The resulting selections are deliberately package-qualified: two workspace crates may legitimately
 /// expose identically named integration targets.
 #[cfg(test)]
@@ -2460,7 +2509,7 @@ fn compiler_suite_target_selection_features(
     Ok(features.into_iter().collect())
 }
 
-/// Derive the one exact temporary Cargo invocation authorized for a workspace test root.
+/// Derive the one exact `legacy_cargo` invocation authorized for a workspace test root.
 #[cfg(test)]
 fn compiler_suite_target_selection_for_unit(
     compiler_root: &Path,
@@ -3590,7 +3639,7 @@ fn compiler_suite_target_runner(mode: &str) -> Result<String, OvenLegacyCargoErr
 
 /// Find the package manifest owning a direct-rustc root and encode only portable package metadata.
 ///
-/// Both compiler-suite shards and compiler-owned base native units must recreate the small, deterministic subset of
+/// Both compiler-suite shards and compiler-owned base Loafs must recreate the small, deterministic subset of
 /// Cargo's compile-time package metadata after the executor has removed inherited `CARGO_*` state. The caller passes
 /// the root of the publisher-owned project tree so workspace-inherited package versions can be resolved without
 /// consulting Cargo at execution time.
@@ -4336,9 +4385,9 @@ fn compiler_suite_foundation_manifest(
             manifest.push_str(&format!("{package} = {{ path = {path} }}\n"));
         }
     }
-    // `prepare-compiler-libtests` uses the named receipt profile for every publisher action.  The private
+    // The compiler-suite Loaf baker uses the named receipt profile for every publisher action. The private
     // foundation manifest must declare the same profile rather than silently compiling its sealed dependency
-    // artifacts with Cargo's `dev` defaults.  Keep this in lockstep with the root manifest and the direct-rustc
+    // artifacts with Cargo's `dev` defaults. Keep this in lockstep with the root manifest and the direct-rustc
     // test-runner contract: this is a publisher-only compatibility setting, never a normal-command fallback.
     manifest.push_str(OVEN_COMPILER_TEST_CARGO_PROFILE_MANIFEST);
     Ok(manifest)
@@ -4690,7 +4739,7 @@ fn artifact_closure(
     Ok((dependency_search_paths, externs, supporting_artifacts))
 }
 
-/// Retain exact dependency-free registry leaves that the named publisher actually compiled into one native unit.
+/// Retain exact dependency-free registry leaves that the named publisher actually compiled into one Loaf.
 ///
 /// Cargo's JSON artifact record is correlated with its publisher-only metadata package record while both are still
 /// inside the explicit transition boundary. The resulting catalog names a single checked artifact already retained by
@@ -4727,7 +4776,7 @@ fn publisher_registry_leaf_catalog(
             }
             let Some(package) = packages.get(artifact.package_id.as_str()) else {
                 return Err(OvenLegacyCargoError::Plan(format!(
-                    "named native-unit publisher emitted package `{}` absent from its metadata",
+                    "named Loaf publisher emitted package `{}` absent from its metadata",
                     artifact.package_id
                 )));
             };
@@ -4766,7 +4815,7 @@ fn publisher_registry_leaf_catalog(
             };
             if artifacts.len() != 1 {
                 return Err(OvenLegacyCargoError::Plan(format!(
-                    "named native-unit publisher emitted multiple target rlibs for registry package `{}` {}",
+                    "named Loaf publisher emitted multiple target rlibs for registry package `{}` {}",
                     package.name, package.version
                 )));
             }
@@ -4819,7 +4868,7 @@ fn publisher_registry_leaf_catalog(
             Some(existing) if existing == &leaf => {}
             Some(existing) => {
                 return Err(OvenLegacyCargoError::Plan(format!(
-                    "named native-unit publisher emitted conflicting registry leaf `{}` {}: {} and {}",
+                    "named Loaf publisher emitted conflicting registry leaf `{}` {}: {} and {}",
                     leaf.package, leaf.version, existing.artifact.relative_path, leaf.artifact.relative_path
                 )));
             }
@@ -5541,7 +5590,7 @@ fn reclaim_unmaterialized_compiler_suite_target_directory(
 /// Measure a conservative physical reservation for transient staging without following links or relying on logical
 /// bytes as physical allocation.
 #[cfg(unix)]
-fn conservative_directory_reservation(root: &Path) -> Result<u64, OvenLegacyCargoError> {
+pub(crate) fn conservative_directory_reservation(root: &Path) -> Result<u64, OvenLegacyCargoError> {
     let mut seen_files = BTreeSet::new();
     conservative_directory_reservation_with_seen_files(root, &mut seen_files)
 }
@@ -5609,7 +5658,7 @@ fn conservative_directory_reservation_with_seen_files(
 
 /// Platforms without inode identity retain conservative per-directory accounting.
 #[cfg(not(unix))]
-fn conservative_directory_reservation(root: &Path) -> Result<u64, OvenLegacyCargoError> {
+pub(crate) fn conservative_directory_reservation(root: &Path) -> Result<u64, OvenLegacyCargoError> {
     let metadata = fs::symlink_metadata(root).map_err(|source| OvenLegacyCargoError::Io {
         path: root.to_path_buf(),
         source,
@@ -5657,7 +5706,7 @@ fn conservative_directory_reservation(root: &Path) -> Result<u64, OvenLegacyCarg
 /// Refuse prepared publisher staging once its retained shard/index inputs exceed the compatibility-domain allowance.
 ///
 /// A selection target has already been reclaimed when this runs, so the measurement is the bounded immutable batch
-/// input rather than a temporary Cargo cache. The final store batch performs its own physical measurement and is the
+/// input rather than private Cargo cache state. The final store batch performs its own physical measurement and is the
 /// only operation that makes the artifacts visible.
 fn enforce_compiler_suite_prepared_staging_capacity(
     staging: &Path,
@@ -5704,7 +5753,10 @@ mod tests {
         select_compiler_test_suite_identity, stage_compiler_suite_shard_files, stage_self_contained_sdk_provider_tree,
         validate_compiler_suite_unit_graph,
     };
-    use crate::oven::native_unit::{OVEN_NATIVE_UNIT_SEED_SCHEMA_VERSION, OvenNativeUnitSeed};
+    use crate::oven::loaf::{
+        OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf, OvenLoafEnvelopeManifest,
+        OvenLoafEnvelopeMember,
+    };
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenRustcSupportingArtifact,
         rustc_identity,
@@ -5714,6 +5766,24 @@ mod tests {
     };
     use crate::oven::{OvenBuildIntent, OvenCompilerSuiteRequest, receipt_native_compiler_suite};
     use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
+
+    fn write_test_loaf_envelope(
+        loafs: &std::path::Path,
+        members: Vec<OvenLoafEnvelopeMember>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        fs::write(loafs.join(".envelope.lock"), "")?;
+        fs::write(
+            loafs.join("envelope.json"),
+            serde_json::to_vec(&OvenLoafEnvelopeManifest {
+                schema_version: OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION,
+                envelope: "compiler-suite".to_string(),
+                generation_identity: "sha256:fixture-generation".to_string(),
+                evidence: BTreeMap::new(),
+                loafs: members,
+            })?,
+        )?;
+        Ok(())
+    }
 
     #[test]
     fn compiler_suite_dependency_directories_preserves_a_host_only_foundation() -> Result<(), Box<dyn std::error::Error>>
@@ -6393,39 +6463,38 @@ mod tests {
     }
 
     #[test]
-    fn publisher_materializes_compiler_native_unit_data_below_its_own_prefix() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn publisher_materializes_compiler_loaf_data_below_its_own_prefix() -> Result<(), Box<dyn std::error::Error>> {
         let toolchain = tempfile::tempdir()?;
-        let native_units = toolchain.path().join("share/incan/oven/native-units");
-        let seed = native_units.join("debug/seed.json");
-        fs::create_dir_all(seed.parent().ok_or("seed parent missing")?)?;
-        fs::write(&seed, "sealed seed")?;
+        let loafs = toolchain.path().join("share/incan/oven/loafs");
+        let loaf = loafs.join("fixture.loaf/loaf.json");
+        fs::create_dir_all(loaf.parent().ok_or("Loaf parent missing")?)?;
+        fs::write(&loaf, "sealed Loaf")?;
 
         let files = materialized_files_from_directory(
-            &native_units,
-            "toolchain-data/share/incan/oven/native-units",
-            "compiler-owned native-unit data",
+            &loafs,
+            "toolchain-data/share/incan/oven/loafs",
+            "compiler-owned Loaf data",
         )?;
 
         assert_eq!(files.len(), 1);
         assert_eq!(
             files[0].relative_path,
-            "toolchain-data/share/incan/oven/native-units/debug/seed.json"
+            "toolchain-data/share/incan/oven/loafs/fixture.loaf/loaf.json"
         );
         Ok(())
     }
 
     #[test]
-    fn compiler_suite_toolchain_data_retains_debug_and_release_native_seeds() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn compiler_suite_toolchain_data_retains_debug_and_release_loafs() -> Result<(), Box<dyn std::error::Error>> {
         let toolchain = tempfile::tempdir()?;
-        let native_units = toolchain.path().join("share/incan/oven/native-units");
+        let loafs = toolchain.path().join("share/incan/oven/loafs");
+        let mut members = Vec::new();
         for (name, profile) in [("debug", "debug"), ("release", "release")] {
-            let seed_path = native_units.join(name).join("seed.json");
-            fs::create_dir_all(seed_path.parent().ok_or("seed parent missing")?)?;
-            let seed = OvenNativeUnitSeed {
-                schema_version: OVEN_NATIVE_UNIT_SEED_SCHEMA_VERSION,
+            let loaf = OvenLoaf {
+                schema_version: OVEN_LOAF_SCHEMA_VERSION,
                 build_unit_identity: format!("sha256:{name}"),
+                provenance: Default::default(),
+                accounting: Default::default(),
                 compatibility: Default::default(),
                 registry_leaves: Vec::new(),
                 plan: OvenRustcArtifactManifest {
@@ -6446,8 +6515,24 @@ mod tests {
                     supporting_artifacts: Vec::new(),
                 },
             };
-            fs::write(seed_path, serde_json::to_vec(&seed)?)?;
+            let loaf_identity = crate::oven::digest_bytes(&serde_json::to_vec_pretty(&loaf)?);
+            let relative = PathBuf::from(format!(
+                "generations/fixture-generation/{}.loaf/loaf.json",
+                loaf_identity.strip_prefix("sha256:").unwrap_or(&loaf_identity)
+            ));
+            let loaf_path = loafs.join(&relative);
+            fs::create_dir_all(loaf_path.parent().ok_or("Loaf parent missing")?)?;
+            fs::write(loaf_path, serde_json::to_vec_pretty(&loaf)?)?;
+            members.push(OvenLoafEnvelopeMember {
+                label: name.to_string(),
+                profile: profile.to_string(),
+                action: "run".to_string(),
+                build_unit_identity: format!("sha256:{name}"),
+                loaf_identity,
+                path: relative,
+            });
         }
+        write_test_loaf_envelope(&loafs, members)?;
 
         let plans = compiler_suite_toolchain_data_plans(toolchain.path(), 1024 * 1024, &BTreeMap::new())?;
         let paths = plans
@@ -6456,20 +6541,20 @@ mod tests {
             .map(|file| file.relative_path)
             .collect::<Vec<_>>();
 
-        assert!(paths.iter().any(|path| path.ends_with("debug/seed.json")));
-        assert!(paths.iter().any(|path| path.ends_with("release/seed.json")));
+        assert_eq!(paths.iter().filter(|path| path.ends_with("loaf.json")).count(), 2);
         Ok(())
     }
 
     #[test]
-    fn compiler_suite_toolchain_data_rejects_seed_for_a_different_sealed_runtime()
+    fn compiler_suite_toolchain_data_rejects_loaf_for_a_different_sealed_runtime()
     -> Result<(), Box<dyn std::error::Error>> {
         let toolchain = tempfile::tempdir()?;
-        let seed_path = toolchain.path().join("share/incan/oven/native-units/debug/seed.json");
-        fs::create_dir_all(seed_path.parent().ok_or("seed parent missing")?)?;
-        let mut seed = OvenNativeUnitSeed {
-            schema_version: OVEN_NATIVE_UNIT_SEED_SCHEMA_VERSION,
+        let loafs = toolchain.path().join("share/incan/oven/loafs");
+        let mut loaf = OvenLoaf {
+            schema_version: OVEN_LOAF_SCHEMA_VERSION,
             build_unit_identity: "sha256:fixture".to_string(),
+            provenance: Default::default(),
+            accounting: Default::default(),
             compatibility: Default::default(),
             registry_leaves: Vec::new(),
             plan: OvenRustcArtifactManifest {
@@ -6490,14 +6575,32 @@ mod tests {
                 supporting_artifacts: Vec::new(),
             },
         };
-        seed.compatibility
+        loaf.compatibility
             .runtime_inputs
             .insert("runtime-lock".to_string(), "sha256:old".to_string());
-        fs::write(&seed_path, serde_json::to_vec(&seed)?)?;
+        let loaf_identity = crate::oven::digest_bytes(&serde_json::to_vec_pretty(&loaf)?);
+        let relative = PathBuf::from(format!(
+            "generations/fixture-generation/{}.loaf/loaf.json",
+            loaf_identity.strip_prefix("sha256:").unwrap_or(&loaf_identity)
+        ));
+        let loaf_path = loafs.join(&relative);
+        fs::create_dir_all(loaf_path.parent().ok_or("Loaf parent missing")?)?;
+        fs::write(&loaf_path, serde_json::to_vec_pretty(&loaf)?)?;
+        write_test_loaf_envelope(
+            &loafs,
+            vec![OvenLoafEnvelopeMember {
+                label: "fixture".to_string(),
+                profile: "debug".to_string(),
+                action: "run".to_string(),
+                build_unit_identity: "sha256:fixture".to_string(),
+                loaf_identity,
+                path: relative,
+            }],
+        )?;
         let expected = BTreeMap::from([("runtime-lock".to_string(), "sha256:new".to_string())]);
 
         let error = match compiler_suite_toolchain_data_plans(toolchain.path(), 1024 * 1024, &expected) {
-            Ok(_) => return Err("a seed from another staged SDK runtime must be refused".into()),
+            Ok(_) => return Err("a Loaf from another staged SDK runtime must be refused".into()),
             Err(error) => error,
         };
 
@@ -6509,7 +6612,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("regenerate it through the named legacy-cargo native-unit publisher")
+                .contains("regenerate it through the named legacy-cargo Loaf baker")
         );
         Ok(())
     }
@@ -6523,7 +6626,7 @@ mod tests {
         let discarded_object = target.join("aarch64-apple-darwin/debug/deps/fixture.o");
         let discarded_dep_info = target.join("aarch64-apple-darwin/debug/deps/fixture.d");
         let discarded_profile_file = target.join("aarch64-apple-darwin/debug/fixture");
-        fs::create_dir_all(retained.parent().expect("retained parent"))?;
+        fs::create_dir_all(retained.parent().ok_or("retained parent missing")?)?;
         fs::write(&retained, "retained direct-rustc artifact")?;
         fs::write(&discarded_object, "Cargo object")?;
         fs::write(&discarded_dep_info, "Cargo dep-info")?;
@@ -6774,6 +6877,19 @@ mod tests {
             payload: serde_json::to_vec(&suite)?,
             materialized_files: Vec::new(),
         })?;
+        fs::write(
+            compiler_root.path().join("src/lib.rs"),
+            "pub fn fixture_changed_without_graph_change() {}\n",
+        )?;
+        let current_receipt = receipt_native_compiler_suite(&OvenCompilerSuiteRequest::new(
+            compiler_root.path(),
+            "aarch64-apple-darwin",
+            rustc_identity(&rustc)?,
+            "debug",
+            Vec::new(),
+        ))?;
+        assert_ne!(receipt.identity, current_receipt.identity);
+        assert_eq!(receipt.build_unit_identity, current_receipt.build_unit_identity);
         let fixture = tempfile::tempdir()?;
         let cargo_marker = fixture.path().join("unexpected-cargo-invocation");
         let cargo = fixture.path().join("cargo");
@@ -6788,10 +6904,11 @@ mod tests {
 
         let result = prepare_compiler_test_suite(&OvenLegacyCargoPrepareRequest {
             store: &store,
-            receipt,
+            receipt: current_receipt,
             generated_project: fixture.path().join("unused-generated-project"),
             cargo,
             rustc,
+            sdk_inventory: None,
             domain: "compiler-suite".to_string(),
             publication_kind: OvenLegacyCargoPublicationKind::LibraryTests,
             source_evidence_key: "compiler-libtest-root".to_string(),
@@ -6815,7 +6932,7 @@ mod tests {
     fn direct_rustc_environment_captures_generated_package_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let project = tempfile::tempdir()?;
         let source = project.path().join("src/main.rs");
-        fs::create_dir_all(source.parent().expect("source parent"))?;
+        fs::create_dir_all(source.parent().ok_or("source parent missing")?)?;
         fs::write(
             project.path().join("Cargo.toml"),
             "[package]\nname = \"native_seed\"\nversion = \"7.2.1\"\n",
@@ -6847,7 +6964,7 @@ mod tests {
         let observed_debug_setting = fixture.path().join("cargo-debug-setting");
         let observed_incremental_setting = fixture.path().join("cargo-incremental-setting");
         let observed_arguments = fixture.path().join("cargo-arguments");
-        fs::create_dir_all(source.parent().expect("source parent"))?;
+        fs::create_dir_all(source.parent().ok_or("source parent missing")?)?;
         fs::write(
             project.join("Cargo.toml"),
             "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
@@ -7285,7 +7402,7 @@ mod tests {
         let binary_source = compiler_root.path().join("src/bin/generate_fixture.rs");
         fs::write(&library_source, "pub fn fixture() {}\n")?;
         fs::write(&cli_source, "fn main() {}\n")?;
-        fs::create_dir_all(binary_source.parent().expect("binary source parent"))?;
+        fs::create_dir_all(binary_source.parent().ok_or("binary source parent missing")?)?;
         fs::write(&binary_source, "fn main() {}\n")?;
         let receipt = receipt_native_compiler_suite(&OvenCompilerSuiteRequest::new(
             compiler_root.path(),
@@ -7611,7 +7728,7 @@ mod tests {
     fn publisher_accepts_doctest_roots_for_direct_rustdoc() -> Result<(), Box<dyn std::error::Error>> {
         let compiler_root = tempfile::tempdir()?;
         let source = compiler_root.path().join("src/lib.rs");
-        fs::create_dir_all(source.parent().expect("lib source parent"))?;
+        fs::create_dir_all(source.parent().ok_or("lib source parent missing")?)?;
         fs::write(&source, "//! a doctest\n")?;
         let graph = CargoUnitGraph {
             version: 1,
@@ -7640,7 +7757,7 @@ mod tests {
     fn publisher_accepts_proc_macro_test_roots_for_direct_rustc() -> Result<(), Box<dyn std::error::Error>> {
         let compiler_root = tempfile::tempdir()?;
         let source = compiler_root.path().join("crates/macros/src/lib.rs");
-        fs::create_dir_all(source.parent().expect("macro source parent"))?;
+        fs::create_dir_all(source.parent().ok_or("macro source parent missing")?)?;
         fs::write(&source, "pub fn fixture() {}\n")?;
         let graph = CargoUnitGraph {
             version: 1,
@@ -7673,10 +7790,10 @@ mod tests {
         let root_integration = compiler_root.path().join("tests/smoke.rs");
         let macro_source = compiler_root.path().join("crates/macros/src/lib.rs");
         let nested_integration = compiler_root.path().join("crates/other/tests/smoke.rs");
-        fs::create_dir_all(root_source.parent().expect("root source parent"))?;
-        fs::create_dir_all(root_integration.parent().expect("root integration parent"))?;
-        fs::create_dir_all(macro_source.parent().expect("macro source parent"))?;
-        fs::create_dir_all(nested_integration.parent().expect("nested integration parent"))?;
+        fs::create_dir_all(root_source.parent().ok_or("root source parent missing")?)?;
+        fs::create_dir_all(root_integration.parent().ok_or("root integration parent missing")?)?;
+        fs::create_dir_all(macro_source.parent().ok_or("macro source parent missing")?)?;
+        fs::create_dir_all(nested_integration.parent().ok_or("nested integration parent missing")?)?;
         fs::write(
             compiler_root.path().join("Cargo.toml"),
             "[package]\nname = \"root-package\"\nversion = \"0.1.0\"\n",

@@ -1,10 +1,10 @@
 [package]
-name = "oven_native_seed_dependencies"
+name = "oven_loaf_dependencies"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
-# This isolated manifest is a locked source inventory for the named legacy_cargo native-unit publisher. It is not a
+# This isolated manifest is a locked source inventory for the named legacy_cargo Loaf publisher. It is not a
 # workspace member and is never available to ordinary Incan build, run, or test commands.
 [workspace]
 

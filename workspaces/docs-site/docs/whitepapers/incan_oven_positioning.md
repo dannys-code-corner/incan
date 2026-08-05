@@ -30,7 +30,7 @@ review_after: "After Incan 0.5"
 
 --8<-- "_snippets/callouts/whitepaper_status.md"
 
-> **Current boundary:** supported Alpha envelopes for ordinary `incan build`, `incan test`, and `incan run` select receipt-bound, store-owned direct-`rustc` execution without Cargo on the consumer path. The named `legacy_cargo` publisher remains a temporary preparation boundary, never a normal-command fallback. Retained cold and reuse guarded compiler-suite runs each completed 3,618 of 3,618 tests across 37 green roots on the measured macOS configuration. Oven Alpha is not yet a general Cargo-free toolchain, a cross-platform performance result, or the full design described here. This paper remains future-facing; see [Oven Alpha](../tooling/explanation/oven_alpha.md) for the Alpha boundary.
+> **Current boundary:** supported Alpha envelopes for ordinary `incan build`, `incan test`, and `incan run` select receipt-bound, store-owned direct-`rustc` execution without Cargo on the consumer path. The hidden `legacy_cargo` Loaf baker is the sole Cargo-backed compatibility publisher for those envelopes, never a normal-command fallback. The repository suite exercises the same Oven runner and records both case and root aggregates under a Cargo guard. Oven Alpha is not yet a general Cargo-free toolchain, a cross-platform performance claim, or the full design described here. This paper remains future-facing; see [Oven Alpha](../tooling/explanation/oven_alpha.md) for the implemented boundary.
 
 ## Abstract
 
