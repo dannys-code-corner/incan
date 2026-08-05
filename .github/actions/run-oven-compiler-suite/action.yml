@@ -7,7 +7,7 @@ inputs:
   publisher_toolchain:
     description: Rustup toolchain that supplies Cargo only for the named legacy publisher.
     required: false
-    default: nightly
+    default: nightly-2026-03-24
 runs:
   using: composite
   steps:

@@ -210,6 +210,9 @@ jobs:
       - name: Restore CLI executable permission
         run: chmod +x target/debug/incan
       - uses: ./.github/actions/restore-sdk-provider-store
+      - uses: ./.github/actions/install-nightly-toolchain
+        with:
+          toolchain: nightly-2026-03-24
       - name: Prewarm compiled SDK providers
         # Ordinary test shards share the immutable SDK inventory and compiler-owned native units. The separate
         # cold-provider acceptance job does not download either artifact, so it still proves first publication from
@@ -225,7 +228,6 @@ jobs:
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           make test-prewarm-oven-native-units
-      - uses: ./.github/actions/install-nightly-toolchain
       - name: Run bounded Oven compiler suite beside its prepared closure
         # The suite consumes the same locally prepared provider/native-unit closure. Sending roughly 900 MiB through
         # the artifact service only to download it into another identical runner made the CI critical path transfer-
@@ -233,6 +235,7 @@ jobs:
         uses: ./.github/actions/run-oven-compiler-suite
         with:
           lane: ubuntu-latest-stable
+          publisher_toolchain: nightly-2026-03-24
       - name: Upload Linux compiler-suite evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v6
@@ -425,6 +428,9 @@ jobs:
       - name: Restore CLI executable permission
         run: chmod +x target/debug/incan
       - uses: ./.github/actions/restore-sdk-provider-store
+      - uses: ./.github/actions/install-nightly-toolchain
+        with:
+          toolchain: nightly-2026-03-24
       - name: Prewarm compiled SDK providers
         run: >-
           CARGO_BUILD_JOBS=2
@@ -437,13 +443,13 @@ jobs:
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           make test-prewarm-oven-native-units
-      - uses: ./.github/actions/install-nightly-toolchain
       - name: Run bounded Oven compiler suite beside its prepared closure
         # Keep the prepared native units local to the consumer. The direct-Rustc suite needs their immutable
         # contents, not an artifact-service round trip that can dominate the macOS critical path.
         uses: ./.github/actions/run-oven-compiler-suite
         with:
           lane: macos-latest-stable
+          publisher_toolchain: nightly-2026-03-24
       - name: Upload macOS compiler-suite evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v6
@@ -628,6 +634,9 @@ jobs:
       - name: Restore CLI executable permission
         run: chmod +x target/debug/incan
       - uses: ./.github/actions/restore-sdk-provider-store
+      - uses: ./.github/actions/install-nightly-toolchain
+        with:
+          toolchain: nightly-2026-03-24
       - name: Prewarm compiled SDK providers
         run: >-
           CARGO_BUILD_JOBS=2
@@ -641,13 +650,13 @@ jobs:
           INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
           INCAN_TEST_PREWARM_TOOLCHAIN=1.93.0
           make test-prewarm-oven-native-units
-      - uses: ./.github/actions/install-nightly-toolchain
       - name: Run bounded Oven compiler suite beside its prepared closure
         # The MSRV direct-Rustc runner consumes the just-published immutable closure in this job. Keeping it local
         # avoids making a large artifact upload/download the gate for the actual all-root execution.
         uses: ./.github/actions/run-oven-compiler-suite
         with:
           lane: ubuntu-latest-msrv-1-93-0
+          publisher_toolchain: nightly-2026-03-24
       - name: Upload MSRV compiler-suite evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v6
