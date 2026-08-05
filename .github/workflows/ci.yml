@@ -213,6 +213,8 @@ jobs:
       - uses: ./.github/actions/install-nightly-toolchain
         with:
           toolchain: nightly-2026-03-24
+      - name: Install WASI target for pinned Oven publisher
+        run: rustup target add wasm32-wasip1 --toolchain nightly-2026-03-24
       - name: Prewarm compiled SDK providers
         # Ordinary test shards share the immutable SDK inventory and compiler-owned native units. The separate
         # cold-provider acceptance job does not download either artifact, so it still proves first publication from
@@ -431,6 +433,8 @@ jobs:
       - uses: ./.github/actions/install-nightly-toolchain
         with:
           toolchain: nightly-2026-03-24
+      - name: Install WASI target for pinned Oven publisher
+        run: rustup target add wasm32-wasip1 --toolchain nightly-2026-03-24
       - name: Prewarm compiled SDK providers
         run: >-
           CARGO_BUILD_JOBS=2
@@ -637,6 +641,8 @@ jobs:
       - uses: ./.github/actions/install-nightly-toolchain
         with:
           toolchain: nightly-2026-03-24
+      - name: Install WASI target for pinned Oven publisher
+        run: rustup target add wasm32-wasip1 --toolchain nightly-2026-03-24
       - name: Prewarm compiled SDK providers
         run: >-
           CARGO_BUILD_JOBS=2
