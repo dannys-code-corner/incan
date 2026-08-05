@@ -199,7 +199,7 @@ struct OvenPreparedLibraryProfile {
 /// Outside a compiler suite, the selection is always a policy-bounded immutable store entry. A suite child may use
 /// the parent-leased, read-only compiler-native seed directly so concurrent fixture commands do not each copy the
 /// same closure into their small mutable home and race policy pruning.
-enum OvenDirectRustcPlanSelection {
+pub(crate) enum OvenDirectRustcPlanSelection {
     Stored(Box<OvenStoredDirectRustcExecutionPlan>),
     CompilerSuiteNative(Box<OvenToolchainNativeUnit>),
 }
@@ -2936,7 +2936,7 @@ fn ensure_native_unit_seed_stdlib_features(stdlib_features: &mut Vec<String>, na
 /// store partition remains leased by the parent. Those children consume that shared native seed directly; copying it
 /// into every fixture's small mutable store would consume the same capacity repeatedly and allow policy pruning to
 /// remove a just-selected plan before execution. Every other normal command retains the ordinary bounded-store path.
-fn select_oven_direct_rustc_plan(
+pub(crate) fn select_oven_direct_rustc_plan(
     store: &OvenStore,
     receipt: &crate::oven::OvenReceipt,
     registry_dependencies: &[DependencySpec],

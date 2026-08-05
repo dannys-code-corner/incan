@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,10 +24,7 @@ use crate::frontend::{lexer, parser};
 use crate::lockfile::CargoFeatureSelection;
 use crate::manifest::DependencySpec;
 use crate::oven::native_test::{OvenNativeTestRequest, run_native_test_batch};
-use crate::oven::native_unit::{
-    OvenNativeUnitSelection, OvenToolchainNativeUnit, materialize_toolchain_native_unit_for_registry_dependencies,
-    resolve_toolchain_native_unit_for_registry_dependencies, runtime_build_unit_inputs,
-};
+use crate::oven::native_unit::runtime_build_unit_inputs;
 use crate::oven::rustc::{
     OvenTrustedDirectRustcTargetRequest, attach_caller_owned_rustc_libraries, bake_trusted_direct_rustc_test,
     materialize_declared_rust_libraries_with_selected_path_authority, resolve_active_rustc, rustc_host_target,
@@ -61,12 +57,7 @@ pub(super) struct TestExecutionOptions {
 ///
 /// A compiler-suite child receives a parent-leased immutable compiler-data root. It uses that seed directly instead
 /// of publishing a duplicate closure into its output-owned store; ordinary tests keep the bounded-store path.
-enum OvenTestPlanSelection {
-    /// The receipt-selected store payload and its active lease, retained through materialization, baking, and test
-    /// execution. A plan identity alone would reopen a prune race between those steps.
-    Stored(Box<crate::cli::commands::build::OvenStoredDirectRustcExecutionPlan>),
-    CompilerSuiteNative(Box<OvenToolchainNativeUnit>),
-}
+type OvenTestPlanSelection = crate::cli::commands::build::OvenDirectRustcPlanSelection;
 
 /// Validate strict Incan lock policy once before Oven schedules any generated native test harnesses.
 ///
@@ -2533,76 +2524,20 @@ fn run_file_tests_batch_oven(
         Ok(store) => store,
         Err(error) => return failure(error.message),
     };
-    let plan_selection = if env::var_os("INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION").is_some_and(|value| value == "1") {
-        let toolchain_data_root = match env::var_os("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .filter(|path| path.is_dir())
-        {
-            Some(path) => path,
-            None => {
-                return failure(
-                    "compiler-suite native test execution requires a readable immutable toolchain-data root"
-                        .to_string(),
-                );
-            }
-        };
-        match resolve_toolchain_native_unit_for_registry_dependencies(
-            &receipt,
-            OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
-            &inline_path_dependencies,
-        ) {
-            Ok(Some(native)) if native.artifact_root.starts_with(&toolchain_data_root) => {
-                OvenTestPlanSelection::CompilerSuiteNative(Box::new(native))
-            }
-            Ok(Some(_)) => {
-                return failure(
-                    "compiler-suite native test selection escaped its immutable toolchain-data root".to_string(),
-                );
-            }
-            Ok(None) => {
-                return failure(format!(
-                    "Oven Alpha has no compatible native test provider/dependency unit. Generated harness: {}; receipt: {}. `incan test` will not invoke Cargo; the active toolchain does not ship a compatible Oven-native unit",
-                    generated_root.display(),
-                    receipt_path.display(),
-                ));
-            }
-            Err(error) => return failure(error.to_string()),
+    let plan_selection = match crate::cli::commands::build::select_oven_direct_rustc_plan(
+        &store,
+        &receipt,
+        &inline_path_dependencies,
+    ) {
+        Ok(Some(selection)) => selection,
+        Ok(None) => {
+            return failure(format!(
+                "Oven Alpha has no compatible native test provider/dependency unit. Generated harness: {}; receipt: {}. `incan test` will not invoke Cargo; the active toolchain does not ship a compatible Oven-native unit",
+                generated_root.display(),
+                receipt_path.display(),
+            ));
         }
-    } else {
-        let select_stored = || {
-            crate::cli::commands::build::select_receipt_direct_rustc_execution_plan(&store, &receipt)
-                .map(|selected| selected.map(|selected| OvenTestPlanSelection::Stored(Box::new(selected))))
-        };
-        match select_stored() {
-            Ok(Some(selection)) => selection,
-            Ok(None) => match materialize_toolchain_native_unit_for_registry_dependencies(
-                &store,
-                &receipt,
-                OvenNativeUnitSelection::CompilerOwnedProviderSuperset,
-                &inline_path_dependencies,
-            ) {
-                Ok(Some(_)) => match select_stored() {
-                    Ok(Some(selection)) => selection,
-                    Ok(None) => {
-                        return failure(
-                            "the receipt-compatible Oven native unit was reclaimed before test execution acquired its lease"
-                                .to_string(),
-                        );
-                    }
-                    Err(error) => return failure(error.message),
-                },
-                Ok(None) => {
-                    return failure(format!(
-                        "Oven Alpha has no compatible native test provider/dependency unit. Generated harness: {}; receipt: {}. `incan test` will not invoke Cargo; the active toolchain does not ship a compatible Oven-native unit",
-                        generated_root.display(),
-                        receipt_path.display(),
-                    ));
-                }
-                Err(error) => return failure(error.to_string()),
-            },
-            Err(error) => return failure(error.message),
-        }
+        Err(error) => return failure(error.message),
     };
     let selection_elapsed = selection_start.elapsed();
 
