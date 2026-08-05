@@ -20,6 +20,11 @@ INCAN_TEST_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES ?= 2684354560
 # Aggregate physical limit for the named compiler-owned native-unit publisher. Its individual seeds retain their own
 # explicit 768 MiB logical and 1 GiB physical allowances.
 INCAN_TEST_OVEN_NATIVE_UNIT_MAX_BYTES ?= 2147483648
+# Keep local publisher and suite toolchains aligned with CI: stable Cargo owns native-unit preparation, while
+# nightly Cargo owns the explicit compiler-suite unit-graph publisher. These are publisher boundaries only; normal
+# Oven build/run/test execution remains direct-rustc and never invokes Cargo.
+INCAN_TEST_PREWARM_TOOLCHAIN ?= stable
+INCAN_TEST_SUITE_TOOLCHAIN ?= nightly
 TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
 	INCAN_GENERATED_CARGO_TARGET_DIR="$(INCAN_TEST_GENERATED_CARGO_TARGET_DIR)" \
 	INCAN_INTERNAL_SDK_PROVIDER_STORE="$(INCAN_TEST_SDK_PROVIDER_STORE)" \
@@ -273,7 +278,7 @@ test-oven: test-prewarm-oven-native-units
 			else echo "Oven suite failed; retaining caller output at $$suite_output" >&2; fi; \
 		}; \
 		trap cleanup_suite_output EXIT; \
-		$(TEST_RUNTIME_ENV) CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
+		$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
 		bash scripts/run_oven_compiler_suite.sh \
 			--incan "$(CURDIR)/target/debug/incan" \
 			--compiler-root "$(CURDIR)" \
@@ -300,9 +305,9 @@ test-prewarm-sdk:
 	@if [ "$(INCAN_TEST_COMPILER_ALREADY_BUILT)" = "1" ]; then \
 		test -x "$(CURDIR)/target/debug/incan"; \
 	else \
-		$(TEST_ENV) cargo build --features lsp; \
+		$(TEST_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_PREWARM_TOOLCHAIN)" cargo build --features lsp; \
 	fi
-	@$(TEST_ENV) CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
+	@$(TEST_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_PREWARM_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
 		INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
 		INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
 		INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)" \
@@ -313,7 +318,7 @@ test-prewarm-sdk:
 .PHONY: test-prewarm-oven-native-units
 test-prewarm-oven-native-units: test-prewarm-sdk
 	@echo "\033[1mPreparing compiler-owned Oven native test units...\033[0m"
-	@$(TEST_ENV) CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
+	@$(TEST_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_PREWARM_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
 		INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
 		INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
 		INCAN_SDK_INVENTORY="$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json" \

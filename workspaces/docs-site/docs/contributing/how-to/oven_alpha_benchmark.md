@@ -85,6 +85,10 @@ than averaging it into a performance claim.
 The repository suite uses the same bounded-store policy but has an additional, explicitly named preparation seam:
 `scripts/run_oven_compiler_suite.sh`. Invoke it with the current checkout, prewarmed SDK-provider store, compiler-owned
 native-unit layout, and the limits used by `make test-oven`; the `test-oven` target is the canonical argument list.
+The Makefile pins the publisher split used by CI: stable Cargo prepares native units and nightly Cargo supplies the
+publisher-only `-Z unit-graph` capability for the stored compiler suite. Normal Oven consumers remain direct-rustc.
+For a local full run, use `make test-verbose`; override `INCAN_TEST_PREWARM_TOOLCHAIN` or
+`INCAN_TEST_SUITE_TOOLCHAIN` only when reproducing a documented alternate toolchain matrix.
 For benchmark evidence, invoke the script directly with a retained, unique `--output` directory instead of the
 Make target's disposable success directory.
 
