@@ -193,7 +193,21 @@ capture_storage_junction() {
         return 1
     fi
     cp "$output_dir/store_snapshot_$junction.log" "$junction_dir/store-inspection.json"
-    du -sk "$store_root" "$output_dir" > "$junction_dir/disk-usage-kib.tsv"
+    # A nested normal command may remove a temporary file while recursive `du` walks the caller-owned output tree.
+    # Retry the physical snapshot so a transient vanished-file race cannot turn a successful benchmark into a
+    # missing-evidence failure.
+    local disk_status=1
+    for _ in 1 2 3 4 5; do
+        if du -sk "$store_root" "$output_dir" > "$junction_dir/disk-usage-kib.tsv" 2>/dev/null; then
+            disk_status=0
+            break
+        fi
+        sleep 1
+    done
+    if [ "$disk_status" -ne 0 ]; then
+        echo "failed to capture stable physical disk usage at benchmark junction $junction" >&2
+        return 1
+    fi
     printf '%s\n' "$junction" >> "$junction_tsv"
 }
 
