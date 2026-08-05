@@ -67,6 +67,13 @@ pub const OVEN_RECEIPT_SCHEMA_VERSION: u32 = 3;
 /// Compiler-owned, project-relative destination for a default Oven receipt.
 pub const DEFAULT_RECEIPT_RELATIVE_PATH: &str = ".incan/oven/receipt.json";
 
+/// Default aggregate physical allocation retained by an everyday Alpha Oven store.
+pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Default physical allocation cap for one compatibility domain.
+pub const DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
+/// Default logical artifact-byte cap for one compatibility domain.
+pub const DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES: u64 = 768 * 1024 * 1024;
+
 /// Explicit, portable build facts for one frozen-project import.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OvenImportRequest {

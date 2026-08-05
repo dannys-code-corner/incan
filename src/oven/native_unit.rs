@@ -39,9 +39,6 @@ pub const OVEN_NATIVE_UNIT_SEED_SCHEMA_VERSION: u32 = 10;
 /// trusted standard-provider identity as the SDK publisher, but it never authorizes Cargo for a caller command.
 pub(crate) const OVEN_NATIVE_UNIT_SEED_ENV: &str = "INCAN_OVEN_NATIVE_UNIT_SEED";
 const TOOLCHAIN_SEED_RELATIVE_ROOT: &str = "share/incan/oven/native-units";
-const BASE_UNIT_MAX_PHYSICAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const BASE_UNIT_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
-const BASE_UNIT_MAX_DOMAIN_LOGICAL_BYTES: u64 = 768 * 1024 * 1024;
 static NATIVE_UNIT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Owner-scoped staging directory that is removed unless a verified seed is atomically published from it.
@@ -554,9 +551,9 @@ pub fn prepare_native_unit_seed_from_generated_project(
     let store = OvenStore::new(
         store_root.path(),
         super::store::OvenStoreLimits::new(
-            BASE_UNIT_MAX_PHYSICAL_BYTES,
-            BASE_UNIT_MAX_DOMAIN_PHYSICAL_BYTES,
-            BASE_UNIT_MAX_DOMAIN_LOGICAL_BYTES,
+            super::DEFAULT_OVEN_MAX_PHYSICAL_BYTES,
+            super::DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES,
+            super::DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES,
         ),
     );
     let generated_source = generated_project.join("src/main.rs");

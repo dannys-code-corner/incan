@@ -46,19 +46,11 @@ use crate::oven::store::{
     OvenStoreLease, OvenStoreLimits,
 };
 use crate::oven::{
+    DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES, DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES, DEFAULT_OVEN_MAX_PHYSICAL_BYTES,
     OVEN_COMPILER_TEST_PROFILE, OvenBuildIntent, OvenCompilerSuiteRequest, OvenImportRequest, OvenReceipt,
     default_receipt_path, digest_bytes, import_frozen_project, receipt_native_compiler_suite, write_receipt,
 };
 
-/// Default aggregate physical allocation retained by an everyday Alpha Oven store.
-///
-/// Large compiler-suite or toolchain-publisher experiments must opt into a larger explicit policy; they must not
-/// silently turn the normal developer store into a multi-gigabyte artifact cache.
-pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-/// Default physical allocation cap for one compatibility domain.
-pub const DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
-/// Default logical artifact-byte cap for one compatibility domain.
-pub const DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES: u64 = 768 * 1024 * 1024;
 /// Environment override for aggregate physical allocation policy.
 pub const OVEN_MAX_PHYSICAL_BYTES_ENV: &str = "INCAN_OVEN_MAX_PHYSICAL_BYTES";
 /// Environment override for per-domain physical allocation policy.
