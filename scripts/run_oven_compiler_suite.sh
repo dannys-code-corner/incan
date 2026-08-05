@@ -130,7 +130,21 @@ capture_store_junction() {
     if [ "$status" -ne 0 ]; then
         return "$status"
     fi
-    du -sk "$store" "$output" > "$junction_dir/disk-usage-kib.tsv"
+    # Nested compiler tests can remove their caller-owned temporary files while a recursive `du` walk is in
+    # progress. Retry the snapshot until the output tree is quiescent so a transient vanished-file race cannot erase
+    # the complete suite evidence after a successful direct-rustc replay.
+    local disk_status=1
+    for _ in 1 2 3 4 5; do
+        if du -sk "$store" "$output" > "$junction_dir/disk-usage-kib.tsv" 2>/dev/null; then
+            disk_status=0
+            break
+        fi
+        sleep 1
+    done
+    if [ "$disk_status" -ne 0 ]; then
+        echo "failed to capture stable physical disk usage at Oven junction $junction" >&2
+        return 1
+    fi
     printf '%s\n' "$junction" >> "$junction_tsv"
 }
 
