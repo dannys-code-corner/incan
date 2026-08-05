@@ -2618,7 +2618,8 @@ fn compiler_suite_artifact_catalog(
                     message: format!("{} must contain regular non-symlink files only", path.display()),
                 });
             }
-            found |= insert_compiler_suite_catalog_artifact(staging, &mut all_files, &mut by_source_path, &path)?;
+            found |=
+                insert_compiler_suite_catalog_artifact(staging, &mut all_files, &mut by_source_path, &path, false)?;
         }
         if found {
             dependency_search_paths.push(directory_relative);
@@ -2628,7 +2629,27 @@ fn compiler_suite_artifact_catalog(
     // Materialize only the explicit compiler-artifact paths recorded by the named publisher; scanning that broad
     // profile directory would accidentally admit Cargo bookkeeping and executables.
     for path in direct_artifact_files {
-        insert_compiler_suite_catalog_artifact(staging, &mut all_files, &mut by_source_path, path)?;
+        // These paths already passed the Cargo-recorded build-output identity check in
+        // `compiler_suite_output_artifact_paths`. A current Cargo can place a real compiler artifact below
+        // `oven-test/build/<crate>/<identity>/out`; retain only that verified record, never a directory scan of
+        // arbitrary build-script output.
+        let cargo_reported_build_output = compiler_suite_cargo_build_output(path);
+        if insert_compiler_suite_catalog_artifact(staging, &mut all_files, &mut by_source_path, path, true)?
+            && cargo_reported_build_output
+        {
+            // A direct `--extern` points at the target library, but Rustc resolves that library's own closure via
+            // `-L dependency`. Cargo 1.99 gives each such library its own `out` directory instead of one shared
+            // `deps` directory, so retain only the parent directory of every already-verified JSON record.
+            let source_path = verified_regular_file(path, "compiler-suite Cargo artifact")?;
+            let parent = source_path.parent().ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field: "compiler-suite Cargo artifact",
+                message: format!("{} has no parent directory", source_path.display()),
+            })?;
+            let parent_relative = relative_path(staging, parent)?;
+            if !dependency_search_paths.contains(&parent_relative) {
+                dependency_search_paths.push(parent_relative);
+            }
+        }
     }
     if all_files.is_empty() {
         return Err(OvenLegacyCargoError::MissingDirectArtifact {
@@ -2684,6 +2705,7 @@ fn insert_compiler_suite_catalog_artifact(
     all_files: &mut BTreeMap<String, String>,
     by_source_path: &mut BTreeMap<PathBuf, (String, String)>,
     path: &Path,
+    permit_cargo_reported_build_output: bool,
 ) -> Result<bool, OvenLegacyCargoError> {
     let metadata = fs::symlink_metadata(path).map_err(|source| OvenLegacyCargoError::Io {
         path: path.to_path_buf(),
@@ -2702,7 +2724,9 @@ fn insert_compiler_suite_catalog_artifact(
                 field: "compiler-suite Cargo artifact",
                 message: format!("{} has a non-UTF-8 file name", path.display()),
             })?;
-    if !is_direct_rustc_artifact(file_name) || compiler_suite_cargo_build_output(path) {
+    if !is_direct_rustc_artifact(file_name)
+        || (!permit_cargo_reported_build_output && compiler_suite_cargo_build_output(path))
+    {
         return Ok(false);
     }
     let source_path = verified_regular_file(path, "compiler-suite Cargo artifact")?;
@@ -2765,6 +2789,7 @@ fn compiler_suite_artifact_index(
                 path.file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(is_direct_rustc_artifact)
+                    && compiler_suite_cargo_reported_direct_artifact(&artifact.target.name, path)
             })
             .map(|path| {
                 fs::canonicalize(&path).map_err(|source| OvenLegacyCargoError::Io {
@@ -2774,7 +2799,6 @@ fn compiler_suite_artifact_index(
             })
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
-            .filter(|path| !compiler_suite_cargo_build_output(path))
             .collect::<Vec<_>>();
         if !files.is_empty() {
             let mut platforms = files
@@ -2818,9 +2842,10 @@ fn compiler_suite_artifact_index(
 
 /// Read the exact compiler/linker files Cargo reported for one named publisher invocation.
 ///
-/// Cargo can place a package's primary `.rlib` beside the profile directory while dependencies appear below `deps/`.
-/// The catalog admits these exact reported files only after verifying that each one is a regular path below publisher
-/// staging, so this does not broaden the trusted filesystem scope to an arbitrary Cargo target.
+/// Cargo can place a package's primary `.rlib` beside the profile directory while dependencies appear below `deps`.
+/// Newer Cargo releases can instead report a compiler library below a per-crate `build/<crate>/<identity>/out`
+/// directory. The catalog admits the latter only when it is an exact Cargo-recorded, crate-and-identity-matching
+/// compiler artifact, then verifies it is a regular path below publisher staging.
 fn compiler_suite_output_artifact_paths(output: &CargoInvocationOutput) -> Result<Vec<PathBuf>, OvenLegacyCargoError> {
     let mut paths = BTreeSet::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -2835,6 +2860,7 @@ fn compiler_suite_output_artifact_paths(output: &CargoInvocationOutput) -> Resul
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(is_direct_rustc_artifact)
+                || !compiler_suite_cargo_reported_direct_artifact(&artifact.target.name, &path)
             {
                 continue;
             }
@@ -2842,9 +2868,6 @@ fn compiler_suite_output_artifact_paths(output: &CargoInvocationOutput) -> Resul
                 path: path.clone(),
                 source,
             })?;
-            if compiler_suite_cargo_build_output(&path) {
-                continue;
-            }
             paths.insert(path);
         }
     }
@@ -4859,15 +4882,15 @@ fn is_direct_rustc_artifact(name: &str) -> bool {
         .any(|extension| name.ends_with(extension))
 }
 
-/// Cargo build-script output is an implementation detail of the named publisher, never a direct-Rustc crate input.
+/// Identify Cargo's `oven-test/build/<package>/<identity>/out` output layout.
 ///
-/// A compiler-artifact record can name an `.rlib` written below Cargo's `oven-test/build/<package>/.../out` layout.
-/// It may resemble a dependency library by filename, but Rustc cannot use it as the package's resolved `--extern`;
-/// the compatible library lives in the sealed `deps` closure. Retaining or selecting it would produce a late E0463
-/// instead of a deterministic receipt-bound dependency plan. The compiler-suite publisher always uses the named
-/// `oven-test` profile, so fence the match to that profile rather than treating an unrelated checkout component named
-/// `build` as a Cargo implementation detail. Cargo can add an identity directory between the package and `out`, so
-/// require the final parent to be `out` instead of assuming a fixed number of path components.
+/// An arbitrary file below this path is still build-script implementation detail, never a direct-Rustc crate input.
+/// Newer Cargo releases can report a real compiler artifact in the same layout, so callers admitting a Cargo JSON
+/// record must additionally prove its package, target, and identity-shaped filename in
+/// `compiler_suite_cargo_reported_direct_artifact`. The compiler-suite publisher always uses the named `oven-test`
+/// profile, so fence the match to that profile rather than treating an unrelated checkout component named `build` as
+/// a Cargo implementation detail. Cargo can add an identity directory between the package and `out`, so require the
+/// final parent to be `out` instead of assuming a fixed number of path components.
 fn compiler_suite_cargo_build_output(path: &Path) -> bool {
     let components = path.components().collect::<Vec<_>>();
     let Some((_, parent_components)) = components.split_last() else {
@@ -4879,6 +4902,47 @@ fn compiler_suite_cargo_build_output(path: &Path) -> bool {
         && parent_components
             .windows(2)
             .any(|components| components[0].as_os_str() == "oven-test" && components[1].as_os_str() == "build")
+}
+
+/// Accept one direct-Rustc compiler artifact Cargo explicitly reported from its newer build-output layout.
+///
+/// Cargo 1.99 writes normal dependency libraries as
+/// `oven-test/build/<package>/<identity>/out/lib<target>-<identity>.<linker-extension>`. A build script may also
+/// write files below `out`, but it cannot pass this structural identity test unless Cargo has presented it as that
+/// target's compiler artifact. Directory scans keep rejecting all `build` output; this predicate is used only for
+/// the JSON-recorded file list from the named publisher.
+fn compiler_suite_cargo_reported_direct_artifact(target_name: &str, path: &Path) -> bool {
+    if !compiler_suite_cargo_build_output(path) {
+        return true;
+    }
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let parent_components = parent.components().collect::<Vec<_>>();
+    let Some(out_index) = parent_components
+        .iter()
+        .rposition(|component| component.as_os_str() == "out")
+    else {
+        return false;
+    };
+    if out_index + 1 != parent_components.len() || out_index < 3 {
+        return false;
+    }
+    let identity = parent_components[out_index - 1].as_os_str().to_str();
+    let package = parent_components[out_index - 2].as_os_str().to_str();
+    let Some((identity, package)) = identity.zip(package) else {
+        return false;
+    };
+    let normalize = |value: &str| value.chars().filter(char::is_ascii_alphanumeric).collect::<String>();
+    if identity.is_empty() || normalize(package) != normalize(target_name) {
+        return false;
+    }
+    [".rlib", ".dylib", ".so", ".dll", ".a", ".lib"]
+        .iter()
+        .any(|extension| file_name == format!("lib{}-{identity}{extension}", target_name.replace('-', "_")))
 }
 
 /// Read direct dependency aliases from the generated root `Cargo.toml` without asking Cargo for metadata.
@@ -7117,7 +7181,8 @@ mod tests {
     }
 
     #[test]
-    fn publisher_excludes_build_script_output_from_direct_rustc_artifacts() -> Result<(), Box<dyn std::error::Error>> {
+    fn publisher_excludes_unmatched_build_output_but_retains_cargo_reported_compiler_artifacts()
+    -> Result<(), Box<dyn std::error::Error>> {
         let staging = tempfile::tempdir()?;
         // The parent `build` component is deliberately unrelated to Cargo's build-script layout. The direct
         // dependency must remain admissible while both supported nested build-script `out` layouts are excluded.
@@ -7130,13 +7195,17 @@ mod tests {
             workspace_root.join("target/x86_64-unknown-linux-gnu/oven-test/build/serde-fixture/out");
         let build_output_with_identity_directory =
             workspace_root.join("target/x86_64-unknown-linux-gnu/oven-test/build/serde-fixture/abc123/out");
+        let cargo_reported_output_directory =
+            workspace_root.join("target/x86_64-unknown-linux-gnu/oven-test/build/serde/real123/out");
         fs::create_dir_all(&dependency_directory)?;
         fs::create_dir_all(&build_output_directory)?;
         fs::create_dir_all(&build_output_with_identity_directory)?;
+        fs::create_dir_all(&cargo_reported_output_directory)?;
         let resolved_library = dependency_directory.join("libserde-resolved.rlib");
         let build_output_library = build_output_directory.join("libserde-build-output.rlib");
         let build_output_with_identity_library =
             build_output_with_identity_directory.join("libserde-build-output-with-identity.rlib");
+        let cargo_reported_library = cargo_reported_output_directory.join("libserde-real123.rlib");
         let unrelated_build_output = workspace_root.join("fixtures/out/libfixture.rlib");
         assert!(!compiler_suite_cargo_build_output(&unrelated_build_output));
         assert!(compiler_suite_cargo_build_output(&build_output_library));
@@ -7147,6 +7216,7 @@ mod tests {
             &build_output_with_identity_library,
             "not a Cargo dependency artifact with an identity directory",
         )?;
+        fs::write(&cargo_reported_library, "Cargo-reported serde compiler artifact")?;
         let artifact_message = serde_json::json!({
             "reason": "compiler-artifact",
             "package_id": "serde 1.0.0 (registry+https://example.invalid)",
@@ -7156,6 +7226,7 @@ mod tests {
                 resolved_library,
                 build_output_library,
                 build_output_with_identity_library,
+                cargo_reported_library,
             ],
             "profile": { "test": false },
         });
@@ -7166,17 +7237,36 @@ mod tests {
         let artifact_index = compiler_suite_artifact_index(&output, "x86_64-unknown-linux-gnu")?;
         let indexed = artifact_index.values().flatten().collect::<Vec<_>>();
         let canonical_resolved_library = fs::canonicalize(&resolved_library)?;
-        assert_eq!(indexed, vec![&canonical_resolved_library]);
+        let canonical_cargo_reported_library = fs::canonicalize(&cargo_reported_library)?;
+        let canonical_build_output_library = fs::canonicalize(&build_output_library)?;
+        let canonical_build_output_with_identity_library = fs::canonicalize(&build_output_with_identity_library)?;
+        assert_eq!(
+            indexed,
+            vec![&canonical_cargo_reported_library, &canonical_resolved_library]
+        );
         let reported = compiler_suite_output_artifact_paths(&output)?;
-        assert_eq!(reported, vec![canonical_resolved_library]);
+        assert_eq!(
+            reported,
+            vec![canonical_cargo_reported_library.clone(), canonical_resolved_library]
+        );
         let catalog = compiler_suite_artifact_catalog(&workspace_root, &[dependency_directory], &reported)?;
-        assert_eq!(catalog.materialized_files.len(), 1);
+        assert_eq!(catalog.materialized_files.len(), 2);
+        assert!(
+            catalog
+                .closure
+                .dependency_search_paths
+                .contains(&"target/x86_64-unknown-linux-gnu/oven-test/build/serde/real123/out".to_string())
+        );
         assert!(
             catalog
                 .materialized_files
                 .iter()
-                .all(|artifact| !artifact.relative_path.contains("/build/"))
+                .any(|artifact| artifact.source_path == canonical_cargo_reported_library)
         );
+        assert!(catalog.materialized_files.iter().all(|artifact| {
+            artifact.source_path != canonical_build_output_library
+                && artifact.source_path != canonical_build_output_with_identity_library
+        }));
         Ok(())
     }
 
