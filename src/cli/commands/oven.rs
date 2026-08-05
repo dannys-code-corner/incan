@@ -1395,12 +1395,25 @@ fn prepare_compiler_suite_child<'a>(
     let prefer_dynamic = target.target_kind == "proc-macro"
         || compiler_suite_workspace_outputs_include_dylib(&workspace_library_outputs);
     let mut target_environment = environment.clone();
+    if !compiler_suite_target_requires_generated_rust_closure(&target.source_relative_path) {
+        compiler_suite_remove_generated_rust_closure(&mut target_environment);
+    }
     let mut binary_compile_environment = BTreeMap::new();
     // A parallel child may itself invoke `incan`. Give that nested command an isolated mutable home while it reads
     // the shared, leased provider store through the receipt-bound environment above.
     target_environment.insert(
         "INCAN_HOME".to_string(),
         compiler_suite_environment_path(&output_directory.join("incan-home"))?
+            .display()
+            .to_string(),
+    );
+    // Nested normal commands may still use generated-project state for source and release-asset fixtures.  A
+    // scheduler-wide target directory lets otherwise independent suite roots overwrite that mutable state while
+    // they run in parallel.  Keep it with the caller-owned child output directory just like INCAN_HOME; this does
+    // not affect the parent-leased immutable native provider closure.
+    target_environment.insert(
+        "INCAN_GENERATED_CARGO_TARGET_DIR".to_string(),
+        compiler_suite_environment_path(&output_directory.join("generated-cargo-target"))?
             .display()
             .to_string(),
     );
@@ -1436,6 +1449,21 @@ fn prepare_compiler_suite_child<'a>(
         foundation_references,
         foundations,
     })
+}
+
+/// Return whether a stored root compiles generated Rust through the scheduler-provided direct-rustc closure.
+///
+/// The closure is needed by every root whose nested normal command may consume the direct generated-Rust artifacts.
+/// The toolchain-installer root is the one deliberate exception: its Homebrew smoke launches a self-contained
+/// fixture compiler and inheriting the large closure overflows that nested process.
+fn compiler_suite_target_requires_generated_rust_closure(source_relative_path: &str) -> bool {
+    source_relative_path != "tests/toolchain_installer_tests.rs"
+}
+
+/// Remove direct generated-Rust closure details while retaining the suite marker used by Cargo-free fixture paths.
+fn compiler_suite_remove_generated_rust_closure(environment: &mut BTreeMap<String, String>) {
+    environment
+        .retain(|key, _| !key.starts_with("INCAN_OVEN_COMPILER_SUITE_") || key == "INCAN_OVEN_COMPILER_SUITE_RUSTC");
 }
 
 /// Compile and execute prepared compiler-suite roots with a bounded worker pool.
@@ -1627,14 +1655,32 @@ fn run_prepared_compiler_suite_child(
     }
 }
 
-/// Bound direct compiler-suite root parallelism while allowing a release machine to select a smaller safe value.
+/// Derive a root-worker count that leaves capacity for each root's libtest and nested Incan children.
+///
+/// Each direct-Rustc root can itself run a test harness with internal parallelism and launch normal Incan commands.
+/// Running one outer worker per CPU therefore oversubscribes constrained CI hosts despite being technically bounded.
+/// Reserve headroom while still scaling with the host: one core runs one worker, 2--3 cores run two, 4--7 run three,
+/// and larger hosts run four. An explicit operator override remains available for measured release-machine tuning.
+fn compiler_suite_auto_parallel_jobs(logical_cores: usize) -> usize {
+    match logical_cores {
+        0 | 1 => 1,
+        2..=3 => 2,
+        4..=7 => 3,
+        _ => 4,
+    }
+}
+
+/// Bound direct compiler-suite root parallelism while allowing a release machine to select a measured safe value.
 fn compiler_suite_parallel_jobs(child_count: usize) -> usize {
     let configured = env::var(OVEN_COMPILER_TEST_JOBS_ENV)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0);
-    let detected = thread::available_parallelism().map(usize::from).unwrap_or(1).min(8);
-    configured.unwrap_or(detected).min(child_count).max(1)
+    let detected = thread::available_parallelism().map(usize::from).unwrap_or(1);
+    configured
+        .unwrap_or_else(|| compiler_suite_auto_parallel_jobs(detected))
+        .min(child_count)
+        .max(1)
 }
 
 /// Compile/inventory/execute every receipt-bound Rustc or Rustdoc workspace test target while the suite lease is
@@ -3509,9 +3555,10 @@ mod tests {
         DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES, DEFAULT_OVEN_MAX_PHYSICAL_BYTES, OvenImportCommandOptions,
         OvenPlanPublishCommandOptions, OvenRunCommandOptions, OvenStoreCommandOptions, OvenTestCommandOptions,
         attach_compiler_suite_target_workspace_libraries, bake_planned_compiler_suite_binaries,
-        bake_planned_compiler_suite_workspace_libraries, compiler_suite_cli_output, compiler_suite_directory,
-        compiler_suite_environment, compiler_suite_environment_path, compiler_suite_file,
-        compiler_suite_selected_shard_references, default_rustup_home, default_store_root, oven_import,
+        bake_planned_compiler_suite_workspace_libraries, compiler_suite_auto_parallel_jobs, compiler_suite_cli_output,
+        compiler_suite_directory, compiler_suite_environment, compiler_suite_environment_path, compiler_suite_file,
+        compiler_suite_remove_generated_rust_closure, compiler_suite_selected_shard_references,
+        compiler_suite_target_requires_generated_rust_closure, default_rustup_home, default_store_root, oven_import,
         oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path, prepare_compiler_suite_child,
         resolve_limits, resolve_limits_with_environment, run_compiler_suite_children_with_leases_retained,
         run_prepared_compiler_suite_children, select_compiler_suite_shards, write_compiler_suite_report,
@@ -4030,6 +4077,55 @@ mod tests {
     }
 
     #[test]
+    fn compiler_suite_worker_budget_is_hardware_aware_and_bounded() {
+        assert_eq!(compiler_suite_auto_parallel_jobs(0), 1);
+        assert_eq!(compiler_suite_auto_parallel_jobs(1), 1);
+        assert_eq!(compiler_suite_auto_parallel_jobs(2), 2);
+        assert_eq!(compiler_suite_auto_parallel_jobs(3), 2);
+        assert_eq!(compiler_suite_auto_parallel_jobs(4), 3);
+        assert_eq!(compiler_suite_auto_parallel_jobs(7), 3);
+        assert_eq!(compiler_suite_auto_parallel_jobs(8), 4);
+        assert_eq!(compiler_suite_auto_parallel_jobs(64), 4);
+    }
+
+    #[test]
+    fn compiler_suite_limits_generated_rust_closure_to_its_consumers() {
+        assert!(compiler_suite_target_requires_generated_rust_closure("src/lib.rs"));
+        assert!(compiler_suite_target_requires_generated_rust_closure(
+            "tests/generated_rust_native_consumer_tests.rs"
+        ));
+        assert!(compiler_suite_target_requires_generated_rust_closure(
+            "tests/integration_tests.rs"
+        ));
+        assert!(!compiler_suite_target_requires_generated_rust_closure(
+            "tests/toolchain_installer_tests.rs"
+        ));
+
+        let mut environment = BTreeMap::from([
+            ("INCAN_OVEN_COMPILER_SUITE_RUSTC".to_string(), "rustc".to_string()),
+            ("INCAN_OVEN_COMPILER_SUITE_STDLIB".to_string(), "stdlib".to_string()),
+            (
+                "INCAN_OVEN_COMPILER_SUITE_VOCAB_EXTERN_0_PATH".to_string(),
+                "vocab-extern".to_string(),
+            ),
+            ("INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION".to_string(), "1".to_string()),
+        ]);
+
+        compiler_suite_remove_generated_rust_closure(&mut environment);
+
+        assert_eq!(
+            environment.get("INCAN_OVEN_COMPILER_SUITE_RUSTC"),
+            Some(&"rustc".to_string())
+        );
+        assert!(!environment.contains_key("INCAN_OVEN_COMPILER_SUITE_STDLIB"));
+        assert!(!environment.contains_key("INCAN_OVEN_COMPILER_SUITE_VOCAB_EXTERN_0_PATH"));
+        assert_eq!(
+            environment.get("INCAN_INTERNAL_OVEN_NATIVE_UNIT_EXECUTION"),
+            Some(&"1".to_string())
+        );
+    }
+
+    #[test]
     fn compiler_suite_environment_paths_are_absolute_before_nested_tests_change_directory()
     -> Result<(), Box<dyn std::error::Error>> {
         let relative = Path::new("target/compiler-suite-relative-environment-value");
@@ -4218,6 +4314,13 @@ fn planned_suite_child_uses_sdk_inventory() -> Result<(), String> {
     if std::path::Path::new(&suite_home).file_name().and_then(|name| name.to_str()) != Some("incan-home") {
         return Err("stored child must receive its caller-owned suite home".to_string());
     }
+    let generated_target = std::env::var("INCAN_GENERATED_CARGO_TARGET_DIR")
+        .map_err(|error| format!("generated target: {error}"))?;
+    if std::path::Path::new(&generated_target).file_name().and_then(|name| name.to_str())
+        != Some("generated-cargo-target")
+    {
+        return Err("stored child must receive its isolated generated target directory".to_string());
+    }
     let native_root = std::env::var("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT")
         .map_err(|error| format!("native-unit root: {error}"))?;
     if !std::path::Path::new(&native_root).join("share/incan/oven/native-units").is_dir() {
@@ -4398,6 +4501,22 @@ fn planned_suite_child_uses_sdk_inventory() -> Result<(), String> {
                 .map(|path| path.display().to_string())
                 .as_ref(),
             "the worker must retain the exact direct helper-binary compile environment"
+        );
+        let generated_target = Path::new(
+            prepared_child
+                .environment
+                .get("INCAN_GENERATED_CARGO_TARGET_DIR")
+                .ok_or("prepared child has no isolated generated target directory")?,
+        );
+        assert!(
+            generated_target.starts_with(output.path()),
+            "the generated target must remain within caller-owned child output: {}",
+            generated_target.display()
+        );
+        assert_eq!(
+            generated_target.file_name().and_then(|name| name.to_str()),
+            Some("generated-cargo-target"),
+            "the isolated generated target should be distinguishable from the shared harness target"
         );
         let report = run_prepared_compiler_suite_children(vec![prepared_child], &receipt, &rustc)?;
 

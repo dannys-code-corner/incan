@@ -147,11 +147,6 @@ if [[ ! "$temp_root_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
 fi
 mkdir -p "$temp_root"
 
-feature_args=()
-if [ -n "$feature" ]; then
-    feature_args=(--feature "$feature")
-fi
-
 if ! capture_store_junction initial; then
     echo "initial Oven store inspection failed; retained timing evidence at $phase_tsv" >&2
     exit 1
@@ -161,6 +156,21 @@ run_named_legacy_publisher() {
     local started finished status
     started="$(now_ms)"
     set +e
+    set -- \
+        "$incan" oven legacy-cargo prepare-compiler-libtests \
+        --compiler-root "$compiler_root" \
+        --cargo "$cargo_path" \
+        --rustc "$rustc_path"
+    if [ -n "$feature" ]; then
+        set -- "$@" --feature "$feature"
+    fi
+    set -- "$@" \
+        --domain "$domain" \
+        --store "$store" \
+        --max-physical-bytes "$max_physical_bytes" \
+        --max-domain-physical-bytes "$max_domain_physical_bytes" \
+        --max-domain-logical-bytes "$max_domain_logical_bytes" \
+        --format json
     CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" \
     CARGO_NET_OFFLINE=true \
     INCAN_SOURCE_ROOT="$compiler_root" \
@@ -172,17 +182,7 @@ run_named_legacy_publisher() {
     INCAN_INTERNAL_SDK_PROVIDER_STORE="$sdk_provider_store" \
     INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$toolchain_data_root" \
     INCAN_GENERATED_CARGO_TARGET_DIR="$generated_cargo_target_dir" \
-    "$incan" oven legacy-cargo prepare-compiler-libtests \
-        --compiler-root "$compiler_root" \
-        --cargo "$cargo_path" \
-        --rustc "$rustc_path" \
-        "${feature_args[@]}" \
-        --domain "$domain" \
-        --store "$store" \
-        --max-physical-bytes "$max_physical_bytes" \
-        --max-domain-physical-bytes "$max_domain_physical_bytes" \
-        --max-domain-logical-bytes "$max_domain_logical_bytes" \
-        --format json > "$publisher_result"
+    "$@" > "$publisher_result"
     status=$?
     set -e
     finished="$(now_ms)"
@@ -215,6 +215,20 @@ run_cargo_free_replay() {
     local started finished status
     started="$(now_ms)"
     set +e
+    set -- \
+        "$incan" oven compiler-libtests \
+        --compiler-root "$compiler_root" \
+        --rustc "$rustc_path"
+    if [ -n "$feature" ]; then
+        set -- "$@" --feature "$feature"
+    fi
+    set -- "$@" \
+        --output "$output" \
+        --store "$store" \
+        --max-physical-bytes "$max_physical_bytes" \
+        --max-domain-physical-bytes "$max_domain_physical_bytes" \
+        --max-domain-logical-bytes "$max_domain_logical_bytes" \
+        --format json
     PATH="$guard:$PATH" \
         CARGO_GUARD_LOG="$guard/invocations.log" \
         TMPDIR="$temp_root" \
@@ -227,16 +241,7 @@ run_cargo_free_replay() {
         INCAN_INTERNAL_SDK_PROVIDER_STORE="$sdk_provider_store" \
         INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$toolchain_data_root" \
         INCAN_GENERATED_CARGO_TARGET_DIR="$generated_cargo_target_dir" \
-        "$incan" oven compiler-libtests \
-            --compiler-root "$compiler_root" \
-            --rustc "$rustc_path" \
-            "${feature_args[@]}" \
-            --output "$output" \
-            --store "$store" \
-            --max-physical-bytes "$max_physical_bytes" \
-            --max-domain-physical-bytes "$max_domain_physical_bytes" \
-            --max-domain-logical-bytes "$max_domain_logical_bytes" \
-            --format json > "$output/compiler-suite-report.json" 2> "$runner_stderr"
+        "$@" > "$output/compiler-suite-report.json" 2> "$runner_stderr"
     status=$?
     set -e
     finished="$(now_ms)"
