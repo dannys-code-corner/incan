@@ -201,8 +201,8 @@ fn sdk_provider_builder_executable(
     cargo_test_binary: Option<PathBuf>,
     current_executable: PathBuf,
 ) -> CliResult<PathBuf> {
-    if let Some(executable) = cargo_test_binary.filter(|path| path.is_file()) {
-        return Ok(executable);
+    if let Some(executable) = cargo_test_binary.as_ref().filter(|path| path.is_file()) {
+        return Ok(executable.clone());
     }
 
     let binary_dir = current_executable.parent().unwrap_or_else(|| Path::new("."));
@@ -218,10 +218,15 @@ fn sdk_provider_builder_executable(
         return Ok(parent_sibling);
     }
 
+    let supplied = cargo_test_binary
+        .as_deref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unset".to_string());
     Err(CliError::failure(format!(
-        "SDK provider publication requires the incan CLI executable at {} or {}; build that binary before running compiler-backed utilities",
+        "SDK provider publication requires the incan CLI executable at {} or {}; CARGO_BIN_EXE_incan={supplied}, current executable={}; build that binary before running compiler-backed utilities",
         sibling.display(),
-        parent_sibling.display()
+        parent_sibling.display(),
+        current_executable.display(),
     )))
 }
 
