@@ -932,6 +932,18 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
         report["cargo_guard"]["verdict"],
         serde_json::json!("successful normal stages imply that Cargo was not launched")
     );
+    assert!(
+        report["timing"]["wall_clock_ms"].as_u64().is_some(),
+        "benchmark report must retain complete wall-clock timing"
+    );
+    assert!(
+        report["timing"]["first_materialization_ms"].as_u64().is_some(),
+        "benchmark report must retain cold materialization timing"
+    );
+    assert!(
+        report["timing"]["warm_repeat_total_ms"].as_u64().is_some(),
+        "benchmark report must retain prepared warm timing"
+    );
     assert_eq!(
         report["toolchain"]["release_identity"],
         serde_json::json!("fixture-release-artifact")
@@ -1104,6 +1116,18 @@ fi\n",
         let evidence: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(output.join("suite-evidence.json"))?)?;
         assert_eq!(evidence["schema_version"], serde_json::json!(2));
+        assert!(
+            evidence["timing"]["wall_clock_ms"].as_u64().is_some(),
+            "suite evidence must retain complete wall-clock timing"
+        );
+        assert!(
+            evidence["timing"]["named_publisher_ms"].as_u64().is_some(),
+            "suite evidence must retain publisher phase timing"
+        );
+        assert!(
+            evidence["timing"]["prepared_replay_ms"].as_u64().is_some(),
+            "suite evidence must retain prepared replay timing"
+        );
         assert_eq!(
             evidence["reports"]["publisher"],
             serde_json::json!("publisher-result.json")

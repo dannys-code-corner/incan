@@ -153,6 +153,11 @@ now_ms() {
     python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
 }
 
+# Keep one monotonic envelope around the complete benchmark, including each storage inspection. Individual command
+# phases remain the actionable cold/warm timings; this envelope makes the report auditable without asking readers to
+# reconstruct wall-clock cost from a TSV that may also contain inspection retries.
+benchmark_started_ms="$(now_ms)"
+
 run_stage() {
     local stage=$1
     shift
@@ -259,10 +264,13 @@ cp "$storage_junctions_dir/$final_junction/store-inspection.json" "$output_dir/s
 
 "$incan" --version >"$output_dir/incan-version.txt"
 uname -a >"$output_dir/uname.txt"
+benchmark_finished_ms="$(now_ms)"
+benchmark_wall_clock_ms=$((benchmark_finished_ms - benchmark_started_ms))
 
 python3 - "$output_dir" "$workload" "$source_path" "$store_root" "$cargo_guard_dir" "$cargo_guard_probe_status" \
     "$max_physical_bytes" "$max_domain_physical_bytes" "$max_domain_logical_bytes" "$release_identity" \
-    "$checkout_revision" "$source_sha256" "$clean_worktree_source" "$clean_worktree_source_sha256" <<'PY'
+    "$checkout_revision" "$source_sha256" "$clean_worktree_source" "$clean_worktree_source_sha256" \
+    "$benchmark_wall_clock_ms" <<'PY'
 import json
 import pathlib
 import sys
@@ -320,6 +328,20 @@ report = {
         "max_domain_physical_bytes": int(sys.argv[8]),
         "max_domain_logical_bytes": int(sys.argv[9]),
         "inspection": final_inspection,
+    },
+    "timing": {
+        "wall_clock_ms": int(sys.argv[15]),
+        "first_materialization_ms": next(
+            phase["duration_ms"] for phase in phases if phase["name"] == "first_materialization"
+        ),
+        "warm_repeat_total_ms": sum(
+            phase["duration_ms"] for phase in phases if phase["name"].startswith("warm_repeat_")
+        ),
+        "clean_worktree_reuse_ms": next(
+            (phase["duration_ms"] for phase in phases if phase["name"] == "clean_worktree_reuse"),
+            None,
+        ),
+        "phase_source": "phases.tsv",
     },
     "phases": phases,
     "storage_junctions": storage_junctions,

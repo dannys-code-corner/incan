@@ -102,6 +102,11 @@ now_ms() {
     python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
 }
 
+# The suite report must expose the complete measured envelope as well as its individual publisher/replay phases. This
+# starts before the initial bounded-store inspection, so a reviewer can distinguish prepared-suite wall clock from
+# only the direct-rustc child duration.
+suite_started_ms="$(now_ms)"
+
 record_phase() {
     # The explicit publisher and the Cargo-free replay are deliberately timed separately. A successful replay is
     # the prepared-suite result; the named legacy publisher is the attributable cold/preparation cost.
@@ -298,6 +303,8 @@ if git -C "$compiler_root" rev-parse HEAD > "$output/compiler-root-revision.txt"
 else
     printf '%s\n' unavailable > "$output/compiler-root-revision.txt"
 fi
+suite_finished_ms="$(now_ms)"
+suite_wall_clock_ms=$((suite_finished_ms - suite_started_ms))
 
 python3 - "$output" <<'PY'
 import json
@@ -341,6 +348,7 @@ jq -n \
     --arg store "$store" \
     --arg compiler_root "$compiler_root" \
     --argjson guard_invocation_count "$guard_invocation_count" \
+    --argjson suite_wall_clock_ms "$suite_wall_clock_ms" \
     'def final_junction:
         $storage_junctions[0] | map(select(.name == "after_cargo_free_direct_rustc_replay")) | .[0];
      {
@@ -361,6 +369,12 @@ jq -n \
             $phases | split("\n")[] | select(length > 0) | split("\t") |
             {name: .[0], duration_ms: (.[1] | tonumber), exit_code: (.[2] | tonumber)}
         ],
+        timing: {
+            wall_clock_ms: $suite_wall_clock_ms,
+            named_publisher_ms: ([$phases | split("\n")[] | select(startswith("named_legacy_publisher\t")) | split("\t")[1] | tonumber] | first // null),
+            prepared_replay_ms: ([$phases | split("\n")[] | select(startswith("cargo_free_direct_rustc_replay\t")) | split("\t")[1] | tonumber] | first // null),
+            phase_source: "phases.tsv"
+        },
         cargo_guard: {
             executable: $guard,
             invocation_count: $guard_invocation_count,
