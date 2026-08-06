@@ -847,10 +847,10 @@ See: [Checked contract metadata](contract_metadata.md) for bundle schema, materi
 Build outputs:
 
 - **Generated Rust project**: `target/incan/<name>/`
-- **Built binary**: `target/incan/<name>/target/release/<name>`
+- **Built binary**: `target/incan/<name>/oven/release/<name>`
 - **Built library artifact (`--lib`)**: `target/lib/<name>.incnlib` plus the generated library crate output
 
-Cleaning generated source and the project-local published binary (only while no Incan or Cargo command is using it):
+Cleaning generated source and the project-local published binary (only while no Incan command is using it):
 
 ```bash
 rm -rf target/incan/
