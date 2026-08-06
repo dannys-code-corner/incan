@@ -7078,7 +7078,7 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        return Err("capacity abort left the fake-Cargo descendant running".into());
+        Err("capacity abort left the fake-Cargo descendant running".into())
     }
 
     #[cfg(unix)]
