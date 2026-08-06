@@ -41,6 +41,7 @@ pub(crate) fn terminate_process_group(child: &mut Child) -> io::Result<ExitStatu
 }
 
 #[cfg(all(test, unix))]
+/// Return whether a process still accepts a signal-zero existence probe.
 pub(crate) fn process_exists(pid: u32) -> io::Result<bool> {
     Ok(Command::new("/bin/kill")
         .args(["-0", &pid.to_string()])
