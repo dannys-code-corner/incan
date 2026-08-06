@@ -348,6 +348,40 @@ test-prewarm-oven-release-loafs: test-prewarm-sdk
 			--cargo "$$(rustup which --toolchain "$(INCAN_TEST_PUBLISHER_TOOLCHAIN)" cargo)" \
 			--rustc "$$(rustup which --toolchain "$(INCAN_TEST_LOAF_TOOLCHAIN)" rustc)"
 
+.PHONY: test-oven-focused
+test-oven-focused:
+	@echo "\033[1mRunning focused Oven and Loaf regression tests...\033[0m"
+	@cargo test --locked --features lsp --lib oven::
+	@cargo test --locked --features lsp --test cli_integration \
+		lock_records_oven_interop_requirements_and_detects_input_drift -- --exact
+	@cargo test --locked --features lsp --test toolchain_installer_tests \
+		oven_alpha_benchmark_records_a_verified_cargo_guard_verdict -- --exact
+	@cargo test --locked --features lsp --test toolchain_installer_tests \
+		compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence -- --exact
+
+.PHONY: test-oven-release-smoke
+test-oven-release-smoke: test-prewarm-oven-release-loafs
+	@echo "\033[1mRunning Cargo-guarded Oven release-envelope smoke...\033[0m"
+	@set -e; \
+		smoke_root="$$(mktemp -d "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)/oven-release-smoke.XXXXXX")"; \
+		cleanup_smoke_root() { rm -rf -- "$$smoke_root"; }; \
+		trap cleanup_smoke_root EXIT; \
+		mkdir -p "$$smoke_root/cargo-guard" "$$smoke_root/incan-home"; \
+		printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "unexpected Cargo invocation: $$*" >> "$$CARGO_GUARD_LOG"' 'exit 97' \
+			> "$$smoke_root/cargo-guard/cargo"; \
+		chmod +x "$$smoke_root/cargo-guard/cargo"; \
+		: > "$$smoke_root/cargo-guard/invocations.log"; \
+		for command in build run test; do \
+			source="$(CURDIR)/src/oven/fixtures/release_core.incn"; \
+			if [ "$$command" = test ]; then source="$(CURDIR)/src/oven/fixtures/test_release_core.incn"; fi; \
+			PATH="$$smoke_root/cargo-guard:$$PATH" \
+				CARGO_GUARD_LOG="$$smoke_root/cargo-guard/invocations.log" \
+				INCAN_HOME="$$smoke_root/incan-home" INCAN_NO_BANNER=1 \
+				RUSTUP_TOOLCHAIN="$(INCAN_TEST_LOAF_TOOLCHAIN)" \
+				"$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan" "$$command" "$$source" >/dev/null; \
+		done; \
+		test ! -s "$$smoke_root/cargo-guard/invocations.log"
+
 .PHONY: test-rust-inspect  ## test - Run focused rust-inspect regression tests
 test-rust-inspect:
 	@echo "\033[1mRunning rust-inspect focused tests...\033[0m"
@@ -398,34 +432,39 @@ smoke-test-require-release-bin:
 smoke-test-canary:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mRunning Incan assertion canary...\033[0m"
-	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 ./target/release/incan test tests/fixtures/test_assert_canary.incn
+	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
+		./target/release/incan test tests/fixtures/test_assert_canary.incn
 	@echo "\033[32m✓ Incan assertion canary passed\033[0m"
 
 .PHONY: smoke-test-web-example
 smoke-test-web-example:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mBuilding web example (build-only)...\033[0m"
-	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 ./target/release/incan build examples/web/hello_web.incn
+	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
+		./target/release/incan build examples/web/hello_web.incn
 	@echo "\033[32m✓ Web example built\033[0m"
 
 .PHONY: smoke-test-nested-project-example
 smoke-test-nested-project-example:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mBuilding nested_project example (build-only)...\033[0m"
-	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 ./target/release/incan build examples/advanced/nested_project/src/main.incn
+	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
+		./target/release/incan build examples/advanced/nested_project/src/main.incn
 	@echo "\033[32m✓ Nested project example built\033[0m"
 
 .PHONY: smoke-test-examples
 smoke-test-examples:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mRunning examples...\033[0m"
-	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 INCAN_EXAMPLES_TIMEOUT=$${INCAN_EXAMPLES_TIMEOUT:-30} bash scripts/run_examples.sh
+	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
+		INCAN_EXAMPLES_TIMEOUT=$${INCAN_EXAMPLES_TIMEOUT:-30} bash scripts/run_examples.sh
 
 .PHONY: smoke-test-benchmarks-incan
 smoke-test-benchmarks-incan:
 	@$(MAKE) -s smoke-test-require-release-bin
 	@echo "\033[1mChecking benchmarks (Incan build only)...\033[0m"
-	@$(TEST_RUNTIME_ENV) INCAN_NO_BANNER=1 bash workspaces/benchmarks/check_incan.sh
+	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
+		bash workspaces/benchmarks/check_incan.sh
 
 .PHONY: smoke-test-core
 smoke-test-core: test-prewarm-oven-loafs

@@ -1011,17 +1011,31 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
         "the named publisher Cargo and direct-rustc consumer toolchains must remain separate"
     );
     let workflow = fs::read_to_string(repo_root().join(".github/workflows/ci.yml"))?;
+    let evidence_workflow = fs::read_to_string(repo_root().join(".github/workflows/oven_evidence.yml"))?;
     for required in [
-        "consumer_toolchain: stable",
-        "consumer_toolchain: 1.93.0",
-        "INCAN_TEST_LOAF_TOOLCHAIN=1.93.0",
-        "INCAN_TEST_SUITE_TOOLCHAIN=1.93.0",
-        "make test-prewarm-oven-release-loafs",
+        "toolchain: 1.93.0",
+        "consumer_toolchain: ${{ matrix.toolchain }}",
+        "INCAN_TEST_LOAF_TOOLCHAIN=${{ matrix.toolchain }}",
+        "INCAN_TEST_SUITE_TOOLCHAIN=${{ matrix.toolchain }}",
+        "test-prewarm-oven-release-loafs",
         "src/oven/fixtures/release_core.incn",
         "target/oven-alpha-release-toolchain/bin/incan",
     ] {
-        assert!(workflow.contains(required), "CI must retain `{required}`");
+        assert!(
+            evidence_workflow.contains(required),
+            "release evidence CI must retain `{required}`"
+        );
     }
+    assert!(
+        workflow.contains("cancel-in-progress: true")
+            && workflow.contains("make -s test-oven-release-smoke")
+            && workflow.contains("make test-oven-focused"),
+        "pull-request CI must cancel superseded runs and retain focused Oven correctness and normal-command gates"
+    );
+    assert!(
+        !workflow.contains("run-oven-compiler-suite") && !workflow.contains("bench_oven_alpha.sh"),
+        "complete repository-suite and benchmark evidence must not run on every pull-request commit"
+    );
     assert!(
         !repo_root().join("scripts/run_oven_compiler_suite.sh").exists(),
         "product-level compiler-suite orchestration must not live in shell"

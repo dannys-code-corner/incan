@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main, release/** ]
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -114,7 +118,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          # Share registry/target across stable jobs; the Linux test shard is the cache writer.
+          # Reuse matching stable artifacts without making a pull-request job a shared-cache writer.
           shared-key: incan-stable
           save-if: false
       - uses: ./.github/actions/setup-rust-sccache
@@ -124,636 +128,91 @@ jobs:
         if: always()
         run: ${SCCACHE_PATH:-sccache} --show-stats || true
 
-  test-linux-bootstrap:
-    name: Oven Suite Bootstrap (ubuntu-latest, stable)
-    runs-on: ubuntu-latest
+  oven-pr:
+    name: Oven PR Gate (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-stable
+            name: ubuntu-latest, stable
+            runner: ubuntu-latest
+            toolchain: stable
+            run_focused_tests: true
+          - id: macos-stable
+            name: macos-latest, stable
+            runner: macos-latest
+            toolchain: stable
+            run_focused_tests: false
+          - id: linux-msrv
+            name: ubuntu-latest, MSRV 1.93.0
+            runner: ubuntu-latest
+            toolchain: 1.93.0
+            run_focused_tests: false
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable
+          toolchain: ${{ matrix.toolchain }}
       - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
+        run: rustup target add wasm32-wasip1 --toolchain "${{ matrix.toolchain }}"
       - name: Restore Cargo sources
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-oven-pr-sources-v1-${{ matrix.toolchain }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
           restore-keys: |
-            incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - name: Build compiler binaries for the Oven publisher
-        # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
-        # are receipt-bound Oven work, not a Cargo/Nextest harness.
+            incan-oven-pr-sources-v1-${{ matrix.toolchain }}-${{ runner.os }}-${{ runner.arch }}-
+      - name: Fetch locked compiler and Loaf publisher sources
         run: |
-          CARGO_BUILD_JOBS=2 cargo build --features lsp --bins
-          CARGO_BUILD_JOBS=2 cargo build -p incan_core --bin generate_lang_reference
-      - name: Upload matching Incan CLI
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-linux-incan-cli
-          path: target/debug/incan
-          if-no-files-found: error
-          retention-days: 1
-      - name: Upload checked-reference generators
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-linux-reference-generators
-          path: |
-            target/debug/generate_lang_reference
-            target/debug/generate_feature_inventory
-          if-no-files-found: error
-          retention-days: 1
-
-  test-linux-provider:
-    name: Oven Provider + Compiler Suite (ubuntu-latest, stable)
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - test-linux-bootstrap
-      - smoke-release
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-      - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
-          restore-keys: |
-            incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - name: Fetch locked Oven native publisher sources
-        # This publisher-only registry inventory makes the provider job's later offline Loaf baking
-        # reproducible; ordinary Oven consumers never fetch or invoke Cargo.
-        run: make fetch-oven-loaf-sources
-      - name: Download matching Incan CLI
-        uses: actions/download-artifact@v6
-        with:
-          name: test-linux-incan-cli
-          path: target/debug
-      - name: Restore CLI executable permission
-        run: chmod +x target/debug/incan
+          make fetch-locked-cargo-sources
+          make fetch-oven-loaf-sources
+      - name: Build the compiler
+        run: CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
+      - name: Run focused Oven regressions
+        if: ${{ matrix.run_focused_tests }}
+        run: make test-oven-focused
+      - name: Build checked-reference generators
+        if: ${{ matrix.id == 'linux-stable' }}
+        run: CARGO_BUILD_JOBS=2 cargo build --locked -p incan_core --bin generate_lang_reference
       - uses: ./.github/actions/restore-sdk-provider-store
       - uses: ./.github/actions/install-nightly-toolchain
         with:
           toolchain: nightly-2026-03-24
-      - name: Install WASI target for pinned Oven publisher
+      - name: Install WASI target for the pinned Loaf baker
         run: rustup target add wasm32-wasip1 --toolchain nightly-2026-03-24
-      - name: Prewarm compiled SDK providers
-        # Ordinary test shards share the immutable SDK inventory and compiler-owned Loafs. The separate
-        # cold-provider acceptance job does not download either artifact, so it still proves first publication from
-        # an empty provider store rather than inheriting a warmed test fixture.
+      - name: Bake the release Loafs and guard normal build, run, and test
         run: >-
-          CARGO_BUILD_JOBS=2
           CARGO_NET_OFFLINE=true
           INCAN_TEST_COMPILER_ALREADY_BUILT=1
-          INCAN_SOURCE_ROOT="$GITHUB_WORKSPACE"
-          INCAN_STDLIB="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
-          INCAN_STDLIB_DIR="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
-          INCAN_TOOLCHAIN_CRATES_DIR="$GITHUB_WORKSPACE/crates"
-          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          make -s test-prewarm-oven-loafs INCAN_TEST_OVEN_BAKE_FORMAT=json INCAN_TEST_OVEN_BAKE_REPORT="$GITHUB_WORKSPACE/target/oven-baker-result.json"
-      - name: Run bounded Oven compiler suite beside its prepared closure
-        # The suite consumes the same locally prepared provider/Loaf closure. Sending roughly 900 MiB through
-        # the artifact service only to download it into another identical runner made the CI critical path transfer-
-        # bound and does not exercise a normal Oven consumer any better.
-        uses: ./.github/actions/run-oven-compiler-suite
-        with:
-          lane: ubuntu-latest-stable
-          publisher_toolchain: nightly-2026-03-24
-          consumer_toolchain: stable
-      - name: Upload Linux compiler-suite evidence
-        if: ${{ always() }}
+          INCAN_TEST_PREWARM_TOOLCHAIN=${{ matrix.toolchain }}
+          INCAN_TEST_LOAF_TOOLCHAIN=${{ matrix.toolchain }}
+          make -s test-oven-release-smoke
+      - name: Upload Linux compiler and reference generators
+        if: ${{ matrix.id == 'linux-stable' }}
         uses: actions/upload-artifact@v6
         with:
-          name: oven-compiler-suite-linux-evidence
+          name: test-linux-tools
           path: |
-            target/oven-compiler-suite-output/evidence.json
-            target/oven-compiler-suite-output/compiler-suite-report.json
-            target/oven-compiler-suite-output/compiler-suite-stdout.json
-            target/oven-compiler-suite-output/baker-result.json
-            target/oven-compiler-suite-output/raw-disk-usage-kib.tsv
-            target/oven-compiler-suite-output/cargo-guard/invocations.log
-            target/oven-compiler-suite-output/shards/**/*.libtest-output.txt
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Download release compiler for normal Oven smoke commands
-        uses: actions/download-artifact@v6
-        with:
-          name: incan-release-bin
-          path: target/release
-      - name: Restore release compiler executable permission
-        run: chmod +x target/release/incan
-      - name: Bake the release Loaf envelope for normal-command evidence
-        run: >-
-          INCAN_TEST_COMPILER_ALREADY_BUILT=1
-          INCAN_TEST_OVEN_RELEASE_COMPILER_BIN="$GITHUB_WORKSPACE/target/release/incan"
-          make test-prewarm-oven-release-loafs
-      - name: Record guarded release Oven Alpha build benchmark
-        # This is a small representative normal command, not the compiler-suite timing.  It uses the same release
-        # compiler and locally prepared Loaf layout as the smoke set, starts with an empty Oven home, and
-        # persists the Linux reference report without transferring the large compiler-suite Loaf closure.
-        run: |
-          clean_worktree="$RUNNER_TEMP/incan-oven-alpha-clean-worktree"
-          git worktree add --detach "$clean_worktree" "$GITHUB_SHA"
-          trap 'git worktree remove --force "$clean_worktree"' EXIT
-          mkdir -p target/ci-benchmark-cargo-guard
-          cat > target/ci-benchmark-cargo-guard/cargo <<'EOF'
-          #!/usr/bin/env bash
-          exit 97
-          EOF
-          chmod +x target/ci-benchmark-cargo-guard/cargo
-          bash scripts/bench_oven_alpha.sh \
-            --incan "$GITHUB_WORKSPACE/target/oven-alpha-release-toolchain/bin/incan" \
-            --release-identity "GitHub Actions incan-release-bin artifact for $GITHUB_SHA" \
-            --checkout-revision "$GITHUB_SHA" \
-            --workload build \
-            --source "$GITHUB_WORKSPACE/src/oven/fixtures/release_core.incn" \
-            --clean-worktree-source "$clean_worktree/src/oven/fixtures/release_core.incn" \
-            --incan-home "$RUNNER_TEMP/incan-oven-alpha-benchmark-home" \
-            --output "$GITHUB_WORKSPACE/target/oven-alpha-linux-benchmark" \
-            --cargo-guard-dir "$GITHUB_WORKSPACE/target/ci-benchmark-cargo-guard" \
-            --repetitions 2
-          jq . target/oven-alpha-linux-benchmark/report.json
-      - name: Upload Linux Oven Alpha benchmark evidence
-        uses: actions/upload-artifact@v6
-        with:
-          name: oven-alpha-linux-benchmark
-          path: target/oven-alpha-linux-benchmark
+            target/debug/incan
+            target/debug/generate_lang_reference
+            target/debug/generate_feature_inventory
           if-no-files-found: error
-          retention-days: 14
-      - name: Run normal Oven smoke set without Cargo
-        run: |
-          mkdir -p target/ci-cargo-guard
-          cat > target/ci-cargo-guard/cargo <<'EOF'
-          #!/usr/bin/env bash
-          printf '%s\n' "unexpected Cargo invocation during normal Oven smoke command: $*" >> "$CARGO_GUARD_LOG"
-          exit 97
-          EOF
-          chmod +x target/ci-cargo-guard/cargo
-          : > target/ci-cargo-guard/invocations.log
-          export PATH="$GITHUB_WORKSPACE/target/ci-cargo-guard:$PATH"
-          export CARGO_GUARD_LOG="$GITHUB_WORKSPACE/target/ci-cargo-guard/invocations.log"
-          for make_target in \
-            smoke-test-canary \
-            smoke-test-web-example \
-            smoke-test-nested-project-example \
-            smoke-test-examples \
-            smoke-test-benchmarks-incan
-          do
-            INCAN_EXAMPLES_TIMEOUT=20 make "$make_target"
-          done
-          if [ -s "$CARGO_GUARD_LOG" ]; then
-            cat "$CARGO_GUARD_LOG" >&2
-            exit 1
-          fi
-      - name: Upload compiled SDK provider store
-        # The provider store is a bounded immutable product of the matching compiler, not part of the test archive.
+          retention-days: 1
+      - name: Upload Linux SDK provider store
+        if: ${{ matrix.id == 'linux-stable' }}
         uses: actions/upload-artifact@v6
         with:
           name: test-linux-sdk-provider-store
           path: target/incan_test_sdk_provider_store
           if-no-files-found: error
           retention-days: 1
-      - name: Upload selected SDK provider inventory
-        # The sealed inventory path selects one digest-verified entry inside the immutable provider store.
-        # Downstream normal-command consumers must receive this selection instead of rediscovering a provider.
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-linux-sdk-provider-path
-          path: target/incan_test_sdk_provider_path
-          if-no-files-found: error
-          retention-days: 1
 
-  test-linux-oven:
-    name: Oven Compiler Suite (ubuntu-latest, stable)
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - test-linux-provider
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - name: Verify provider-local bounded Oven compiler suite
-        run: |
-          if [ "${{ needs.test-linux-provider.result }}" != "success" ]; then
-            echo "test-linux-provider finished with ${{ needs.test-linux-provider.result }}"
-            exit 1
-          fi
-          echo "provider-local bounded Ubuntu Oven compiler suite passed"
-
-  test-linux:
-    name: Test Suite (ubuntu-latest, stable)
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - test-linux-oven
-    if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - name: Verify bounded Oven compiler suite
-        run: |
-          if [ "${{ needs.test-linux-oven.result }}" != "success" ]; then
-            echo "test-linux-oven finished with ${{ needs.test-linux-oven.result }}"
-            exit 1
-          fi
-          echo "bounded Ubuntu Oven compiler suite passed"
-  test-macos-bootstrap:
-    name: Oven Suite Bootstrap (macos-latest, stable)
-    runs-on: macos-latest
-    needs: changes
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-      - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
-          restore-keys: |
-            incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - name: Build compiler binaries for the Oven publisher
-        # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
-        # are receipt-bound Oven work, not a Cargo/Nextest harness.
-        run: CARGO_BUILD_JOBS=2 cargo build --features lsp --bins
-      - name: Upload matching Incan CLI
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-macos-incan-cli
-          path: target/debug/incan
-          if-no-files-found: error
-          retention-days: 1
-
-  test-macos-provider:
-    name: Oven Provider + Compiler Suite (macos-latest, stable)
-    runs-on: macos-latest
-    needs:
-      - changes
-      - test-macos-bootstrap
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-      - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: incan-test-cargo-sources-v3-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
-          restore-keys: |
-            incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - name: Fetch locked Oven native publisher sources
-        run: make fetch-oven-loaf-sources
-      - name: Download matching Incan CLI
-        uses: actions/download-artifact@v6
-        with:
-          name: test-macos-incan-cli
-          path: target/debug
-      - name: Restore CLI executable permission
-        run: chmod +x target/debug/incan
-      - uses: ./.github/actions/restore-sdk-provider-store
-      - uses: ./.github/actions/install-nightly-toolchain
-        with:
-          toolchain: nightly-2026-03-24
-      - name: Install WASI target for pinned Oven publisher
-        run: rustup target add wasm32-wasip1 --toolchain nightly-2026-03-24
-      - name: Prewarm compiled SDK providers
-        run: >-
-          CARGO_BUILD_JOBS=2
-          CARGO_NET_OFFLINE=true
-          INCAN_TEST_COMPILER_ALREADY_BUILT=1
-          INCAN_SOURCE_ROOT="$GITHUB_WORKSPACE"
-          INCAN_STDLIB="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
-          INCAN_STDLIB_DIR="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
-          INCAN_TOOLCHAIN_CRATES_DIR="$GITHUB_WORKSPACE/crates"
-          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          make -s test-prewarm-oven-loafs INCAN_TEST_OVEN_BAKE_FORMAT=json INCAN_TEST_OVEN_BAKE_REPORT="$GITHUB_WORKSPACE/target/oven-baker-result.json"
-      - name: Run bounded Oven compiler suite beside its prepared closure
-        # Keep the prepared Loafs local to the consumer. The direct-Rustc suite needs their immutable
-        # contents, not an artifact-service round trip that can dominate the macOS critical path.
-        uses: ./.github/actions/run-oven-compiler-suite
-        with:
-          lane: macos-latest-stable
-          publisher_toolchain: nightly-2026-03-24
-          consumer_toolchain: stable
-      - name: Upload macOS compiler-suite evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: oven-compiler-suite-macos-evidence
-          path: |
-            target/oven-compiler-suite-output/evidence.json
-            target/oven-compiler-suite-output/compiler-suite-report.json
-            target/oven-compiler-suite-output/compiler-suite-stdout.json
-            target/oven-compiler-suite-output/baker-result.json
-            target/oven-compiler-suite-output/raw-disk-usage-kib.tsv
-            target/oven-compiler-suite-output/cargo-guard/invocations.log
-            target/oven-compiler-suite-output/shards/**/*.libtest-output.txt
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Record guarded macOS Oven Alpha build benchmark
-        # The stable test-CLI artifact is identified explicitly in the report. The measured normal command uses Oven;
-        # Cargo only built the compiler in its separate bootstrap job.
-        run: |
-          clean_worktree="$RUNNER_TEMP/incan-oven-alpha-clean-worktree"
-          git worktree add --detach "$clean_worktree" "$GITHUB_SHA"
-          trap 'git worktree remove --force "$clean_worktree"' EXIT
-          mkdir -p target/ci-benchmark-cargo-guard
-          cat > target/ci-benchmark-cargo-guard/cargo <<'EOF'
-          #!/usr/bin/env bash
-          exit 97
-          EOF
-          chmod +x target/ci-benchmark-cargo-guard/cargo
-          INCAN_TEST_COMPILER_ALREADY_BUILT=1 make test-prewarm-oven-release-loafs
-          bash scripts/bench_oven_alpha.sh \
-            --incan "$GITHUB_WORKSPACE/target/oven-alpha-release-toolchain/bin/incan" \
-            --release-identity "GitHub Actions test-macos-incan-cli artifact for $GITHUB_SHA" \
-            --checkout-revision "$GITHUB_SHA" \
-            --workload build \
-            --source "$GITHUB_WORKSPACE/src/oven/fixtures/release_core.incn" \
-            --clean-worktree-source "$clean_worktree/src/oven/fixtures/release_core.incn" \
-            --incan-home "$RUNNER_TEMP/incan-oven-alpha-benchmark-home" \
-            --output "$GITHUB_WORKSPACE/target/oven-alpha-macos-benchmark" \
-            --cargo-guard-dir "$GITHUB_WORKSPACE/target/ci-benchmark-cargo-guard" \
-            --repetitions 2
-          jq . target/oven-alpha-macos-benchmark/report.json
-      - name: Upload macOS Oven Alpha benchmark evidence
-        uses: actions/upload-artifact@v6
-        with:
-          name: oven-alpha-macos-benchmark
-          path: target/oven-alpha-macos-benchmark
-          if-no-files-found: error
-          retention-days: 14
-      - name: Upload compiled SDK provider store
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-macos-sdk-provider-store
-          path: target/incan_test_sdk_provider_store
-          if-no-files-found: error
-          retention-days: 1
-      - name: Upload selected SDK provider inventory
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-macos-sdk-provider-path
-          path: target/incan_test_sdk_provider_path
-          if-no-files-found: error
-          retention-days: 1
-
-  test-macos-oven:
-    name: Oven Compiler Suite (macos-latest, stable)
-    runs-on: macos-latest
-    needs:
-      - changes
-      - test-macos-provider
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - name: Verify provider-local bounded Oven compiler suite
-        run: |
-          if [ "${{ needs.test-macos-provider.result }}" != "success" ]; then
-            echo "test-macos-provider finished with ${{ needs.test-macos-provider.result }}"
-            exit 1
-          fi
-          echo "provider-local bounded macOS Oven compiler suite passed"
-
-  test-macos:
-    name: Test Suite (macos-latest, stable)
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - test-macos-oven
-    if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - name: Verify bounded Oven compiler suite
-        run: |
-          if [ "${{ needs.test-macos-oven.result }}" != "success" ]; then
-            echo "test-macos-oven finished with ${{ needs.test-macos-oven.result }}"
-            exit 1
-          fi
-          echo "bounded macOS Oven compiler suite passed"
-  msrv-build:
-    name: MSRV Build (1.93.0)
-    runs-on: ubuntu-latest
-    needs: changes
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Rust 1.93.0
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.93.0
-          components: clippy
-      - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: ./.github/actions/setup-rust-sccache
-      - name: Cargo build (locked)
-        run: cargo build --locked
-      - name: Show sccache stats
-        if: always()
-        run: ${SCCACHE_PATH:-sccache} --show-stats || true
-
-  msrv-test-bootstrap:
-    name: MSRV Oven Suite Bootstrap (1.93.0)
-    runs-on: ubuntu-latest
-    needs: changes
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Rust 1.93.0
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.93.0
-          components: clippy
-      - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
-          restore-keys: |
-            incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - name: Build compiler binaries for the Oven publisher
-        # Bootstrap Cargo is permitted only to build the compiler executable. Test compilation and execution below
-        # are receipt-bound Oven work, not a Cargo/Nextest harness.
-        run: CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
-      - name: Upload matching Incan CLI
-        uses: actions/upload-artifact@v6
-        with:
-          name: msrv-test-incan-cli
-          path: target/debug/incan
-          if-no-files-found: error
-          retention-days: 1
-
-  msrv-test-provider:
-    name: MSRV Oven Provider + Compiler Suite (1.93.0)
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - msrv-test-bootstrap
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Rust 1.93.0
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.93.0
-          components: clippy
-      - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1
-      - name: Restore Cargo sources
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: incan-test-cargo-sources-v3-msrv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
-          restore-keys: |
-            incan-test-cargo-sources-v1-msrv-${{ runner.os }}-${{ runner.arch }}-
-      - name: Fetch locked Cargo sources
-        run: make fetch-locked-cargo-sources
-      - name: Fetch locked Oven native publisher sources
-        run: make fetch-oven-loaf-sources
-      - name: Download matching Incan CLI
-        uses: actions/download-artifact@v6
-        with:
-          name: msrv-test-incan-cli
-          path: target/debug
-      - name: Restore CLI executable permission
-        run: chmod +x target/debug/incan
-      - uses: ./.github/actions/restore-sdk-provider-store
-      - uses: ./.github/actions/install-nightly-toolchain
-        with:
-          toolchain: nightly-2026-03-24
-      - name: Install WASI target for pinned Oven publisher
-        run: rustup target add wasm32-wasip1 --toolchain nightly-2026-03-24
-      - name: Prewarm compiled SDK providers
-        run: >-
-          CARGO_BUILD_JOBS=2
-          CARGO_NET_OFFLINE=true
-          INCAN_TEST_COMPILER_ALREADY_BUILT=1
-          INCAN_SOURCE_ROOT="$GITHUB_WORKSPACE"
-          INCAN_STDLIB="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
-          INCAN_STDLIB_DIR="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib"
-          INCAN_TOOLCHAIN_CRATES_DIR="$GITHUB_WORKSPACE/crates"
-          INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target"
-          INCAN_INTERNAL_SDK_PROVIDER_STORE="$GITHUB_WORKSPACE/target/incan_test_sdk_provider_store"
-          INCAN_TEST_PREWARM_TOOLCHAIN=1.93.0
-          INCAN_TEST_LOAF_TOOLCHAIN=1.93.0
-          INCAN_TEST_SUITE_TOOLCHAIN=1.93.0
-          make -s test-prewarm-oven-loafs INCAN_TEST_OVEN_BAKE_FORMAT=json INCAN_TEST_OVEN_BAKE_REPORT="$GITHUB_WORKSPACE/target/oven-baker-result.json"
-      - name: Run bounded Oven compiler suite beside its prepared closure
-        # The MSRV direct-Rustc runner consumes the just-published immutable closure in this job. Keeping it local
-        # avoids making a large artifact upload/download the gate for the actual all-root execution.
-        uses: ./.github/actions/run-oven-compiler-suite
-        with:
-          lane: ubuntu-latest-msrv-1-93-0
-          publisher_toolchain: nightly-2026-03-24
-          consumer_toolchain: 1.93.0
-      - name: Upload MSRV compiler-suite evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: oven-compiler-suite-msrv-evidence
-          path: |
-            target/oven-compiler-suite-output/evidence.json
-            target/oven-compiler-suite-output/compiler-suite-report.json
-            target/oven-compiler-suite-output/compiler-suite-stdout.json
-            target/oven-compiler-suite-output/baker-result.json
-            target/oven-compiler-suite-output/raw-disk-usage-kib.tsv
-            target/oven-compiler-suite-output/cargo-guard/invocations.log
-            target/oven-compiler-suite-output/shards/**/*.libtest-output.txt
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Upload compiled SDK provider store
-        uses: actions/upload-artifact@v6
-        with:
-          name: msrv-test-sdk-provider-store
-          path: target/incan_test_sdk_provider_store
-          if-no-files-found: error
-          retention-days: 1
-      - name: Upload selected SDK provider inventory
-        uses: actions/upload-artifact@v6
-        with:
-          name: msrv-test-sdk-provider-path
-          path: target/incan_test_sdk_provider_path
-          if-no-files-found: error
-          retention-days: 1
-
-  msrv-test-oven:
-    name: MSRV Oven Compiler Suite (1.93.0)
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - msrv-test-provider
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - name: Verify provider-local bounded Oven compiler suite
-        run: |
-          if [ "${{ needs.msrv-test-provider.result }}" != "success" ]; then
-            echo "msrv-test-provider finished with ${{ needs.msrv-test-provider.result }}"
-            exit 1
-          fi
-          echo "provider-local bounded MSRV Oven compiler suite passed"
-
-  msrv:
-    name: MSRV Build/Test (1.93.0)
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - msrv-build
-      - msrv-test-oven
-    if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - name: Verify MSRV build and bounded Oven compiler suite
-        run: |
-          if [ "${{ needs.msrv-build.result }}" != "success" ]; then
-            echo "msrv-build finished with ${{ needs.msrv-build.result }}"
-            exit 1
-          fi
-          if [ "${{ needs.msrv-test-oven.result }}" != "success" ]; then
-            echo "msrv-test-oven finished with ${{ needs.msrv-test-oven.result }}"
-            exit 1
-          fi
-          echo "MSRV build and bounded Oven compiler suite passed"
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -878,50 +337,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build release compiler once
         run: make smoke-test-release
-      - name: Upload release compiler
-        uses: actions/upload-artifact@v6
-        with:
-          name: incan-release-bin
-          path: target/release/incan
-          if-no-files-found: error
-          retention-days: 1
-
-  smoke-test-shards:
-    name: Oven Normal-Command Smoke Set
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - test-linux-provider
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - name: Verify provider-local normal Oven smoke set
-        run: |
-          if [ "${{ needs.test-linux-provider.result }}" != "success" ]; then
-            echo "test-linux-provider finished with ${{ needs.test-linux-provider.result }}"
-            exit 1
-          fi
-          echo "provider-local normal Oven smoke set passed"
-
-  smoke-test:
-    name: Smoke Test
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - smoke-release
-      - smoke-test-shards
-    if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
-    steps:
-      - name: Verify smoke jobs
-        run: |
-          if [ "${{ needs.smoke-release.result }}" != "success" ]; then
-            echo "smoke-release finished with ${{ needs.smoke-release.result }}"
-            exit 1
-          fi
-          if [ "${{ needs.smoke-test-shards.result }}" != "success" ]; then
-            echo "smoke-test-shards finished with ${{ needs.smoke-test-shards.result }}"
-            exit 1
-          fi
-          echo "smoke jobs passed"
 
   generate-rust-docs:
     name: Docs Build
@@ -964,8 +379,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - changes
-      - test-linux-bootstrap
-      - test-linux-provider
+      - oven-pr
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
@@ -981,15 +395,10 @@ jobs:
             incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
-      - name: Download matching Incan CLI
+      - name: Download matching Incan CLI and checked-reference generators
         uses: actions/download-artifact@v6
         with:
-          name: test-linux-incan-cli
-          path: target/debug
-      - name: Download checked-reference generators
-        uses: actions/download-artifact@v6
-        with:
-          name: test-linux-reference-generators
+          name: test-linux-tools
           path: target/debug
       - name: Restore executable permissions
         run: chmod +x target/debug/incan target/debug/generate_lang_reference target/debug/generate_feature_inventory
