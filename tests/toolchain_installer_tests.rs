@@ -1038,6 +1038,10 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
         "focused Oven tests must not pay the cold-link cost of unused test debug information"
     );
     assert!(
+        !makefile.contains("CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --features lsp"),
+        "focused Oven tests must not compile the unrelated LSP feature graph"
+    );
+    assert!(
         !workflow.contains("run-oven-compiler-suite") && !workflow.contains("bench_oven_alpha.sh"),
         "complete repository-suite and benchmark evidence must not run on every pull-request commit"
     );
