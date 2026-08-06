@@ -2432,6 +2432,7 @@ fn run_prepared_compiler_suite_child(
                 features: &child.target.features,
                 is_proc_macro: child.target.target_kind == "proc-macro",
                 prefer_dynamic: child.prefer_dynamic,
+                timeout: Some(OVEN_COMPILER_TEST_ROOT_TIMEOUT),
             })
             .map_err(oven_error)?;
             Ok(CompilerSuiteChildrenReport {
@@ -2595,6 +2596,7 @@ fn run_planned_compiler_suite_children(
                     features: &target.features,
                     is_proc_macro: target.target_kind == "proc-macro",
                     prefer_dynamic,
+                    timeout: Some(OVEN_COMPILER_TEST_ROOT_TIMEOUT),
                 })
                 .map_err(oven_error)?;
                 suite_report.doctest_targets += 1;

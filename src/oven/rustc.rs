@@ -8,13 +8,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
+use super::process::{isolate_process_group, terminate_process_group};
 use super::{OVEN_COMPILER_TEST_PROFILE, OvenBuildIntent, OvenReceipt, digest_bytes, digest_source_tree};
 use crate::manifest::{DependencySource, DependencySpec};
 use crate::oven::store::{OvenArtifactKind, OvenStore, OvenStoreError, OvenStoreExecutionPayload, OvenStoreLease};
@@ -1493,6 +1496,8 @@ pub(crate) struct OvenTrustedRustdocTestRequest<'a> {
     pub is_proc_macro: bool,
     /// Whether the doctest root requires the selected toolchain dynamic library environment.
     pub prefer_dynamic: bool,
+    /// Maximum wall-clock duration for the Rustdoc root and its generated doctest descendants.
+    pub timeout: Option<Duration>,
 }
 
 /// Successful direct Rustdoc doctest execution transcript.
@@ -2751,15 +2756,103 @@ pub(crate) fn run_trusted_rustdoc_test(
     for (crate_name, path) in &plan.externs {
         command.arg("--extern").arg(format!("{crate_name}={}", path.display()));
     }
-    let output = command.output().map_err(|source_error| OvenRustcError::Io {
-        path: rustdoc,
-        source: source_error,
-    })?;
-    let transcript = combined_process_output(&output.stdout, &output.stderr);
-    if !output.status.success() {
+    let (output, timed_out) = run_supervised_rustdoc_command(command, &rustdoc, request.timeout)?;
+    let mut transcript = combined_process_output(&output.stdout, &output.stderr);
+    if timed_out {
+        if !transcript.ends_with('\n') && !transcript.is_empty() {
+            transcript.push('\n');
+        }
+        if let Some(timeout) = request.timeout {
+            transcript.push_str(&format!(
+                "Oven Rustdoc execution group timed out after {}ms (source: {})\n",
+                timeout.as_millis(),
+                source.display(),
+            ));
+        }
+    }
+    if timed_out || !output.status.success() {
         return Err(OvenRustcError::RustdocTestFailed { output: transcript });
     }
     Ok(OvenRustdocTestReport { output: transcript })
+}
+
+/// Run Rustdoc and its generated doctest children inside the same bounded process group as native suite roots.
+fn run_supervised_rustdoc_command(
+    mut command: Command,
+    rustdoc: &Path,
+    timeout: Option<Duration>,
+) -> Result<(std::process::Output, bool), OvenRustcError> {
+    let Some(timeout) = timeout else {
+        let output = command.output().map_err(|source| OvenRustcError::Io {
+            path: rustdoc.to_path_buf(),
+            source,
+        })?;
+        return Ok((output, false));
+    };
+
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    isolate_process_group(&mut command);
+    let mut child = command.spawn().map_err(|source| OvenRustcError::Io {
+        path: rustdoc.to_path_buf(),
+        source,
+    })?;
+    let mut stdout = child.stdout.take().ok_or_else(|| OvenRustcError::Io {
+        path: rustdoc.to_path_buf(),
+        source: io::Error::other("Rustdoc stdout was not piped"),
+    })?;
+    let mut stderr = child.stderr.take().ok_or_else(|| OvenRustcError::Io {
+        path: rustdoc.to_path_buf(),
+        source: io::Error::other("Rustdoc stderr was not piped"),
+    })?;
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes)?;
+        Ok::<_, io::Error>(bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes)?;
+        Ok::<_, io::Error>(bytes)
+    });
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait().map_err(|source| OvenRustcError::Io {
+            path: rustdoc.to_path_buf(),
+            source,
+        })? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                timed_out = true;
+                break terminate_process_group(&mut child).map_err(|source| OvenRustcError::Io {
+                    path: rustdoc.to_path_buf(),
+                    source,
+                })?;
+            }
+            None => thread::sleep(Duration::from_millis(1)),
+        }
+    };
+    let stdout = join_rustdoc_output_reader(stdout_reader, rustdoc, "stdout")?;
+    let stderr = join_rustdoc_output_reader(stderr_reader, rustdoc, "stderr")?;
+    Ok((std::process::Output { status, stdout, stderr }, timed_out))
+}
+
+/// Join one Rustdoc pipe reader and retain the executable path in any I/O diagnostic.
+fn join_rustdoc_output_reader(
+    reader: thread::JoinHandle<Result<Vec<u8>, io::Error>>,
+    rustdoc: &Path,
+    stream: &str,
+) -> Result<Vec<u8>, OvenRustcError> {
+    reader
+        .join()
+        .map_err(|_| OvenRustcError::Io {
+            path: rustdoc.to_path_buf(),
+            source: io::Error::other(format!("Rustdoc {stream} reader panicked")),
+        })?
+        .map_err(|source| OvenRustcError::Io {
+            path: rustdoc.to_path_buf(),
+            source,
+        })
 }
 
 /// Compile one receipt-bound generated Rust test target without a Cargo consumer process.
@@ -5476,8 +5569,90 @@ mod tests {
             features: &[],
             is_proc_macro: false,
             prefer_dynamic: false,
+            timeout: None,
         })?;
         assert!(report.output.contains("test result: ok"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_rustdoc_timeout_terminates_a_stalled_doctest_descendant() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        let project = tempfile::tempdir()?;
+        let output = tempfile::tempdir()?;
+        let artifact_root = tempfile::tempdir()?;
+        write_project(project.path())?;
+        fs::create_dir_all(project.path().join("src"))?;
+        let source = project.path().join("src/stalled_doctest.rs");
+        fs::write(
+            &source,
+            "//! ```\n//! assert!(true);\n//! ```\npub struct StalledDoctest;\n",
+        )?;
+
+        let sysroot = output.path().join("sysroot");
+        let rustc = output.path().join("rustc");
+        let rustdoc = sysroot.join("bin/rustdoc");
+        let descendant_started = output.path().join("descendant-started");
+        fs::create_dir_all(rustdoc.parent().ok_or("Rustdoc parent missing")?)?;
+        fs::write(
+            &rustc,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '%s\\n' 'rustc oven-timeout-fixture'\n  exit 0\nfi\nif [ \"$1\" = \"--print\" ] && [ \"$2\" = \"sysroot\" ]; then\n  printf '%s\\n' \"{}\"\n  exit 0\nfi\nexit 97\n",
+                sysroot.display(),
+            ),
+        )?;
+        fs::write(
+            &rustdoc,
+            format!(
+                "#!/bin/sh\nsleep 30 &\nprintf '%s\\n' \"$!\" > \"{}\"\nwait\n",
+                descendant_started.display(),
+            ),
+        )?;
+        for executable in [&rustc, &rustdoc] {
+            let mut permissions = fs::metadata(executable)?.permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(executable, permissions)?;
+        }
+        let receipt = import_frozen_project(
+            &OvenImportRequest::new(
+                project.path(),
+                "fixture-target",
+                "rustc oven-timeout-fixture",
+                "release",
+                Vec::new(),
+            )
+            .with_supplemental_source_digest("stalled-doctest", digest_bytes(&fs::read(&source)?)),
+        )?;
+
+        let started = Instant::now();
+        let error = run_trusted_rustdoc_test(&OvenTrustedRustdocTestRequest {
+            receipt: &receipt,
+            artifacts: &empty_manifest(&receipt),
+            artifact_root: artifact_root.path(),
+            artifact_plan: None,
+            rustc: &rustc,
+            source: &source,
+            temporary_directory: &output.path().join("rustdoc-temporary"),
+            crate_name: "stalled_doctest",
+            edition: "2024",
+            source_evidence_key: "stalled-doctest",
+            features: &[],
+            is_proc_macro: false,
+            prefer_dynamic: false,
+            timeout: Some(Duration::from_secs(10)),
+        })
+        .expect_err("stalled Rustdoc should exceed its receipt-bound root deadline");
+        assert!(descendant_started.is_file(), "fake Rustdoc descendant was not started");
+        assert!(matches!(error, OvenRustcError::RustdocTestFailed { .. }));
+        assert!(error.to_string().contains("timed out after 10000ms"), "{error}");
+        assert!(error.to_string().contains(&source.display().to_string()), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(25),
+            "stalled doctest descendant outlived the Rustdoc deadline"
+        );
         Ok(())
     }
 
@@ -5532,6 +5707,7 @@ mod tests {
             features: &[],
             is_proc_macro: false,
             prefer_dynamic: false,
+            timeout: None,
         })?;
         assert!(report.output.contains("test result: ok"));
         Ok(())
@@ -5615,6 +5791,7 @@ mod tests {
             features: &[],
             is_proc_macro: false,
             prefer_dynamic: true,
+            timeout: None,
         })?;
         assert!(report.output.contains("test result: ok"));
         Ok(())
@@ -5657,6 +5834,7 @@ mod tests {
             features: &[],
             is_proc_macro: true,
             prefer_dynamic: true,
+            timeout: None,
         })?;
         assert!(report.output.contains("test result: ok"));
         Ok(())

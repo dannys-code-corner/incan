@@ -23,6 +23,7 @@ use crate::manifest::{DependencySource, DependencySpec, GitReference, ProjectMan
 pub mod legacy_cargo;
 pub mod loaf;
 pub mod native_test;
+mod process;
 pub mod rustc;
 pub mod store;
 

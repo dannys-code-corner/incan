@@ -21,6 +21,7 @@ use super::legacy_cargo::{
     OvenLegacyCargoError, OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind,
     direct_rustc_compile_environment, prepare_direct_rustc_plan,
 };
+use super::process::{isolate_process_group, terminate_process_group};
 use super::rustc::{
     OvenRegistryLeafAuthority, OvenRustcArtifactExtern, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
     OvenRustcAuxiliaryTarget, OvenRustcError, OvenRustcRegistryLeaf, OvenRustcSupportingArtifact,
@@ -1066,6 +1067,7 @@ fn run_bounded_loaf_cargo(
         source,
     })?;
     command.stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
+    isolate_process_group(command);
     let mut child = command.spawn().map_err(|source| OvenLoafError::Io {
         path: PathBuf::from(label),
         source,
@@ -1077,8 +1079,10 @@ fn run_bounded_loaf_cargo(
         })?;
         peak = peak.max(observed);
         if observed > transient_limit {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_process_group(&mut child).map_err(|source| OvenLoafError::Io {
+                path: PathBuf::from(label),
+                source,
+            })?;
             return Err(OvenLoafError::Preparation {
                 message: format!(
                     "{label} exceeded the {transient_limit}-byte Loaf transient allowance at {observed} bytes"
@@ -2607,7 +2611,7 @@ mod tests {
         OvenLoafCompatibility, OvenLoafEnvelope, OvenLoafEnvelopeManifest, OvenLoafEnvelopeMember, OvenLoafError,
         OvenLoafSelection, acquire_exclusive_loaf_generation_lock, acquire_loaf_generation_lock, committed_loaf_paths,
         digest_runtime_crate_source, loaf_envelope_specifications, loaf_from_loaf, materialize_loaf_from_loaf,
-        materialize_loaf_from_loaf_with_selection, select_most_specific_compatible_loaf,
+        materialize_loaf_from_loaf_with_selection, run_bounded_loaf_cargo, select_most_specific_compatible_loaf,
     };
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactExtern, OvenRustcArtifactManifest,
@@ -2615,6 +2619,58 @@ mod tests {
     };
     use crate::oven::store::{OvenStore, OvenStoreLimits};
     use crate::oven::{OvenGeneratedProjectRequest, digest_bytes, digest_source_tree, receipt_generated_project};
+
+    #[cfg(unix)]
+    #[test]
+    fn loaf_capacity_abort_terminates_fake_cargo_descendants() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+        use std::time::Instant;
+
+        let fixture = tempfile::tempdir()?;
+        let capacity_root = fixture.path().join("capacity");
+        let capture_root = fixture.path().join("capture");
+        let overflow = capacity_root.join("overflow");
+        let descendant_pid = fixture.path().join("descendant-pid");
+        let cargo = fixture.path().join("cargo");
+        fs::create_dir_all(&capacity_root)?;
+        fs::write(
+            &cargo,
+            format!(
+                "#!/bin/sh\nsleep 30 &\nprintf '%s\\n' \"$!\" > \"{}\"\ndd if=/dev/zero of=\"{}\" bs=8192 count=1 2>/dev/null\nwait\n",
+                descendant_pid.display(),
+                overflow.display(),
+            ),
+        )?;
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
+
+        let mut command = Command::new(&cargo);
+        let started = Instant::now();
+        let result = run_bounded_loaf_cargo(&mut command, &[&capacity_root], 4 * 1024, &capture_root, "fake Cargo");
+        assert!(matches!(result, Err(OvenLoafError::Preparation { .. })));
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "capacity abort waited for the fake Cargo descendant instead of terminating its process group"
+        );
+        fs::remove_dir_all(&capacity_root)?;
+        fs::remove_dir_all(&capture_root)?;
+        assert!(
+            !capacity_root.exists(),
+            "capacity-aborted Loaf staging was not removable"
+        );
+        assert!(
+            !capture_root.exists(),
+            "capacity-aborted Loaf capture output was not removable"
+        );
+        let pid = fs::read_to_string(descendant_pid)?.trim().parse::<u32>()?;
+        for _ in 0..100 {
+            if !crate::oven::process::process_exists(pid)? {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        Err("Loaf capacity abort left the fake-Cargo descendant running".into())
+    }
 
     #[test]
     fn committed_envelope_ignores_unreferenced_generations_and_rejects_foreign_paths()

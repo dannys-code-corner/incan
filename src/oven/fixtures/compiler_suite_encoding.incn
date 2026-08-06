@@ -11,6 +11,7 @@ from std.fs import Path
 from std.io import BytesIO
 from std.traits.error import Error
 
+
 def main() -> None:
     """Verify deterministic one-shot encoders from four independently backed capability families."""
     assert b32encode(b"hello") == "NBSWY3DP"

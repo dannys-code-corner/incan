@@ -18,6 +18,7 @@ from std.tempfile import TemporaryDirectory
 from std.testing import assert_true
 from std.uuid import UUID
 
+
 def main() -> None:
     """Verify checksum, encoding, and filesystem behavior from the selected provider closure."""
     assert_true(Path(".").exists())

@@ -175,6 +175,6 @@ Oven Alpha proves the maintained Incan workflow and the repository's own compile
 - the authored `Loaf.toml`, resolved `Oven.lock`, workspace settings, or registry model proposed for later work; or
 - broad ecosystem readiness based on Axum, Tokio, DataFusion, or other external-library bake-offs.
 
-Those are later releases and RFC work. In v0.5, the hidden baker is the only Cargo-backed compatibility publisher for supported Oven Alpha closures. If the Alpha envelope cannot authorize a normal command, Oven explains the miss and stops.
+Those are later releases and RFC work. For the v0.6 Alpha, the hidden baker is the only Cargo-backed compatibility publisher for supported Oven closures. If the Alpha envelope cannot authorize a normal command, Oven explains the miss and stops.
 
 For the complete command surface, see the [CLI reference](../reference/cli_reference.md).

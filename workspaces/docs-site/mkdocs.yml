@@ -321,6 +321,7 @@ nav:
       - RFCs: RFCs/index.md
   - Release notes:
       - Overview: release_notes/index.md
+      - Release 0.6: release_notes/0_6.md
       - Release 0.5: release_notes/0_5.md
       - Release 0.4: release_notes/0_4.md
       - Release 0.3: release_notes/0_3.md

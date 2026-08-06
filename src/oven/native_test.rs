@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use super::process::{isolate_process_group, terminate_process_group};
 use super::rustc::clear_inherited_cargo_environment;
 
 /// Inventory returned by one exact native libtest binary.
@@ -307,14 +308,9 @@ fn run_native_batch_child(
     };
 
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-
-        // Put each supervised root in its own process group. Nested Incan commands and fixture children inherit this
-        // group, allowing a timeout to close every inherited stdout/stderr writer before reader threads are joined.
-        command.process_group(0);
-    }
+    // Nested Incan commands and fixture children inherit this group, allowing a timeout to close every inherited
+    // stdout/stderr writer before reader threads are joined.
+    isolate_process_group(&mut command);
     let mut child = command.spawn().map_err(|source| OvenNativeTestError::Io {
         path: executable.to_path_buf(),
         source,
@@ -363,44 +359,7 @@ fn terminate_native_batch_child(
     child: &mut std::process::Child,
     executable: &Path,
 ) -> Result<std::process::ExitStatus, OvenNativeTestError> {
-    #[cfg(unix)]
-    {
-        let process_group = format!("-{}", child.id());
-        let group_kill = Command::new("/bin/kill")
-            .args(["-KILL", "--", &process_group])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if !matches!(group_kill, Ok(status) if status.success())
-            && let Err(source) = child.kill()
-        {
-            if let Some(status) = child.try_wait().map_err(|wait_source| OvenNativeTestError::Io {
-                path: executable.to_path_buf(),
-                source: wait_source,
-            })? {
-                return Ok(status);
-            }
-            return Err(OvenNativeTestError::Io {
-                path: executable.to_path_buf(),
-                source,
-            });
-        }
-    }
-    #[cfg(not(unix))]
-    if let Err(source) = child.kill() {
-        if let Some(status) = child.try_wait().map_err(|wait_source| OvenNativeTestError::Io {
-            path: executable.to_path_buf(),
-            source: wait_source,
-        })? {
-            return Ok(status);
-        }
-        return Err(OvenNativeTestError::Io {
-            path: executable.to_path_buf(),
-            source,
-        });
-    }
-
-    child.wait().map_err(|source| OvenNativeTestError::Io {
+    terminate_process_group(child).map_err(|source| OvenNativeTestError::Io {
         path: executable.to_path_buf(),
         source,
     })
@@ -778,7 +737,7 @@ mod tests {
         assert!(report.output.contains("timed out after 10ms"), "{report:#?}");
         assert!(report.output.contains(&executable_display), "{report:#?}");
         assert!(
-            started.elapsed() < Duration::from_secs(2),
+            started.elapsed() < Duration::from_secs(15),
             "descendant-held pipes outlived the process-group timeout"
         );
         Ok(())

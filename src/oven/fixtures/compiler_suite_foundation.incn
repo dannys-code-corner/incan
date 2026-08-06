@@ -32,10 +32,12 @@ from rust::bitflags import bitflags
 from rust::serde_json import Value
 from rust::uuid import Uuid
 
+
 @route("/oven-loaf", methods=[GET])
 async def oven_loaf_route() -> Response:
     """Provide one checked web-routing surface for the foundation Loaf."""
     return Response.ok()
+
 
 def main() -> None:
     """Verify filesystem and external UUID behavior without relying on ambient Cargo state."""

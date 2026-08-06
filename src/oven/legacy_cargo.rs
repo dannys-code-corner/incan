@@ -21,6 +21,7 @@ use crate::library_manifest::{LibraryManifest, digest_provider_artifact};
 use crate::provider::{SDK_INVENTORY_FILE, SdkInventory};
 
 use super::digest_bytes;
+use super::process::{isolate_process_group, terminate_process_group};
 use super::rustc::{
     OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactExtern, OvenRustcArtifactManifest,
     OvenRustcRegistryLeaf, OvenRustcSupportingArtifact, clear_inherited_cargo_environment, rustc_host_target,
@@ -4576,6 +4577,7 @@ fn run_legacy_cargo_invocation(
     if compact_debug_info && profile == "debug" {
         command.env("CARGO_PROFILE_DEV_DEBUG", "0");
     }
+    isolate_process_group(&mut command);
     let mut child = command.spawn().map_err(|source| OvenLegacyCargoError::Io {
         path: cargo.clone(),
         source,
@@ -4598,8 +4600,10 @@ fn run_legacy_cargo_invocation(
                     0
                 };
                 if reservation > transient_limit {
-                    let _ = child.kill();
-                    let _ = child.wait_with_output();
+                    terminate_process_group(&mut child).map_err(|source| OvenLegacyCargoError::Io {
+                        path: cargo.clone(),
+                        source,
+                    })?;
                     return Err(OvenLegacyCargoError::TransientCapacityExceeded {
                         path: capacity_root.to_path_buf(),
                         observed_physical_bytes: reservation,
@@ -7016,6 +7020,7 @@ mod tests {
     #[test]
     fn cargo_monitor_counts_the_whole_private_publisher_staging_root() -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
 
         let fixture = tempfile::tempdir()?;
         let cargo = fixture.path().join("cargo");
@@ -7024,14 +7029,22 @@ mod tests {
         let staging = fixture.path().join("legacy-cargo-staging");
         let target = staging.join("current-target");
         let retained_output = staging.join("earlier-target/overflow");
+        let descendant_pid = fixture.path().join("cargo-descendant-pid");
         fs::create_dir_all(retained_output.parent().ok_or("retained output parent missing")?)?;
-        fs::write(&retained_output, vec![0_u8; 8 * 1024])?;
         fs::write(&manifest, "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n")?;
-        fs::write(&cargo, "#!/bin/sh\nexit 0\n")?;
+        fs::write(
+            &cargo,
+            format!(
+                "#!/bin/sh\nsleep 30 &\nprintf '%s\\n' \"$!\" > \"{}\"\ndd if=/dev/zero of=\"{}\" bs=131072 count=1 2>/dev/null\nwait\n",
+                descendant_pid.display(),
+                retained_output.display(),
+            ),
+        )?;
         fs::write(&rustc, "#!/bin/sh\nexit 0\n")?;
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
         fs::set_permissions(&rustc, fs::Permissions::from_mode(0o755))?;
 
+        let started = Instant::now();
         let result = run_legacy_cargo_invocation(
             &cargo,
             &rustc,
@@ -7041,7 +7054,7 @@ mod tests {
             "aarch64-apple-darwin",
             "debug",
             &[],
-            4 * 1024,
+            64 * 1024,
             "build",
             &OvenLegacyCargoInvocationTarget::None,
             false,
@@ -7052,7 +7065,20 @@ mod tests {
             result,
             Err(super::OvenLegacyCargoError::TransientCapacityExceeded { path, .. }) if path == staging
         ));
-        Ok(())
+        assert!(started.elapsed() < Duration::from_secs(2));
+        fs::remove_dir_all(&staging)?;
+        assert!(
+            !staging.exists(),
+            "capacity-aborted publisher staging was not removable"
+        );
+        let pid = fs::read_to_string(descendant_pid)?.trim().parse::<u32>()?;
+        for _ in 0..100 {
+            if !crate::oven::process::process_exists(pid)? {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        return Err("capacity abort left the fake-Cargo descendant running".into());
     }
 
     #[cfg(unix)]
