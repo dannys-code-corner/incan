@@ -294,31 +294,28 @@ fn write_executable(path: &Path, contents: &str) -> Result<(), Box<dyn std::erro
     make_executable(path)
 }
 
-fn write_fake_bash_recorder(root: &Path) -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
+fn write_fake_bash_arg_printer(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let fake_bin = root.join("fake-bin");
     fs::create_dir_all(&fake_bin)?;
-    let log = root.join("bash-args.log");
     write_executable(
         &fake_bin.join("bash"),
         r#"#!/usr/bin/env sh
 set -eu
-: > "$FAKE_BASH_LOG"
 for arg in "$@"; do
-  printf '%s\n' "$arg" >> "$FAKE_BASH_LOG"
+  printf '%s\n' "$arg"
 done
 "#,
     )?;
-    Ok((fake_bin, log))
+    Ok(fake_bin)
 }
 
-fn assert_recorded_arg_pair(log: &Path, name: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let args = fs::read_to_string(log)?;
+fn assert_printed_arg_pair(output: &[u8], name: &str, value: &str) {
+    let args = String::from_utf8_lossy(output);
     let lines = args.lines().collect::<Vec<_>>();
     assert!(
         lines.windows(2).any(|pair| pair == [name, value]),
         "expected recorded args to contain {name} {value}, got:\n{args}"
     );
-    Ok(())
 }
 
 fn write_fixture_toolchain_commands(root: &Path) -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
@@ -1761,7 +1758,7 @@ fn npm_installer_wrapper_delegates_to_shared_toolchain_installer() -> Result<(),
 #[test]
 fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = ToolchainTestStaging::new()?;
-    let (fake_bin, log) = write_fake_bash_recorder(tmp.path())?;
+    let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
     let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.4.0/manifest.json";
 
@@ -1770,7 +1767,6 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         .arg("--package-install")
         .arg("--dry-run")
         .env("PATH", format!("{}:{current_path}", fake_bin.display()))
-        .env("FAKE_BASH_LOG", &log)
         .env_remove("INCAN_TOOLCHAIN_MANIFEST")
         .env_remove("INCAN_SKIP_NPM_INSTALL")
         .output()?;
@@ -1781,7 +1777,7 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_recorded_arg_pair(&log, "--manifest", expected_manifest)?;
+    assert_printed_arg_pair(&output.stdout, "--manifest", expected_manifest);
     Ok(())
 }
 
@@ -1817,7 +1813,7 @@ fn pip_installer_wrapper_delegates_to_shared_toolchain_installer() -> Result<(),
 #[test]
 fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = ToolchainTestStaging::new()?;
-    let (fake_bin, log) = write_fake_bash_recorder(tmp.path())?;
+    let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
     let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.4.0/manifest.json";
 
@@ -1826,7 +1822,6 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         .arg("install")
         .arg("--dry-run")
         .env("PATH", format!("{}:{current_path}", fake_bin.display()))
-        .env("FAKE_BASH_LOG", &log)
         .env_remove("INCAN_TOOLCHAIN_MANIFEST")
         .output()?;
 
@@ -1836,7 +1831,7 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_recorded_arg_pair(&log, "--manifest", expected_manifest)?;
+    assert_printed_arg_pair(&output.stdout, "--manifest", expected_manifest);
     Ok(())
 }
 

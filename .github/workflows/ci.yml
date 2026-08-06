@@ -244,7 +244,14 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: oven-compiler-suite-linux-evidence
-          path: target/oven-compiler-suite-output
+          path: |
+            target/oven-compiler-suite-output/evidence.json
+            target/oven-compiler-suite-output/compiler-suite-report.json
+            target/oven-compiler-suite-output/compiler-suite-stdout.json
+            target/oven-compiler-suite-output/baker-result.json
+            target/oven-compiler-suite-output/raw-disk-usage-kib.tsv
+            target/oven-compiler-suite-output/cargo-guard/invocations.log
+            target/oven-compiler-suite-output/shards/**/*.libtest-output.txt
           if-no-files-found: warn
           retention-days: 14
       - name: Download release compiler for normal Oven smoke commands
@@ -466,7 +473,14 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: oven-compiler-suite-macos-evidence
-          path: target/oven-compiler-suite-output
+          path: |
+            target/oven-compiler-suite-output/evidence.json
+            target/oven-compiler-suite-output/compiler-suite-report.json
+            target/oven-compiler-suite-output/compiler-suite-stdout.json
+            target/oven-compiler-suite-output/baker-result.json
+            target/oven-compiler-suite-output/raw-disk-usage-kib.tsv
+            target/oven-compiler-suite-output/cargo-guard/invocations.log
+            target/oven-compiler-suite-output/shards/**/*.libtest-output.txt
           if-no-files-found: warn
           retention-days: 14
       - name: Record guarded macOS Oven Alpha build benchmark
@@ -679,7 +693,14 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: oven-compiler-suite-msrv-evidence
-          path: target/oven-compiler-suite-output
+          path: |
+            target/oven-compiler-suite-output/evidence.json
+            target/oven-compiler-suite-output/compiler-suite-report.json
+            target/oven-compiler-suite-output/compiler-suite-stdout.json
+            target/oven-compiler-suite-output/baker-result.json
+            target/oven-compiler-suite-output/raw-disk-usage-kib.tsv
+            target/oven-compiler-suite-output/cargo-guard/invocations.log
+            target/oven-compiler-suite-output/shards/**/*.libtest-output.txt
           if-no-files-found: warn
           retention-days: 14
       - name: Upload compiled SDK provider store
