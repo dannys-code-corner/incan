@@ -141,17 +141,14 @@ jobs:
             name: ubuntu-latest, stable
             runner: ubuntu-latest
             toolchain: stable
-            run_focused_tests: true
           - id: macos-stable
             name: macos-latest, stable
             runner: macos-latest
             toolchain: stable
-            run_focused_tests: false
           - id: linux-msrv
             name: ubuntu-latest, MSRV 1.93.0
             runner: ubuntu-latest
             toolchain: 1.93.0
-            run_focused_tests: false
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -174,9 +171,6 @@ jobs:
           make fetch-oven-loaf-sources
       - name: Build the compiler
         run: CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
-      - name: Run focused Oven regressions
-        if: ${{ matrix.run_focused_tests }}
-        run: make test-oven-focused
       - name: Build checked-reference generators
         if: ${{ matrix.id == 'linux-stable' }}
         run: CARGO_BUILD_JOBS=2 cargo build --locked -p incan_core --bin generate_lang_reference

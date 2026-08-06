@@ -1029,8 +1029,12 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
     assert!(
         workflow.contains("cancel-in-progress: true")
             && workflow.contains("make -s test-oven-release-smoke")
-            && workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs and retain focused Oven correctness and normal-command gates"
+            && !workflow.contains("make test-oven-focused"),
+        "pull-request CI must cancel superseded runs and use the bounded Oven normal-command gate"
+    );
+    assert!(
+        evidence_workflow.contains("uses: ./.github/actions/run-oven-compiler-suite"),
+        "complete compiler-suite correctness must remain in explicit release evidence"
     );
     assert_eq!(
         makefile.matches("CARGO_PROFILE_TEST_DEBUG=0 cargo test").count(),
