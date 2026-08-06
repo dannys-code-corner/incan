@@ -351,12 +351,12 @@ test-prewarm-oven-release-loafs: test-prewarm-sdk
 .PHONY: test-oven-focused
 test-oven-focused:
 	@echo "\033[1mRunning focused Oven and Loaf regression tests...\033[0m"
-	@cargo test --locked --features lsp --lib oven::
-	@cargo test --locked --features lsp --test cli_integration \
+	@CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --features lsp --lib oven::
+	@CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --features lsp --test cli_integration \
 		lock_records_oven_interop_requirements_and_detects_input_drift -- --exact
-	@cargo test --locked --features lsp --test toolchain_installer_tests \
+	@CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --features lsp --test toolchain_installer_tests \
 		oven_alpha_benchmark_records_a_verified_cargo_guard_verdict -- --exact
-	@cargo test --locked --features lsp --test toolchain_installer_tests \
+	@CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --features lsp --test toolchain_installer_tests \
 		compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence -- --exact
 
 .PHONY: test-oven-release-smoke

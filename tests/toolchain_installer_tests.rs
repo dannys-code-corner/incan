@@ -1032,6 +1032,11 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.contains("make test-oven-focused"),
         "pull-request CI must cancel superseded runs and retain focused Oven correctness and normal-command gates"
     );
+    assert_eq!(
+        makefile.matches("CARGO_PROFILE_TEST_DEBUG=0 cargo test").count(),
+        4,
+        "focused Oven tests must not pay the cold-link cost of unused test debug information"
+    );
     assert!(
         !workflow.contains("run-oven-compiler-suite") && !workflow.contains("bench_oven_alpha.sh"),
         "complete repository-suite and benchmark evidence must not run on every pull-request commit"
