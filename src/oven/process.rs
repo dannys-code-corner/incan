@@ -16,14 +16,18 @@ pub(crate) fn isolate_process_group(command: &mut Command) {
 /// Terminate and reap an isolated child process group.
 ///
 /// Cargo, Rustdoc, libtest, build scripts, compilers, and linkers inherit the isolated group unless they explicitly
-/// create a new session, which none of the supported Oven child paths permit or require. The negative group ID is
-/// passed without GNU's optional `--` separator because macOS `/bin/kill` rejects that spelling.
+/// create a new session, which none of the supported Oven child paths permit or require. GNU `kill` needs `--`
+/// before a negative process-group ID, while the BSD implementation shipped by macOS rejects that separator.
 pub(crate) fn terminate_process_group(child: &mut Child) -> io::Result<ExitStatus> {
     #[cfg(unix)]
     {
         let process_group = format!("-{}", child.id());
-        let status = Command::new("/bin/kill")
-            .args(["-KILL", &process_group])
+        let mut command = Command::new("/bin/kill");
+        command.arg("-KILL");
+        #[cfg(target_os = "linux")]
+        command.arg("--");
+        let status = command
+            .arg(&process_group)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
