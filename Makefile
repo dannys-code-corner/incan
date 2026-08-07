@@ -362,7 +362,7 @@ test-oven-focused:
 .PHONY: test-oven-pr-regressions
 test-oven-pr-regressions:
 	@echo "\033[1mRunning bounded Oven process-containment regressions...\033[0m"
-	@CARGO_BUILD_JOBS=2 CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --features lsp --test oven_pr_regressions
+	@CARGO_BUILD_JOBS=2 cargo test --locked --features lsp --test oven_pr_regressions
 
 .PHONY: test-oven-release-smoke
 test-oven-release-smoke: test-prewarm-oven-release-loafs
