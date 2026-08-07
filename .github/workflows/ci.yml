@@ -171,6 +171,9 @@ jobs:
           make fetch-oven-loaf-sources
       - name: Build the compiler
         run: CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
+      - name: Run bounded Oven process-containment regressions
+        if: ${{ matrix.id == 'linux-stable' }}
+        run: make test-oven-pr-regressions
       - name: Build checked-reference generators
         if: ${{ matrix.id == 'linux-stable' }}
         run: CARGO_BUILD_JOBS=2 cargo build --locked -p incan_core --bin generate_lang_reference

@@ -5628,7 +5628,7 @@ mod tests {
         )?;
 
         let started = Instant::now();
-        let error = run_trusted_rustdoc_test(&OvenTrustedRustdocTestRequest {
+        let Err(error) = run_trusted_rustdoc_test(&OvenTrustedRustdocTestRequest {
             receipt: &receipt,
             artifacts: &empty_manifest(&receipt),
             artifact_root: artifact_root.path(),
@@ -5643,8 +5643,9 @@ mod tests {
             is_proc_macro: false,
             prefer_dynamic: false,
             timeout: Some(Duration::from_secs(10)),
-        })
-        .expect_err("stalled Rustdoc should exceed its receipt-bound root deadline");
+        }) else {
+            return Err("stalled Rustdoc unexpectedly completed within its receipt-bound root deadline".into());
+        };
         assert!(descendant_started.is_file(), "fake Rustdoc descendant was not started");
         assert!(matches!(error, OvenRustcError::RustdocTestFailed { .. }));
         assert!(error.to_string().contains("timed out after 10000ms"), "{error}");

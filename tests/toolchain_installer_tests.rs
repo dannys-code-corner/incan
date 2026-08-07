@@ -1029,8 +1029,10 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
     assert!(
         workflow.contains("cancel-in-progress: true")
             && workflow.contains("make -s test-oven-release-smoke")
+            && workflow.contains("make test-oven-pr-regressions")
+            && workflow.contains("matrix.id == 'linux-stable'")
             && !workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs and use the bounded Oven normal-command gate"
+        "pull-request CI must cancel superseded runs and retain bounded normal-command and process-containment gates"
     );
     assert!(
         evidence_workflow.contains("uses: ./.github/actions/run-oven-compiler-suite"),
@@ -1038,7 +1040,7 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
     );
     assert_eq!(
         makefile.matches("CARGO_PROFILE_TEST_DEBUG=0 cargo test").count(),
-        4,
+        5,
         "focused Oven tests must not pay the cold-link cost of unused test debug information"
     );
     assert!(

@@ -359,6 +359,11 @@ test-oven-focused:
 	@CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --test toolchain_installer_tests \
 		compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence -- --exact
 
+.PHONY: test-oven-pr-regressions
+test-oven-pr-regressions:
+	@echo "\033[1mRunning bounded Oven process-containment regressions...\033[0m"
+	@CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --test oven_pr_regressions
+
 .PHONY: test-oven-release-smoke
 test-oven-release-smoke: test-prewarm-oven-release-loafs
 	@echo "\033[1mRunning Cargo-guarded Oven release-envelope smoke...\033[0m"
