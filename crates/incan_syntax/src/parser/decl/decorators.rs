@@ -40,6 +40,11 @@ impl<'a> Parser<'a> {
         let mut args = Vec::new();
         if !self.check_punct(PunctuationId::RParen) {
             loop {
+                // Allow trailing comma: check for ) at start of loop iteration
+                if self.check_punct(PunctuationId::RParen) {
+                    break;
+                }
+
                 // Check for named argument (name: Type or name=value)
                 if let TokenKind::Ident(name) = &self.peek().kind {
                     let name = name.clone();
