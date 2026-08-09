@@ -2378,21 +2378,28 @@ fn prepare_compiler_suite_child<'a>(
     let mut target_environment = environment.clone();
     apply_compiler_suite_target_capabilities(target, &mut target_environment, fixture_cargo)?;
     let mut binary_compile_environment = BTreeMap::new();
+    let child_state_root = compiler_suite_child_state_root(output_directory, target);
     // A parallel child may itself invoke `incan`. Give that nested command an isolated mutable home while it reads
     // the shared, leased provider store through the receipt-bound environment above.
     target_environment.insert(
         "INCAN_HOME".to_string(),
-        compiler_suite_environment_path(&output_directory.join("incan-home"))?
+        compiler_suite_environment_path(&child_state_root.join("incan-home"))?
             .display()
             .to_string(),
     );
-    // Nested normal commands may still use generated-project state for source and release-asset fixtures.  A
-    // scheduler-wide target directory lets otherwise independent suite roots overwrite that mutable state while
-    // they run in parallel.  Keep it with the caller-owned child output directory just like INCAN_HOME; this does
-    // not affect the parent-leased immutable native provider closure.
+    // Tests that intentionally clear `INCAN_HOME` must still resolve their default state below the same child-owned
+    // boundary rather than a sibling root's home. This remains separate from the parent-leased immutable closure.
+    target_environment.insert(
+        "HOME".to_string(),
+        compiler_suite_environment_path(&child_state_root.join("home"))?
+            .display()
+            .to_string(),
+    );
+    // Nested normal commands may still use generated-project state for source and release-asset fixtures. Keep it
+    // per child: parallel roots can otherwise race over mutable build-script, lock, and cleanup outputs.
     target_environment.insert(
         "INCAN_GENERATED_CARGO_TARGET_DIR".to_string(),
-        compiler_suite_environment_path(&output_directory.join("generated-cargo-target"))?
+        compiler_suite_environment_path(&child_state_root.join("generated-cargo-target"))?
             .display()
             .to_string(),
     );
@@ -2961,6 +2968,19 @@ fn compiler_suite_target_output_name(
         compiler_suite_output_segment(&target.target_kind),
         compiler_suite_output_segment(&target.target_name)
     )
+}
+
+/// Return the mutable caller-owned state root for one scheduled compiler-suite child.
+///
+/// The immutable Loaf envelope is shared and lease-protected at the suite level. Homes and generated-project
+/// targets are not: each root receives a distinct location so its nested normal commands cannot race a sibling.
+fn compiler_suite_child_state_root(
+    output_directory: &Path,
+    target: &crate::oven::legacy_cargo::OvenCompilerTestSuiteTarget,
+) -> PathBuf {
+    output_directory
+        .join("children")
+        .join(compiler_suite_target_output_name(0, target))
 }
 
 /// Keep direct-Rustc workspace library outputs deterministic and separate from executable target outputs.
@@ -4615,13 +4635,13 @@ mod tests {
         OvenImportCommandOptions, OvenLoafBakeCommandOptions, OvenPlanPublishCommandOptions, OvenRunCommandOptions,
         OvenStoreCommandOptions, OvenTestCommandOptions, apply_compiler_suite_target_capabilities,
         attach_compiler_suite_target_workspace_libraries, bake_planned_compiler_suite_binaries,
-        bake_planned_compiler_suite_workspace_libraries, compiler_suite_auto_parallel_jobs, compiler_suite_cli_output,
-        compiler_suite_completion_failures, compiler_suite_directory, compiler_suite_environment,
-        compiler_suite_environment_path, compiler_suite_file, compiler_suite_remove_generated_rust_closure,
-        compiler_suite_selected_shard_references, default_rustup_home, default_store_root,
-        loaf_envelope_default_limits, loaf_envelope_evidence, oven_import, oven_legacy_cargo_bake_loafs,
-        oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path, prepare_compiler_suite_child,
-        resolve_limits_with_environment_and_defaults, reuse_complete_loaf_envelope,
+        bake_planned_compiler_suite_workspace_libraries, compiler_suite_auto_parallel_jobs,
+        compiler_suite_child_state_root, compiler_suite_cli_output, compiler_suite_completion_failures,
+        compiler_suite_directory, compiler_suite_environment, compiler_suite_environment_path, compiler_suite_file,
+        compiler_suite_remove_generated_rust_closure, compiler_suite_selected_shard_references, default_rustup_home,
+        default_store_root, loaf_envelope_default_limits, loaf_envelope_evidence, oven_import,
+        oven_legacy_cargo_bake_loafs, oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path,
+        prepare_compiler_suite_child, resolve_limits_with_environment_and_defaults, reuse_complete_loaf_envelope,
         run_compiler_suite_children_with_leases_retained, run_prepared_compiler_suite_children,
         select_compiler_suite_shards, write_compiler_suite_report, write_native_test_failure_transcript,
     };
@@ -6102,15 +6122,35 @@ fn planned_suite_child_uses_sdk_inventory() -> Result<(), String> {
                 .get("INCAN_GENERATED_CARGO_TARGET_DIR")
                 .ok_or("prepared child has no isolated generated target directory")?,
         );
+        let child_state_root = compiler_suite_child_state_root(output.path(), &suite_child);
         assert!(
-            generated_target.starts_with(output.path()),
-            "the generated target must remain within caller-owned child output: {}",
+            generated_target.starts_with(&child_state_root),
+            "the generated target must remain within its caller-owned child state: {}",
             generated_target.display()
         );
         assert_eq!(
             generated_target.file_name().and_then(|name| name.to_str()),
             Some("generated-cargo-target"),
             "the isolated generated target should be distinguishable from the shared harness target"
+        );
+        let child_incan_home = child_state_root.join("incan-home").display().to_string();
+        let child_home = child_state_root.join("home").display().to_string();
+        assert_eq!(
+            prepared_child.environment.get("INCAN_HOME"),
+            Some(&child_incan_home),
+            "each stored child must receive its own mutable Oven home"
+        );
+        assert_eq!(
+            prepared_child.environment.get("HOME"),
+            Some(&child_home),
+            "default state must remain inside the same child-owned boundary"
+        );
+        let mut sibling = suite_child.clone();
+        sibling.target_name = "cli_integration_sibling".to_string();
+        assert_ne!(
+            compiler_suite_child_state_root(output.path(), &suite_child),
+            compiler_suite_child_state_root(output.path(), &sibling),
+            "distinct parallel roots must not share mutable state"
         );
         let report = run_prepared_compiler_suite_children(vec![prepared_child], &receipt, &rustc)?;
 

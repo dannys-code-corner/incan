@@ -4074,6 +4074,118 @@ pub def retain(file: File) -> File:
 
     #[cfg(feature = "rust_inspect")]
     #[test]
+    fn test_codegen_borrows_retained_rustix_file_for_as_fd_generic_free_function()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::backend::project::ProjectGenerator;
+        use crate::manifest::{DependencySource, DependencySpec};
+        use crate::rust_inspect::write_rustix_as_fd_probe_crate;
+
+        let source = r#"
+from rust::rustix::fs import File, FlockOperation, flock
+
+pub def retain(file: File) -> File:
+  flock(file, FlockOperation.LockExclusive)
+  file.sync_all()
+  return file
+"#;
+        let tmp = tempfile::tempdir()?;
+        write_rustix_as_fd_probe_crate(tmp.path())?;
+
+        let ast = parse_program_result(source)?;
+        let mut codegen = IrCodegen::new();
+        codegen.set_rust_inspect_manifest_dir(tmp.path().to_path_buf());
+        let code = codegen
+            .try_generate(&ast)
+            .map_err(|error| std::io::Error::other(format!("codegen failed: {error}")))?;
+
+        assert!(
+            code.contains("flock(&file, FlockOperation::LockExclusive);"),
+            "expected rustix::fs::flock to borrow the retained File through its AsFd generic; got:\n{code}"
+        );
+        assert!(
+            code.contains("file.sync_all();") && code.contains("return file;"),
+            "the retained file must remain available for sync_all and return after flock; got:\n{code}"
+        );
+
+        let generated_root = tmp.path().join("generated");
+        let mut generator = ProjectGenerator::new(&generated_root, "retained_rustix_file", false);
+        generator.set_dependencies(vec![DependencySpec {
+            crate_name: "rustix".to_string(),
+            version: None,
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Path {
+                path: tmp.path().to_path_buf(),
+            },
+            optional: false,
+            package: None,
+        }]);
+        generator.generate(&code)?;
+        let capability = crate::oven::compiler_suite_env::OvenCompilerSuiteCapability::from_environment(
+            crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_CAPABILITY_ENV,
+        )
+        .map_err(std::io::Error::other)?;
+        let output = if let Some(capability) = capability {
+            let fixture_output = tmp.path().join("oven-rustix-fixture");
+            std::fs::create_dir_all(&fixture_output)?;
+            let fixture = std::process::Command::new(&capability.rustc)
+                .args(["--edition=2021", "--crate-name", "rustix", "--crate-type=rlib"])
+                .arg(tmp.path().join("src/lib.rs"))
+                .arg("--out-dir")
+                .arg(&fixture_output)
+                .output()?;
+            assert!(
+                fixture.status.success(),
+                "expected the direct-rustc rustix fixture to compile. stderr:\n{}\nstdout:\n{}",
+                String::from_utf8_lossy(&fixture.stderr),
+                String::from_utf8_lossy(&fixture.stdout)
+            );
+
+            let rustix_rlib = fixture_output.join("librustix.rlib");
+            let mut command = std::process::Command::new(&capability.rustc);
+            command
+                .args([
+                    "--edition=2024",
+                    "--crate-name",
+                    "retained_rustix_file",
+                    "--crate-type=lib",
+                    "--emit=metadata",
+                ])
+                .arg("--out-dir")
+                .arg(generated_root.join("oven-check"))
+                .env("CARGO_MANIFEST_DIR", &generated_root)
+                .env("CARGO_PKG_NAME", "retained_rustix_file")
+                .env("CARGO_PKG_VERSION", "0.1.0");
+            for dependency_path in &capability.dependency_search_paths {
+                command
+                    .arg("-L")
+                    .arg(format!("dependency={}", dependency_path.display()));
+            }
+            for (crate_name, path) in &capability.externs {
+                command.arg("--extern").arg(format!("{crate_name}={}", path.display()));
+            }
+            command
+                .arg("--extern")
+                .arg(format!("rustix={}", rustix_rlib.display()))
+                .arg(generator.crate_root_path())
+                .output()?
+        } else {
+            std::process::Command::new("cargo")
+                .args(["check", "--offline"])
+                .current_dir(&generated_root)
+                .output()?
+        };
+        assert!(
+            output.status.success(),
+            "expected the generated retained-file Rust to compile. stderr:\n{}\nstdout:\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
     fn test_codegen_materializes_owner_specialized_rust_associated_function_arguments()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::frontend::typechecker::TypeChecker;

@@ -3316,6 +3316,7 @@ impl<'a> IrEmitter<'a> {
     #[tracing::instrument(skip_all, fields(decl_count = program.declarations.len()))]
     pub fn emit_program(&mut self, program: &IrProgram) -> Result<String, EmitError> {
         self.iterator_sum_used.replace(false);
+        self.const_bindings.clear();
         // RFC 023: propagate rust.module() path from IR to emitter for @rust.extern delegation.
         if self.rust_module_path.is_none() {
             self.rust_module_path = program.rust_module_path.clone();
@@ -3381,11 +3382,13 @@ impl<'a> IrEmitter<'a> {
             {
                 self.rusttype_alias_names.insert(name.clone());
             }
-            // Collect static-str const initializer expressions for later resolution.
-            if let IrDeclKind::Const { name, ty, value, .. } = &decl.kind
-                && matches!(ty, IrType::StaticStr)
-            {
-                static_str_const_exprs.insert(name.clone(), value.clone());
+            // Collect const initializer expressions before emission. String folding and const representability both
+            // need the declared target type when one checked const flows through another model constant.
+            if let IrDeclKind::Const { name, ty, value, .. } = &decl.kind {
+                self.const_bindings.insert(name.clone(), (ty.clone(), value.clone()));
+                if matches!(ty, IrType::StaticStr) {
+                    static_str_const_exprs.insert(name.clone(), value.clone());
+                }
             }
         }
 
@@ -3707,7 +3710,10 @@ impl<'a> IrEmitter<'a> {
                 _ => None,
             })
             .collect();
-        *self.module_has_local_statics.borrow_mut() = !static_names.is_empty();
+        // `program.module_init` is compiler-generated work such as `@describe` registration. It uses the same
+        // once-only helper as static initialization, and must run when a callable from an otherwise static-free
+        // contributing module is invoked.
+        *self.module_needs_initialization.borrow_mut() = !static_names.is_empty() || !program.module_init.is_empty();
         let (imported_static_init_bindings, imported_static_module_init_bindings) =
             self.collect_imported_static_init_bindings(&emitted_declarations);
         self.set_imported_static_init_bindings(imported_static_init_bindings);

@@ -90,6 +90,84 @@ fn parse_program(source: &str, context: &str) -> crate::frontend::ast::Program {
     parser::parse(&tokens).unwrap_or_else(|errs| panic!("{context} parse failed: {errs:?}"))
 }
 
+/// Issue #1004: an imported public registry retains its defining module as the only registry authority.
+#[test]
+fn imported_registry_description_uses_canonical_catalogue_definition_issue1004() -> Result<(), String> {
+    let mut catalog = parse_program(
+        r#"
+from std.registry import Registry, SubjectKind
+
+@derive(Clone, Eq, Descriptor)
+pub model FunctionKey:
+  pub name: str
+
+@derive(Clone, Descriptor)
+pub model FunctionDescriptor:
+  pub deterministic: bool
+
+pub static functions: Registry[FunctionKey, FunctionDescriptor] = Registry.define(
+  subjects=[SubjectKind.Function],
+)
+"#,
+        "issue1004 catalog",
+    );
+    catalog.source_path = Some("/workspace/src/function_catalog.incn".to_string());
+    let consumer = parse_program(
+        r#"
+from std.registry import describe
+from function_catalog import FunctionDescriptor, FunctionKey, functions
+
+@describe(
+  functions,
+  FunctionKey(name="normalize"),
+  FunctionDescriptor(deterministic=true)
+)
+pub def normalize(value: str) -> str:
+  return value
+"#,
+        "issue1004 consumer",
+    );
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["normalize".to_string()]));
+    checker
+        .check_with_imports(&consumer, &[("function_catalog", &catalog)])
+        .map_err(|errors| format!("imported catalogue @describe should typecheck: {errors:?}"))?;
+
+    assert!(
+        checker.type_info().registry.definitions.is_empty(),
+        "the consumer must not recreate the catalogue registry definition"
+    );
+    let description = checker
+        .type_info()
+        .registry
+        .descriptions
+        .first()
+        .ok_or("the consumer should record one checked description")?;
+    assert!(
+        matches!(
+            &description.registry,
+            RegistryDescriptionRegistry::Imported { module_path, binding, public }
+                if module_path == &["function_catalog".to_string()] && binding == "functions" && *public
+        ),
+        "description must retain the catalogue registry owner, got {:?}",
+        description.registry
+    );
+
+    let metadata = crate::frontend::registry_metadata::collect_checked_registry_metadata(
+        checker.type_info(),
+        vec!["normalize".to_string()],
+        "issue1004",
+    );
+    assert!(
+        metadata.registries.is_empty(),
+        "the consumer metadata must not publish a duplicate registry definition"
+    );
+    assert_eq!(metadata.entries.len(), 1);
+    assert_eq!(metadata.entries[0].registry_identity, "function_catalog::functions");
+    assert!(metadata.entries[0].registry_public);
+    Ok(())
+}
+
 #[test]
 fn set_constructor_calls_record_canonical_collection_identity_issue951() -> Result<(), String> {
     let ast = parse_program(

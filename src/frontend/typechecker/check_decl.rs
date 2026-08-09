@@ -13,7 +13,9 @@ use crate::frontend::testing_markers::{
 use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty};
 
 use super::collect::decorators::resolve_decorator_id;
-use super::type_info::{RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryExplicitEntryInfo};
+use super::type_info::{
+    RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryDescriptionRegistry, RegistryExplicitEntryInfo,
+};
 use super::{DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, TestingFixtureInfo, TypeChecker, YieldContext};
 use incan_core::interop::{RustItemKind, RustItemMetadata, RustTraitAssoc};
 use incan_core::lang::decorators::{self, DecoratorId};
@@ -2491,7 +2493,7 @@ impl TypeChecker {
     }
 
     /// Return the typed key and descriptor arguments when `ty` is `Registry[K, T]`.
-    fn registry_type_arguments(ty: &ResolvedType) -> Option<(&ResolvedType, &ResolvedType)> {
+    pub(super) fn registry_type_arguments(ty: &ResolvedType) -> Option<(&ResolvedType, &ResolvedType)> {
         let ResolvedType::Generic(name, arguments) = ty else {
             return None;
         };
@@ -2714,8 +2716,28 @@ impl TypeChecker {
                 .any(|entry| entry.registry_name == registry_name && &entry.key == key)
     }
 
+    /// Return whether `key` is already claimed by a described registry's canonical definition.
+    ///
+    /// Local aliases remain relevant to runtime lowering, but duplicate validation must compare the source owner so
+    /// importing the same registry under two names cannot create two checked descriptions for one registry key.
+    fn registry_description_has_key(
+        &self,
+        registry: &RegistryDescriptionRegistry,
+        key: &SemanticRegistryValue,
+    ) -> bool {
+        self.type_info
+            .registry
+            .descriptions
+            .iter()
+            .any(|entry| &entry.registry == registry && &entry.key == key)
+            || self.type_info.registry.explicit_entries.iter().any(|entry| {
+                matches!(registry, RegistryDescriptionRegistry::Local { binding } if binding == &entry.registry_name)
+                    && &entry.key == key
+            })
+    }
+
     /// Extract the subject contract from a static `Registry.define(subjects=[...])` initializer.
-    fn registry_definition_subjects(
+    pub(super) fn registry_definition_subjects(
         &self,
         static_decl: &StaticDecl,
     ) -> Result<Vec<SemanticRegistrySubjectKind>, String> {
@@ -4866,7 +4888,26 @@ impl TypeChecker {
                 ));
                 continue;
             };
-            let Some(definition) = self.type_info.registry.definitions.get(registry_name).cloned() else {
+            let (definition, canonical_registry) = if let Some(definition) =
+                self.type_info.registry.definitions.get(registry_name).cloned()
+            {
+                (
+                    definition,
+                    RegistryDescriptionRegistry::Local {
+                        binding: registry_name.clone(),
+                    },
+                )
+            } else if let Some(imported) = self.type_info.registry.imported_definitions.get(registry_name).cloned() {
+                let public = imported.definition.is_public;
+                (
+                    imported.definition,
+                    RegistryDescriptionRegistry::Imported {
+                        module_path: imported.owner_module_path,
+                        binding: imported.owner_binding,
+                        public,
+                    },
+                )
+            } else {
                 self.errors.push(CompileError::type_error(
                     format!("@describe registry `{registry_name}` must be initialized by Registry.define(...) before it is described"),
                     registry.span,
@@ -4927,7 +4968,7 @@ impl TypeChecker {
                     continue;
                 }
             };
-            if self.registry_has_key(registry_name, &key_value) {
+            if self.registry_description_has_key(&canonical_registry, &key_value) {
                 self.errors.push(CompileError::type_error(
                     format!("duplicate @describe key in registry `{registry_name}`"),
                     key.span,
@@ -4936,6 +4977,7 @@ impl TypeChecker {
             }
             self.type_info.registry.descriptions.push(RegistryDescriptionInfo {
                 registry_name: registry_name.clone(),
+                registry: canonical_registry,
                 key: key_value,
                 descriptor: descriptor_value,
                 subject_kind,

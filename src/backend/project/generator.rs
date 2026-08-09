@@ -1109,13 +1109,40 @@ impl ProjectGenerator {
         }
     }
 
+    /// Normalize one generated Rust target name without changing the public Cargo package identity.
+    ///
+    /// Cargo packages may retain distribution spellings such as `hyphenated-library`, while `[lib].name` and direct
+    /// `rustc --crate-name` require an identifier-compatible spelling. Every generated-library boundary must use this
+    /// one normalization rule so a consumer sees the same crate identity as the generated manifest.
+    pub(crate) fn rust_target_name(name: &str) -> String {
+        let mut target_name = name
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '_' {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        if target_name.is_empty()
+            || target_name
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+        {
+            target_name.insert(0, '_');
+        }
+        target_name
+    }
+
     /// Cargo target name used for the generated binary or library target.
     ///
     /// When a caller opts into a broad shared target directory, multiple unrelated generated projects can have the same
     /// user-facing project name (`main`, `consumer`, etc.). Cargo writes root binaries and libraries at
     /// `target/<profile>/<target-name>`, so shared target dirs need a unique target name to avoid stale binary reuse
-    /// and parallel build collisions. Library target names stay stable because native Rust consumers import them as
-    /// crate names from generated library artifacts.
+    /// and parallel build collisions. Library target names use [`Self::rust_target_name`] so native Rust consumers
+    /// import the same valid crate identifier that the manifest declares.
     pub(super) fn cargo_target_name(&self) -> String {
         if self.is_binary && self.cargo_target_dir_override().is_some() {
             let root_identity = self
@@ -1125,8 +1152,10 @@ impl ProjectGenerator {
                 .clone()
                 .unwrap_or_else(|| self.output_dir.to_string_lossy().into_owned());
             Self::shared_target_safe_name(&self.name, &root_identity)
-        } else {
+        } else if self.is_binary {
             self.name.clone()
+        } else {
+            Self::rust_target_name(&self.name)
         }
     }
 

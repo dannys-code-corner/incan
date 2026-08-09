@@ -2677,6 +2677,64 @@ fn test_consts_codegen() {
     insta::assert_snapshot!("consts", rust_code);
 }
 
+/// Issue #1001: an empty frozen descriptor field is const-safe even when its element model is not itself a Rust
+/// const type.
+///
+/// The integration test covers compilation and execution. This focused codegen proof keeps the backend admission
+/// contract local, so a generated-project runner cannot hide a regression in const representability.
+#[test]
+fn test_descriptor_const_with_empty_frozen_list_codegen_issue1001() {
+    let source = r#"
+@derive(Clone, Eq, Descriptor)
+model Version:
+  major: int
+  minor: int
+
+@derive(Clone, Eq, Descriptor)
+model Change:
+  version: Version
+  note: str
+
+@derive(Clone, Eq, Descriptor)
+model Deprecation:
+  since: Version
+  note: str
+
+@derive(Clone, Eq, Descriptor)
+model Lifecycle:
+  since: Version
+  changed: FrozenList[Change]
+  deprecated: Option[Deprecation]
+
+const INITIAL_VERSION: Version = Version(major=0, minor=1)
+const NO_CHANGES: FrozenList[Change] = []
+const INITIAL_LIFECYCLE: Lifecycle = Lifecycle(
+  since=INITIAL_VERSION,
+  changed=NO_CHANGES,
+  deprecated=None,
+)
+
+def main() -> None:
+  assert INITIAL_LIFECYCLE.changed == NO_CHANGES
+"#;
+
+    let rust_code = generate_rust(source);
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact.contains(
+            "constNO_CHANGES:incan_stdlib::frozen::FrozenList<Change>=incan_stdlib::frozen::FrozenList::new(&[],);"
+        ),
+        "empty FrozenList descriptor constants must emit a const-safe Rust initializer; generated:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("constINITIAL_LIFECYCLE:Lifecycle=Lifecycle{since:INITIAL_VERSION,changed:NO_CHANGES,deprecated:None::<_>,};"),
+        "nested descriptor constants must retain the exact frozen-list binding; generated:\n{rust_code}"
+    );
+}
+
 #[test]
 fn test_rfc052_module_static_storage_codegen() {
     let source = load_test_file("rfc052_module_static_storage");
