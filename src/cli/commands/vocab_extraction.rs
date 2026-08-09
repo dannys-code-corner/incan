@@ -11,6 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::cli::{CliError, CliResult};
 use crate::library_manifest::{SoftKeywordActivation, VocabDesugarerArtifact, VocabExports};
 use crate::manifest::ProjectManifest;
+use crate::oven::compiler_suite_env::{
+    OVEN_COMPILER_SUITE_RUSTC_ENV, OVEN_COMPILER_SUITE_VOCAB_CAPABILITY_ENV, OvenCompilerSuiteCapability,
+};
 use crate::oven::rustc::{
     OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcAuxiliaryTargetPlan, clear_inherited_cargo_environment,
 };
@@ -22,12 +25,6 @@ use wasmtime::{Config, Engine, ExternType, Module, ValType};
 const VOCAB_COMPANION_CACHE_FORMAT: u32 = 1;
 const VOCAB_COMPANION_CACHE_DIR_ENV: &str = "INCAN_VOCAB_COMPANION_CACHE_DIR";
 const VOCAB_COMPANION_CACHE_FILE: &str = "metadata.json";
-const OVEN_COMPILER_SUITE_RUSTC_ENV: &str = "INCAN_OVEN_COMPILER_SUITE_RUSTC";
-const OVEN_COMPILER_SUITE_VOCAB_RUSTC_ENV: &str = "INCAN_OVEN_COMPILER_SUITE_VOCAB_RUSTC";
-const OVEN_COMPILER_SUITE_VOCAB_DEPENDENCY_PATH_COUNT_ENV: &str =
-    "INCAN_OVEN_COMPILER_SUITE_VOCAB_DEPENDENCY_PATH_COUNT";
-const OVEN_COMPILER_SUITE_VOCAB_EXTERN_COUNT_ENV: &str = "INCAN_OVEN_COMPILER_SUITE_VOCAB_EXTERN_COUNT";
-
 /// A receipt-bound direct-Rustc closure that can compile the bounded vocabulary helper.
 ///
 /// The compiler-suite scheduler exports this through its child environment, while a normal Oven library build derives
@@ -707,37 +704,30 @@ fn extract_vocab_metadata_from_library_entrypoint(
 
 /// Load the direct-Rustc capability exported by an active Oven compiler-suite scheduler.
 ///
-/// A stored-suite child receives individual paths instead of a path list because Oven identities contain `:`. Every
-/// supplied path must be an absolute regular file or directory, and any malformed capability fails closed instead of
-/// using Cargo as a recovery path.
+/// The scheduler exports one schema-checked JSON capability rather than an independently counted set of environment
+/// keys. Every supplied path must be an absolute regular file or directory, and malformed input fails closed.
 fn oven_compiler_suite_rustc_context() -> CliResult<Option<OvenVocabDirectRustcContext>> {
-    let Some(rustc) = env::var_os(OVEN_COMPILER_SUITE_VOCAB_RUSTC_ENV).filter(|value| !value.is_empty()) else {
+    let Some(capability) = OvenCompilerSuiteCapability::from_environment(OVEN_COMPILER_SUITE_VOCAB_CAPABILITY_ENV)
+        .map_err(CliError::failure)?
+    else {
         return Ok(None);
     };
-    let rustc = PathBuf::from(rustc);
+    let rustc = capability.rustc;
     if !rustc.is_absolute() || !rustc.is_file() {
         return Err(CliError::failure(format!(
             "stored Oven compiler suite provided invalid Rust compiler {}",
             rustc.display()
         )));
     }
-    let dependency_path_count = oven_compiler_suite_path_count(OVEN_COMPILER_SUITE_VOCAB_DEPENDENCY_PATH_COUNT_ENV)?;
-    let extern_count = oven_compiler_suite_path_count(OVEN_COMPILER_SUITE_VOCAB_EXTERN_COUNT_ENV)?;
-    let mut dependency_search_paths = Vec::with_capacity(dependency_path_count);
-    for index in 0..dependency_path_count {
-        let variable = format!("INCAN_OVEN_COMPILER_SUITE_VOCAB_DEPENDENCY_PATH_{index}");
-        let path = oven_compiler_suite_absolute_path(&variable, false)?;
-        dependency_search_paths.push(path);
+    for path in &capability.dependency_search_paths {
+        if !path.is_absolute() || !path.is_dir() {
+            return Err(CliError::failure(format!(
+                "stored Oven compiler suite provided invalid dependency search path {}",
+                path.display()
+            )));
+        }
     }
-    let mut externs = BTreeMap::new();
-    for index in 0..extern_count {
-        let name_variable = format!("INCAN_OVEN_COMPILER_SUITE_VOCAB_EXTERN_{index}_NAME");
-        let path_variable = format!("INCAN_OVEN_COMPILER_SUITE_VOCAB_EXTERN_{index}_PATH");
-        let crate_name = env::var(&name_variable).map_err(|_| {
-            CliError::failure(format!(
-                "stored Oven compiler suite did not provide direct-Rustc extern name {index}"
-            ))
-        })?;
+    for (crate_name, path) in &capability.externs {
         if crate_name.is_empty()
             || !crate_name
                 .chars()
@@ -747,15 +737,15 @@ fn oven_compiler_suite_rustc_context() -> CliResult<Option<OvenVocabDirectRustcC
                 "stored Oven compiler suite provided invalid direct-Rustc extern name `{crate_name}`"
             )));
         }
-        let path = oven_compiler_suite_absolute_path(&path_variable, true)?;
-        if externs.insert(crate_name.clone(), path).is_some() {
+        if !path.is_absolute() || !path.is_file() {
             return Err(CliError::failure(format!(
-                "stored Oven compiler suite repeated direct-Rustc extern `{crate_name}`"
+                "stored Oven compiler suite provided invalid direct-Rustc extern `{crate_name}`: {}",
+                path.display()
             )));
         }
     }
     for required in ["incan_vocab", "serde_json"] {
-        if !externs.contains_key(required) {
+        if !capability.externs.contains_key(required) {
             return Err(CliError::failure(format!(
                 "stored Oven compiler suite direct-Rustc closure lacks required `{required}` for vocab extraction"
             )));
@@ -763,8 +753,8 @@ fn oven_compiler_suite_rustc_context() -> CliResult<Option<OvenVocabDirectRustcC
     }
     Ok(Some(OvenVocabDirectRustcContext {
         rustc,
-        dependency_search_paths,
-        externs,
+        dependency_search_paths: capability.dependency_search_paths,
+        externs: capability.externs,
         auxiliary_targets: BTreeMap::new(),
     }))
 }
@@ -885,38 +875,6 @@ fn oven_vocab_auxiliary_target_context(
         dependency_search_paths: plan.dependency_search_paths,
         externs,
     })
-}
-
-/// Read one bounded count from the scheduler-provided direct-Rustc environment.
-fn oven_compiler_suite_path_count(variable: &str) -> CliResult<usize> {
-    const MAX_COMPILER_SUITE_DIRECT_RUSTC_INPUTS: usize = 1024;
-    let value = env::var(variable)
-        .map_err(|_| CliError::failure(format!("stored Oven compiler suite did not provide `{variable}`")))?;
-    let count = value
-        .parse::<usize>()
-        .map_err(|error| CliError::failure(format!("stored Oven compiler suite has invalid `{variable}`: {error}")))?;
-    if count > MAX_COMPILER_SUITE_DIRECT_RUSTC_INPUTS {
-        return Err(CliError::failure(format!(
-            "stored Oven compiler suite `{variable}` exceeds the direct-Rustc input limit {MAX_COMPILER_SUITE_DIRECT_RUSTC_INPUTS}"
-        )));
-    }
-    Ok(count)
-}
-
-/// Read one verified-looking direct-Rustc capability path from the compiler-suite environment.
-fn oven_compiler_suite_absolute_path(variable: &str, regular_file: bool) -> CliResult<PathBuf> {
-    let path = env::var_os(variable)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| CliError::failure(format!("stored Oven compiler suite did not provide `{variable}`")))?;
-    let valid_kind = if regular_file { path.is_file() } else { path.is_dir() };
-    if !path.is_absolute() || !valid_kind {
-        return Err(CliError::failure(format!(
-            "stored Oven compiler suite provided invalid `{variable}` path {}",
-            path.display()
-        )));
-    }
-    Ok(path)
 }
 
 /// Extract a companion's registration through the suite's receipt-bound direct-Rustc closure.

@@ -5,7 +5,7 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
@@ -74,6 +74,9 @@ impl ToolchainTestStaging {
     }
 
     fn cleanup(&mut self) -> io::Result<()> {
+        let _thread_guard = TOOLCHAIN_TEST_STAGING_SWEEP
+            .lock()
+            .map_err(|_| io::Error::other("toolchain test staging sweep lock is poisoned"))?;
         let mut active = active_toolchain_test_staging()?;
         let cleanup_result = match self.tempdir.take() {
             Some(tempdir) => tempdir.close(),
@@ -851,9 +854,19 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
     )?;
     fs::copy(&source, &clean_worktree_source)?;
     let incan = tmp.path().join("fixture-incan");
+    let fixture_inspection = serde_json::json!({
+        "limits": {
+            "max_physical_bytes": incan::oven::DEFAULT_OVEN_MAX_PHYSICAL_BYTES,
+            "max_domain_physical_bytes": incan::oven::DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES,
+            "max_domain_logical_bytes": incan::oven::DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES,
+        }
+    });
     write_executable(
         &incan,
-        "#!/usr/bin/env sh\nif [ \"$1\" = \"oven\" ]; then printf '{}\\n'; elif [ \"$1\" = \"--version\" ]; then printf 'incan fixture\\n'; fi\n",
+        &format!(
+            "#!/usr/bin/env sh\nif [ \"$1\" = \"oven\" ]; then printf '%s\\n' '{}'; elif [ \"$1\" = \"--version\" ]; then printf 'incan fixture\\n'; fi\n",
+            fixture_inspection
+        ),
     )?;
     let guard_dir = tmp.path().join("cargo-guard");
     fs::create_dir_all(&guard_dir)?;
@@ -928,6 +941,11 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
         report["workload"]["source_sha256"],
         report["workload"]["clean_worktree_source_sha256"]
     );
+    assert_eq!(
+        report["store"]["requested_limit_overrides"]["max_physical_bytes"],
+        serde_json::Value::Null
+    );
+    assert_eq!(report["store"]["effective_limits"], fixture_inspection["limits"]);
     let storage_junctions = report["storage_junctions"]
         .as_array()
         .ok_or("benchmark report is missing storage junctions")?;
@@ -968,6 +986,9 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
         "cargo-guard",
         "consumer_toolchain",
         "rustup which --toolchain \"${{ inputs.consumer_toolchain }}\" rustc",
+        "rustup which --toolchain \"${{ inputs.publisher_toolchain }}\" cargo",
+        "--fixture-cargo \"$fixture_cargo_path\"",
+        "fixture_invocation_count",
         "publisher[0].compiler_suite.store",
         "suite[0].store",
         "total_ms",
@@ -1004,6 +1025,7 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
     );
     assert!(
         makefile.contains("INCAN_TEST_PUBLISHER_TOOLCHAIN ?= nightly-2026-03-24")
+            && makefile.contains("INCAN_TEST_FIXTURE_CARGO_TOOLCHAIN ?= $(INCAN_TEST_PUBLISHER_TOOLCHAIN)")
             && makefile.contains("INCAN_TEST_SUITE_TOOLCHAIN ?= stable")
             && makefile
                 .contains("--cargo \"$$(rustup which --toolchain \"$(INCAN_TEST_PUBLISHER_TOOLCHAIN)\" cargo)\"")
@@ -1038,14 +1060,31 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
         evidence_workflow.contains("uses: ./.github/actions/run-oven-compiler-suite"),
         "complete compiler-suite correctness must remain in explicit release evidence"
     );
-    assert_eq!(
-        makefile.matches("CARGO_PROFILE_TEST_DEBUG=0 cargo test").count(),
-        5,
+    let focused_target = makefile
+        .split_once(".PHONY: test-oven-focused")
+        .and_then(|(_, suffix)| suffix.split_once(".PHONY: test-oven-pr-regressions"))
+        .map(|(target, _)| target)
+        .ok_or("Makefile omitted the focused Oven target boundary")?;
+    let focused_cargo_tests = focused_target
+        .lines()
+        .filter(|line| line.contains("cargo test"))
+        .collect::<Vec<_>>();
+    assert_eq!(focused_cargo_tests.len(), 4);
+    assert!(
+        focused_cargo_tests
+            .iter()
+            .all(|line| line.contains("CARGO_PROFILE_TEST_DEBUG=0")),
         "focused Oven tests must not pay the cold-link cost of unused test debug information"
     );
     assert!(
-        !makefile.contains("CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --features lsp"),
+        !focused_target.contains("--features lsp"),
         "focused Oven tests must not compile the unrelated LSP feature graph"
+    );
+    assert!(
+        makefile.contains(
+            "CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=2 cargo test --locked --features lsp --test oven_pr_regressions"
+        ),
+        "the bounded PR containment lane must suppress unused test debug information"
     );
     assert!(
         !workflow.contains("run-oven-compiler-suite") && !workflow.contains("bench_oven_alpha.sh"),
@@ -1133,7 +1172,7 @@ fn default_sdk_archive_contains_every_default_profile_component() -> Result<(), 
 }
 
 #[test]
-fn toolchain_release_assets_are_prepared_by_central_manifest_script() -> Result<(), Box<dyn std::error::Error>> {
+fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = ToolchainTestStaging::new()?;
     let dist = tmp.path().join("toolchain");
     let (incan, incan_lsp) = write_fixture_toolchain_commands(tmp.path())?;
@@ -1180,6 +1219,8 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_script() -> Result<
     assert!(formula.contains("libexec.install Dir[\"*\"]"));
     assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan\""));
     assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan-lsp\""));
+    assert!(formula.contains("Incan builds supported projects with verified Oven direct-rustc plans"));
+    assert!(!formula.contains("Incan builds projects through Cargo"));
     Ok(())
 }
 
@@ -1905,6 +1946,37 @@ fn toolchain_test_staging_is_removed_after_a_failing_path() -> Result<(), Box<dy
         "failed test path retained release staging: {}",
         staging_path.display()
     );
+    Ok(())
+}
+
+#[test]
+fn toolchain_test_staging_creation_and_cleanup_share_one_sweep_guard() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let root_path = Arc::new(root.path().to_path_buf());
+    let mut workers = Vec::new();
+
+    for worker in 0..8 {
+        let root_path = Arc::clone(&root_path);
+        workers.push(std::thread::spawn(move || -> Result<(), String> {
+            for iteration in 0..32 {
+                let mut staging = ToolchainTestStaging::new_in(&root_path).map_err(|error| error.to_string())?;
+                fs::write(
+                    staging.path().join(format!("release-asset-{worker}-{iteration}")),
+                    "fixture",
+                )
+                .map_err(|error| error.to_string())?;
+                staging.cleanup().map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        }));
+    }
+
+    for worker in workers {
+        match worker.join() {
+            Ok(result) => result.map_err(io::Error::other)?,
+            Err(_) => return Err(io::Error::other("toolchain staging worker panicked").into()),
+        }
+    }
     Ok(())
 }
 

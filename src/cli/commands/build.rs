@@ -87,7 +87,7 @@ use super::common::{
 use super::common::{collect_rust_inspect_query_paths, collect_rust_inspect_query_paths_from_programs};
 use super::lock::{LockResolution, LockResolutionRequest, resolve_lock_context, validate_oven_lock_policy};
 #[cfg(feature = "rust_inspect")]
-use super::lock::{RustInspectWorkspaceRequest, prepare_rust_inspect_workspace};
+use super::lock::{OvenRustInspectSourceAuthorityRequest, RustInspectWorkspaceRequest, prepare_rust_inspect_workspace};
 use super::oven::open_default_oven_store;
 use super::vocab_extraction::{
     PendingDesugarerArtifact, collect_library_vocab_metadata, oven_vocab_direct_rustc_context_from_plan,
@@ -1206,9 +1206,10 @@ fn prepare_project_with_options(
             prepare_when_empty: true,
             direct_oven_inspection: false,
             force_direct_prewarm: false,
+            oven_source_authority: None,
         })?
         .ok_or_else(|| CliError::failure("rust-inspect workspace preparation did not return a manifest directory"))?;
-        codegen.set_rust_inspect_manifest_dir(rust_inspect_manifest_dir.clone());
+        codegen.set_rust_inspect_manifest_dir(rust_inspect_manifest_dir.manifest_dir().to_path_buf());
         Some(rust_inspect_manifest_dir)
     };
 
@@ -1221,7 +1222,9 @@ fn prepare_project_with_options(
         .analyze_modules(
             &modules,
             #[cfg(feature = "rust_inspect")]
-            rust_inspect_manifest_dir.as_deref(),
+            rust_inspect_manifest_dir
+                .as_ref()
+                .map(|workspace| workspace.manifest_dir()),
         )
         .map_err(|failure| CliError::failure(failure.render_human()))?;
     let main_type_info = compilation_analysis
@@ -1285,7 +1288,7 @@ fn prepare_project_with_options(
 /// are not derived from that directory: normal execution selects one matching direct-rustc provider/dependency plan
 /// from the bounded Oven store. Incan-generated programs always link the standard runtime, so an empty plan is not a
 /// meaningful normal-command fallback.
-fn oven_build_unit_inputs(
+pub(crate) fn oven_build_unit_inputs(
     provider_plan: &ProviderPlan,
     requirements: &ProjectRequirements,
     resolved: &ResolvedDependencies,
@@ -2620,6 +2623,9 @@ fn prepare_oven_project(
         sdk_profile_override,
     )?;
     let oven_build_inputs = oven_build_unit_inputs(&provider_plan, &project_requirements, &resolved)?;
+    let rustc = resolve_active_rustc().map_err(|error| CliError::failure(error.to_string()))?;
+    let rustc_target = rustc_host_target(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
+    let rustc_toolchain = rustc_identity(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
 
     #[cfg(feature = "rust_inspect")]
     let rust_inspect_manifest_dir = {
@@ -2640,9 +2646,18 @@ fn prepare_oven_project(
             prepare_when_empty: false,
             direct_oven_inspection: true,
             force_direct_prewarm: loaf_codegen_mode(),
+            oven_source_authority: Some(OvenRustInspectSourceAuthorityRequest {
+                project_version: &project_version,
+                target: &rustc_target,
+                toolchain: &rustc_toolchain,
+                profile,
+                features: &cargo_features.cargo_features,
+                build_unit_inputs: &oven_build_inputs,
+                registry_dependencies: &resolved.dependencies,
+            }),
         })?;
         if let Some(manifest_dir) = rust_inspect_manifest_dir.as_ref() {
-            codegen.set_rust_inspect_manifest_dir(manifest_dir.clone());
+            codegen.set_rust_inspect_manifest_dir(manifest_dir.manifest_dir().to_path_buf());
         }
         rust_inspect_manifest_dir
     };
@@ -2651,7 +2666,9 @@ fn prepare_oven_project(
         .analyze_modules(
             &modules,
             #[cfg(feature = "rust_inspect")]
-            rust_inspect_manifest_dir.as_deref(),
+            rust_inspect_manifest_dir
+                .as_ref()
+                .map(|workspace| workspace.manifest_dir()),
         )
         .map_err(|failure| CliError::failure(failure.render_human()))?;
     let main_type_info = analysis
@@ -2705,20 +2722,19 @@ fn prepare_oven_project(
             .map_err(|error| CliError::failure(format!("Error generating project: {error}")))?;
     }
 
-    let rustc = resolve_active_rustc().map_err(|error| CliError::failure(error.to_string()))?;
     let mut receipt_request = OvenGeneratedProjectRequest::new(
         &project_root,
         &project_name,
         &project_version,
-        rustc_host_target(&rustc).map_err(|error| CliError::failure(error.to_string()))?,
-        rustc_identity(&rustc).map_err(|error| CliError::failure(error.to_string()))?,
+        rustc_target,
+        rustc_toolchain,
         profile,
         cargo_features.cargo_features.clone(),
     )
     .with_generated_source("generated-root", generator.crate_root_path())
     .with_generated_source_tree("generated-source-tree", generator.output_dir().join("src"));
-    for (name, value) in oven_build_inputs {
-        receipt_request = receipt_request.with_build_unit_input(name, value);
+    for (name, value) in &oven_build_inputs {
+        receipt_request = receipt_request.with_build_unit_input(name.clone(), value.clone());
     }
     let receipt = receipt_generated_project(&receipt_request).map_err(|error| CliError::failure(error.to_string()))?;
     write_receipt(&receipt, crate::oven::default_receipt_path(&project_root))
@@ -3386,6 +3402,11 @@ fn prepare_library_project(
         ));
     };
     enforce_project_toolchain_constraint(&manifest)?;
+    let project_version = manifest
+        .project
+        .as_ref()
+        .and_then(|project| project.version.clone())
+        .unwrap_or_else(|| "0.1.0".to_string());
 
     let lib_entry = validate_library_entrypoint(&manifest)?;
     let compilation_session = if normal_oven {
@@ -3595,6 +3616,24 @@ fn prepare_library_project(
         )
     };
     record_timing(&mut timings_ms, "library_resolve_lock_payload", lock_start);
+    let oven_build_inputs = normal_oven
+        .then(|| oven_build_unit_inputs(&provider_plan, &project_requirements, &resolved))
+        .transpose()?;
+    let oven_rustc = normal_oven
+        .then(resolve_active_rustc)
+        .transpose()
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    let oven_target = oven_rustc
+        .as_ref()
+        .map(|rustc| rustc_host_target(rustc))
+        .transpose()
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    let oven_toolchain = oven_rustc
+        .as_ref()
+        .map(|rustc| rustc_identity(rustc))
+        .transpose()
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    let empty_oven_build_inputs = BTreeMap::new();
     #[cfg(feature = "rust_inspect")]
     let rust_inspect_manifest_dir = if normal_oven {
         !metadata_query_paths.is_empty()
@@ -3644,6 +3683,15 @@ fn prepare_library_project(
             prepare_when_empty: true,
             direct_oven_inspection: normal_oven,
             force_direct_prewarm: false,
+            oven_source_authority: normal_oven.then(|| OvenRustInspectSourceAuthorityRequest {
+                project_version: &project_version,
+                target: oven_target.as_deref().unwrap_or_default(),
+                toolchain: oven_toolchain.as_deref().unwrap_or_default(),
+                profile: "debug",
+                features: &cargo_features.cargo_features,
+                build_unit_inputs: oven_build_inputs.as_ref().unwrap_or(&empty_oven_build_inputs),
+                registry_dependencies: &resolved.dependencies,
+            }),
         })?
         .ok_or_else(|| CliError::failure("rust-inspect workspace preparation did not return a manifest directory"))?;
         record_timing(&mut timings_ms, "library_rust_inspect_prewarm", rust_inspect_start);
@@ -3668,7 +3716,7 @@ fn prepare_library_project(
         checker.set_provider_plan(Arc::clone(&provider_plan));
         #[cfg(feature = "rust_inspect")]
         if let Some(rust_inspect_manifest_dir) = rust_inspect_manifest_dir.as_ref() {
-            checker.set_rust_inspect_manifest_dir(rust_inspect_manifest_dir.clone());
+            checker.set_rust_inspect_manifest_dir(rust_inspect_manifest_dir.manifest_dir().to_path_buf());
         }
 
         // A provider producer checks its complete source package before publishing the public checked facade.
@@ -3780,11 +3828,6 @@ fn prepare_library_project(
     record_timing(&mut timings_ms, "library_resolve_exports", export_start);
 
     let manifest_start = Instant::now();
-    let project_version = manifest
-        .project
-        .as_ref()
-        .and_then(|project| project.version.clone())
-        .unwrap_or_else(|| "0.1.0".to_string());
     let project_license = manifest.project.as_ref().and_then(|project| project.license.clone());
 
     let mut library_manifest =
@@ -3834,7 +3877,8 @@ fn prepare_library_project(
     library_manifest.contract_metadata.registry = Some(registry_metadata);
     #[cfg(feature = "rust_inspect")]
     if let Some(rust_inspect_manifest_dir) = rust_inspect_manifest_dir.as_ref() {
-        library_manifest.rust_abi = collect_library_rust_abi(rust_inspect_manifest_dir, &metadata_query_paths)?;
+        library_manifest.rust_abi =
+            collect_library_rust_abi(rust_inspect_manifest_dir.manifest_dir(), &metadata_query_paths)?;
     }
     record_timing(&mut timings_ms, "library_build_manifest_metadata", manifest_start);
     let manifest_path = out_dir.join(format!("{project_name}.incnlib"));
@@ -3918,7 +3962,7 @@ fn prepare_library_project(
     generator.set_rust_edition(rust_edition.clone());
     #[cfg(feature = "rust_inspect")]
     if let Some(rust_inspect_manifest_dir) = rust_inspect_manifest_dir.as_ref() {
-        codegen.set_rust_inspect_manifest_dir(rust_inspect_manifest_dir.clone());
+        codegen.set_rust_inspect_manifest_dir(rust_inspect_manifest_dir.manifest_dir().to_path_buf());
     }
     generator.set_cargo_lock_payload(lock_payload_for_typecheck);
     generator.set_cargo_lock_projection_root(cargo_lock_projection_root.clone());
@@ -3930,9 +3974,6 @@ fn prepare_library_project(
         .transpose()?;
     let rust_dependencies = resolved.dependencies.clone();
     let rust_dev_dependencies = resolved.dev_dependencies.clone();
-    let oven_build_inputs = normal_oven
-        .then(|| oven_build_unit_inputs(&provider_plan, &project_requirements, &resolved))
-        .transpose()?;
     let mut report_draft = BuildReportDraft {
         mode: BuildReportMode::Library,
         profile: "release".to_string(),
@@ -4005,9 +4046,10 @@ fn prepare_library_project(
         })?,
     )?;
     let oven = if normal_oven {
-        let rustc = resolve_active_rustc().map_err(|error| CliError::failure(error.to_string()))?;
-        let target = rustc_host_target(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
-        let toolchain = rustc_identity(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
+        let rustc = oven_rustc.ok_or_else(|| CliError::failure("normal Oven library build omitted rustc"))?;
+        let target = oven_target.ok_or_else(|| CliError::failure("normal Oven library build omitted target"))?;
+        let toolchain =
+            oven_toolchain.ok_or_else(|| CliError::failure("normal Oven library build omitted toolchain"))?;
         let store = open_default_oven_store()?;
         let mut profiles = BTreeMap::new();
         for profile in ["debug", "release"] {
@@ -5419,6 +5461,12 @@ mod tests {
                 version: "1.0.0".to_string(),
                 crate_name: "serde_json".to_string(),
                 features: Vec::new(),
+                source: crate::oven::rustc::OvenRustcRegistrySource {
+                    registry: "registry+https://example.invalid/index".to_string(),
+                    checksum: "fixture-checksum".to_string(),
+                    relative_root: "registry-sources/serde-json".to_string(),
+                    digest: crate::oven::digest_bytes(b"fixture registry source"),
+                },
                 artifact: crate::oven::rustc::OvenRustcArtifactExtern {
                     crate_name: "serde_json".to_string(),
                     relative_path: relative_path.to_string(),

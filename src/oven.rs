@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::manifest::{DependencySource, DependencySpec, GitReference, ProjectManifest};
 
+pub(crate) mod compiler_suite_env;
 pub mod legacy_cargo;
 pub mod loaf;
 pub mod native_test;
@@ -121,6 +122,7 @@ pub struct OvenCompilerSuiteRequest {
     toolchain: String,
     profile: String,
     features: Vec<String>,
+    loaf_envelope_identity: Option<String>,
 }
 
 impl OvenGeneratedProjectRequest {
@@ -200,7 +202,19 @@ impl OvenCompilerSuiteRequest {
             toolchain: toolchain.into(),
             profile: profile.into(),
             features,
+            loaf_envelope_identity: None,
         }
+    }
+
+    /// Bind the compiler self-suite to the exact committed Loaf generation its nested commands consume.
+    ///
+    /// This is a reusable build-unit input rather than source evidence: changing the compiler-suite Loaf envelope
+    /// invalidates the stored suite and its compiler-data partitions, while ordinary Rust source edits can continue
+    /// to reuse the same expensive dependency foundation.
+    #[must_use]
+    pub fn with_loaf_envelope_identity(mut self, identity: impl Into<String>) -> Self {
+        self.loaf_envelope_identity = Some(identity.into());
+        self
     }
 }
 
@@ -506,6 +520,9 @@ pub fn receipt_native_compiler_suite(request: &OvenCompilerSuiteRequest) -> Resu
     build_unit_inputs.insert("compiler-cargo-manifest".to_string(), cargo_manifest_digest.clone());
     build_unit_inputs.insert("compiler-cargo-lock".to_string(), cargo_lock_digest.clone());
     build_unit_inputs.insert("compiler-suite-plan".to_string(), compiler_plan_digest);
+    if let Some(identity) = &request.loaf_envelope_identity {
+        build_unit_inputs.insert("compiler-loaf-envelope".to_string(), identity.clone());
+    }
     let mut supplemental_digests = BTreeMap::from([
         (
             "compiler-libtest-root".to_string(),
@@ -1205,7 +1222,7 @@ mod tests {
 
     use super::{
         OvenCompilerSuiteRequest, OvenGeneratedProjectRequest, OvenImportRequest, OvenReceipt, default_receipt_path,
-        import_frozen_project, receipt_generated_project, receipt_native_compiler_suite, write_receipt,
+        digest_bytes, import_frozen_project, receipt_generated_project, receipt_native_compiler_suite, write_receipt,
     };
 
     #[test]
@@ -1321,6 +1338,17 @@ mod tests {
         fs::write(project.path().join("src/new_target_input.rs"), "pub fn added() {}\n")?;
         let topology_changed = receipt_native_compiler_suite(&request())?;
         assert_ne!(changed.build_unit_identity, topology_changed.build_unit_identity);
+
+        let first_loaf_generation = receipt_native_compiler_suite(
+            &request().with_loaf_envelope_identity(digest_bytes(b"compiler-suite-generation-one")),
+        )?;
+        let next_loaf_generation = receipt_native_compiler_suite(
+            &request().with_loaf_envelope_identity(digest_bytes(b"compiler-suite-generation-two")),
+        )?;
+        assert_ne!(
+            first_loaf_generation.build_unit_identity, next_loaf_generation.build_unit_identity,
+            "a new committed Loaf generation must invalidate the suite and its toolchain-data partitions"
+        );
         Ok(())
     }
 

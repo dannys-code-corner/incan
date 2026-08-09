@@ -1427,7 +1427,9 @@ impl CargoCommandInfo {
 
     /// Run only `cargo --version`; this does not resolve packages or access the network outside a sealed Oven child.
     fn collect() -> Self {
-        if env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC").is_some_and(|value| !value.is_empty()) {
+        if env::var_os(crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_RUSTC_ENV)
+            .is_some_and(|value| !value.is_empty())
+        {
             return Self::unavailable_for_oven_compiler_suite();
         }
         match Command::new("cargo").arg("--version").output() {

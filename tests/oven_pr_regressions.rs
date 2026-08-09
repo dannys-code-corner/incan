@@ -97,6 +97,7 @@ fn legacy_cargo_capacity_abort_terminates_descendants() -> Result<(), Box<dyn st
         publication_kind: OvenLegacyCargoPublicationKind::Executable,
         source_evidence_key: "generated-root".to_string(),
         compile_environment: BTreeMap::new(),
+        inspection_packages: None,
         compact_debug_info: false,
     });
 

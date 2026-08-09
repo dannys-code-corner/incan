@@ -23,10 +23,12 @@ use crate::manifest::{DependencySource, DependencySpec};
 use crate::oven::store::{OvenArtifactKind, OvenStore, OvenStoreError, OvenStoreExecutionPayload, OvenStoreLease};
 
 /// Wire-format version for an Oven-owned direct-rustc artifact manifest.
-/// Version 7 retains the exact registry-leaf catalog alongside the copied direct-rustc closure, so a normal
-/// consumer never combines one leaf's transitive metadata with a different compatibility domain. Older payloads
-/// are intentionally ignored during selection and re-materialized from the active toolchain Loaf.
-pub const OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION: u32 = 7;
+/// Version 9 separates the complete sealed Rust-inspection source closure from linkable registry leaves. This keeps
+/// transitive proc-macro sources in the same immutable plan even though they do not provide an `.rlib` leaf. Older
+/// payloads are intentionally ignored during selection and re-materialized from the active toolchain Loaf.
+pub const OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION: u32 = 9;
+/// Fixed supporting-artifact path for the publisher lock that owns sealed registry sources.
+pub const OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH: &str = "registry-sources/Cargo.lock";
 /// Schema version for caller-owned native-output reuse evidence.
 const OVEN_DIRECT_RUSTC_OUTPUT_RECEIPT_SCHEMA_VERSION: u32 = 2;
 
@@ -96,6 +98,12 @@ pub struct OvenRustcArtifactManifest {
     /// store entry so a selected plan resolves caller `rust::` imports only from its own compatibility domain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registry_leaves: Vec<OvenRustcRegistryLeaf>,
+    /// Complete locked registry source closure authorized for build-system-neutral Rust inspection.
+    ///
+    /// This is distinct from `registry_leaves`: a transitive proc macro may be required by the source graph without
+    /// exposing an `.rlib` that a caller can select as a direct Rust dependency.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registry_sources: Vec<OvenRustcRegistrySourcePackage>,
     /// Deterministic compile-time environment explicitly required by the source closure.
     ///
     /// Ambient `CARGO_*` values are still removed before every consumer invocation. The only permitted replacements
@@ -183,8 +191,37 @@ pub struct OvenRustcRegistryLeaf {
     /// run a feature resolver or permit a consumer to add a feature absent from the sealed leaf.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
+    /// Exact registry source closure retained for build-system-neutral Rust inspection.
+    pub source: OvenRustcRegistrySource,
     /// Digest-verified compiler artifact retained below the Loaf root.
     pub artifact: OvenRustcArtifactExtern,
+}
+
+/// Publisher-sealed registry source corresponding to one compiled registry leaf.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OvenRustcRegistrySource {
+    /// Cargo registry identity recorded by the exact publisher lock.
+    pub registry: String,
+    /// Registry archive checksum recorded by the exact publisher lock.
+    pub checksum: String,
+    /// Safe directory path relative to the immutable Loaf root.
+    pub relative_root: String,
+    /// Content digest of every regular source file and its portable relative path.
+    pub digest: String,
+}
+
+/// One exact locked registry package in the sealed Rust-inspection source closure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OvenRustcRegistrySourcePackage {
+    /// Cargo package name recorded by the explicit publisher.
+    pub package: String,
+    /// Exact package version recorded by the explicit publisher lock.
+    pub version: String,
+    /// Unified feature set selected by the publisher's resolved graph.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    /// Immutable source identity and artifact-root-relative location.
+    pub source: OvenRustcRegistrySource,
 }
 
 /// One registry leaf and the immutable Loaf root that seals its relative artifact path.
@@ -2163,6 +2200,94 @@ impl OvenRustcArtifactManifest {
                 });
             }
         }
+        let mut registry_source_identities = BTreeMap::new();
+        let mut registry_package_sources = BTreeSet::new();
+        for package in &self.registry_sources {
+            if package.package.trim().is_empty() || package.version.trim().is_empty() {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "artifact manifest registry sources",
+                    message: "registry source package and version must not be empty".to_string(),
+                });
+            }
+            let mut features = BTreeSet::new();
+            for feature in &package.features {
+                if feature.trim().is_empty() || !features.insert(feature.as_str()) {
+                    return Err(OvenRustcError::InvalidInput {
+                        field: "artifact manifest registry sources",
+                        message: format!(
+                            "registry source `{}` `{}` declares an empty or duplicate feature",
+                            package.package, package.version
+                        ),
+                    });
+                }
+            }
+            if !package.source.registry.starts_with("registry+")
+                || package.source.checksum.trim().is_empty()
+                || package.source.digest.trim().is_empty()
+            {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "artifact manifest registry sources",
+                    message: format!(
+                        "registry source `{}` `{}` has incomplete source identity",
+                        package.package, package.version
+                    ),
+                });
+            }
+            let source_root = Path::new(&package.source.relative_root);
+            if source_root.is_absolute()
+                || source_root.as_os_str().is_empty()
+                || source_root.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )
+                })
+            {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "artifact manifest registry sources",
+                    message: format!(
+                        "registry source `{}` `{}` has an unsafe source root",
+                        package.package, package.version
+                    ),
+                });
+            }
+            let source_manifest = source_root.join("Cargo.toml").to_string_lossy().replace('\\', "/");
+            if !declared_artifacts.contains_key(source_manifest.as_str()) {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "artifact manifest registry sources",
+                    message: format!(
+                        "registry source `{}` `{}` is not declared by the immutable plan",
+                        package.package, package.version
+                    ),
+                });
+            }
+            let key = (
+                package.package.as_str(),
+                package.version.as_str(),
+                package.source.registry.as_str(),
+                package.source.checksum.as_str(),
+            );
+            if !registry_package_sources.insert((key.0, key.1, key.2)) {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "artifact manifest registry sources",
+                    message: format!(
+                        "declares more than one source identity for registry package `{}` version `{}`",
+                        package.package, package.version
+                    ),
+                });
+            }
+            if registry_source_identities.insert(key, package).is_some() {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "artifact manifest registry sources",
+                    message: format!(
+                        "declares registry source `{}` version `{}` more than once",
+                        package.package, package.version
+                    ),
+                });
+            }
+        }
         let mut package_versions = BTreeSet::new();
         for leaf in &self.registry_leaves {
             if leaf.package.trim().is_empty() || leaf.version.trim().is_empty() {
@@ -2235,6 +2360,36 @@ impl OvenRustcArtifactManifest {
                         ),
                     });
                 }
+            }
+            let source_key = (
+                leaf.package.as_str(),
+                leaf.version.as_str(),
+                leaf.source.registry.as_str(),
+                leaf.source.checksum.as_str(),
+            );
+            let Some(source) = registry_source_identities.get(&source_key) else {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "artifact manifest registry catalog",
+                    message: format!(
+                        "registry leaf `{}` `{}` has no matching sealed inspection source",
+                        leaf.package, leaf.version
+                    ),
+                });
+            };
+            let source_features = source.features.iter().map(String::as_str).collect::<BTreeSet<_>>();
+            if source.source != leaf.source
+                || leaf
+                    .features
+                    .iter()
+                    .any(|feature| !source_features.contains(feature.as_str()))
+            {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "artifact manifest registry catalog",
+                    message: format!(
+                        "registry leaf `{}` `{}` disagrees with or exceeds its sealed inspection source",
+                        leaf.package, leaf.version
+                    ),
+                });
             }
         }
         let mut auxiliary_targets = BTreeSet::new();
@@ -4178,10 +4333,10 @@ mod tests {
     use super::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenCallerOwnedRustcLibrary, OvenDirectRustcTestRequest,
         OvenRegistryLeafAuthority, OvenRustcArtifactExtern, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
-        OvenRustcError, OvenRustcRegistryLeaf, OvenRustcSupportingArtifact, OvenSelectedPathRustcAuthority,
-        OvenStoredDirectRustcRunRequest, OvenStoredDirectRustcTestRequest, OvenTrustedDirectRustcTargetRequest,
-        OvenTrustedRustcArtifactRoot, OvenTrustedRustdocTestRequest, apply_oven_profile,
-        attach_caller_owned_rustc_libraries, bake_direct_rustc_test, bake_stored_direct_rustc_run,
+        OvenRustcError, OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcSupportingArtifact,
+        OvenSelectedPathRustcAuthority, OvenStoredDirectRustcRunRequest, OvenStoredDirectRustcTestRequest,
+        OvenTrustedDirectRustcTargetRequest, OvenTrustedRustcArtifactRoot, OvenTrustedRustdocTestRequest,
+        apply_oven_profile, attach_caller_owned_rustc_libraries, bake_direct_rustc_test, bake_stored_direct_rustc_run,
         bake_stored_direct_rustc_test, bake_trusted_direct_rustc_dylib, bake_trusted_direct_rustc_library,
         bake_trusted_direct_rustc_proc_macro, bake_trusted_direct_rustc_run, bake_trusted_direct_rustc_test,
         combined_process_output, materialize_declared_rust_libraries,
@@ -4196,6 +4351,15 @@ mod tests {
         OVEN_COMPILER_TEST_PROFILE, OvenGeneratedProjectRequest, OvenImportRequest, digest_bytes,
         import_frozen_project, receipt_generated_project,
     };
+
+    fn fixture_registry_source() -> OvenRustcRegistrySource {
+        OvenRustcRegistrySource {
+            registry: "registry+https://example.invalid/index".to_string(),
+            checksum: "fixture-checksum".to_string(),
+            relative_root: "registry-sources/fixture".to_string(),
+            digest: digest_bytes(b"fixture registry source"),
+        }
+    }
 
     #[test]
     fn failed_direct_rustc_report_keeps_the_bounded_invocation() {
@@ -4554,6 +4718,7 @@ mod tests {
                 version: "1.0.0".to_string(),
                 crate_name: "registry_helper".to_string(),
                 features: Vec::new(),
+                source: fixture_registry_source(),
                 artifact: OvenRustcArtifactExtern {
                     crate_name: "registry_helper".to_string(),
                     relative_path: registry_relative.to_string(),
@@ -4633,6 +4798,7 @@ mod tests {
                 } else {
                     Vec::new()
                 },
+                source: fixture_registry_source(),
                 artifact: OvenRustcArtifactExtern {
                     crate_name: "itoa".to_string(),
                     relative_path: artifact
@@ -4707,6 +4873,7 @@ mod tests {
                     version: "2.13.1".to_string(),
                     crate_name: "bitflags".to_string(),
                     features: Vec::new(),
+                    source: fixture_registry_source(),
                     artifact: OvenRustcArtifactExtern {
                         crate_name: "bitflags".to_string(),
                         relative_path: "libbitflags-v2.rlib".to_string(),
@@ -4721,6 +4888,7 @@ mod tests {
                     version: "1.3.2".to_string(),
                     crate_name: "bitflags".to_string(),
                     features: Vec::new(),
+                    source: fixture_registry_source(),
                     artifact: OvenRustcArtifactExtern {
                         crate_name: "bitflags".to_string(),
                         relative_path: "libbitflags-v1.rlib".to_string(),
@@ -4765,6 +4933,7 @@ mod tests {
             version: "1.0.0".to_string(),
             crate_name: "fixture_registry".to_string(),
             features: vec!["derive".to_string()],
+            source: fixture_registry_source(),
             artifact: OvenRustcArtifactExtern {
                 crate_name: "fixture_registry".to_string(),
                 relative_path: relative_path.to_string(),
@@ -4832,6 +5001,7 @@ mod tests {
             externs: Vec::new(),
             entrypoint_externs: BTreeMap::new(),
             registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
             compile_environment: BTreeMap::new(),
             vocab_auxiliary_targets: Vec::new(),
             supporting_artifacts: Vec::new(),
@@ -4859,6 +5029,7 @@ mod tests {
             externs: Vec::new(),
             entrypoint_externs: BTreeMap::new(),
             registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
             compile_environment: BTreeMap::new(),
             vocab_auxiliary_targets: Vec::new(),
             supporting_artifacts: vec![
@@ -4919,6 +5090,7 @@ mod tests {
             externs: Vec::new(),
             entrypoint_externs: BTreeMap::new(),
             registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
             compile_environment: BTreeMap::new(),
             vocab_auxiliary_targets: Vec::new(),
             supporting_artifacts: Vec::new(),
@@ -5050,6 +5222,7 @@ mod tests {
                 externs: Vec::new(),
                 entrypoint_externs: BTreeMap::new(),
                 registry_leaves: Vec::new(),
+                registry_sources: Vec::new(),
                 compile_environment: BTreeMap::new(),
                 vocab_auxiliary_targets: Vec::new(),
                 supporting_artifacts: Vec::new(),
@@ -6114,6 +6287,7 @@ mod tests {
             externs: Vec::new(),
             entrypoint_externs: BTreeMap::new(),
             registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
             compile_environment: BTreeMap::new(),
             vocab_auxiliary_targets: Vec::new(),
             supporting_artifacts: Vec::new(),

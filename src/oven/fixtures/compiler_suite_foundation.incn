@@ -29,8 +29,8 @@ from std.web.request import Query
 from std.web.routing import GET, route
 import std.async
 from rust::bitflags import bitflags
+from rust::semver import Version
 from rust::serde_json import Value
-from rust::uuid import Uuid
 
 
 @route("/oven-loaf", methods=[GET])
@@ -40,7 +40,7 @@ async def oven_loaf_route() -> Response:
 
 
 def main() -> None:
-    """Verify filesystem and external UUID behavior without relying on ambient Cargo state."""
+    """Verify filesystem and declared Rust interop without relying on ambient Cargo state."""
     assert_true(Path(".").exists())
-    identifier = Uuid.new_v4().to_string()
-    assert_true(len(identifier) > 0)
+    version = Version.new(1, 2, 3).to_string()
+    assert_true(version == "1.2.3")

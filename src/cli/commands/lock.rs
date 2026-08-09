@@ -3,7 +3,7 @@
 //! Handles creating and validating `incan.lock` files that pin dependency versions for reproducible builds.
 //! Used by both `incan lock` and the build pipeline.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 #[cfg(test)]
 use std::fs::OpenOptions;
@@ -36,6 +36,16 @@ use crate::lockfile::{
     semantic_lock_state, workspace_semantic_lock_state,
 };
 use crate::manifest::{DependencySpec, ProjectManifest};
+#[cfg(feature = "rust_inspect")]
+use crate::oven::legacy_cargo::OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY_ENV;
+#[cfg(feature = "rust_inspect")]
+use crate::oven::loaf::{OvenLoafSelection, OvenToolchainLoaf, resolve_toolchain_loaf_for_registry_sources};
+#[cfg(feature = "rust_inspect")]
+use crate::oven::rustc::OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH;
+#[cfg(feature = "rust_inspect")]
+use crate::oven::rustc::{resolve_active_rustc, rustc_host_target, rustc_identity};
+#[cfg(feature = "rust_inspect")]
+use crate::oven::{OvenGeneratedProjectRequest, receipt_generated_project};
 use crate::provider::{
     FeatureSelection, PackageFeaturePlan, ProviderPlan, SDK_PROVIDER_BUILD_ENV, SdkComponentSelection,
 };
@@ -284,12 +294,14 @@ pub(crate) struct RustInspectTypecheckRequest<'a> {
     pub cargo_features: &'a CargoFeatureSelection,
     pub cargo_policy: &'a CargoPolicy,
     pub rust_edition: Option<String>,
+    pub provider_plan: &'a ProviderPlan,
 }
 
 #[cfg(feature = "rust_inspect")]
 pub(crate) struct PreparedRustInspectTypecheckWorkspace {
     manifest_dir: PathBuf,
     _cache_lease: Option<GeneratedCacheLease>,
+    _source_loaf: Option<OvenToolchainLoaf>,
 }
 
 #[cfg(feature = "rust_inspect")]
@@ -320,11 +332,42 @@ pub(crate) struct RustInspectWorkspaceRequest<'a> {
     /// The named Loaf publisher must materialize provider-source metadata even when ordinary lazy prewarm is
     /// off.
     pub force_direct_prewarm: bool,
+    /// Receipt inputs used to select the exact immutable Loaf that owns registry inspection sources.
+    pub oven_source_authority: Option<OvenRustInspectSourceAuthorityRequest<'a>>,
+}
+
+/// Receipt-compatible Loaf inputs required before a normal direct Oven metadata prewarm.
+#[cfg(feature = "rust_inspect")]
+pub(crate) struct OvenRustInspectSourceAuthorityRequest<'a> {
+    pub project_version: &'a str,
+    pub target: &'a str,
+    pub toolchain: &'a str,
+    pub profile: &'a str,
+    pub features: &'a [String],
+    pub build_unit_inputs: &'a BTreeMap<String, String>,
+    pub registry_dependencies: &'a [DependencySpec],
+}
+
+/// Prepared projection and any generation lock retaining its source-owning Loaf through semantic analysis.
+#[cfg(feature = "rust_inspect")]
+pub(crate) struct PreparedRustInspectWorkspace {
+    manifest_dir: PathBuf,
+    _source_loaf: Option<OvenToolchainLoaf>,
+}
+
+#[cfg(feature = "rust_inspect")]
+impl PreparedRustInspectWorkspace {
+    /// Return the compiler-authored manifest directory while this workspace retains its source Loaf.
+    pub(crate) fn manifest_dir(&self) -> &Path {
+        &self.manifest_dir
+    }
 }
 
 /// Prepare and prewarm the generated Rust workspace used for rust-inspect metadata queries.
 #[cfg(feature = "rust_inspect")]
-pub(crate) fn prepare_rust_inspect_workspace(request: RustInspectWorkspaceRequest<'_>) -> CliResult<Option<PathBuf>> {
+pub(crate) fn prepare_rust_inspect_workspace(
+    request: RustInspectWorkspaceRequest<'_>,
+) -> CliResult<Option<PreparedRustInspectWorkspace>> {
     let RustInspectWorkspaceRequest {
         project_root,
         project_name,
@@ -341,6 +384,7 @@ pub(crate) fn prepare_rust_inspect_workspace(request: RustInspectWorkspaceReques
         prepare_when_empty,
         direct_oven_inspection,
         force_direct_prewarm,
+        oven_source_authority,
     } = request;
     if rust_inspect_query_paths.is_empty() && !prepare_when_empty {
         return Ok(None);
@@ -359,7 +403,73 @@ pub(crate) fn prepare_rust_inspect_workspace(request: RustInspectWorkspaceReques
         cargo_target_dir,
         &cargo_policy_flags,
     )?;
+    let mut source_loaf = None;
     if direct_oven_inspection {
+        if std::env::var_os(crate::oven::loaf::OVEN_LOAF_ENV).is_some_and(|value| value == "1") {
+            let source = std::env::var_os(OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY_ENV)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    CliError::failure("explicit Loaf baker did not supply its locked Rust inspection source authority")
+                })?;
+            let destination =
+                rust_inspect_manifest_dir.join(crate::rust_inspect::OVEN_DIRECT_INSPECTION_AUTHORITY_FILE);
+            fs::copy(&source, &destination).map_err(|error| {
+                CliError::failure(format!(
+                    "failed to install explicit baker Rust inspection authority from {}: {error}",
+                    source.display()
+                ))
+            })?;
+        } else if let Some(authority_request) = oven_source_authority {
+            let mut receipt_request = OvenGeneratedProjectRequest::new(
+                project_root,
+                project_name,
+                authority_request.project_version,
+                authority_request.target,
+                authority_request.toolchain,
+                authority_request.profile,
+                authority_request.features.to_vec(),
+            )
+            .with_generated_source("generated-root", rust_inspect_manifest_dir.join("src/main.rs"));
+            for (name, value) in authority_request.build_unit_inputs {
+                receipt_request = receipt_request.with_build_unit_input(name, value);
+            }
+            let receipt = receipt_generated_project(&receipt_request).map_err(|error| {
+                CliError::failure(format!("failed to receipt Oven Rust inspection source: {error}"))
+            })?;
+            let selected = resolve_toolchain_loaf_for_registry_sources(
+                &receipt,
+                OvenLoafSelection::CompilerOwnedProviderSuperset,
+                authority_request.registry_dependencies,
+            )
+            .map_err(|error| CliError::failure(error.to_string()))?
+            .ok_or_else(|| {
+                CliError::failure(
+                    "Oven Alpha has no receipt-compatible Loaf containing the requested Rust inspection sources",
+                )
+            })?;
+            let sources = selected
+                .artifacts
+                .registry_sources
+                .iter()
+                .map(|package| crate::rust_inspect::OvenInspectionRegistrySource {
+                    package: package.package.clone(),
+                    version: package.version.clone(),
+                    registry: package.source.registry.clone(),
+                    checksum: package.source.checksum.clone(),
+                    features: package.features.clone(),
+                    source_root: selected.artifact_root.join(&package.source.relative_root),
+                    source_digest: package.source.digest.clone(),
+                })
+                .collect();
+            crate::rust_inspect::write_oven_inspection_source_authority(&rust_inspect_manifest_dir, sources)
+                .map_err(|error| CliError::failure(format!("failed to install Loaf Rust source authority: {error}")))?;
+            let sealed_lock = selected.artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+            if sealed_lock.is_file() {
+                install_oven_registry_lock(&sealed_lock, &rust_inspect_manifest_dir.join("Cargo.lock"))?;
+            }
+            source_loaf = Some(selected);
+        }
         mark_oven_direct_rust_inspection(&rust_inspect_manifest_dir)?;
     }
     prewarm_rust_inspect_workspace(
@@ -368,7 +478,39 @@ pub(crate) fn prepare_rust_inspect_workspace(request: RustInspectWorkspaceReques
         rust_inspect_query_paths,
         force_direct_prewarm,
     )?;
-    Ok(Some(rust_inspect_manifest_dir))
+    Ok(Some(PreparedRustInspectWorkspace {
+        manifest_dir: rust_inspect_manifest_dir,
+        _source_loaf: source_loaf,
+    }))
+}
+
+/// Install a sealed registry lock as writable caller-owned inspection state.
+///
+/// Loaf artifacts are intentionally read-only. Copying their filesystem permissions into the mutable inspection
+/// workspace makes the first projection impossible to replace on reuse, so only the verified bytes cross this
+/// ownership boundary.
+#[cfg(feature = "rust_inspect")]
+fn install_oven_registry_lock(source: &Path, destination: &Path) -> CliResult<()> {
+    let payload = fs::read(source).map_err(|error| {
+        CliError::failure(format!(
+            "failed to read Loaf registry lock from {}: {error}",
+            source.display()
+        ))
+    })?;
+    if destination.exists() {
+        fs::remove_file(destination).map_err(|error| {
+            CliError::failure(format!(
+                "failed to replace projected Loaf registry lock {}: {error}",
+                destination.display()
+            ))
+        })?;
+    }
+    fs::write(destination, payload).map_err(|error| {
+        CliError::failure(format!(
+            "failed to install Loaf registry lock from {}: {error}",
+            source.display()
+        ))
+    })
 }
 
 /// Prepare the rust-inspect workspace needed before metadata-backed typechecking.
@@ -385,6 +527,7 @@ pub(crate) fn prepare_rust_inspect_typecheck_workspace(
         cargo_features,
         cargo_policy,
         rust_edition,
+        provider_plan,
     } = request;
     let metadata_query_paths = collect_rust_inspect_query_paths(modules);
     if metadata_query_paths.is_empty() {
@@ -435,6 +578,18 @@ pub(crate) fn prepare_rust_inspect_typecheck_workspace(
     )
     .map_err(|error| CliError::failure(format!("failed to prepare rust-inspect Cargo cache: {error}")))?;
     let (cargo_target_dir, cache_lease, _cache_identity) = managed_target.into_parts();
+    let oven_build_inputs = super::build::oven_build_unit_inputs(
+        provider_plan,
+        &lock_resolution.project_requirements,
+        &lock_resolution.resolved,
+    )?;
+    let rustc = resolve_active_rustc().map_err(|error| CliError::failure(error.to_string()))?;
+    let target = rustc_host_target(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
+    let toolchain = rustc_identity(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
+    let project_version = manifest
+        .and_then(|manifest| manifest.project.as_ref())
+        .and_then(|project| project.version.as_deref())
+        .unwrap_or("0.1.0");
     let manifest_dir = prepare_rust_inspect_workspace(RustInspectWorkspaceRequest {
         project_root,
         project_name,
@@ -455,10 +610,20 @@ pub(crate) fn prepare_rust_inspect_typecheck_workspace(
         // ambiguity for independently selected workspace members.
         direct_oven_inspection: true,
         force_direct_prewarm: false,
+        oven_source_authority: Some(OvenRustInspectSourceAuthorityRequest {
+            project_version,
+            target: &target,
+            toolchain: &toolchain,
+            profile: "debug",
+            features: &cargo_features.cargo_features,
+            build_unit_inputs: &oven_build_inputs,
+            registry_dependencies: &lock_resolution.resolved.dependencies,
+        }),
     })?;
-    Ok(manifest_dir.map(|manifest_dir| PreparedRustInspectTypecheckWorkspace {
-        manifest_dir,
+    Ok(manifest_dir.map(|workspace| PreparedRustInspectTypecheckWorkspace {
+        manifest_dir: workspace.manifest_dir,
         _cache_lease: cache_lease,
+        _source_loaf: workspace._source_loaf,
     }))
 }
 
@@ -1874,6 +2039,28 @@ mod tests {
             cargo_lock_payload_override(Some(lock_path))?,
             Some("version = 4\n".to_string())
         );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn sealed_oven_registry_lock_can_replace_a_prior_projection() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = tempfile::tempdir()?;
+        let sealed_lock = temp_dir.path().join("sealed.lock");
+        let projected_lock = temp_dir.path().join("Cargo.lock");
+        fs::write(&sealed_lock, "version = 4\n")?;
+        let mut sealed_permissions = fs::metadata(&sealed_lock)?.permissions();
+        sealed_permissions.set_readonly(true);
+        fs::set_permissions(&sealed_lock, sealed_permissions)?;
+
+        install_oven_registry_lock(&sealed_lock, &projected_lock)?;
+        let mut projected_permissions = fs::metadata(&projected_lock)?.permissions();
+        projected_permissions.set_readonly(true);
+        fs::set_permissions(&projected_lock, projected_permissions)?;
+        install_oven_registry_lock(&sealed_lock, &projected_lock)?;
+
+        assert_eq!(fs::read_to_string(&projected_lock)?, "version = 4\n");
+        assert!(!fs::metadata(&projected_lock)?.permissions().readonly());
         Ok(())
     }
 

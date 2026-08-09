@@ -2962,22 +2962,15 @@ def main() -> None:
         let generator = ProjectGenerator::new(tmp.path(), "warning_clean_codegen", true);
         generator.generate(&code)?;
 
-        let output = if let Some(rustc) = std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC") {
-            let stdlib = std::env::var_os("INCAN_OVEN_COMPILER_SUITE_STDLIB")
-                .ok_or("stored Oven compiler suite did not provide its incan_stdlib artifact")?;
-            let dependency_path_count = std::env::var("INCAN_OVEN_COMPILER_SUITE_DEPENDENCY_PATH_COUNT")
-                .map_err(|_| "stored Oven compiler suite did not provide dependency search-path count")?
-                .parse::<usize>()
-                .map_err(|error| {
-                    format!("stored Oven compiler suite has an invalid dependency search-path count: {error}")
-                })?;
-            let extern_count = std::env::var("INCAN_OVEN_COMPILER_SUITE_EXTERN_COUNT")
-                .map_err(|_| "stored Oven compiler suite did not provide direct-rustc extern count")?
-                .parse::<usize>()
-                .map_err(|error| {
-                    format!("stored Oven compiler suite has an invalid direct-rustc extern count: {error}")
-                })?;
-            let mut command = Command::new(rustc);
+        let capability = crate::oven::compiler_suite_env::OvenCompilerSuiteCapability::from_environment(
+            crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_CAPABILITY_ENV,
+        )
+        .map_err(std::io::Error::other)?;
+        let output = if let Some(capability) = capability {
+            if !capability.externs.contains_key("incan_stdlib") {
+                return Err("stored Oven compiler suite direct-rustc capability omitted incan_stdlib".into());
+            }
+            let mut command = Command::new(&capability.rustc);
             command
                 .arg("--edition=2024")
                 .arg("--crate-name")
@@ -2989,33 +2982,13 @@ def main() -> None:
                 .env("CARGO_MANIFEST_DIR", tmp.path())
                 .env("CARGO_PKG_NAME", "warning_clean_codegen")
                 .env("CARGO_PKG_VERSION", "0.1.0");
-            for index in 0..dependency_path_count {
-                let variable = format!("INCAN_OVEN_COMPILER_SUITE_DEPENDENCY_PATH_{index}");
-                let dependency_path = std::env::var_os(&variable).ok_or_else(|| {
-                    format!("stored Oven compiler suite did not provide dependency search path {index}")
-                })?;
-                command.arg("-L").arg(format!(
-                    "dependency={}",
-                    std::path::Path::new(&dependency_path).display()
-                ));
-            }
-            let mut received_stdlib = false;
-            for index in 0..extern_count {
-                let name_variable = format!("INCAN_OVEN_COMPILER_SUITE_EXTERN_{index}_NAME");
-                let path_variable = format!("INCAN_OVEN_COMPILER_SUITE_EXTERN_{index}_PATH");
-                let crate_name = std::env::var(&name_variable).map_err(|_| {
-                    format!("stored Oven compiler suite did not provide direct-rustc extern name {index}")
-                })?;
-                let path = std::env::var_os(&path_variable).ok_or_else(|| {
-                    format!("stored Oven compiler suite did not provide direct-rustc extern path {index}")
-                })?;
-                received_stdlib |= crate_name == "incan_stdlib" && path == stdlib;
+            for dependency_path in &capability.dependency_search_paths {
                 command
-                    .arg("--extern")
-                    .arg(format!("{crate_name}={}", std::path::Path::new(&path).display()));
+                    .arg("-L")
+                    .arg(format!("dependency={}", dependency_path.display()));
             }
-            if !received_stdlib {
-                return Err("stored Oven compiler suite direct-rustc externs omitted its incan_stdlib artifact".into());
+            for (crate_name, path) in &capability.externs {
+                command.arg("--extern").arg(format!("{crate_name}={}", path.display()));
             }
             command.arg(generator.crate_root_path()).output()?
         } else {

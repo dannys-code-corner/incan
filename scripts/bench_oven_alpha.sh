@@ -24,9 +24,9 @@ Options:
   --checkout-revision TEXT        Revision of the checkout that supplied the benchmark fixture (required)
   --clean-worktree-source PATH    Identical fixture in a clean checkout for a final reuse run
   --cargo-guard-dir PATH          Directory containing a `cargo` executable that exits exactly 97 (required)
-  --max-physical-bytes BYTES      Aggregate Oven physical-store policy (default: 3221225472)
-  --max-domain-physical-bytes N   Per-domain Oven physical-store policy (default: 1073741824)
-  --max-domain-logical-bytes N    Per-domain Oven logical-artifact policy (default: 805306368)
+  --max-physical-bytes BYTES      Override the aggregate Oven physical-store policy
+  --max-domain-physical-bytes N   Override the per-domain Oven physical-store policy
+  --max-domain-logical-bytes N    Override the per-domain Oven logical-artifact policy
   -h, --help                      Show this help
 EOF
 }
@@ -41,9 +41,9 @@ checkout_revision=""
 clean_worktree_source=""
 repetitions=2
 cargo_guard_dir=""
-max_physical_bytes=3221225472
-max_domain_physical_bytes=1073741824
-max_domain_logical_bytes=805306368
+max_physical_bytes=""
+max_domain_physical_bytes=""
+max_domain_logical_bytes=""
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -103,14 +103,14 @@ set -e
 [ "$cargo_guard_probe_status" -eq 97 ] \
     || { echo "--cargo-guard-dir/cargo must exit exactly 97 when probed; got $cargo_guard_probe_status" >&2; exit 2; }
 
-case "$max_physical_bytes:$max_domain_physical_bytes:$max_domain_logical_bytes" in
-    *[!0-9:]*|::*|:*|*:) echo "storage limits must be whole-byte integers" >&2; exit 2 ;;
-esac
-if [ "$max_physical_bytes" -eq 0 ] || [ "$max_domain_physical_bytes" -eq 0 ] || [ "$max_domain_logical_bytes" -eq 0 ]; then
-    echo "storage limits must be greater than zero" >&2
-    exit 2
-fi
-if [ "$max_domain_physical_bytes" -gt "$max_physical_bytes" ]; then
+for storage_limit in "$max_physical_bytes" "$max_domain_physical_bytes" "$max_domain_logical_bytes"; do
+    case "$storage_limit" in
+        "") ;;
+        *[!0-9]*|0) echo "storage limit overrides must be positive whole-byte integers" >&2; exit 2 ;;
+    esac
+done
+if [ -n "$max_physical_bytes" ] && [ -n "$max_domain_physical_bytes" ] \
+    && [ "$max_domain_physical_bytes" -gt "$max_physical_bytes" ]; then
     echo "per-domain physical policy cannot exceed aggregate policy" >&2
     exit 2
 fi
@@ -168,15 +168,19 @@ run_stage() {
     # source overrides intentionally remain supported elsewhere, but inheriting one from a different checkout would
     # turn this packaged-toolchain benchmark into an ambient-state measurement and make its receipt incompatible
     # with the compiler-owned Loaf.
+    local -a storage_policy_env=()
+    [ -z "$max_physical_bytes" ] || storage_policy_env+=("INCAN_OVEN_MAX_PHYSICAL_BYTES=$max_physical_bytes")
+    [ -z "$max_domain_physical_bytes" ] \
+        || storage_policy_env+=("INCAN_OVEN_MAX_DOMAIN_PHYSICAL_BYTES=$max_domain_physical_bytes")
+    [ -z "$max_domain_logical_bytes" ] \
+        || storage_policy_env+=("INCAN_OVEN_MAX_DOMAIN_LOGICAL_BYTES=$max_domain_logical_bytes")
     env -u INCAN_SOURCE_ROOT -u INCAN_STDLIB -u INCAN_STDLIB_DIR -u INCAN_STDLIB_PATH \
         -u INCAN_TOOLCHAIN_CRATES_DIR -u INCAN_SDK_INVENTORY \
         -u INCAN_INTERNAL_SDK_PROVIDER_STORE -u INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE \
         -u INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT -u INCAN_INTERNAL_OVEN_LOAF_EXECUTION \
         -u INCAN_INTERNAL_OVEN_RUNTIME_ROOT \
         INCAN_HOME="$incan_home" \
-        INCAN_OVEN_MAX_PHYSICAL_BYTES="$max_physical_bytes" \
-        INCAN_OVEN_MAX_DOMAIN_PHYSICAL_BYTES="$max_domain_physical_bytes" \
-        INCAN_OVEN_MAX_DOMAIN_LOGICAL_BYTES="$max_domain_logical_bytes" \
+        "${storage_policy_env[@]}" \
         PATH="${cargo_guard_dir:+$cargo_guard_dir:}$PATH" \
         "$@" >"$output_dir/$stage.log" 2>&1
     status=$?
@@ -300,6 +304,9 @@ for name in (output / "storage-junctions.tsv").read_text().splitlines():
 
 final_inspection = storage_junctions[-1]["inspection"]
 
+def optional_int(value):
+    return int(value) if value else None
+
 report = {
     "schema_version": 4,
     "purpose": "Oven Alpha packaged-unit first-materialization and warm normal-command evidence",
@@ -324,9 +331,12 @@ report = {
     },
     "store": {
         "root": sys.argv[4],
-        "max_physical_bytes": int(sys.argv[7]),
-        "max_domain_physical_bytes": int(sys.argv[8]),
-        "max_domain_logical_bytes": int(sys.argv[9]),
+        "requested_limit_overrides": {
+            "max_physical_bytes": optional_int(sys.argv[7]),
+            "max_domain_physical_bytes": optional_int(sys.argv[8]),
+            "max_domain_logical_bytes": optional_int(sys.argv[9]),
+        },
+        "effective_limits": final_inspection.get("limits"),
         "inspection": final_inspection,
     },
     "timing": {

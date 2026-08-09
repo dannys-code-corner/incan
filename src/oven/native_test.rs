@@ -570,6 +570,7 @@ mod tests {
             externs: Vec::new(),
             entrypoint_externs: BTreeMap::new(),
             registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
             compile_environment: BTreeMap::new(),
             vocab_auxiliary_targets: Vec::new(),
             supporting_artifacts: Vec::new(),

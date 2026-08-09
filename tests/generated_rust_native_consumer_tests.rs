@@ -3,6 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[allow(dead_code)]
+#[path = "../src/oven/compiler_suite_env.rs"]
+mod compiler_suite_env;
 mod support;
 
 fn incan_binary() -> PathBuf {
@@ -21,7 +24,7 @@ fn incan_binary() -> PathBuf {
 fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let stdlib_root = source_root.join("crates/incan_stdlib/stdlib");
-    let stored_suite = compiler_suite_rustc_inputs().is_some();
+    let stored_suite = std::env::var_os(compiler_suite_env::OVEN_COMPILER_SUITE_CAPABILITY_ENV).is_some();
     let mut command = Command::new(incan_binary());
     command
         .args(args)
@@ -59,41 +62,28 @@ struct CompilerSuiteRustcInputs {
     externs: BTreeMap<String, PathBuf>,
 }
 
-fn compiler_suite_rustc_inputs() -> Option<CompilerSuiteRustcInputs> {
-    let rustc = std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC")?;
-    let stdlib = std::env::var_os("INCAN_OVEN_COMPILER_SUITE_STDLIB")?;
-    let sdk_inventory = std::env::var_os("INCAN_SDK_INVENTORY")?;
-    let dependency_path_count = std::env::var("INCAN_OVEN_COMPILER_SUITE_DEPENDENCY_PATH_COUNT")
-        .ok()?
-        .parse::<usize>()
-        .ok()?;
-    let dependency_paths = (0..dependency_path_count)
-        .map(|index| std::env::var_os(format!("INCAN_OVEN_COMPILER_SUITE_DEPENDENCY_PATH_{index}")))
-        .collect::<Option<Vec<_>>>()?
-        .into_iter()
+fn compiler_suite_rustc_inputs() -> Result<Option<CompilerSuiteRustcInputs>, Box<dyn std::error::Error>> {
+    let Some(capability) = compiler_suite_env::OvenCompilerSuiteCapability::from_environment(
+        compiler_suite_env::OVEN_COMPILER_SUITE_CAPABILITY_ENV,
+    )?
+    else {
+        return Ok(None);
+    };
+    let stdlib = capability
+        .externs
+        .get("incan_stdlib")
+        .cloned()
+        .ok_or("stored compiler-suite capability omitted incan_stdlib")?;
+    let sdk_inventory = std::env::var_os("INCAN_SDK_INVENTORY")
         .map(PathBuf::from)
-        .collect();
-    let extern_count = std::env::var("INCAN_OVEN_COMPILER_SUITE_EXTERN_COUNT")
-        .ok()?
-        .parse::<usize>()
-        .ok()?;
-    let externs = (0..extern_count)
-        .map(|index| {
-            Some((
-                std::env::var(format!("INCAN_OVEN_COMPILER_SUITE_EXTERN_{index}_NAME")).ok()?,
-                PathBuf::from(std::env::var_os(format!(
-                    "INCAN_OVEN_COMPILER_SUITE_EXTERN_{index}_PATH"
-                ))?),
-            ))
-        })
-        .collect::<Option<BTreeMap<_, _>>>()?;
-    Some(CompilerSuiteRustcInputs {
-        rustc: PathBuf::from(rustc),
-        stdlib: PathBuf::from(stdlib),
-        sdk_inventory: PathBuf::from(sdk_inventory),
-        dependency_paths,
-        externs,
-    })
+        .ok_or("stored compiler-suite capability omitted the SDK inventory")?;
+    Ok(Some(CompilerSuiteRustcInputs {
+        rustc: capability.rustc,
+        stdlib,
+        sdk_inventory,
+        dependency_paths: capability.dependency_search_paths,
+        externs: capability.externs,
+    }))
 }
 
 fn suite_rustc_command(inputs: &CompilerSuiteRustcInputs, current_dir: &Path) -> Command {
@@ -353,7 +343,7 @@ fn native_rust_consumer_can_call_generated_public_items() -> Result<(), Box<dyn 
 
     let consumer = write_consumer(tmp.path())?;
     let forge = write_forge(tmp.path())?;
-    if let Some(inputs) = compiler_suite_rustc_inputs() {
+    if let Some(inputs) = compiler_suite_rustc_inputs()? {
         direct_oven_native_consumer_test(&producer, &consumer, &forge, &tmp.path().join("native-direct"), &inputs)?;
         return Ok(());
     }

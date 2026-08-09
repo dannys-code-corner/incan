@@ -5,7 +5,7 @@ inputs:
     description: Stable compatibility-domain suffix for this platform and toolchain lane.
     required: true
   publisher_toolchain:
-    description: Evidence label for the toolchain used by the earlier named baker; this action does not invoke it.
+    description: Pinned Cargo toolchain used by the earlier baker and logged legacy-interoperability test fixtures.
     required: false
     default: nightly-2026-03-24
   consumer_toolchain:
@@ -19,6 +19,7 @@ runs:
       run: |
         set -euo pipefail
         rustc_path="$(rustup which --toolchain "${{ inputs.consumer_toolchain }}" rustc)"
+        fixture_cargo_path="$(rustup which --toolchain "${{ inputs.publisher_toolchain }}" cargo)"
         output="$GITHUB_WORKSPACE/target/oven-compiler-suite-output"
         store="$GITHUB_WORKSPACE/target/oven-compiler-suite-store"
         provider_root="$(cat "$GITHUB_WORKSPACE/target/incan_test_sdk_provider_path")"
@@ -28,13 +29,13 @@ runs:
         read -r raw_after_baker_kib _ < <(du -sk "$store")
         cat > "$output/cargo-guard/cargo" <<'EOF'
         #!/bin/sh
-        printf '%s\n' "unexpected Cargo invocation: $*" >> "$CARGO_GUARD_LOG"
+        printf '%s\n' "unexpected Cargo invocation: $*" >> "$INCAN_OVEN_CARGO_GUARD_LOG"
         exit 97
         EOF
         chmod +x "$output/cargo-guard/cargo"
         : > "$output/cargo-guard/invocations.log"
         replay_started="$(python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)')"
-        PATH="$output/cargo-guard:$PATH" CARGO_GUARD_LOG="$output/cargo-guard/invocations.log" \
+        PATH="$output/cargo-guard:$PATH" INCAN_OVEN_CARGO_GUARD_LOG="$output/cargo-guard/invocations.log" \
           TMPDIR="$RUNNER_TEMP/incan_oven_tmp" CARGO_NET_OFFLINE=true \
           INCAN_SOURCE_ROOT="$GITHUB_WORKSPACE" \
           INCAN_STDLIB="$GITHUB_WORKSPACE/crates/incan_stdlib/stdlib" \
@@ -46,7 +47,8 @@ runs:
           INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$GITHUB_WORKSPACE/target" \
           INCAN_GENERATED_CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/incan_generated_shared_target" \
           "$GITHUB_WORKSPACE/target/debug/incan" oven compiler-libtests \
-            --compiler-root "$GITHUB_WORKSPACE" --rustc "$rustc_path" --feature lsp --output "$output" \
+            --compiler-root "$GITHUB_WORKSPACE" --rustc "$rustc_path" --fixture-cargo "$fixture_cargo_path" \
+            --feature lsp --output "$output" \
             --store "$store" --format json \
             > "$output/compiler-suite-stdout.json"
         replay_finished="$(python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)')"
@@ -70,6 +72,11 @@ runs:
               after_baker: ($publisher[0].compiler_suite.store + {raw_disk_kib: $raw_after_baker_kib}),
               after_replay: ($suite[0].store + {raw_disk_kib: $raw_final_kib})
             },
-            cargo_guard: {invocation_count: 0, verified: true}}' > "$output/evidence.json"
+            cargo_guard: {
+              invocation_count: 0,
+              unexpected_invocation_count: 0,
+              fixture_invocation_count: ($suite[0].fixture_cargo.invocations // 0),
+              verified: true
+            }}' > "$output/evidence.json"
         jq '{lane, toolchains, timing, cargo_guard, suite: (.suite | {success, native_test_case_totals, native_test_roots, failures}), storage}' "$output/evidence.json"
         df -h "$GITHUB_WORKSPACE"

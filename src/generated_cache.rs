@@ -17,10 +17,10 @@ use sha2::{Digest, Sha256};
 use crate::backend::project::generator::{GENERATED_CARGO_TARGET_DIR_ENV, cargo_config_identity};
 use crate::backend::project::runner::cargo_executable;
 use crate::lockfile::CargoFeatureSelection;
+use crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_RUSTC_ENV;
 
 /// Marker exported by a receipt-bound compiler-suite child. Its presence means that Cargo is not an execution
 /// capability and must not be probed while deriving a compatibility identity.
-const OVEN_COMPILER_SUITE_RUSTC_ENV: &str = "INCAN_OVEN_COMPILER_SUITE_RUSTC";
 const OVEN_SEALED_CARGO_COMMAND_IDENTITY: &str = "oven-sealed-no-cargo";
 const OVEN_SEALED_CARGO_VERSION_IDENTITY: &str = "not-consulted";
 const OVEN_SEALED_CARGO_CONFIG_IDENTITY: &str = "not-consulted";

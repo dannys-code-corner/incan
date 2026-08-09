@@ -1086,6 +1086,35 @@ impl OvenStore {
         self.inspect_while_locked()
     }
 
+    /// Return manifest-bound accounting for an exact warm reuse without rehashing every immutable artifact.
+    ///
+    /// The store manager lock excludes concurrent staging and pruning while allocation and lease state are measured.
+    /// Full byte verification remains the contract of [`Self::inspect`] and selection; this path is only for a baker
+    /// that has already matched its exact preparation identity and will verify each selected entry before execution.
+    pub(crate) fn inspect_for_exact_reuse(&self) -> Result<OvenStoreInspection, OvenStoreError> {
+        self.ensure_layout()?;
+        let manager = open_lock(&self.root.join(MANAGER_LOCK_FILE))?;
+        manager.lock().map_err(|source| OvenStoreError::Io {
+            path: self.root.join(MANAGER_LOCK_FILE),
+            source,
+        })?;
+        self.reclaim_stale_staging()?;
+        let entries = self.collect_entries_for_admission()?;
+        let logical_bytes = entries.iter().map(|entry| entry.logical_bytes).sum();
+        let physical_bytes = entries.iter().map(|entry| entry.physical_bytes).sum();
+        let (reclaimable_physical_bytes, active_lease_physical_bytes) = physical_bytes_by_lease(&entries)?;
+        Ok(OvenStoreInspection {
+            schema_version: OVEN_STORE_SCHEMA_VERSION,
+            root: self.root.clone(),
+            limits: self.limits,
+            logical_bytes,
+            physical_bytes,
+            reclaimable_physical_bytes,
+            active_lease_physical_bytes,
+            entries,
+        })
+    }
+
     /// Return store accounting while the manager lease excludes unreported staging writes and concurrent pruning.
     fn inspect_while_locked(&self) -> Result<OvenStoreInspection, OvenStoreError> {
         let entries = self.collect_entries()?;
@@ -1234,18 +1263,38 @@ impl OvenStore {
                 // `write_staged_entry` adds the trailing manifest newline and the mutable access timestamp.
                 .saturating_add(round_physical(1))
                 .saturating_add(round_physical(20));
-            let files = validated_materialized_files(&request.materialized_files)?;
-            for file in files {
-                let source = fs::canonicalize(&file.source_path).map_err(|source_error| OvenStoreError::Io {
-                    path: file.source_path.clone(),
+            // `manifest_for_publication` has just read and digest-validated this request's files. Capacity needs the
+            // canonical source location plus the resulting manifest accounting, not a second full content read.
+            // `publish_batch` validates them again at the actual atomic hand-off, so a source mutation between these
+            // phases still fails closed rather than changing the admitted identity.
+            let source_paths = request
+                .materialized_files
+                .iter()
+                .map(|file| {
+                    let relative = normalized_materialized_relative_path(&file.relative_path)?;
+                    Ok((relative, file.source_path.clone()))
+                })
+                .collect::<Result<BTreeMap<_, _>, OvenStoreError>>()?;
+            for file in &manifest.materialized_files {
+                let source_path = source_paths
+                    .get(&file.relative_path)
+                    .ok_or_else(|| OvenStoreError::Integrity {
+                        identity: manifest.identity.clone(),
+                        message: format!(
+                            "validated manifest path `{}` has no publication source",
+                            file.relative_path
+                        ),
+                    })?;
+                let source = fs::canonicalize(source_path).map_err(|source_error| OvenStoreError::Io {
+                    path: source_path.clone(),
                     source: source_error,
                 })?;
                 if source.starts_with(&publisher_root)
-                    || !copied_materializations.insert((file.manifest.digest, file.manifest.executable))
+                    || !copied_materializations.insert((file.digest.clone(), file.executable))
                 {
                     continue;
                 }
-                observed_physical = observed_physical.saturating_add(round_physical(file.manifest.logical_bytes));
+                observed_physical = observed_physical.saturating_add(round_physical(file.logical_bytes));
             }
         }
         if observed_physical <= self.limits.max_physical_bytes {
@@ -2727,6 +2776,28 @@ mod tests {
         assert_eq!(inspection.entries[0].manifest.identity, manifest.identity);
         assert_eq!(inspection.logical_bytes, 14);
         assert!(inspection.physical_bytes >= inspection.logical_bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn exact_reuse_inspection_defers_content_hashing_to_verified_selection() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let manifest = store.publish(&request(project.path(), "engine-arm64", b"payload")?)?;
+        fs::write(
+            store.entry_root(&manifest.identity).join(super::PAYLOAD_FILE),
+            b"corrupt",
+        )?;
+
+        let warm_inspection = store.inspect_for_exact_reuse()?;
+        assert_eq!(warm_inspection.entries.len(), 1);
+        assert!(matches!(store.inspect(), Err(OvenStoreError::Integrity { .. })));
+        assert!(matches!(
+            store.select_payload(&manifest.identity),
+            Err(OvenStoreError::Integrity { .. })
+        ));
         Ok(())
     }
 

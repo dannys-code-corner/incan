@@ -2055,7 +2055,7 @@ enum LibraryDependencyPreparation {
     OvenDirectRustc,
 }
 
-/// Decide whether session construction is permitted to invoke the temporary legacy-Cargo provider publisher.
+/// Decide whether session construction is inside the explicitly named legacy-Cargo provider publisher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SdkInventorySource {
     /// Existing compatibility behavior for commands that still explicitly own legacy artifact preparation.
@@ -3281,12 +3281,10 @@ fn print_rust_inspect_prewarm_progress(message: String) {
 /// The generated projection still carries a manifest as structured dependency input, but a normal Oven command must
 /// never ask Cargo to interpret or build that projection.
 #[cfg(feature = "rust_inspect")]
-const OVEN_DIRECT_RUST_INSPECT_MARKER: &str = ".incan_oven_direct_rust_project";
-
 /// Mark one compiler-authored Rust inspection projection for receipt-bound direct-Rustc loading.
 #[cfg(feature = "rust_inspect")]
 pub(crate) fn mark_oven_direct_rust_inspection(manifest_dir: &Path) -> CliResult<()> {
-    let marker = manifest_dir.join(OVEN_DIRECT_RUST_INSPECT_MARKER);
+    let marker = manifest_dir.join(crate::rust_inspect::OVEN_DIRECT_INSPECTION_MARKER);
     fs::write(&marker, b"receipt-bound direct-rustc inspection\n").map_err(|error| {
         CliError::failure(format!(
             "failed to mark Oven Rust inspection projection {}: {error}",
@@ -3298,7 +3296,9 @@ pub(crate) fn mark_oven_direct_rust_inspection(manifest_dir: &Path) -> CliResult
 #[cfg(feature = "rust_inspect")]
 /// Return whether this generated manifest carries the direct-Oven rust-inspect marker.
 fn oven_direct_rust_inspection_marked(manifest_dir: &Path) -> bool {
-    manifest_dir.join(OVEN_DIRECT_RUST_INSPECT_MARKER).is_file()
+    manifest_dir
+        .join(crate::rust_inspect::OVEN_DIRECT_INSPECTION_MARKER)
+        .is_file()
 }
 
 /// Prepare rust-inspect metadata access before typechecking/codegen hot paths.
@@ -6623,7 +6623,7 @@ pub def main() -> int:
         let runtime_root = shadow_root.join(runtime_relative);
         let direct = workspace.path().join("oven-direct-rustc");
         fs::create_dir_all(&direct)?;
-        let rustc = std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC")
+        let rustc = std::env::var_os(crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_RUSTC_ENV)
             .or_else(|| std::env::var_os("RUSTC"))
             .unwrap_or_else(|| "rustc".into());
         let compile = |source: &Path,

@@ -19,11 +19,13 @@ INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT ?= $(CURDIR)/target
 # refusal tests pass explicit tiny CLI limits rather than redefining production policy here.
 INCAN_TEST_OVEN_BAKE_FORMAT ?= text
 INCAN_TEST_OVEN_BAKE_REPORT ?=
-# The pinned publisher Cargo supplies the unstable unit graph only. Loaf receipts and direct-rustc suite execution
-# use the selected consumer toolchain, so stable and MSRV gates prove their advertised compiler rather than nightly.
-# The named legacy publisher remains the only Cargo boundary; normal Oven build/run/test remains direct-rustc.
+# The pinned publisher Cargo supplies the unstable unit graph and the package-qualified Rust-inspection tests that
+# exercise Cargo's nightly-only metadata flags. Loaf receipts and direct-rustc suite execution use the selected
+# consumer toolchain, so stable and MSRV gates prove their advertised compiler rather than nightly. The named legacy
+# publisher/test-fixture boundary remains explicit; normal Oven build/run/test remains direct-rustc.
 INCAN_TEST_PREWARM_TOOLCHAIN ?= stable
 INCAN_TEST_PUBLISHER_TOOLCHAIN ?= nightly-2026-03-24
+INCAN_TEST_FIXTURE_CARGO_TOOLCHAIN ?= $(INCAN_TEST_PUBLISHER_TOOLCHAIN)
 INCAN_TEST_LOAF_TOOLCHAIN ?= stable
 INCAN_TEST_SUITE_TOOLCHAIN ?= stable
 TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
@@ -273,24 +275,28 @@ test-oven: test-prewarm-oven-loafs
 	@set -e; \
 		mkdir -p "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)"; \
 		suite_output="$$(mktemp -d "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)/oven-compiler-suite-output.XXXXXX")"; \
+		suite_tmp="$$(mktemp -d "$${TMPDIR:-/tmp}/incan-oven-suite.XXXXXX")"; \
 		suite_succeeded=false; \
 		cleanup_suite_output() { \
+			rm -rf -- "$$suite_tmp"; \
 			if [ "$$suite_succeeded" = true ]; then rm -rf -- "$$suite_output"; \
 			else echo "Oven suite failed; retaining caller output at $$suite_output" >&2; fi; \
 		}; \
 		trap cleanup_suite_output EXIT; \
 		rustc_path="$$(rustup which --toolchain "$(INCAN_TEST_SUITE_TOOLCHAIN)" rustc)"; \
-		mkdir -p "$$suite_output/cargo-guard" "$(CURDIR)/target/oven_tmp"; \
-		printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "unexpected Cargo invocation: $$*" >> "$$CARGO_GUARD_LOG"' 'exit 97' \
+		fixture_cargo_path="$$(rustup which --toolchain "$(INCAN_TEST_FIXTURE_CARGO_TOOLCHAIN)" cargo)"; \
+		mkdir -p "$$suite_output/cargo-guard"; \
+		printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "unexpected Cargo invocation: $$*" >> "$$INCAN_OVEN_CARGO_GUARD_LOG"' 'exit 97' \
 			> "$$suite_output/cargo-guard/cargo"; \
 		chmod +x "$$suite_output/cargo-guard/cargo"; \
 		: > "$$suite_output/cargo-guard/invocations.log"; \
 		PATH="$$suite_output/cargo-guard:$$PATH" \
-			CARGO_GUARD_LOG="$$suite_output/cargo-guard/invocations.log" TMPDIR="$(CURDIR)/target/oven_tmp" \
+			INCAN_OVEN_CARGO_GUARD_LOG="$$suite_output/cargo-guard/invocations.log" TMPDIR="$$suite_tmp" \
 			$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
 			INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$(CURDIR)/target" \
 			./target/debug/incan oven compiler-libtests \
-				--compiler-root "$(CURDIR)" --rustc "$$rustc_path" --feature lsp --output "$$suite_output" \
+				--compiler-root "$(CURDIR)" --rustc "$$rustc_path" --fixture-cargo "$$fixture_cargo_path" \
+				--feature lsp --output "$$suite_output" \
 				--store "$(INCAN_TEST_OVEN_COMPILER_SUITE_STORE)" \
 				--format text; \
 		test ! -s "$$suite_output/cargo-guard/invocations.log"; \
@@ -362,7 +368,7 @@ test-oven-focused:
 .PHONY: test-oven-pr-regressions
 test-oven-pr-regressions:
 	@echo "\033[1mRunning bounded Oven process-containment regressions...\033[0m"
-	@CARGO_BUILD_JOBS=2 cargo test --locked --features lsp --test oven_pr_regressions
+	@CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=2 cargo test --locked --features lsp --test oven_pr_regressions
 
 .PHONY: test-oven-release-smoke
 test-oven-release-smoke: test-prewarm-oven-release-loafs
@@ -372,7 +378,7 @@ test-oven-release-smoke: test-prewarm-oven-release-loafs
 		cleanup_smoke_root() { rm -rf -- "$$smoke_root"; }; \
 		trap cleanup_smoke_root EXIT; \
 		mkdir -p "$$smoke_root/cargo-guard" "$$smoke_root/incan-home"; \
-		printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "unexpected Cargo invocation: $$*" >> "$$CARGO_GUARD_LOG"' 'exit 97' \
+		printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "unexpected Cargo invocation: $$*" >> "$$INCAN_OVEN_CARGO_GUARD_LOG"' 'exit 97' \
 			> "$$smoke_root/cargo-guard/cargo"; \
 		chmod +x "$$smoke_root/cargo-guard/cargo"; \
 		: > "$$smoke_root/cargo-guard/invocations.log"; \
@@ -380,7 +386,7 @@ test-oven-release-smoke: test-prewarm-oven-release-loafs
 			source="$(CURDIR)/src/oven/fixtures/release_core.incn"; \
 			if [ "$$command" = test ]; then source="$(CURDIR)/src/oven/fixtures/test_release_core.incn"; fi; \
 			PATH="$$smoke_root/cargo-guard:$$PATH" \
-				CARGO_GUARD_LOG="$$smoke_root/cargo-guard/invocations.log" \
+				INCAN_OVEN_CARGO_GUARD_LOG="$$smoke_root/cargo-guard/invocations.log" \
 				INCAN_HOME="$$smoke_root/incan-home" INCAN_NO_BANNER=1 \
 				RUSTUP_TOOLCHAIN="$(INCAN_TEST_LOAF_TOOLCHAIN)" \
 				"$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan" "$$command" "$$source" >/dev/null; \
@@ -518,23 +524,27 @@ test-one: test-prewarm-oven-loafs
 	@set -e; \
 		mkdir -p "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)"; \
 		root_output="$$(mktemp -d "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)/oven-test-one.XXXXXX")"; \
+		root_tmp="$$(mktemp -d "$${TMPDIR:-/tmp}/incan-oven-root.XXXXXX")"; \
 		root_succeeded=false; \
 		cleanup_root_output() { \
+			rm -rf -- "$$root_tmp"; \
 			if [ "$$root_succeeded" = true ]; then rm -rf -- "$$root_output"; \
 			else echo "Oven root failed; retaining caller output at $$root_output" >&2; fi; \
 		}; \
 		trap cleanup_root_output EXIT; \
 		rustc_path="$$(rustup which --toolchain "$(INCAN_TEST_SUITE_TOOLCHAIN)" rustc)"; \
-		mkdir -p "$$root_output/cargo-guard" "$(CURDIR)/target/oven_tmp"; \
-		printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "unexpected Cargo invocation: $$*" >> "$$CARGO_GUARD_LOG"' 'exit 97' \
+		fixture_cargo_path="$$(rustup which --toolchain "$(INCAN_TEST_FIXTURE_CARGO_TOOLCHAIN)" cargo)"; \
+		mkdir -p "$$root_output/cargo-guard"; \
+		printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "unexpected Cargo invocation: $$*" >> "$$INCAN_OVEN_CARGO_GUARD_LOG"' 'exit 97' \
 			> "$$root_output/cargo-guard/cargo"; \
 		chmod +x "$$root_output/cargo-guard/cargo"; \
 		: > "$$root_output/cargo-guard/invocations.log"; \
-		PATH="$$root_output/cargo-guard:$$PATH" CARGO_GUARD_LOG="$$root_output/cargo-guard/invocations.log" \
-			TMPDIR="$(CURDIR)/target/oven_tmp" $(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" \
+		PATH="$$root_output/cargo-guard:$$PATH" INCAN_OVEN_CARGO_GUARD_LOG="$$root_output/cargo-guard/invocations.log" \
+			TMPDIR="$$root_tmp" $(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" \
 			CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$(CURDIR)/target" \
 			./target/debug/incan oven compiler-libtests \
-				--compiler-root "$(CURDIR)" --rustc "$$rustc_path" --feature lsp --target "$(TEST_ROOT)" \
+				--compiler-root "$(CURDIR)" --rustc "$$rustc_path" --fixture-cargo "$$fixture_cargo_path" \
+				--feature lsp --target "$(TEST_ROOT)" \
 				--output "$$root_output" --store "$(INCAN_TEST_OVEN_COMPILER_SUITE_STORE)" \
 				--format text; \
 		test ! -s "$$root_output/cargo-guard/invocations.log"; \

@@ -1812,7 +1812,7 @@ mod tests {
         output: &Path,
         externs: &[(&str, &Path)],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let rustc = std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC")
+        let rustc = std::env::var_os(crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_RUSTC_ENV)
             .or_else(|| std::env::var_os("RUSTC"))
             .unwrap_or_else(|| "rustc".into());
         let mut command = Command::new(rustc);

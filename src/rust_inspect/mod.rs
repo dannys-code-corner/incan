@@ -12,6 +12,7 @@ pub(crate) use test_fixtures::{
 };
 
 pub use ::rust_inspect::{
-    Fidelity, InspectError, InspectResult, Inspector, InspectorConfig, RustMetadataCache, RustMetadataError,
-    RustWorkspace, extract_rust_item,
+    Fidelity, InspectError, InspectResult, Inspector, InspectorConfig, OVEN_DIRECT_INSPECTION_AUTHORITY_FILE,
+    OVEN_DIRECT_INSPECTION_MARKER, OvenInspectionRegistrySource, RustMetadataCache, RustMetadataError, RustWorkspace,
+    extract_rust_item, write_oven_inspection_source_authority,
 };

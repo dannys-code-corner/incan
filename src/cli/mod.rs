@@ -980,6 +980,9 @@ pub enum OvenCommand {
         /// Receipt-bound test source path to execute; may be repeated. Omitting this runs the complete stored suite.
         #[arg(long = "target", value_name = "SOURCE")]
         targets: Vec<String>,
+        /// Explicit Cargo for roots whose tests exercise legacy Cargo interoperability
+        #[arg(long = "fixture-cargo", value_name = "PATH", hide = true)]
+        fixture_cargo: Option<PathBuf>,
         /// Caller-owned direct-rustc libtest output path
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
@@ -1660,6 +1663,7 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                 rustc,
                 features,
                 targets,
+                fixture_cargo,
                 output,
                 store,
                 format,
@@ -1668,6 +1672,7 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                 rustc,
                 features,
                 targets,
+                fixture_cargo,
                 output,
                 store: store.into(),
                 format,

@@ -1579,7 +1579,7 @@ const build_test_oven_observability_forms: FrozenList[str] = ["incan build --rep
 const build_test_oven_observability_references: FrozenList[CapabilityReference] = [CapabilityReference(
     label="CLI reference",
     path="../../tooling/reference/cli_reference.md",
-), CapabilityReference(label="Release 0.6", path="../../release_notes/0_6.md")]
+), CapabilityReference(label="Release 0.5", path="../../release_notes/0_5.md")]
 static build_test_oven_observability: RegistryEntry[CapabilityId, CapabilityDescriptor] = capabilities.entry(
     key=CapabilityId("BuildTestOvenObservability"),
     subject=RegistrySubject.current_unit(),
@@ -1587,7 +1587,7 @@ static build_test_oven_observability: RegistryEntry[CapabilityId, CapabilityDesc
         id=CapabilityId("BuildTestOvenObservability"),
         name="Build and test Oven observability",
         category=CapabilityCategory.Tooling,
-        since="0.6",
+        since="0.5",
         rfc="RFC 015",
         stability=CapabilityStability.Experimental,
         activation="Use a JSON build report, verbose test output, or `incan oven store inspect --format json` to inspect the documented Oven Alpha envelope.",
