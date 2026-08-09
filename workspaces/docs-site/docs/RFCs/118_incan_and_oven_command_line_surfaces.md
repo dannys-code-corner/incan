@@ -113,10 +113,10 @@ These commands operate on a selected Loaf or workspace closure. They discover `L
 
 The names intentionally overlap only where the underlying questions differ:
 
-| Question | Command surface | Example |
-| --- | --- | --- |
-| What declarations, types, imports, and source relationships exist? | Incan semantic inspection | `incan inspect symbols`, `incan codegraph export` |
-| What architecture or safety findings follow from checked source? | Incan analysis | `incan architect` |
+| Question                                                                                 | Command surface             | Example                                                           |
+| ---------------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------- |
+| What declarations, types, imports, and source relationships exist?                       | Incan semantic inspection   | `incan inspect symbols`, `incan codegraph export`                 |
+| What architecture or safety findings follow from checked source?                         | Incan analysis              | `incan architect`                                                 |
 | Which members, providers, targets, artifacts, cache entries, and receipts were selected? | Oven operational inspection | `oven inspect plan`, `oven inspect receipt`, `oven inspect cache` |
 
 `oven inspect` must not masquerade as a semantic codegraph API, and `incan inspect` must not infer provider/cache facts from generated Rust or filesystem conventions.
@@ -134,16 +134,16 @@ Cargo compatibility is a clearly selected mode for a directory with `Cargo.toml`
 
 ### Command ownership
 
-| Domain | Canonical owner | Illustrative commands |
-| --- | --- | --- |
-| Direct source/module execution outside a Loaf, or explicitly requested direct work | `incan` | `run --direct`, `-m`, `-c`, `repl` |
-| Parsing, checking, formatting, compiler diagnostics | `incan` | `check`, `fmt` |
-| Language services and semantic products | `incan` | `lsp`, `inspect`, `codegraph`, `architect` |
-| Manifest and workspace selection | `oven` | `init`, `new`, member selection |
-| Dependency, lock, and registry lifecycle | `oven` | `add`, `remove`, `update`, `lock`, `registry`, `publish` |
-| Target, carrier, provider, and artifact lifecycle | `oven` | `plan`, `bake`, `run`, `test`, `inspect` |
-| Environments, typed actions, project mutations | `oven` | `env`, `action`, `starter`, `capability` |
-| Cargo compatibility | `oven` | `cargo` |
+| Domain                                                                             | Canonical owner | Illustrative commands                                    |
+| ---------------------------------------------------------------------------------- | --------------- | -------------------------------------------------------- |
+| Direct source/module execution outside a Loaf, or explicitly requested direct work | `incan`         | `run --direct`, `-m`, `-c`, `repl`                       |
+| Parsing, checking, formatting, compiler diagnostics                                | `incan`         | `check`, `fmt`                                           |
+| Language services and semantic products                                            | `incan`         | `lsp`, `inspect`, `codegraph`, `architect`               |
+| Manifest and workspace selection                                                   | `oven`          | `init`, `new`, member selection                          |
+| Dependency, lock, and registry lifecycle                                           | `oven`          | `add`, `remove`, `update`, `lock`, `registry`, `publish` |
+| Target, carrier, provider, and artifact lifecycle                                  | `oven`          | `plan`, `bake`, `run`, `test`, `inspect`                 |
+| Environments, typed actions, project mutations                                     | `oven`          | `env`, `action`, `starter`, `capability`                 |
+| Cargo compatibility                                                                | `oven`          | `cargo`                                                  |
 
 An operation that changes dependency resolution, registry trust, a lock, generated project state, selected toolchain/provider, target output, or execution receipt belongs to Oven even when the selected sources are entirely Incan.
 

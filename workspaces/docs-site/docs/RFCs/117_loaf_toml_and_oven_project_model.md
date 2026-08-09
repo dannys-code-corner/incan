@@ -324,11 +324,11 @@ RFC 119 owns the detailed native-Rust facet grammar, crate-provider graph, direc
 
 Every dependency requirement has a **unit kind** and an **origin**.
 
-| Unit kind | Default origin | Contributes | Does not become |
-| --- | --- | --- | --- |
-| `loaf` | `incan.pub` | checked Incan semantic/provider facts and public package features | a Cargo crate or generated Rust source contract |
-| `crate` | crates.io | Rust interop metadata and backend implementation/linkage requirements | a public Incan feature namespace by accident |
-| `capability` | Oven-managed system/foreign catalog | target-specific library, SDK, toolchain, runtime, or deployment requirement | an ambient host discovery result |
+| Unit kind    | Default origin                      | Contributes                                                                 | Does not become                                 |
+| ------------ | ----------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------- |
+| `loaf`       | `incan.pub`                         | checked Incan semantic/provider facts and public package features           | a Cargo crate or generated Rust source contract |
+| `crate`      | crates.io                           | Rust interop metadata and backend implementation/linkage requirements       | a public Incan feature namespace by accident    |
+| `capability` | Oven-managed system/foreign catalog | target-specific library, SDK, toolchain, runtime, or deployment requirement | an ambient host discovery result                |
 
 An entry may override its default origin through a registered registry, Git, path, or another supported source form. The resolved provider contract determines the legal source forms; a Loaf registry must not be accepted as a Cargo registry merely because it has a URL.
 
@@ -351,11 +351,11 @@ RFC 034 remains the protocol and publication authority for `incan.pub`; this RFC
 
 Target selection has three distinct levels:
 
-| Level | Responsibility | Constraint rule |
-| --- | --- | --- |
-| Loaf | Declares supported platform/interface/carrier combinations and package requirements | Defines the maximum compatibility surface the package claims |
-| Workspace | Declares named delivery policy, allowed targets, selected members, shared provider rules, and defaults | May narrow a member's support; must not broaden it |
-| Bake invocation | Selects the concrete target, carrier, profile, feature closure, and optional delivery policy | Must satisfy both workspace policy and every selected Loaf |
+| Level           | Responsibility                                                                                         | Constraint rule                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| Loaf            | Declares supported platform/interface/carrier combinations and package requirements                    | Defines the maximum compatibility surface the package claims |
+| Workspace       | Declares named delivery policy, allowed targets, selected members, shared provider rules, and defaults | May narrow a member's support; must not broaden it           |
+| Bake invocation | Selects the concrete target, carrier, profile, feature closure, and optional delivery policy           | Must satisfy both workspace policy and every selected Loaf   |
 
 The resolved plan must distinguish:
 
@@ -399,12 +399,12 @@ RFC 104 owns capability-enforcement and receipt semantics. RFC 112 owns crash-sa
 
 The following authored concepts move into `Loaf.toml` under Oven ownership. Their table roots are intentionally typed and reserved; arbitrary `[tool.*]` namespaces do not carry forward:
 
-| Concept | Semantic owner | Oven responsibility |
-| --- | --- | --- |
-| project and environment toolchain constraints | RFC 073 | resolve and enforce compatible toolchains |
-| named environments and matrices | RFC 073 | materialize the resolved environment and expand matrix cells deterministically |
-| typed workflow actions | RFC 078 | resolve scope, show plan, policy-gate, and execute explicit actions |
-| mutation policy | RFC 076 | evaluate receiver authority over planned changes/effects |
+| Concept                                       | Semantic owner | Oven responsibility                                                            |
+| --------------------------------------------- | -------------- | ------------------------------------------------------------------------------ |
+| project and environment toolchain constraints | RFC 073        | resolve and enforce compatible toolchains                                      |
+| named environments and matrices               | RFC 073        | materialize the resolved environment and expand matrix cells deterministically |
+| typed workflow actions                        | RFC 078        | resolve scope, show plan, policy-gate, and execute explicit actions            |
+| mutation policy                               | RFC 076        | evaluate receiver authority over planned changes/effects                       |
 
 RFC 015 is implemented, so RFC 117 supersedes its `incan.toml` discovery and `[tool.incan.envs]` configuration placement. RFCs 073, 076, and 078 are still Draft and must be amended to name the new Loaf/Oven tables and terminology rather than preserving legacy configuration compatibility.
 

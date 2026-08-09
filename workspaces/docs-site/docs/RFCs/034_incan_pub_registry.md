@@ -346,18 +346,18 @@ The resolver must not wire downloaded generated Rust source into generated `Carg
 
 ### CLI commands
 
-| Command | Description |
-|---|---|
-| `oven add <pkg>` | Add a Loaf dependency to `Loaf.toml` (fetch latest version from `incan.pub`) |
-| `oven add --crate <pkg>` | Add a crate dependency to `Loaf.toml` (fetch from crates.io by default) |
-| `oven remove <pkg>` | Remove a typed dependency from `Loaf.toml` |
-| `oven update` | Re-resolve the selected closure and update `Oven.lock` |
-| `oven login` | Authenticate with `incan.pub`, save credentials in Oven-controlled secure storage |
-| `oven publish` | Bake the selected Loaf, package `.incanpkg`, sign, and upload it |
-| `oven yank <pkg> <ver>` | Mark a version as yanked (still downloadable but skipped in new resolves) |
-| `oven search <query>` | Search the registry index (client-side text search over cached index) |
-| `oven owner add <user> <pkg>` | Add a co-owner for a package |
-| `oven owner list <pkg>` | List owners of a package |
+| Command                       | Description                                                                       |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| `oven add <pkg>`              | Add a Loaf dependency to `Loaf.toml` (fetch latest version from `incan.pub`)      |
+| `oven add --crate <pkg>`      | Add a crate dependency to `Loaf.toml` (fetch from crates.io by default)           |
+| `oven remove <pkg>`           | Remove a typed dependency from `Loaf.toml`                                        |
+| `oven update`                 | Re-resolve the selected closure and update `Oven.lock`                            |
+| `oven login`                  | Authenticate with `incan.pub`, save credentials in Oven-controlled secure storage |
+| `oven publish`                | Bake the selected Loaf, package `.incanpkg`, sign, and upload it                  |
+| `oven yank <pkg> <ver>`       | Mark a version as yanked (still downloadable but skipped in new resolves)         |
+| `oven search <query>`         | Search the registry index (client-side text search over cached index)             |
+| `oven owner add <user> <pkg>` | Add a co-owner for a package                                                      |
+| `oven owner list <pkg>`       | List owners of a package                                                          |
 
 #### `oven add` in detail
 

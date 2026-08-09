@@ -226,16 +226,16 @@ Oven can consume a crate from crates.io because Rust libraries are part of the w
 
 The native Rust claim is valid only for the published conformance envelope. The initial matrix must include at least:
 
-| Class | Required evidence |
-| --- | --- |
-| Pure Rust library and binary | direct `rustc` graph, feature closure, lock/offline/relocation, receipt and cache reuse |
-| Mixed Incan/Rust Loaf | cross-language dependency/linkage facts and source-mapped diagnostics |
-| Rust integration and doctests | separately selected test roles, scheduler/receipt behavior, failure diagnostics |
+| Class                         | Required evidence                                                                                  |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| Pure Rust library and binary  | direct `rustc` graph, feature closure, lock/offline/relocation, receipt and cache reuse            |
+| Mixed Incan/Rust Loaf         | cross-language dependency/linkage facts and source-mapped diagnostics                              |
+| Rust integration and doctests | separately selected test roles, scheduler/receipt behavior, failure diagnostics                    |
 | Proc macro and build provider | distinct host unit, declared authority, generated-input invalidation, cross-target target consumer |
-| Native-link crate | capability/toolchain/linker facts and target-bound carrier asset |
-| Cross target | separated host/target plan, sysroot/linker identity, no host result mislabelled as target proof |
-| Cargo project | explicit `oven cargo` execution and a no-implicit-adoption diagnostic |
-| Cargo adoption | proposed Loaf contract, policy-gated write, unsupported-feature diagnostic, then Loaf-only bake |
+| Native-link crate             | capability/toolchain/linker facts and target-bound carrier asset                                   |
+| Cross target                  | separated host/target plan, sysroot/linker identity, no host result mislabelled as target proof    |
+| Cargo project                 | explicit `oven cargo` execution and a no-implicit-adoption diagnostic                              |
+| Cargo adoption                | proposed Loaf contract, policy-gated write, unsupported-feature diagnostic, then Loaf-only bake    |
 
 The matrix is a compatibility statement, not a one-time benchmark. It must run on every change that can alter resolver, provider, compiler, cache, target, or receipt behavior.
 
