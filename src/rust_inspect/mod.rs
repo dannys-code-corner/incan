@@ -8,7 +8,7 @@ mod test_fixtures;
 #[cfg(test)]
 pub(crate) use test_fixtures::{
     write_async_result_probe_crate, write_borrowed_param_probe_crate, write_hyphenated_function_probe_crate,
-    write_substrait_probe_crate,
+    write_rustix_as_fd_probe_crate, write_substrait_probe_crate,
 };
 
 pub use ::rust_inspect::{

@@ -2548,6 +2548,38 @@ impl AstLowering {
                 .map(|module| format!("{module}.{}", description.declaration_name))
                 .unwrap_or_else(|| description.declaration_name.clone());
             let subject_name = TypedExpr::new(IrExprKind::String(qualified_name), IrType::String);
+            // `@describe` lowers to the compiler-reserved Registry helper rather than an ordinary source call, so
+            // supply its checked Incan surface explicitly. In particular, the final `str` parameter is an owned
+            // Rust `String`; treating this as an untyped external method call would borrow the materialized value.
+            let describe_signature = FunctionSignature {
+                params: vec![
+                    FunctionParam {
+                        name: "key".to_string(),
+                        ty: key.ty.clone(),
+                        mutability: Mutability::Immutable,
+                        is_self: false,
+                        kind: ast::ParamKind::Normal,
+                        default: None,
+                    },
+                    FunctionParam {
+                        name: "descriptor".to_string(),
+                        ty: descriptor.ty.clone(),
+                        mutability: Mutability::Immutable,
+                        is_self: false,
+                        kind: ast::ParamKind::Normal,
+                        default: None,
+                    },
+                    FunctionParam {
+                        name: "qualified_name".to_string(),
+                        ty: IrType::String,
+                        mutability: Mutability::Immutable,
+                        is_self: false,
+                        kind: ast::ParamKind::Normal,
+                        default: None,
+                    },
+                ],
+                return_type: IrType::Unit,
+            };
 
             inits.push(IrStmt::new(IrStmtKind::Expr(TypedExpr::new(
                 IrExprKind::MethodCall {
@@ -2583,8 +2615,8 @@ impl AstLowering {
                             expr: subject_name,
                         },
                     ],
-                    callable_signature: None,
-                    arg_policy: MethodCallArgPolicy::Default,
+                    callable_signature: Some(describe_signature),
+                    arg_policy: MethodCallArgPolicy::SourceOwned,
                 },
                 IrType::Unit,
             ))));

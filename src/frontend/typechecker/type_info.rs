@@ -521,6 +521,11 @@ pub struct DeclarationArtifacts {
 pub struct RegistryArtifacts {
     /// Registry definitions keyed by their module-static binding name.
     pub definitions: HashMap<String, RegistryDefinitionInfo>,
+    /// Canonical registry definitions imported into this module, keyed by the local import name.
+    ///
+    /// These are dependency facts, not duplicate local definitions. A checked `@describe` may use one only after the
+    /// importer resolves the public static binding to the defining module's `Registry.define(...)` contract.
+    pub imported_definitions: HashMap<String, ImportedRegistryDefinitionInfo>,
     /// Declaration descriptions in source order.
     pub descriptions: Vec<RegistryDescriptionInfo>,
     /// Explicit compilation-unit and package entries in source order.
@@ -537,10 +542,50 @@ pub struct RegistryDefinitionInfo {
     pub is_public: bool,
 }
 
+/// A public registry definition imported from the source module that owns its `Registry.define(...)` declaration.
+///
+/// This fact carries the defining contract across an import boundary without inserting a second definition into the
+/// consumer's [`RegistryArtifacts::definitions`] map. `owner_module_path` and `owner_binding` are the canonical
+/// registry identity used by package metadata; `local_name` is intentionally only the consumer's spelling.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedRegistryDefinitionInfo {
+    /// Contract checked from the defining static declaration.
+    pub definition: RegistryDefinitionInfo,
+    /// Canonical source module that owns the registry static.
+    pub owner_module_path: Vec<String>,
+    /// Canonical static binding in the owning source module.
+    pub owner_binding: String,
+}
+
+/// Provenance of the canonical registry binding selected for one checked description.
+///
+/// Runtime lowering still uses the source-local `registry_name` to access the imported static. Metadata and semantic
+/// facts use this reference so an imported alias cannot invent a second registry identity in the consumer module.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RegistryDescriptionRegistry {
+    /// The described registry is declared by a static in this module.
+    Local {
+        /// Module-local static binding that owns the `Registry.define(...)` call.
+        binding: String,
+    },
+    /// The described registry is a public static imported from its defining source module.
+    Imported {
+        /// Canonical source module containing the defining static.
+        module_path: Vec<String>,
+        /// Static binding in the canonical source module.
+        binding: String,
+        /// Public visibility checked on the canonical definition.
+        public: bool,
+    },
+}
+
 /// One checked `@describe` declaration attachment.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RegistryDescriptionInfo {
+    /// Source-local binding that lowering reads to register the runtime descriptor.
     pub registry_name: String,
+    /// Canonical definition selected for this description.
+    pub registry: RegistryDescriptionRegistry,
     pub key: SemanticRegistryValue,
     pub descriptor: SemanticRegistryValue,
     pub subject_kind: SemanticRegistrySubjectKind,
@@ -1056,11 +1101,19 @@ impl TypeCheckInfo {
         }
 
         for description in &self.registry.descriptions {
+            let registry = match &description.registry {
+                RegistryDescriptionRegistry::Local { binding } => {
+                    CompilerNodeId::declaration(&module_identity, binding)
+                }
+                RegistryDescriptionRegistry::Imported {
+                    module_path, binding, ..
+                } => CompilerNodeId::declaration(&module_path.join("::"), binding),
+            };
             facts.push(SemanticFact::new(
                 CompilerNodeId::declaration(&module_identity, &description.declaration_name),
                 SemanticFactKind::Registry,
                 SemanticFactValue::registry_entry(SemanticRegistryEntry {
-                    registry: CompilerNodeId::declaration(&module_identity, &description.registry_name),
+                    registry,
                     key: description.key.clone(),
                     descriptor: description.descriptor.clone(),
                     subject_kind: description.subject_kind,

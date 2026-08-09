@@ -1296,13 +1296,21 @@ fn lock_provider_used_module_paths(modules: &[ParsedModule]) -> BTreeSet<Vec<Str
     used
 }
 
-/// Return sorted manifest script entry paths plus an optional explicitly requested entry file.
+/// Return sorted manifest script and conventional library entry paths plus an optional explicitly requested entry.
+///
+/// A root library need not expose a runnable script. Canonical project and workspace locks nevertheless cover its
+/// `src/lib.incn` graph, so a rooted RFC 077 workspace can publish one complete lock from its root without inventing
+/// a command-only entrypoint.
 fn project_lock_entry_paths(manifest: &ProjectManifest, explicit_entry_file: Option<&Path>) -> Vec<PathBuf> {
     let mut paths = BTreeSet::new();
     if let Some(project) = &manifest.project {
         for script in project.scripts.values() {
             paths.insert(manifest.project_root().join(script));
         }
+    }
+    let library_entry = manifest.project_root().join("src/lib.incn");
+    if library_entry.is_file() {
+        paths.insert(library_entry);
     }
     if let Some(file) = explicit_entry_file {
         paths.insert(file.to_path_buf());

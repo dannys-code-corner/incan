@@ -37,7 +37,8 @@ impl<'a> IrEmitter<'a> {
     ///
     /// Everything else is rejected with an actionable error.
     pub(super) fn validate_const_emittable(&self, name: &str, ty: &IrType, value: &TypedExpr) -> Result<(), EmitError> {
-        if !self.const_type_emittable(ty) {
+        let mut visiting = std::collections::HashSet::new();
+        if !self.const_value_emittable(ty, value, &mut visiting) {
             let ty_name = ty.rust_name();
             return Err(EmitError::Unsupported(format!(
                 "const '{}' of type '{}' is not representable as a Rust const.\n\
@@ -48,6 +49,75 @@ impl<'a> IrEmitter<'a> {
         }
 
         Self::validate_const_expr_kind(&value.kind)
+    }
+
+    /// Return whether this exact typed value can be emitted in a Rust const initializer.
+    ///
+    /// A type alone cannot decide every legal immutable value: an empty `FrozenList[Model]` never constructs an
+    /// element, and `None` never constructs its non-const payload type. Const references are resolved through the
+    /// same declaration scan that string folding already uses, so a nested descriptor model receives the exact
+    /// immutable proof rather than a weaker type-only approximation.
+    fn const_value_emittable(
+        &self,
+        ty: &IrType,
+        value: &TypedExpr,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        use super::super::types::IrType as T;
+
+        if let IrExprKind::Var { name, .. } = &value.kind {
+            let Some((referenced_ty, referenced_value)) = self.const_bindings.get(name) else {
+                return self.const_type_emittable(ty);
+            };
+            if referenced_ty != ty || !visiting.insert(name.clone()) {
+                return false;
+            }
+            let emittable = self.const_value_emittable(referenced_ty, referenced_value, visiting);
+            visiting.remove(name);
+            return emittable;
+        }
+
+        match (ty, &value.kind) {
+            (T::Option(_), IrExprKind::None) => true,
+            (T::NamedGeneric(name, args), IrExprKind::List(items))
+                if name == collections::as_str(CollectionTypeId::FrozenList) && args.len() == 1 =>
+            {
+                items.iter().all(|entry| match entry {
+                    IrListEntry::Element(item) => self.const_value_emittable(&args[0], item, visiting),
+                    IrListEntry::Spread(_) => false,
+                })
+            }
+            (T::NamedGeneric(name, args), IrExprKind::Set(items))
+                if name == collections::as_str(CollectionTypeId::FrozenSet) && args.len() == 1 =>
+            {
+                items
+                    .iter()
+                    .all(|item| self.const_value_emittable(&args[0], item, visiting))
+            }
+            (T::NamedGeneric(name, args), IrExprKind::Dict(entries))
+                if name == collections::as_str(CollectionTypeId::FrozenDict) && args.len() == 2 =>
+            {
+                entries.iter().all(|entry| match entry {
+                    IrDictEntry::Pair(key, value) => {
+                        self.const_value_emittable(&args[0], key, visiting)
+                            && self.const_value_emittable(&args[1], value, visiting)
+                    }
+                    IrDictEntry::Spread(_) => false,
+                })
+            }
+            (T::Struct(name), IrExprKind::Struct { fields, .. }) => {
+                let Some(metadata) = self.struct_constructor_metadata_for_fields(name, fields) else {
+                    return self.const_type_emittable(ty);
+                };
+                fields.iter().all(|(field_name, field_value)| {
+                    metadata
+                        .canonical_field_name(field_name)
+                        .and_then(|canonical| metadata.field_types.get(canonical))
+                        .is_some_and(|field_ty| self.const_value_emittable(field_ty, field_value, visiting))
+                })
+            }
+            _ => self.const_type_emittable(ty),
+        }
     }
 
     /// Return whether an IR type can appear in a Rust `const` initializer emitted by RFC 008.

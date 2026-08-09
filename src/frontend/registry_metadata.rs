@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::frontend::api_metadata::{ApiDeclaration, CheckedApiMetadata};
-use crate::frontend::typechecker::{RegistryExplicitEntryInfo, TypeCheckInfo};
+use crate::frontend::typechecker::{RegistryDescriptionRegistry, RegistryExplicitEntryInfo, TypeCheckInfo};
 use incan_semantics_core::{SemanticRegistrySubjectKind, SemanticRegistryValue};
 
 /// Wire-schema version for the checked-registry package projection.
@@ -178,13 +178,23 @@ pub fn collect_checked_registry_metadata(
 
     let mut entries = Vec::new();
     for description in &type_info.registry.descriptions {
-        let Some(definition) = type_info.registry.definitions.get(&description.registry_name) else {
-            continue;
+        let (registry_identity, registry_public) = match &description.registry {
+            RegistryDescriptionRegistry::Local { binding } => {
+                let Some(definition) = type_info.registry.definitions.get(binding) else {
+                    continue;
+                };
+                (format!("{module_identity}::{binding}"), definition.is_public)
+            }
+            RegistryDescriptionRegistry::Imported {
+                module_path,
+                binding,
+                public,
+            } => (format!("{}::{binding}", module_path.join("::")), *public),
         };
         let subject_identity = format!("{module_identity}.{}", description.declaration_name);
         entries.push(CheckedRegistryEntry {
-            registry_identity: format!("{module_identity}::{}", description.registry_name),
-            registry_public: definition.is_public,
+            registry_identity,
+            registry_public,
             key: checked_registry_value(&description.key),
             descriptor: checked_registry_value(&description.descriptor),
             subject_kind: description.subject_kind.into(),

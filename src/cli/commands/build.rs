@@ -1392,11 +1392,10 @@ pub(crate) fn oven_caller_owned_libraries(
                 artifact.dependency_key
             )));
         }
-        let output = artifact
-            .crate_root
-            .join("oven")
-            .join(profile)
-            .join(format!("lib{}.rlib", oven_crate_name(&artifact.manifest_name)));
+        let output = artifact.crate_root.join("oven").join(profile).join(format!(
+            "lib{}.rlib",
+            ProjectGenerator::rust_target_name(&artifact.manifest_name)
+        ));
         if !output.is_file() {
             // `rematerialize_caller_owned_libraries` follows immediately after native-plan selection and rebuilds
             // the receipt-authorized generated source with that exact cohort. Do not turn a missing convenience
@@ -2168,7 +2167,7 @@ fn rematerialize_caller_owned_provider_graph(
         nested_libraries.append(&mut provider_rust_libraries);
         deduplicate_caller_owned_libraries_prefer_extern(&mut nested_libraries);
 
-        let crate_name = oven_crate_name(&artifact.manifest_name);
+        let crate_name = ProjectGenerator::rust_target_name(&artifact.manifest_name);
         let artifact_digest = digest_provider_artifact(&artifact.crate_root).map_err(|error| {
             CliError::failure(format!(
                 "Oven Alpha cannot fingerprint generated provider artifact for pub::{} at {}: {error}",
@@ -2834,34 +2833,11 @@ fn prepare_oven_project(
         receipt,
         plan_selection,
         rustc,
-        crate_name: oven_crate_name(&project_name),
+        crate_name: ProjectGenerator::rust_target_name(&project_name),
         rust_edition,
         caller_owned_libraries,
         report,
     })
-}
-
-/// Normalize the generated executable name to the strict direct-rustc crate-name grammar.
-fn oven_crate_name(project_name: &str) -> String {
-    let mut crate_name = project_name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if crate_name.is_empty()
-        || crate_name
-            .chars()
-            .next()
-            .is_some_and(|character| character.is_ascii_digit())
-    {
-        crate_name.insert(0, '_');
-    }
-    crate_name
 }
 
 /// Return whether an explicit Loaf publisher is constructing its compiler-owned source closure.
@@ -4144,7 +4120,7 @@ fn prepare_library_project(
         }
         Some(OvenPreparedLibrary {
             rustc,
-            crate_name: oven_crate_name(&project_name),
+            crate_name: ProjectGenerator::rust_target_name(&project_name),
             rust_edition: rust_edition.clone().unwrap_or_else(|| "2024".to_string()),
             profiles,
         })

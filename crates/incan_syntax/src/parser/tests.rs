@@ -601,6 +601,37 @@ class Box:
     }
 
     #[test]
+    fn test_parse_describe_decorator_allows_trailing_comma() -> Result<(), Vec<CompileError>> {
+        let source = r#"
+@describe(
+  functions,
+  FunctionId("normalize"),
+  FunctionSpec(summary="Normalize text"),
+)
+def normalize(value: str) -> str:
+  return value
+"#;
+
+        let program = parse_str(source)?;
+        let decorators = program
+            .declarations
+            .first()
+            .and_then(|declaration| match &declaration.node {
+                Declaration::Function(function) => Some(&function.decorators),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                vec![CompileError::new(
+                    "expected decorated function".to_string(),
+                    Span::default(),
+                )]
+            })?;
+        assert_eq!(decorators.len(), 1);
+        assert_eq!(decorators[0].node.args.len(), 3);
+        Ok(())
+    }
+
+    #[test]
     fn test_parse_class_docstring() -> Result<(), Vec<CompileError>> {
         let source = r#"
 class FieldInfo:

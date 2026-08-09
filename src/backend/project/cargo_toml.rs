@@ -573,6 +573,18 @@ mod tests {
     }
 
     #[test]
+    fn cargo_toml_normalizes_hyphenated_library_targets_without_renaming_the_package()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut generator = ProjectGenerator::new("/tmp/hyphenated-library", "hyphenated-library", false);
+        generator.set_package_name(Some("hyphenated-library".to_string()));
+        let toml = generator.generate_cargo_toml()?;
+
+        assert!(toml.contains("[package]\nname = \"hyphenated-library\""));
+        assert!(toml.contains("[lib]\nname = \"hyphenated_library\""));
+        Ok(())
+    }
+
+    #[test]
     fn compiled_artifact_support_crate_paths_are_relocatable() -> Result<(), Box<dyn std::error::Error>> {
         let output_dir = Path::new("/tmp/relocatable_incan_artifact");
         let dependency = path_dependency(

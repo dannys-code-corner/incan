@@ -1696,6 +1696,57 @@ itoa = "1"
 }
 
 #[test]
+fn workspace_root_library_without_a_script_publishes_the_canonical_lock_issue997()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    fs::create_dir_all(root.path().join("src"))?;
+    fs::write(
+        root.path().join("incan.toml"),
+        r#"[project]
+name = "root-library"
+version = "0.1.0"
+
+[workspace]
+members = ["packages/member"]
+"#,
+    )?;
+    fs::write(
+        root.path().join("src/lib.incn"),
+        "pub def answer() -> int:\n  return 42\n",
+    )?;
+
+    let member = root.path().join("packages/member");
+    fs::create_dir_all(member.join("src"))?;
+    fs::write(
+        member.join("incan.toml"),
+        "[project]\nname = \"member-library\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(
+        member.join("src/lib.incn"),
+        "pub def member_answer() -> int:\n  return 7\n",
+    )?;
+
+    let output = run_incan(root.path(), &["lock"])?;
+    assert_success(&output, "rooted workspace lock without scripts");
+
+    let root_lock = root.path().join("incan.lock");
+    assert!(root_lock.is_file(), "rooted workspace lock was not written");
+    let lock = incan::lockfile::IncanLock::load(&root_lock)?;
+    let roots = lock
+        .semantic
+        .workspace_members
+        .iter()
+        .map(|member| member.member_root.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(roots, vec!["", "packages/member"]);
+    assert!(
+        !member.join("incan.lock").exists(),
+        "a workspace member must not receive a second authoritative lock"
+    );
+    Ok(())
+}
+
+#[test]
 fn rooted_workspace_semantic_lock_is_relocation_stable_issue906() -> Result<(), Box<dyn std::error::Error>> {
     fn create_locked_workspace(
         root: &Path,
@@ -4454,6 +4505,30 @@ version = "0.1.0"
     assert!(report["timings_ms"]["oven_build"].as_u64().is_some());
     assert!(report["timings_ms"]["total"].as_u64().is_some());
 
+    Ok(())
+}
+
+#[test]
+fn hyphenated_library_package_preserves_identity_and_emits_a_valid_rust_target_issue995()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    fs::create_dir_all(root.path().join("src"))?;
+    fs::write(
+        root.path().join("incan.toml"),
+        "[project]\nname = \"hyphenated-library\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(
+        root.path().join("src/lib.incn"),
+        "pub def answer() -> int:\n  return 42\n",
+    )?;
+
+    let output = run_incan(root.path(), &["build", "--lib"])?;
+    assert_success(&output, "hyphenated library build");
+
+    let cargo_toml = fs::read_to_string(root.path().join("target/lib/Cargo.toml"))?;
+    let manifest: toml::Value = toml::from_str(&cargo_toml)?;
+    assert_eq!(manifest["package"]["name"].as_str(), Some("hyphenated-library"));
+    assert_eq!(manifest["lib"]["name"].as_str(), Some("hyphenated_library"));
     Ok(())
 }
 
@@ -10608,6 +10683,87 @@ def test_loaded_entries_keep_checked_description_shape() -> None:
         &["test", test_path.to_str().ok_or("test path was not valid UTF-8")?],
     )?;
     assert_success(&output, "compiled test batch for std.registry");
+    Ok(())
+}
+
+#[test]
+fn imported_registry_descriptions_keep_the_catalogue_as_canonical_authority_issue1004()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let main_path = write_minimal_project(tmp.path(), "imported_registry_description", "")?;
+    let src_dir = main_path.parent().ok_or("main path had no parent")?;
+    let tests_dir = tmp.path().join("tests");
+    fs::create_dir_all(&tests_dir)?;
+    fs::write(
+        src_dir.join("catalog.incn"),
+        r#"from std.registry import Registry, SubjectKind
+
+@derive(Clone, Eq, Descriptor)
+pub model FunctionKey:
+    pub name: str
+
+@derive(Clone, Descriptor)
+pub model FunctionDescriptor:
+    pub deterministic: bool
+
+pub static functions: Registry[FunctionKey, FunctionDescriptor] = Registry.define(
+    subjects=[SubjectKind.Function],
+)
+"#,
+    )?;
+    fs::write(
+        src_dir.join("normalize.incn"),
+        r#"from std.registry import describe
+from catalog import FunctionDescriptor, FunctionKey, functions
+
+@describe(
+    functions,
+    FunctionKey(name="normalize"),
+    FunctionDescriptor(deterministic=true)
+)
+pub def normalize(value: str) -> str:
+    return value
+"#,
+    )?;
+    fs::write(
+        src_dir.join("lib.incn"),
+        r#"pub from catalog import FunctionDescriptor, FunctionKey, functions
+pub from normalize import normalize
+"#,
+    )?;
+    fs::write(
+        tests_dir.join("test_registry.incn"),
+        r#"from std.testing import assert_eq
+from catalog import functions
+from normalize import normalize
+
+def test_imported_registry_description() -> None:
+    assert_eq(normalize("value"), "value", "imported described function should execute")
+    entries = functions.loaded_entries()
+    assert_eq(
+        len(entries),
+        1,
+        f"the imported canonical registry should receive one description, got {len(entries)}",
+    )
+    assert_eq(entries[0].key.name, "normalize", "registry key should survive imported registration")
+    assert_eq(entries[0].descriptor.deterministic, true, "registry descriptor should survive imported registration")
+    assert_eq(
+        entries[0].subject.qualified_name,
+        "normalize.normalize",
+        "registry subject should retain the contributing module identity",
+    )
+"#,
+    )?;
+
+    let library_build = run_incan(tmp.path(), &["build", "--lib"])?;
+    assert_success(&library_build, "library build with an imported canonical registry");
+
+    let test_path = tests_dir.join("test_registry.incn");
+    let test_output = run_incan(
+        tmp.path(),
+        &["test", test_path.to_str().ok_or("test path was not valid UTF-8")?],
+    )?;
+    assert_success(&test_output, "compiled test using the imported canonical registry");
     Ok(())
 }
 

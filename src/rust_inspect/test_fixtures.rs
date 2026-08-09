@@ -184,3 +184,43 @@ pub mod logical_plan {
     )?;
     Ok(())
 }
+
+/// Minimal `rustix::fs`-shaped crate whose generic `AsFd` function must receive a retained file by borrow.
+///
+/// The fixture preserves the source form used by `rustix::fs::flock`: Rust writes `Fd` as a by-value generic, while
+/// the `AsFd` bound means callers can and should lend a handle that remains live after the call.
+pub(crate) fn write_rustix_as_fd_probe_crate(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(root.join("src"))?;
+    fs::write(
+        root.join("Cargo.toml"),
+        r#"[package]
+name = "rustix"
+version = "1.1.0"
+edition = "2021"
+"#,
+    )?;
+    fs::write(
+        root.join("src/lib.rs"),
+        r#"pub mod fs {
+    pub struct File;
+
+    pub trait AsFd {}
+
+    impl AsFd for &File {}
+
+    pub enum FlockOperation {
+        LockExclusive,
+    }
+
+    /// Accept a file descriptor through the generic `AsFd` surface used by the borrowing regression.
+    pub fn flock<Fd: AsFd>(_fd: Fd, _operation: FlockOperation) {}
+
+    impl File {
+        /// Confirm that the file remains usable after a generic `AsFd` call.
+        pub fn sync_all(&self) {}
+    }
+}
+"#,
+    )?;
+    Ok(())
+}

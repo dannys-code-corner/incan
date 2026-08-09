@@ -517,6 +517,8 @@ pub struct IrEmitter<'a> {
     in_return_context: RefCell<bool>,
     /// Map of const string bindings to their literal values (for const folding of string adds)
     const_string_literals: std::collections::HashMap<String, String>,
+    /// Const declarations keyed by source binding so nested const-safe model values can prove immutable references.
+    const_bindings: std::collections::HashMap<String, (IrType, TypedExpr)>,
     /// Map of type name -> module path segments for dependency modules.
     type_module_paths: HashMap<String, Vec<String>>,
     /// Provider module paths owned by linked compiled SDK providers.
@@ -564,8 +566,11 @@ pub struct IrEmitter<'a> {
     rust_import_paths: RefCell<std::collections::HashMap<String, Vec<String>>>,
     /// Local newtype construction plans, including conservative fallbacks when checked metadata is unavailable.
     newtype_construction: HashMap<String, super::IrNewtypeConstructionPlan>,
-    /// Whether the currently emitted module contains any local `static` declarations.
-    module_has_local_statics: RefCell<bool>,
+    /// Whether the currently emitted module has initialization work that every callable entrypoint must perform.
+    ///
+    /// Local statics and compiler-generated module registrations share the same once-only init guard. A module can
+    /// therefore need initialization even when its only static is imported from a source sibling.
+    module_needs_initialization: RefCell<bool>,
     /// Imported static bindings that need their defining module's static-init guard before use.
     imported_static_init_bindings: RefCell<HashSet<String>>,
     /// Imported static bindings re-exported by this module whose defining module's static-init guard should be
@@ -657,6 +662,7 @@ impl<'a> IrEmitter<'a> {
             method_signature_type_params: HashMap::new(),
             in_return_context: RefCell::new(false),
             const_string_literals: std::collections::HashMap::new(),
+            const_bindings: std::collections::HashMap::new(),
             type_module_paths: HashMap::new(),
             compiled_sdk_module_paths: HashSet::new(),
             compiled_sdk_type_module_paths: HashMap::new(),
@@ -670,7 +676,7 @@ impl<'a> IrEmitter<'a> {
             rust_module_path: None,
             rust_import_paths: RefCell::new(std::collections::HashMap::new()),
             newtype_construction: HashMap::new(),
-            module_has_local_statics: RefCell::new(false),
+            module_needs_initialization: RefCell::new(false),
             imported_static_init_bindings: RefCell::new(HashSet::new()),
             imported_static_module_init_bindings: RefCell::new(Vec::new()),
             in_static_initializer: RefCell::new(false),
@@ -1045,7 +1051,8 @@ impl<'a> IrEmitter<'a> {
 
     /// Emit the generated call that initializes local and imported module statics.
     pub(super) fn emit_module_static_init_call(&self) -> TokenStream {
-        if *self.module_has_local_statics.borrow() || !self.imported_static_module_init_bindings.borrow().is_empty() {
+        if *self.module_needs_initialization.borrow() || !self.imported_static_module_init_bindings.borrow().is_empty()
+        {
             let init_fn = Self::rust_ident("__incan_init_module_statics");
             quote! { #init_fn(); }
         } else {

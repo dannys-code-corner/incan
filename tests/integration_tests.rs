@@ -8533,6 +8533,66 @@ def main() -> None:
     }
 
     #[test]
+    fn descriptor_const_with_empty_frozen_list_builds_and_runs() -> Result<(), Box<dyn std::error::Error>> {
+        let output = incan_command()
+            .args([
+                "run",
+                "-c",
+                r#"
+@derive(Clone, Eq, Descriptor)
+model Version:
+    major: int
+    minor: int
+
+@derive(Clone, Eq, Descriptor)
+model Change:
+    version: Version
+    note: str
+
+@derive(Clone, Eq, Descriptor)
+model Deprecation:
+    since: Version
+    note: str
+
+@derive(Clone, Eq, Descriptor)
+model Lifecycle:
+    since: Version
+    changed: FrozenList[Change]
+    deprecated: Option[Deprecation]
+
+const INITIAL_VERSION: Version = Version(major=0, minor=1)
+const NO_CHANGES: FrozenList[Change] = []
+const INITIAL_LIFECYCLE: Lifecycle = Lifecycle(
+    since=INITIAL_VERSION,
+    changed=NO_CHANGES,
+    deprecated=None,
+)
+
+@derive(Clone, Descriptor)
+model FunctionDescriptor:
+    lifecycle: Lifecycle = INITIAL_LIFECYCLE
+
+def main() -> None:
+    descriptor = FunctionDescriptor()
+    assert descriptor.lifecycle == INITIAL_LIFECYCLE
+    println(descriptor.lifecycle.since.minor)
+"#,
+            ])
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "descriptor FrozenList const program failed: status={:?} stdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+        Ok(())
+    }
+
+    #[test]
     fn test_const_str_materializes_to_owned_str_at_runtime_sites() {
         let Ok(output) = incan_command()
             .args([
@@ -9340,6 +9400,39 @@ def test_prints() -> None:
             captured_stderr,
         );
         assert!(captured_stdout.contains("VISIBLE_CAPTURE"));
+    }
+
+    #[test]
+    fn e2e_generated_harness_success_reports_the_incan_test_identity_issue996() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let dir = write_test_project(
+            "incan.toml",
+            "[project]\nname = \"test_runner_repro\"\nversion = \"0.1.0\"\n",
+        );
+        std::fs::create_dir_all(dir.join("src"))?;
+        std::fs::create_dir_all(dir.join("tests"))?;
+        std::fs::write(dir.join("src/lib.incn"), "pub def answer() -> int:\n  return 42\n")?;
+        std::fs::write(
+            dir.join("tests/test_smoke.incn"),
+            "def test_smoke__reports_pass() -> None:\n  assert 42 == 42\n",
+        )?;
+
+        let output = run_incan_test_relative(&dir, "tests");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "expected the passing generated harness to preserve its Incan result.\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        );
+        assert!(
+            stdout.contains("test_smoke.incn::test_smoke__reports_pass") && stdout.contains("PASSED"),
+            "expected the runner to report the collected Incan identity as passing.\nstdout:\n{stdout}",
+        );
+        assert!(
+            !stdout.contains("Test runner did not report outcome"),
+            "a successful native harness must not become a missing-outcome failure.\nstdout:\n{stdout}",
+        );
+        Ok(())
     }
 
     #[test]

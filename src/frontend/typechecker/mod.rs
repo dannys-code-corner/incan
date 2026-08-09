@@ -59,10 +59,11 @@ pub use type_info::{
     CAbiInteropArtifacts, CAbiOutputSlot, CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingOutcome,
     CBindingParameter, CBindingRawCall, CBindingResource, CBindingStruct, CBindingStructField, CBindingSymbol,
     CBindingType, COutputMode, CResourceAccess, ComputedPropertyAccessInfo, DecoratedFunctionBindingInfo,
-    DecoratedMethodBindingInfo, FixedUnpackPlan, FunctionBindingInfo, IdentKind, PartialProjectionInfo,
-    PartialProjectionPreset, PartialProjectionTargetKind, ProtocolIterationInfo, RegistryArtifacts,
-    RegistryExplicitEntryInfo, ResolvedMethodCall, ResolvedMethodDispatch, ResolvedOperatorCall, ResolvedOperatorKind,
-    RustArgCoercionInfo, RustArgCoercionKind, SourceTargetInfo, StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo,
+    DecoratedMethodBindingInfo, FixedUnpackPlan, FunctionBindingInfo, IdentKind, ImportedRegistryDefinitionInfo,
+    PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind, ProtocolIterationInfo,
+    RegistryArtifacts, RegistryDefinitionInfo, RegistryDescriptionRegistry, RegistryExplicitEntryInfo,
+    ResolvedMethodCall, ResolvedMethodDispatch, ResolvedOperatorCall, ResolvedOperatorKind, RustArgCoercionInfo,
+    RustArgCoercionKind, SourceTargetInfo, StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo,
     ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode, ValidatedNewtypeCoercionStep,
 };
 #[cfg(test)]
@@ -326,6 +327,11 @@ pub struct TypeChecker {
     /// Direct source imports use this map before falling back to ambient symbol lookup so `from module import name as
     /// alias` binds `module.name`, not an unrelated same-name symbol imported earlier from a sibling dependency.
     pub(crate) dependency_member_symbols: HashMap<String, HashMap<String, SymbolKind>>,
+    /// Checked `Registry.define(...)` contracts exported by dependency source modules, keyed by canonical module name.
+    ///
+    /// This cache is deliberately separate from imported static types. A `Registry[K, T]` type alone is not proof of
+    /// a canonical registry definition; only an owned `Registry.define(...)` declaration contributes a fact here.
+    pub(crate) dependency_registry_definitions: HashMap<String, DependencyRegistryDefinitions>,
     /// Exact source-module partial projection metadata collected from dependencies, keyed by canonical module name.
     ///
     /// Source imports must preserve the callable projection, not only the callable signature, so const evaluation and
@@ -449,6 +455,19 @@ pub struct TypeChecker {
     pub(crate) rust_inspect_manifest_dir: Option<PathBuf>,
 }
 
+/// Dependency-owned registry contracts and their canonical source-module identity.
+///
+/// Dependency map keys are compatibility lookup keys that join path segments with underscores. They cannot safely
+/// reconstruct a source identity because a legal segment can itself contain an underscore, so the owner path travels
+/// beside the definition rather than being recovered from the cache key.
+#[derive(Debug, Clone)]
+pub(crate) struct DependencyRegistryDefinitions {
+    /// Exact source module that declares the cached registry statics.
+    owner_module_path: Vec<String>,
+    /// Definitions keyed by their owner-module static binding.
+    definitions: HashMap<String, RegistryDefinitionInfo>,
+}
+
 impl TypeChecker {
     /// Create an empty typechecker with fresh symbol, diagnostic, import, and lowering-metadata state.
     pub fn new() -> Self {
@@ -496,6 +515,7 @@ impl TypeChecker {
             type_info: TypeCheckInfo::default(),
             dependency_exports: HashMap::new(),
             dependency_member_symbols: HashMap::new(),
+            dependency_registry_definitions: HashMap::new(),
             dependency_member_partial_projections: HashMap::new(),
             dependency_direct_member_symbols: HashMap::new(),
             dependency_direct_member_partial_projections: HashMap::new(),
@@ -4710,6 +4730,7 @@ impl TypeChecker {
         self.resolve_pending_trait_supertraits();
         self.register_dependency_derivable_metadata(_module_name, module_ast);
         self.cache_dependency_direct_member_symbols(_module_name, module_ast, true);
+        self.cache_dependency_registry_definitions(_module_name, module_ast, true);
         self.cache_dependency_member_symbols(_module_name, module_ast, true);
         let owned_names = module_ast
             .declarations
@@ -4781,6 +4802,7 @@ impl TypeChecker {
         self.resolve_pending_trait_supertraits();
         self.register_dependency_derivable_metadata(_module_name, module_ast);
         self.cache_dependency_direct_member_symbols(_module_name, module_ast, false);
+        self.cache_dependency_registry_definitions(_module_name, module_ast, false);
         self.cache_dependency_member_symbols(_module_name, module_ast, false);
         let owned_names = module_ast
             .declarations
@@ -4935,6 +4957,89 @@ impl TypeChecker {
             .insert(module_name.to_string(), direct_projections);
     }
 
+    /// Cache canonical `Registry.define(...)` contracts from one dependency's owned static declarations.
+    ///
+    /// This accepts only actual `Registry.define(subjects=[...])` initializers. An imported `Registry[K, T]` type
+    /// therefore never acquires registry authority by itself, while a consumer can use the defining contract without
+    /// creating a second registry definition in its own `TypeCheckInfo`.
+    fn cache_dependency_registry_definitions(&mut self, module_name: &str, module_ast: &Program, public_only: bool) {
+        let mut definitions = HashMap::new();
+        for declaration in &module_ast.declarations {
+            let Declaration::Static(static_decl) = &declaration.node else {
+                continue;
+            };
+            if public_only && static_decl.visibility != Visibility::Public {
+                continue;
+            }
+            let static_type = self.resolve_type_checked(&static_decl.ty);
+            let Some((key_type, descriptor_type)) = Self::registry_type_arguments(&static_type) else {
+                continue;
+            };
+            let Ok(subjects) = self.registry_definition_subjects(static_decl) else {
+                continue;
+            };
+            definitions.insert(
+                static_decl.name.clone(),
+                RegistryDefinitionInfo {
+                    key_type: key_type.clone(),
+                    descriptor_type: descriptor_type.clone(),
+                    subjects,
+                    is_public: static_decl.visibility == Visibility::Public,
+                },
+            );
+        }
+        self.dependency_registry_definitions.insert(
+            module_name.to_string(),
+            DependencyRegistryDefinitions {
+                owner_module_path: Self::dependency_registry_owner_module_path(module_ast, module_name),
+                definitions,
+            },
+        );
+    }
+
+    /// Recover the source-module identity for a dependency registry without inferring it from its lookup key.
+    ///
+    /// The parser records the module file path for normal compilation. Its path below `src/` is the source authority
+    /// for metadata identity. Inline unit tests do not carry a file path, so their explicitly supplied dependency
+    /// name remains the narrow test-only fallback.
+    fn dependency_registry_owner_module_path(module_ast: &Program, module_name: &str) -> Vec<String> {
+        let Some(source_path) = module_ast.source_path.as_deref() else {
+            return vec![module_name.to_string()];
+        };
+        let path = std::path::Path::new(source_path);
+        let mut after_src = false;
+        let mut segments = Vec::new();
+        for component in path.components() {
+            let std::path::Component::Normal(component) = component else {
+                continue;
+            };
+            let Some(component) = component.to_str() else {
+                return vec![module_name.to_string()];
+            };
+            if component == "src" {
+                after_src = true;
+                segments.clear();
+            } else if after_src {
+                segments.push(component.to_string());
+            }
+        }
+        let Some(last) = segments.last_mut() else {
+            return vec![module_name.to_string()];
+        };
+        let Some(stem) = std::path::Path::new(last).file_stem().and_then(|stem| stem.to_str()) else {
+            return vec![module_name.to_string()];
+        };
+        *last = stem.to_string();
+        if matches!(last.as_str(), "mod" | "__init__") {
+            segments.pop();
+        }
+        if segments.is_empty() {
+            vec![module_name.to_string()]
+        } else {
+            canonicalize_source_module_segments(&segments)
+        }
+    }
+
     /// Return direct declaration names owned by a dependency module, excluding import re-exports.
     fn dependency_direct_member_names(module_ast: &Program, public_only: bool) -> HashSet<String> {
         if public_only {
@@ -5043,6 +5148,55 @@ impl TypeChecker {
         self.dependency_module_entry_for_path(module, &self.dependency_member_symbols)?
             .get(item_name)
             .cloned()
+    }
+
+    /// Return one imported registry's checked defining contract and canonical owner path.
+    ///
+    /// Source import resolution uses the same candidate order as member-symbol resolution. The returned owner path is
+    /// the resolved dependency path rather than the consumer's local alias, preserving one registry identity through
+    /// typechecking, lowering, and package metadata.
+    pub(crate) fn dependency_registry_definition_for_path(
+        &self,
+        module: &ImportPath,
+        item_name: &str,
+    ) -> Option<(RegistryDefinitionInfo, Vec<String>)> {
+        let current_module_path = self.current_module_path.as_deref().unwrap_or_default();
+        for candidate in logical_source_import_candidates(current_module_path, module) {
+            let key = canonicalize_source_module_segments(&candidate).join("_");
+            if let Some(registries) = self.dependency_registry_definitions.get(&key)
+                && let Some(definition) = registries.definitions.get(item_name)
+            {
+                return Some((definition.clone(), registries.owner_module_path.clone()));
+            }
+        }
+        if module.is_absolute || module.parent_levels > 0 {
+            return None;
+        }
+
+        let suffix = canonicalize_source_module_segments(&module.segments).join("_");
+        if suffix.is_empty() {
+            return None;
+        }
+        let suffix = format!("_{suffix}");
+        let mut matches = self
+            .dependency_registry_definitions
+            .iter()
+            .filter_map(|(module_key, definitions)| {
+                module_key
+                    .ends_with(&suffix)
+                    .then(|| {
+                        definitions
+                            .definitions
+                            .get(item_name)
+                            .map(|definition| (module_key, definitions, definition))
+                    })
+                    .flatten()
+            });
+        let (_module_key, registries, definition) = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some((definition.clone(), registries.owner_module_path.clone()))
     }
 
     /// Return the exact partial projection metadata for one dependency module member path.
@@ -5319,6 +5473,7 @@ impl TypeChecker {
         self.cached_pub_libraries.clear();
         self.dependency_exports.clear();
         self.dependency_member_symbols.clear();
+        self.dependency_registry_definitions.clear();
         self.dependency_member_partial_projections.clear();
         self.dependency_direct_member_symbols.clear();
         self.dependency_direct_member_partial_projections.clear();
@@ -5364,6 +5519,7 @@ impl TypeChecker {
         // Skip populating dependency exports so visibility checks are bypassed.
         self.dependency_exports.clear();
         self.dependency_member_symbols.clear();
+        self.dependency_registry_definitions.clear();
         self.dependency_member_partial_projections.clear();
         self.dependency_direct_member_symbols.clear();
         self.dependency_direct_member_partial_projections.clear();

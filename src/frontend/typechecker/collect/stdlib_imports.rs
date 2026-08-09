@@ -25,8 +25,8 @@ use crate::frontend::testing_markers::{
 };
 use crate::frontend::typechecker::type_info::RustTraitImportInfo;
 use crate::frontend::typechecker::{
-    PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind, PublicLibraryTypeIdentity,
-    TypeChecker, canonical_public_library_type_name,
+    ImportedRegistryDefinitionInfo, PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind,
+    PublicLibraryTypeIdentity, TypeChecker, canonical_public_library_type_name,
 };
 use crate::library_manifest::{
     AliasExport, ClassExport, ConstExport, EnumExport, EnumValueExport, EnumValueTypeExport, FieldExport,
@@ -1041,6 +1041,18 @@ impl TypeChecker {
                 local_name.clone(),
                 crate::frontend::typechecker::StaticBindingInfo { is_imported: true },
             );
+            if let Some((definition, owner_module_path)) =
+                self.dependency_registry_definition_for_path(module, &item.name)
+            {
+                self.type_info.registry.imported_definitions.insert(
+                    local_name.clone(),
+                    ImportedRegistryDefinitionInfo {
+                        definition,
+                        owner_module_path,
+                        owner_binding: item.name.clone(),
+                    },
+                );
+            }
         }
         if let Some(mut projection) = projection {
             projection.name.clone_from(&local_name);

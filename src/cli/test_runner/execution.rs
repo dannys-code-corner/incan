@@ -2012,28 +2012,20 @@ fn extract_libtest_failure_detail(combined: &str, full_name: &str) -> String {
 
 /// Turn one batched native-test run into per-[`TestInfo`] results.
 ///
-/// On compile failure, every test shares `compile_message`. Otherwise outcomes come from [`parse_libtest_outcomes`];
-/// wall time is split evenly across tests for display.
+/// Individual outcomes come from [`parse_libtest_outcomes`]. A verified successful native batch makes any
+/// unreported selected harness passed; wall time is split evenly across tests for display.
 fn map_batch_results(
     tests: &[TestInfo],
     combined_output: &str,
     elapsed: std::time::Duration,
-    compile_failed: bool,
-    compile_message: &str,
+    native_batch_succeeded: bool,
     generated_root: &Path,
     crate_name: &str,
 ) -> Vec<(TestInfo, TestResult)> {
-    if compile_failed {
-        let msg = compile_message.to_string();
-        return tests
-            .iter()
-            .map(|t| (t.clone(), TestResult::Failed(elapsed, msg.clone())))
-            .collect();
-    }
-
     let outcomes = parse_libtest_outcomes(combined_output);
     let per_test_ms = elapsed.as_millis() / tests.len().max(1) as u128;
-    let batch_failed = combined_output.contains("test result: FAILED") || combined_output.contains("failures:");
+    let batch_failed = !native_batch_succeeded
+        && (combined_output.contains("test result: FAILED") || combined_output.contains("failures:"));
     let expected_failures = tests
         .iter()
         .enumerate()
@@ -2057,6 +2049,7 @@ fn map_batch_results(
                     let detail = extract_libtest_failure_detail(combined_output, &full);
                     TestResult::Failed(std::time::Duration::from_millis(per_test_ms as u64), detail)
                 }
+                None if native_batch_succeeded => TestResult::Passed(std::time::Duration::from_millis(per_test_ms as u64)),
                 None if teardown_failure && index + 1 == tests.len() => TestResult::Failed(
                     std::time::Duration::from_millis(per_test_ms as u64),
                     extract_libtest_failure_detail(combined_output, "zzzz_incan_harness_teardown_cached_fixtures"),
@@ -2749,8 +2742,7 @@ fn run_file_tests_batch_oven(
         tests,
         &report.output,
         start.elapsed(),
-        false,
-        "",
+        report.success,
         &generated_root,
         &runner_crate_name,
     )
@@ -3101,6 +3093,33 @@ test test_runner_76001490ba86f677::__incan_file_tests::incan_harness_1_b ... FAI
         let m = parse_libtest_outcomes(out);
         assert_eq!(m.get("__incan_file_tests::incan_harness_0_a"), Some(&true));
         assert_eq!(m.get("__incan_file_tests::incan_harness_1_b"), Some(&false));
+    }
+
+    #[test]
+    fn successful_native_batch_preserves_a_passing_harness_result_issue996() {
+        let test = TestInfo {
+            file_path: PathBuf::from("tests/test_smoke.incn"),
+            function_name: "test_smoke_reports_pass".to_string(),
+            is_async: false,
+            markers: Vec::new(),
+            required_fixtures: Vec::new(),
+            parameter_names: Vec::new(),
+            timeout: None,
+            parametrize_call: None,
+        };
+        let results = map_batch_results(
+            std::slice::from_ref(&test),
+            "running 1 test\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+            Duration::from_millis(5),
+            true,
+            Path::new("target/incan/test-runner"),
+            "test_runner",
+        );
+
+        assert!(matches!(
+            results.first().map(|(_, result)| result),
+            Some(TestResult::Passed(_))
+        ));
     }
 
     #[test]
