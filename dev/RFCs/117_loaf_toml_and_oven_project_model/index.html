@@ -18,7 +18,7 @@
     
     
       
-        <title>RFC 097: Rust-hosted Incan caller - Incan Documentation</title>
+        <title>RFC 117: Loaf.toml and Oven's language-neutral project model - Incan Documentation</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#rfc-097-rust-hosted-incan-caller" class="md-skip">
+        <a href="#rfc-117-loaftoml-and-ovens-language-neutral-project-model" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              RFC 097: Rust-hosted Incan caller
+              RFC 117: Loaf.toml and Oven's language-neutral project model
             
           </span>
         </div>
@@ -6658,6 +6658,494 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#core-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core model
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Motivation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Goals
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Non-Goals
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prospective-supersession-of-closed-rfc-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prospective supersession of closed RFC decisions
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#terminology-and-mental-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Terminology and mental model
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#guide-level-explanation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Guide-level explanation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Guide-level explanation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-single-project" class="md-nav__link">
+    <span class="md-ellipsis">
+      A single project
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-workspace-of-loaves" class="md-nav__link">
+    <span class="md-ellipsis">
+      A workspace of Loaves
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hierarchical-sub-loaves" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hierarchical sub-Loaves
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#registries-without-ambient-trust" class="md-nav__link">
+    <span class="md-ellipsis">
+      Registries without ambient trust
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#declaring-c-abi-and-future-carriers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Declaring C ABI and future carriers
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#baking-and-inspecting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Baking and inspecting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cargo-compatibility-is-a-different-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cargo compatibility is a different mode
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference-level-explanation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reference-level explanation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reference-level explanation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#manifest-discovery-and-shapes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Manifest discovery and shapes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#project-metadata-and-source-domains" class="md-nav__link">
+    <span class="md-ellipsis">
+      Project metadata and source domains
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rust-source-facet" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rust source facet
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#typed-dependencies-and-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Typed dependencies and features
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#registry-registration-and-trust" class="md-nav__link">
+    <span class="md-ellipsis">
+      Registry registration and trust
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#targets-carriers-profiles-and-delivery-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Targets, carriers, profiles, and delivery policy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#plans-effects-extensions-and-receipts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Plans, effects, extensions, and receipts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#environments-and-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environments and actions
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#interop-package-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interop package envelope
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#locks-and-derived-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Locks and derived state
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      Design details
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Design details">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#manifest-ownership-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      Manifest ownership map
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#source-language-and-authored-rust" class="md-nav__link">
+    <span class="md-ellipsis">
+      Source language and authored Rust
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cargo-compatibility-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cargo compatibility boundary
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#inspectability-and-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Inspectability and diagnostics
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compatibility-and-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compatibility and migration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alternatives-considered" class="md-nav__link">
+    <span class="md-ellipsis">
+      Alternatives considered
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Alternatives considered">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#add-oventoml-beside-loaftoml" class="md-nav__link">
+    <span class="md-ellipsis">
+      Add Oven.toml beside Loaf.toml
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keep-incantoml-and-add-loaf-concepts-inside-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      Keep incan.toml and add Loaf concepts inside it
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keep-separate-incan-and-rust-dependency-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Keep separate Incan and Rust dependency tables
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#treat-all-registries-as-equivalent-urls" class="md-nav__link">
+    <span class="md-ellipsis">
+      Treat all registries as equivalent URLs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#infer-workspace-members-or-build-behavior-from-the-directory-tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      Infer workspace members or build behavior from the directory tree
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-dependency-hooks-like-cargo-buildrs-or-npm-lifecycle-scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Run dependency hooks like Cargo build.rs or npm lifecycle scripts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#let-tool-be-an-unbounded-extension-namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      Let [tool.*] be an unbounded extension namespace
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#drawbacks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Drawbacks
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layers-affected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Layers affected
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptance-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance criteria
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implementation-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      Implementation plan
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Implementation plan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-manifest-and-workspace-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1: Manifest and workspace authority
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-typed-graph-registries-and-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2: Typed graph, registries, and lock
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-target-plan-and-controlled-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3: Target plan and controlled effects
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-environment-and-action-rehoming" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 4: Environment and action rehoming
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-5-explicit-cargo-compatibility-and-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 5: Explicit Cargo compatibility and documentation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unresolved-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unresolved questions
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -6674,314 +7162,545 @@
   
 
 
-<h1 id="rfc-097-rust-hosted-incan-caller">RFC 097: Rust-hosted Incan caller<a class="headerlink" href="#rfc-097-rust-hosted-incan-caller" title="Permanent link">&para;</a></h1>
+<h1 id="rfc-117-loaftoml-and-ovens-language-neutral-project-model">RFC 117: <code>Loaf.toml</code> and Oven's language-neutral project model<a class="headerlink" href="#rfc-117-loaftoml-and-ovens-language-neutral-project-model" title="Permanent link">&para;</a></h1>
 <ul>
 <li><strong>Status:</strong> Draft</li>
-<li><strong>Created:</strong> 2026-05-12</li>
+<li><strong>Created:</strong> 2026-08-04</li>
 <li><strong>Author(s):</strong> Danny Meijer (@dannymeijer)</li>
 <li><strong>Related:</strong><ul>
-<li>RFC 005 (Rust interop)</li>
 <li>RFC 013 (Rust crate dependencies)</li>
-<li>RFC 020 (Cargo offline and locked policy)</li>
-<li>RFC 031 (Incan library system phase 1)</li>
+<li>RFC 015 (hatch-like tooling and project lifecycle CLI)</li>
+<li>RFC 020 (offline, locked, and reproducible builds)</li>
+<li>RFC 023 (compilable stdlib and Rust module binding)</li>
+<li>RFC 031 (Incan library system)</li>
 <li>RFC 034 (<code>incan.pub</code> package registry)</li>
-<li>RFC 041 (first-class Rust interop authoring)</li>
-<li>RFC 043 (Rust trait implementation from Incan)</li>
+<li>RFC 073 (environment matrices and toolchain constraints)</li>
+<li>RFC 076 (project mutation policy and recovery)</li>
+<li>RFC 077 (workspace and multi-package projects)</li>
+<li>RFC 078 (tool execution and typed workflow actions)</li>
 <li>RFC 079 (<code>incan.pub</code> artifact graph)</li>
-<li>RFC 092 (interactive runtime stdlib contracts)</li>
-<li>RFC 117 (<code>Loaf.toml</code> and Oven's language-neutral project model)</li>
+<li>RFC 097 (Rust-hosted Incan caller)</li>
+<li>RFC 104 (ambient runtime capabilities and receipts)</li>
+<li>RFC 112 (crash-safe local publication and file coordination)</li>
+<li>RFC 114 (compiled providers, SDK components, and package features)</li>
+<li>RFC 116 (typed C ABI interop)</li>
+<li>RFC 118 (Incan and Oven command-line surfaces)</li>
 <li>RFC 119 (Oven-native Rust build facets and Cargo interoperation)</li>
-<li>
-<h1 id="656-rust-facing-abi-and-incan-package-compatibility-direction">656 (Rust-facing ABI and Incan package compatibility direction)<a class="headerlink" href="#656-rust-facing-abi-and-incan-package-compatibility-direction" title="Permanent link">&para;</a></h1>
-</li>
-<li>
-<h1 id="975-oven-cargo-free-incanrust-toolchain">975 (Oven: Cargo-free Incan/Rust toolchain)<a class="headerlink" href="#975-oven-cargo-free-incanrust-toolchain" title="Permanent link">&para;</a></h1>
-</li>
 </ul>
 </li>
-<li><strong>Issue:</strong> https://github.com/encero-systems/incan/issues/569</li>
+<li><strong>Issue:</strong> <a href="https://github.com/encero-systems/incan/issues/1009">#1009</a></li>
 <li><strong>RFC PR:</strong> —</li>
-<li><strong>Written against:</strong> ~~v0.3~~ v0.5</li>
+<li><strong>Written against:</strong> v0.5</li>
+<li><strong>Target scope:</strong> v0.6 design and implementation planning; this is not a shipment claim.</li>
 <li><strong>Shipped in:</strong> —</li>
 </ul>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
-<p>This RFC defines a Rust-hosted Incan caller model: a native Rust application should be able to depend on an Incan-authored library through a Cargo-compatible caller package or an Oven-native Rust-host path and call a curated, typed Rust-facing API without reverse-engineering compiler output, manually wiring Incan runtime helpers, or treating every public Incan export as a stable Rust API.</p>
-<p>This Draft is framed around a Rust-facing caller facet and caller ABI/package metadata. Generated Rust source may remain useful for inspection, debugging, migration, or an implementation backend, but it must not be the public package compatibility path. Oven plans and materializes target-compatible caller build units and <code>*.loaf</code> assets from the selected facet. A Cargo-usable package is a compatibility projection for a Rust host, not Oven's build authority. The caller boundary is the stable host API shape; it is backed by checked Incan metadata, ABI/package metadata, generated adapters where needed, and a small support crate that owns initialization, conversions, async/runtime policy, diagnostics, version checks, and panic/error containment.</p>
+<p>This RFC replaces <code>incan.toml</code> with <code>Loaf.toml</code> as the sole authored manifest for an Oven-managed project. A <code>Loaf.toml</code> may describe one project, a rooted workspace, or a virtual workspace. It is language-neutral: a project may contain Incan sources, Rust sources, both, or checked foreign interfaces without making any implementation language the repository's organizing principle.</p>
+<p><code>[project]</code> remains the familiar metadata table. <code>[workspace]</code> remains the explicit repository-coordination table. Dependencies use one typed graph whose unit kind and origin are explicit when the defaults are insufficient: Incan Loaf packages default to <code>incan.pub</code>, Rust crates default to crates.io, and foreign/system requirements use Oven-managed capability providers. Oven resolves authored intent into <code>Oven.lock</code>, then bakes the selected target into immutable, verified <code>*.loaf</code> assets and receipts. Cargo remains a deliberately explicit compatibility mode for repositories that have no <code>Loaf.toml</code>; it is never inferred as part of a Loaf build.</p>
+<p>This RFC also rehomes the authored configuration boundaries of existing environment, matrix, action, workspace, provider, and interop RFCs. It does not define the final command spelling or a general-purpose task shell.</p>
 <h2 id="core-model">Core model<a class="headerlink" href="#core-model" title="Permanent link">&para;</a></h2>
+<p>Read this RFC as thirteen foundations:</p>
 <ol>
-<li><strong>Rust-hosted consumption is a first-class direction:</strong> Incan already lets Incan code call Rust; this RFC defines the reverse direction where Rust code deliberately calls Incan-authored behavior.</li>
-<li><strong>The Rust-host artifact is not generated Rust source as contract:</strong> a Cargo-compatible package may be useful to a Rust host, but the public compatibility promise is the caller facet and ABI/package metadata, not compiler-emitted Rust internals.</li>
-<li><strong>Implementation artifacts remain inspectable:</strong> generated Rust, object code, IR snapshots, or other backend artifacts should be inspectable and debuggable where emitted, but they are not the host-facing semantic contract.</li>
-<li><strong>The caller boundary is the stable host-facing shape:</strong> Rust consumers should target caller helpers and support traits that make calls feel natural from Rust while preserving Incan semantics.</li>
-<li><strong>The <code>pub</code> system should grow rather than be bypassed:</strong> Rust-hosted exports should be modeled as a public export profile or facet, not as an unrelated side channel.</li>
-<li><strong>Types cross through reusable helpers:</strong> primitive values, models, newtypes, enums, <code>Result</code>, <code>Option</code>, collections, and Rust-backed types should cross through explicit, versioned conversion helpers that can also simplify emitter responsibilities.</li>
-<li><strong>Runtime policy is explicit:</strong> async execution, logger/telemetry hooks, host capabilities, panic handling, and initialization must be part of the caller contract rather than incidental generated code behavior.</li>
-<li><strong>Cargo is a host compatibility surface, not Incan's build authority:</strong> an ordinary Rust application may use normal Cargo dependency declarations and a caller package, while Oven remains responsible for resolving, baking, selecting, and verifying the Incan artifact graph. Oven-native Rust hosts consume the same caller facet without Cargo.</li>
+<li><strong>One authored manifest:</strong> <code>Loaf.toml</code> is the only Incan/Oven project manifest. <code>incan.toml</code> is not read as a compatibility format.</li>
+<li><strong>A familiar project table:</strong> <code>[project]</code> owns package identity and publication metadata. The filename carries the Loaf vocabulary; the metadata table remains ordinary and legible.</li>
+<li><strong>A workspace is an optional hierarchy:</strong> <code>[workspace]</code> declares explicit members and shared policy. A root with both <code>[project]</code> and <code>[workspace]</code> is a rooted workspace; a root with only <code>[workspace]</code> is virtual. Members may declare sub-Loaves, but the root remains the sole authority for resolution, locking, registry trust, target policy, and receipts.</li>
+<li><strong>The package graph is language-neutral:</strong> every dependency is one logical requirement with a typed provider contract. The author does not choose a separate Incan-versus-Rust dependency table.</li>
+<li><strong>Origins are configurable:</strong> Loaf packages default to <code>incan.pub</code>; crates default to crates.io. A project may explicitly select registered private registries, Git, path, or other supported controlled sources.</li>
+<li><strong>Provider semantics stay visible:</strong> an <code>incan.pub</code> package contributes checked Incan semantic/provider facts, a Cargo ecosystem crate contributes Rust interop and implementation requirements, and a system/foreign capability contributes a verified target requirement. Oven must not flatten those differences or expose backend details as public Incan API.</li>
+<li><strong>Source discovery is convention-first:</strong> Oven discovers supported source files under <code>src/</code> by language extension. Nonstandard roots or generated inputs require explicit configuration. A Loaf never implicitly consumes a neighbouring <code>Cargo.toml</code>.</li>
+<li><strong>Targets have three scopes:</strong> a Loaf declares supported target/interface combinations; a workspace declares shared delivery policy; a bake invocation chooses one concrete target, carrier, profile, and feature closure that produces a target-bound <code>*.loaf</code> asset.</li>
+<li><strong>Plans precede effects:</strong> resolution, import, installation, or the presence of a file must not execute package code. Oven exposes a plan before baking and records the actual execution in a receipt.</li>
+<li><strong>Environments and actions belong to Oven:</strong> existing environment/matrix and typed-action semantics remain, but their authored configuration moves out of <code>[tool.incan.*]</code> and into the Loaf model. Oven materializes environments and explicitly runs actions.</li>
+<li><strong>Derived state is separate:</strong> <code>Oven.lock</code>, immutable <code>*.loaf</code> assets, the artifact store, selected host toolchains, caches, staged outputs, generated code, and receipts are not authored Loaf configuration.</li>
+<li><strong>Distribution assets are verifiable:</strong> a <code>*.loaf</code> asset is immutable and target-bound. It identifies the selected project/facet, target, carrier, profile, resolved graph, payload digest, and receipt; its wire or bundle format is intentionally deferred.</li>
+<li><strong>Cargo compatibility is explicit:</strong> a directory with only <code>Cargo.toml</code> may be run by Oven in Cargo-compatibility mode. A directory containing <code>Loaf.toml</code> is a Loaf project; Cargo files there are ignored with a diagnostic unless the user explicitly invokes Cargo compatibility.</li>
 </ol>
 <h2 id="motivation">Motivation<a class="headerlink" href="#motivation" title="Permanent link">&para;</a></h2>
-<p>Incan's current interop story is strong in one direction: Incan source imports Rust crates, wraps Rust types, and can implement Rust traits for Incan-owned types. That is necessary, but it does not answer the common embedding question: "how do I integrate Incan-generated code into my native Rust application code?"</p>
-<p>That question exposes a deeper product direction. Incan should produce Rust-native integration artifacts without making generated Rust source the package contract. Generated Rust can still be valuable as an implementation artifact and inspection surface, but the durable promise to Rust hosts should be an explicit caller ABI, metadata, support crate contract, and Cargo-native package shape.</p>
-<p>RFC 031 created the first library artifact foundation: an Incan library can build a semantic manifest and implementation artifacts. The missing product-level answer is the shape above those artifacts: which public exports are intended for Rust hosts, which helper types make calls feel Incan-like from Rust, which support code owns repeated boundary mechanics, and which metadata defines compatibility without exposing generated Rust internals as API.</p>
-<p>Oven completes the delivery boundary without replacing this caller model. A selected Rust-hosted export facet is a target-neutral public contract; Oven turns it into target-specific build units and verified <code>*.loaf</code> assets. RFC 117 owns the authored-manifest, resolved-graph, asset-identity, and receipt model that this RFC consumes. A Rust application that already uses Cargo may consume a lightweight caller package over that Oven-produced output, but it must not need Cargo to resolve or compile the Incan library itself.</p>
-<p>The missing piece is not only a command. It is a boundary. A Rust application embedding Incan code needs to know which calls are stable, how values convert, how errors surface, whether async calls need a runtime, whether panics are contained, how logs and telemetry are connected, and which compiler/runtime version produced the artifact. Without that boundary, users either treat compiler output as hand-authored Rust or avoid Rust-hosted Incan entirely.</p>
-<p>The end-state should be simple: an application team writes domain logic, policy, validation, transformations, routing decisions, or workflow steps in Incan, builds or publishes a Rust-facing package, and calls it from Rust as a typed dependency. The Rust app should remain in charge of process lifecycle, threading, deployment, and host resources. The Incan package should remain in charge of Incan language semantics and its exported behavior.</p>
+<p>The current <code>incan.toml</code> correctly introduced project identity, dependency declarations, SDK selection, build configuration, workspaces, environment configuration, Rust dependency declarations, and Oven interop requirements. It now carries an assumption that no longer fits the intended architecture: that a project's identity is primarily Incan source and that Rust is a special external implementation substrate.</p>
+<p>That assumption is constraining in both directions. An Incan-authored package may need a Rust crate, a C ABI library, a C++ shim, a target SDK, or a later JNI/Python carrier without ceasing to be one package. A Rust-authored project that elects to use Oven should be able to adopt the same package, target, receipt, and workspace model without being forced to rewrite its sources into Incan. Cargo must remain runnable where Cargo is explicitly authoritative, but Cargo's implicit build scripts, proc macros, target conventions, and workspace semantics must not become accidental Loaf semantics.</p>
+<p>The same pressure exists at the repository root. A separate <code>Oven.toml</code> would distinguish package metadata from workspace orchestration, but introduces two canonical files and an ownership/discovery boundary without a demonstrated capability need. Cargo already demonstrates that one manifest can express a root package, a virtual workspace, or both. <code>Loaf.toml</code> can do the same when its table scopes are explicit.</p>
+<p>Oven is more than a package resolver. It must plan target-specific C ABI, JNI, Python, Rust-host, and future carrier builds; select and verify toolchains; materialize controlled environments; protect shared artifact stores; and describe exactly what happened. That requires a manifest that captures desired inputs, not hidden host discovery or arbitrary execution.</p>
 <h2 id="goals">Goals<a class="headerlink" href="#goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Define a Rust-hosted caller model for native Rust applications that call Incan-authored libraries.</li>
-<li>Define a stable Rust-facing caller surface backed by ABI/package metadata.</li>
-<li>Keep implementation artifacts inspectable without making generated Rust source the public compatibility path.</li>
-<li>Define how the <code>pub</code> system can express Rust-hosted public export profiles or facets.</li>
-<li>Define conversion requirements for primitives, collections, models, enums, newtypes, results, options, and Rust-backed values.</li>
-<li>Define reusable caller helpers that can reduce bespoke emitter output for common boundary shapes.</li>
-<li>Define initialization, version, diagnostics, panic, async, logging, telemetry, and host capability responsibilities at the caller boundary.</li>
-<li>Preserve Cargo-compatible Rust host ergonomics without making Cargo the authority for Incan resolution, baking, or provenance.</li>
-<li>Define how a selected caller facet becomes a target-compatible Oven caller artifact with inspectable build and source-map receipts.</li>
-<li>Leave room for both local path development and published package consumption.</li>
-<li>Keep Rust integration Rust-shaped enough to feel natural in Rust applications without making Incan source adopt Rust's full API design model.</li>
+<li>Replace <code>incan.toml</code> with <code>Loaf.toml</code> wholesale before Incan 1.0.</li>
+<li>Preserve <code>[project]</code> as the familiar package-metadata surface.</li>
+<li>Preserve rooted and virtual workspace forms using optional <code>[workspace]</code>.</li>
+<li>Give Incan packages, Rust crates, and foreign/system capabilities one dependency grammar while retaining their distinct resolver and linkage contracts.</li>
+<li>Make <code>incan.pub</code> the default origin for Loaf packages and crates.io the default origin for Rust crates, while allowing registered alternative registries and explicit sources.</li>
+<li>Define safe discovery when <code>Loaf.toml</code> and <code>Cargo.toml</code> coexist.</li>
+<li>Permit explicitly declared hierarchical sub-Loaves under one inherited root-workspace authority.</li>
+<li>Keep source-language choice out of the package identity while avoiding implicit Cargo participation.</li>
+<li>Define a target model that distinguishes platform target, deployable carrier, profile, and delivery policy.</li>
+<li>Distinguish authored intent (<code>Loaf.toml</code>), resolved graph (<code>Oven.lock</code>), and immutable target-bound distribution assets (<code>*.loaf</code>) without making any of them hidden state.</li>
+<li>Make plans, declared effects, selected inputs, output artifacts, and receipts inspectable.</li>
+<li>Rehome environment/matrix/action configuration ownership to Oven without re-specifying the semantics already owned by RFCs 073 and 078.</li>
+<li>Rehome package-level C ABI configuration from <code>[oven.interop]</code> into an interop section that future binding kinds may share, while retaining RFC 116 as the owner of C safety semantics.</li>
+<li>Keep locks, caches, credentials, selected SDK paths, staged artifacts, and generated output out of the authored manifest.</li>
+<li>Leave command spelling and CLI ergonomics for a dedicated follow-up RFC.</li>
 </ul>
 <h2 id="non-goals">Non-Goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li>This RFC does not make generated Rust source the public package compatibility path.</li>
-<li>This RFC does not require every implementation backend to emit Rust source.</li>
-<li>This RFC does not make every generated Rust module a stable public API where generated Rust is still emitted.</li>
-<li>This RFC does not replace <code>rust::</code> imports or Rust interop from Incan source.</li>
-<li>This RFC does not define a C ABI, dynamic plugin ABI, <code>extern "C"</code> boundary, or cross-language FFI story.</li>
-<li>This RFC does not require a Rust application to run the Incan compiler at runtime.</li>
-<li>This RFC does not require Cargo to resolve or compile an Incan package before a Rust host can call it.</li>
-<li>This RFC does not require every Incan public export to be Rust-callable by default.</li>
-<li>This RFC does not define registry publication mechanics beyond compatibility with RFC 034 and RFC 079.</li>
-<li>This RFC does not define <code>Loaf.toml</code>, <code>Oven.lock</code>, or the <code>*.loaf</code> asset format; it consumes the project, asset-identity, and receipt contract from RFC 117.</li>
-<li>This RFC does not define the full implementation of async runtime internals, host capability enforcement, or telemetry backends.</li>
-<li>This RFC does not guarantee that every Rust type imported through <code>rust::</code> can automatically cross back into a host Rust application without an adapter.</li>
+<li>Defining a separate <code>Oven.toml</code> root manifest.</li>
+<li>Preserving <code>incan.toml</code>, <code>incan.lock</code>, or <code>[tool.incan.*]</code> as legacy compatibility formats.</li>
+<li>Defining the final <code>oven</code> versus <code>incan</code> command-line binary, aliases, or command hierarchy.</li>
+<li>Reimplementing arbitrary Cargo behavior, including implicit <code>build.rs</code> execution, proc-macro execution policy, or Cargo workspace discovery, for Loaf projects.</li>
+<li>Defining crates.io's protocol, the full <code>incan.pub</code> registry protocol, registry hosting, or publishing UX.</li>
+<li>Defining C ABI safety rules, direct C++ ABI interop, JNI safety rules, Python extension safety rules, or a universal foreign-runtime type system.</li>
+<li>Defining remote execution, distributed builds, or a general-purpose shell/task runner.</li>
+<li>Defining the <code>*.loaf</code> wire or bundle format, registry transport, or archive layout; a dedicated artifact-format RFC owns those details.</li>
+<li>Allowing packages to run arbitrary installation, import, or lifecycle hooks.</li>
+<li>Giving cold, warm, and hot Loaves normative compiler or package semantics in this RFC.</li>
+</ul>
+<h2 id="prospective-supersession-of-closed-rfc-decisions">Prospective supersession of closed RFC decisions<a class="headerlink" href="#prospective-supersession-of-closed-rfc-decisions" title="Permanent link">&para;</a></h2>
+<p>Closed RFCs remain historical records and are not retroactively edited. This RFC explicitly supersedes the following decisions for implementations that adopt the Loaf/Oven project model:</p>
+<ul>
+<li><strong>RFC 013 and RFC 031:</strong> separate authored <code>[dependencies]</code> and <code>[rust-dependencies]</code> tables, and the assumption that a consumer's dependency graph is authored as Cargo wiring. <code>Loaf.toml</code> has one typed dependency graph; provider-specific Rust requirements remain visible facts rather than a second authoring domain.</li>
+<li><strong>RFC 015:</strong> <code>incan.toml</code> as the project manifest, nearest-manifest root discovery, project generation that writes <code>incan.toml</code>, and <code>[tool.incan.envs]</code> as the environment-configuration home. <code>Loaf.toml</code> is the sole authored manifest, while environment semantics remain owned by their dedicated RFCs.</li>
+<li><strong>RFC 020:</strong> <code>incan.lock</code> as the generated resolution identity. The reproducibility and locked/offline requirements remain; their generated artifact is <code>Oven.lock</code>.</li>
+<li><strong>RFC 077:</strong> a flat workspace that forbids nested workspaces. Explicit membership, rooted and virtual workspace forms, and one shared resolution boundary remain; a member may now declare explicit sub-Loaves within a single inherited root-workspace authority.</li>
+<li><strong>RFC 112:</strong> the public lockfile path used by its publication examples. Crash-safe publication and coordination requirements remain unchanged, but the published lockfile is <code>Oven.lock</code> and its companion coordination identity follows that name.</li>
+<li><strong>RFC 114:</strong> references to the canonical <code>incan.lock</code> graph. Its distinction between public Loaf features and provider-specific implementation features remains unchanged; the resolved graph is recorded in <code>Oven.lock</code>.</li>
+</ul>
+<p>This RFC does not supersede the retained semantic contracts in those RFCs: reproducibility, explicit workspace membership, crash-safe publication, checked library surfaces, and public package-feature meaning remain requirements. It changes the authored manifest, authority hierarchy, dependency presentation, and derived-state names through which those contracts are implemented.</p>
+<h2 id="terminology-and-mental-model">Terminology and mental model<a class="headerlink" href="#terminology-and-mental-model" title="Permanent link">&para;</a></h2>
+<p>The user-facing contract is intentionally small: authors write <code>Loaf.toml</code>; Oven plans and bakes it. The surrounding bread vocabulary is a guide-level model and an Oven inspection affordance, not a second vocabulary users must configure.</p>
+<div class="language-text highlight"><pre><span></span><code>Loaf.toml + declared sources + declared inputs
+  -&gt; Doughball (internal source-and-input mass)
+  -&gt; Oven shapes one or more Loaves (resolved logical build units)
+  -&gt; Oven bakes a selected Loaf for a selected target
+  -&gt; immutable target-bound *.loaf asset + execution receipt
+</code></pre></div>
+<ul>
+<li>A <strong>project</strong> is the independently named and versioned unit described by <code>[project]</code>.</li>
+<li>A <strong>workspace</strong> is the explicit repository coordination boundary described by <code>[workspace]</code>; it is not itself a compiled package unless it also has <code>[project]</code>.</li>
+<li>A <strong>Doughball</strong> is Oven's internal representation of the selected sources, declared dependencies, features, interop inputs, and policy before target shaping.</li>
+<li>A <strong>Loaf</strong> is the resolved logical build unit Oven obtains by shaping a Doughball for a selected package facet and target-compatible plan.</li>
+<li>A <strong><code>*.loaf</code> asset</strong> is the immutable, verified, target-bound build and distribution asset emitted by a bake. It carries the selected Loaf identity, target/carrier/profile, resolved-graph identity, payload digest, and receipt identity. Its archive or wire format is outside this RFC.</li>
+<li>To <strong>bake</strong> is the operation that executes a resolved plan for a selected target/carrier/profile and produces a <code>*.loaf</code> asset plus a receipt. "Bake" is a verb, not a required artifact type.</li>
+<li><strong>Cold</strong>, <strong>warm</strong>, and <strong>hot</strong> Loaves may be shown by Oven's internal inspection and cache-status UX. Their precise state semantics are intentionally not specified here.</li>
+<li>A <strong>carrier</strong> is the target deliverable form: for example, a static library, framework, JNI shared library, Python wheel, Rust-host caller projection, executable, or another declared artifact family.</li>
 </ul>
 <h2 id="guide-level-explanation">Guide-level explanation<a class="headerlink" href="#guide-level-explanation" title="Permanent link">&para;</a></h2>
-<p>An Incan library author starts with ordinary library exports:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="k">model</span> <span class="nc">OrderInput</span><span class="p">:</span>
-    <span class="k">pub</span> <span class="n">subtotal</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="k">pub</span> <span class="n">customer_tier</span><span class="p">:</span> <span class="nb">str</span>
+<h3 id="a-single-project">A single project<a class="headerlink" href="#a-single-project" title="Permanent link">&para;</a></h3>
+<p>An ordinary project needs only <code>Loaf.toml</code>:</p>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[project]</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;weather_service&quot;</span>
+<span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.6.0&quot;</span>
+<span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;A service that happens to use Incan and Rust sources&quot;</span>
+<span class="n">requires-incan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;&gt;=0.6,&lt;0.7&quot;</span>
 
-<span class="k">pub</span> <span class="k">model</span> <span class="nc">Quote</span><span class="p">:</span>
-    <span class="k">pub</span> <span class="n">total</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="k">pub</span> <span class="n">discount_applied</span><span class="p">:</span> <span class="nb">bool</span>
+<span class="k">[dependencies]</span>
+<span class="n">web</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">loaf</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;stdlib-web&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;^0.6&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">serde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">crate</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;serde&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;derive&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><code>web</code> defaults to <code>incan.pub</code>; <code>serde</code> defaults to crates.io. Neither the project identity nor the command to bake it changes because its implementation contains Incan, Rust, or both. The public package feature graph remains an Incan/Loaf contract. A requested Cargo feature is a typed implementation request for <code>serde</code>; it does not automatically become a public feature of <code>weather_service</code>.</p>
+<p>Oven discovers supported source files below <code>src/</code>. A project with only conventional source roots does not need to list its implementation languages.</p>
+<h3 id="a-workspace-of-loaves">A workspace of Loaves<a class="headerlink" href="#a-workspace-of-loaves" title="Permanent link">&para;</a></h3>
+<p>The root <code>Loaf.toml</code> can be a project and a workspace:</p>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[project]</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;incan&quot;</span>
+<span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.6.0&quot;</span>
 
-<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">quote_order</span><span class="p">(</span><span class="nb">input</span><span class="p">:</span> <span class="nc">OrderInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Quote</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="nb">input</span><span class="o">.</span><span class="n">subtotal</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="s2">&quot;subtotal must be non-negative&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="nb">input</span><span class="o">.</span><span class="n">customer_tier</span> <span class="o">==</span> <span class="s2">&quot;gold&quot;</span><span class="p">:</span>
-        <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nc">Quote</span><span class="p">(</span><span class="n">total</span><span class="o">=</span><span class="nb">input</span><span class="o">.</span><span class="n">subtotal</span> <span class="o">*</span> <span class="mi">90</span> <span class="o">/</span> <span class="mi">100</span><span class="p">,</span> <span class="n">discount_applied</span><span class="o">=</span><span class="k">true</span><span class="p">))</span>
-    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nc">Quote</span><span class="p">(</span><span class="n">total</span><span class="o">=</span><span class="nb">input</span><span class="o">.</span><span class="n">subtotal</span><span class="p">,</span> <span class="n">discount_applied</span><span class="o">=</span><span class="k">false</span><span class="p">))</span>
+<span class="k">[workspace]</span>
+<span class="n">members</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;loaves/*&quot;</span><span class="p">]</span>
+<span class="n">default-members</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;.&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;loaves/incan_lsp&quot;</span><span class="p">]</span>
+
+<span class="k">[workspace.delivery.mobile]</span>
+<span class="n">members</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;loaves/stdlib_interop&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;loaves/stdlib_web&quot;</span><span class="p">]</span>
+<span class="n">targets</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;aarch64-apple-ios&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;aarch64-linux-android&quot;</span><span class="p">]</span>
+<span class="n">profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;release&quot;</span>
 </code></pre></div>
-<p>The library then exposes the relevant export through a Rust-hosted public profile. The exact spelling is unresolved, but the design should enrich Incan's existing <code>pub</code> system rather than introduce an unrelated metadata escape hatch. One possible light-weight shape is:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="n">caller</span> <span class="kn">from</span><span class="w"> </span><span class="nn">pricing</span><span class="w"> </span><span class="kn">import</span> <span class="n">quote_order</span>
+<p>A virtual workspace omits <code>[project]</code> and retains <code>[workspace]</code>. Every member has its own <code>Loaf.toml</code>; no member is inferred merely because it lives under <code>loaves/</code>.</p>
+<p>The directory name is a repository convention, not an identity rule. A member can live anywhere inside the workspace root if it is explicitly included by <code>members</code>.</p>
+<h3 id="hierarchical-sub-loaves">Hierarchical sub-Loaves<a class="headerlink" href="#hierarchical-sub-loaves" title="Permanent link">&para;</a></h3>
+<p>A member may itself declare explicit child members. This is a structural hierarchy, not a nested independent workspace:</p>
+<div class="language-text highlight"><pre><span></span><code>incan/
+├── Loaf.toml                         # root authority and Oven.lock
+└── loaves/
+    └── incan_oven/
+        ├── Loaf.toml                 # an Incan sub-Loaf
+        └── loaves/
+            ├── oven_store/Loaf.toml
+            └── oven_provider_cargo/Loaf.toml
 </code></pre></div>
-<p>That example is intentionally minimal. A synchronous function does not need to spell <code>mode = "sync"</code>, and a Rust caller name does not need to be repeated when it matches the Incan export name. Extra metadata should appear only when the Rust-hosted profile needs an alias, a projection choice, a blocking wrapper, or another non-default policy.</p>
-<p>Oven materializes a target-compatible caller artifact from the selected Rust-hosted facet. The exact command spelling is not normative. The artifact carries caller metadata, ABI/package metadata, target compatibility, source-map references, and its verified Oven build receipt. A Rust application that uses Cargo can consume the resulting compatibility package without compiling the Incan library:</p>
+<p>The root's selected closure contains <code>incan_oven</code> and its declared children. A sub-Loaf may declare local requirements and local member selection, but it inherits the root's resolved graph, lock, registry trust, target/delivery policy, and receipt boundary. It cannot create a second <code>Oven.lock</code>, rebind a registry, widen target policy, or form a second publication authority.</p>
+<p>Membership hierarchy is not a dependency graph. Parent/child placement, a shared workspace, and a selected closure create no runtime, linkage, or publication dependency between packages; those relationships exist only through declared typed dependencies. For example, <code>incql-core</code>, <code>incql-db</code>, and <code>incql-datafusion</code> can remain independently versioned packages whether or not one is structurally nested below another; any dependency between them is explicit in the consuming package's dependency table.</p>
+<p>This hierarchy also permits efficient cache-status inspection: Oven can compare a receipt-bound aggregate for a parent before it descends into a child's declared closure. The exact cold/warm/hot definitions remain an Oven inspection concern rather than this RFC's package contract.</p>
+<h3 id="registries-without-ambient-trust">Registries without ambient trust<a class="headerlink" href="#registries-without-ambient-trust" title="Permanent link">&para;</a></h3>
+<p>Oven has built-in defaults for the public ecosystems:</p>
+<div class="language-text highlight"><pre><span></span><code>Loaf package  -&gt; incan.pub
+Rust crate    -&gt; crates.io
+</code></pre></div>
+<p>Users or organizations explicitly register additional registries in Oven-controlled user or organization configuration. Registry configuration identifies the registry kind, endpoint/index, trust policy, and a reference to credentials held outside the project.</p>
+<div class="language-toml highlight"><pre><span></span><code><span class="c1"># Illustrative Oven user/organization configuration, not Loaf.toml.</span>
+<span class="k">[registries.encero]</span>
+<span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;loaf&quot;</span>
+<span class="n">index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://packages.encero.dev/index&quot;</span>
+<span class="n">trust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;require-signature&quot;</span>
+
+<span class="k">[registries.internal-cargo]</span>
+<span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;crate&quot;</span>
+<span class="n">index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;sparse+https://cargo.encero.dev/index&quot;</span>
+<span class="n">trust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;organization&quot;</span>
+</code></pre></div>
+<p>The project can select a registered source and the workspace can allow-list source identities:</p>
 <div class="language-toml highlight"><pre><span></span><code><span class="k">[dependencies]</span>
-<span class="c1"># This is a caller package materialized from a verified Oven artifact.</span>
-<span class="n">pricing_rules</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;../pricing_rules/caller&quot;</span><span class="w"> </span><span class="p">}</span>
-</code></pre></div>
-<p>The Rust application calls the typed caller wrapper rather than internal implementation details:</p>
-<div class="language-rust highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">pricing_rules</span><span class="p">::</span><span class="n">caller</span><span class="p">::{</span><span class="n">Caller</span><span class="p">,</span><span class="w"> </span><span class="n">OrderInput</span><span class="p">};</span>
+<span class="n">web</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">loaf</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;web&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">registry</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;encero&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">serde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">crate</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;serde&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">registry</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;internal-cargo&quot;</span><span class="w"> </span><span class="p">}</span>
 
-<span class="k">fn</span><span class="w"> </span><span class="nf">price</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">caller</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Caller</span><span class="p">::</span><span class="n">new</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
-<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">quote</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">caller</span><span class="p">.</span><span class="n">quote_order</span><span class="p">(</span><span class="n">OrderInput</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">subtotal</span><span class="p">:</span><span class="w"> </span><span class="mi">10_000</span><span class="p">,</span>
-<span class="w">        </span><span class="n">customer_tier</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;gold&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
-<span class="w">    </span><span class="p">})</span><span class="o">?</span><span class="p">;</span>
-<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">quote</span><span class="p">.</span><span class="n">total</span><span class="p">);</span>
-<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
-<span class="p">}</span>
+<span class="k">[workspace.registries]</span>
+<span class="n">allow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;encero&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;internal-cargo&quot;</span><span class="p">]</span>
 </code></pre></div>
-<p>For async entrypoints, the caller surface should make runtime requirements explicit:</p>
-<div class="language-rust highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">pricing_rules</span><span class="p">::</span><span class="n">caller</span><span class="p">::{</span><span class="n">AsyncCaller</span><span class="p">,</span><span class="w"> </span><span class="n">OrderInput</span><span class="p">};</span>
+<p>The registry alias is convenience, not the security identity. <code>Oven.lock</code> records the canonical registry endpoint and protocol, exact package identity, immutable digest, and observed signature/trust result. Credentials never enter <code>Loaf.toml</code> or the lock. A project cannot silently register, rebind, or trust a registry on a developer's machine.</p>
+<h3 id="declaring-c-abi-and-future-carriers">Declaring C ABI and future carriers<a class="headerlink" href="#declaring-c-abi-and-future-carriers" title="Permanent link">&para;</a></h3>
+<p>A package declares interface intent and physical input requirements. Oven resolves the concrete target toolchain, SDK, artifacts, and deployment placement when it plans a bake.</p>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[project]</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;vision_runtime&quot;</span>
+<span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.6.0&quot;</span>
 
-<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">price_async</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">caller</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AsyncCaller</span><span class="p">::</span><span class="n">new</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
-<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">quote</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">caller</span><span class="p">.</span><span class="n">quote_order</span><span class="p">(</span><span class="n">OrderInput</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">subtotal</span><span class="p">:</span><span class="w"> </span><span class="mi">10_000</span><span class="p">,</span>
-<span class="w">        </span><span class="n">customer_tier</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;gold&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
-<span class="w">    </span><span class="p">}).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
-<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">quote</span><span class="p">.</span><span class="n">total</span><span class="p">);</span>
-<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
-<span class="p">}</span>
+<span class="k">[oven.interop.c]</span>
+<span class="n">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;interop/include/vision.h&quot;</span><span class="p">]</span>
+<span class="n">requires</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;vision-runtime&quot;</span><span class="p">]</span>
+
+<span class="k">[targets.ios]</span>
+<span class="n">platform</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;aarch64-apple-ios&quot;</span>
+<span class="n">carrier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;framework&quot;</span>
+
+<span class="k">[targets.android]</span>
+<span class="n">platform</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;aarch64-linux-android&quot;</span>
+<span class="n">carrier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;jni-library&quot;</span>
 </code></pre></div>
-<p>If an Incan export is not in the Rust-hosted public profile, Rust code must not rely on whatever implementation symbols happen to exist. The distinction is about semantic authority: caller metadata and caller APIs are stable; compiler implementation artifacts are not.</p>
-<p>The author-facing model is:</p>
-<div class="language-text highlight"><pre><span></span><code>Incan library source
-  -&gt; checked public Incan API
-  -&gt; Rust-hosted public profile
-  -&gt; Rust-facing caller facet + ABI/package metadata
-  -&gt; Oven-selected target caller build unit and `*.loaf` asset
-  -&gt; Oven-native Rust host or Cargo-compatible caller package
-  -&gt; native Rust application
+<p>This example is intentionally schematic. <code>[oven.interop]</code> remains Oven-owned in <code>Loaf.toml</code>; <code>[oven.interop.c]</code> is the direct successor to RFC 116's C envelope. RFC 116 continues to define C declarations, ownership, buffers, verification, and checked shims. A future JNI or Python RFC defines the corresponding language/runtime safety contract. They all reuse the same package-envelope distinctions: declared requirement, selected provider/toolchain, target-compatible carrier, lock identity, plan, <code>*.loaf</code> asset, and receipt.</p>
+<h3 id="baking-and-inspecting">Baking and inspecting<a class="headerlink" href="#baking-and-inspecting" title="Permanent link">&para;</a></h3>
+<p>Before Oven performs external work, it can show a plan containing selected members, dependencies, providers, target, carrier, profile, capabilities, declared inputs/outputs, and expected effect classes. Baking executes only that plan and emits a target-bound <code>*.loaf</code> asset plus a receipt.</p>
+<p>The exact CLI spelling is intentionally outside this RFC. The semantic operation is:</p>
+<div class="language-text highlight"><pre><span></span><code>select project/workspace member(s)
+select target, carrier, profile, and features
+resolve the locked provider graph
+show/approve the plan when policy requires it
+bake
+inspect artifacts and receipt
 </code></pre></div>
+<h3 id="cargo-compatibility-is-a-different-mode">Cargo compatibility is a different mode<a class="headerlink" href="#cargo-compatibility-is-a-different-mode" title="Permanent link">&para;</a></h3>
+<p>A repository containing only <code>Cargo.toml</code> remains runnable by Oven in explicitly selected Cargo-compatibility mode. Cargo remains authoritative for that operation and its own build-script/proc-macro side effects are Cargo-mode behavior.</p>
+<p>If both files are present, Oven must continue as a Loaf project and issue a warning equivalent to:</p>
+<div class="language-text highlight"><pre><span></span><code>Found Loaf.toml and Cargo.toml. Loaf.toml is authoritative; Cargo configuration
+was ignored. Use an explicit Cargo-compatibility operation to run Cargo semantics.
+</code></pre></div>
+<p>Oven must not parse, merge, or infer dependency, feature, source, workspace, build-script, or target policy from the adjacent Cargo manifest.</p>
 <h2 id="reference-level-explanation">Reference-level explanation<a class="headerlink" href="#reference-level-explanation" title="Permanent link">&para;</a></h2>
-<p>An Incan implementation that supports Rust-hosted caller artifacts must emit a Rust-facing caller boundary for exports selected by the Rust-hosted public profile.</p>
-<p>The caller boundary must include:</p>
-<ul>
-<li>a stable Rust module or crate-level namespace for caller APIs</li>
-<li>typed Rust representations for caller-visible Incan input and output types</li>
-<li>conversion implementations or generated adapters for every caller-visible boundary type</li>
-<li>a caller initialization API</li>
-<li>version and compatibility metadata</li>
-<li>diagnostic metadata sufficient to map caller failures back to Incan export names and source spans where available</li>
-<li>error types that distinguish Incan <code>Err</code> values, Incan runtime errors, caller conversion errors, host capability errors, version mismatches, and contained panics</li>
-</ul>
-<p>The caller boundary must not require Rust consumers to import arbitrary compiler-generated implementation modules as the host API. Internal generated modules may exist and should remain readable, but only the caller namespace is stable for Rust-hosted consumption.</p>
-<p>The caller boundary must be materialized by Oven as a target-compatible caller artifact. A Cargo-compatible package may live beside that artifact or be projected from it for a Rust host, but Cargo must not become responsible for resolving, compiling, or selecting the Incan implementation graph. Rust consumers must not need to know the compiler's internal implementation layout.</p>
-<p>Caller-visible Incan functions must have a representable Rust signature. The compiler must reject a Rust-hosted public export when any parameter, return value, type parameter, effect, or captured dependency cannot be represented by the caller boundary.</p>
-<p>Caller-visible synchronous functions must expose a synchronous Rust call. Caller-visible async functions must expose an async Rust call or an explicit runtime-backed blocking call, depending on the declared caller mode. The generated API must not silently create or own a runtime in a way that surprises the host application.</p>
-<p>Caller initialization must validate compiler/runtime compatibility before the first call. The generated artifact must expose enough metadata to identify the Incan compiler version, manifest format, caller facet, caller ABI version, generated support crate version, target/profile compatibility, and the selected Oven build receipt or <code>*.loaf</code> asset identity.</p>
-<p>Incan <code>Result[T, E]</code> crossing into Rust must map to Rust <code>Result&lt;T, E&gt;</code> when both <code>T</code> and <code>E</code> are representable. Boundary failures that occur outside the Incan function's declared return value must use the caller error type, not the Incan function's domain error type.</p>
-<p>Incan <code>Option[T]</code> must map to Rust <code>Option&lt;T&gt;</code> when <code>T</code> is representable.</p>
-<p>Incan <code>None</code>, <code>bool</code>, <code>int</code>, <code>float</code>, <code>str</code>, list, dict, tuple-like fixed records, models, enums, value enums, newtypes, and constrained newtypes must have deterministic caller conversion rules. Integer width, constrained storage carriers, and validation failures must not rely on unchecked Rust casts.</p>
-<p>Incan models exposed to Rust callers should generate Rust structs with stable field names and derive surfaces appropriate for Rust host use when those derives are requested or safe by default. Wire aliases remain data-contract metadata and must not silently rename Rust struct fields unless the caller export explicitly chooses that projection.</p>
-<p>Incan newtypes exposed to Rust callers must preserve validation semantics. Constructing a Rust-side caller newtype from an unchecked primitive must either be impossible or go through a checked constructor.</p>
-<p>Rust-backed <code>rusttype</code> values may cross the caller boundary only when the backing Rust type is visible to the host crate and the artifact can prove that the generated caller type and host type refer to the same Rust path and compatible version. Otherwise, the export must require an explicit adapter.</p>
-<p>Panics from generated Incan code or Rust code called by Incan must not be indistinguishable from ordinary Incan <code>Result</code> values. Implementations should contain unwinding where practical and report a caller panic error with diagnostic context. If panic containment is unavailable for a target, the caller metadata must state that policy clearly.</p>
-<p>Host capabilities used by caller-visible Incan code must be visible through metadata. If an Incan caller export requires filesystem, network, process, environment, telemetry, clock, async runtime, or other host services, the Rust caller initialization must provide or validate those services before use when the target supports such validation.</p>
-<p>Caller diagnostics and capability outcomes must reference stable public source-map and receipt identities. They must not expose private HIR, Body IR, compiler session state, or backend implementation representations.</p>
-<h2 id="design-details">Design details<a class="headerlink" href="#design-details" title="Permanent link">&para;</a></h2>
-<h3 id="caller-facet-and-artifact-shape">Caller facet and artifact shape<a class="headerlink" href="#caller-facet-and-artifact-shape" title="Permanent link">&para;</a></h3>
-<p>The Rust-hosted caller facet is the target-neutral public selection of Incan exports, type projections, capability requirements, caller ABI version, and source-map schema. Oven materializes that facet into target-compatible caller artifacts. A current implementation may use generated Rust adapters or a Cargo-compatible package, but the normative contract is the caller facet and metadata, not the emitted source layout or Cargo package structure.</p>
-<p>Conceptually, the caller artifact set contains:</p>
-<div class="language-text highlight"><pre><span></span><code>stable caller namespace
-caller facet metadata
-ABI/package metadata
-semantic manifest
-source-map and Oven-receipt references
-implementation artifact(s)
-target-compatible caller `*.loaf` asset(s)
-optional Cargo-compatible package projection
-</code></pre></div>
-<p>The exact directory layout, static-versus-dynamic linkage, and Cargo package arrangement are not normative. Rust consumers must not need to know which files came from Incan source lowering, backend emission, support glue, ABI materialization, or Oven storage.</p>
-<h3 id="oven-planning-and-cargo-compatibility">Oven planning and Cargo compatibility<a class="headerlink" href="#oven-planning-and-cargo-compatibility" title="Permanent link">&para;</a></h3>
-<p>Oven must include the selected caller facet, public feature projection, compiler and support compatibility, target/profile, native-linkage requirements, and relevant source/ABI metadata in the caller build-unit identity. The resulting <code>*.loaf</code> asset must identify the caller facet and the exact public receipt through which it was built.</p>
-<p>An Oven-native Rust host may consume that selected caller artifact directly. A Cargo-compatible package may instead provide Rust source, metadata, and linkage directives that connect an ordinary Cargo host application to the same selected artifact. Such a package must not invoke the Incan compiler, discover a different Incan artifact, or treat generated implementation modules as public API. It may validate that the selected artifact is compatible with the host target and caller ABI.</p>
-<h3 id="support-crate">Support crate<a class="headerlink" href="#support-crate" title="Permanent link">&para;</a></h3>
-<p>The Incan toolchain should provide a small Rust support crate for caller boundaries. That crate should own shared traits, error types, version checks, conversion helpers, and host context traits that would otherwise be duplicated into every generated package or embedded directly into emitter output. It may be a dependency of a Cargo-compatible caller package, but its existence must not make Cargo a prerequisite for Oven to bake or select caller artifacts.</p>
-<p>The support crate should not become a large runtime framework. It should be boundary infrastructure: initialization, compatibility checks, conversions, diagnostics, panic policy, host context plumbing, and reusable call-shape helpers. Those helpers should make Rust-hosted calls feel closer to Incan's domain model while giving the emitter fewer bespoke cases to print inline.</p>
-<h3 id="public-export-profiles">Public export profiles<a class="headerlink" href="#public-export-profiles" title="Permanent link">&para;</a></h3>
-<p>The caller surface should be represented as an enrichment of <code>pub</code>. Plain Incan public exports remain the Incan package API. Rust-hosted public exports are a profile or facet of that public API intended to be stable for native Rust hosts.</p>
-<p>The exact selection syntax is unresolved. Plausible shapes include <code>pub caller from ... import ...</code>, named export profiles, profile blocks in <code>src/lib.incn</code>, or carefully-scoped declaration metadata for non-default policy. The chosen shape must keep API intent visible in review, support docs/tooling extraction, and avoid making a second export system that fights <code>pub</code>.</p>
-<h3 id="type-projection">Type projection<a class="headerlink" href="#type-projection" title="Permanent link">&para;</a></h3>
-<p>Caller type projection should prefer ordinary Rust types where doing so preserves semantics:</p>
+<h3 id="manifest-discovery-and-shapes">Manifest discovery and shapes<a class="headerlink" href="#manifest-discovery-and-shapes" title="Permanent link">&para;</a></h3>
+<ol>
+<li><code>Loaf.toml</code> is the canonical manifest filename. Project-aware discovery walks upward from the working directory or source path to the nearest directory containing it.</li>
+<li>A manifest containing <code>[project]</code> and no <code>[workspace]</code> describes one project.</li>
+<li>A manifest containing <code>[project]</code> and <code>[workspace]</code> describes a rooted workspace. The root project is a member without requiring <code>"."</code> in <code>members</code>.</li>
+<li>A manifest containing <code>[workspace]</code> and no <code>[project]</code> describes a virtual workspace. It must declare at least one resolved member.</li>
+<li>Workspace membership is explicit. The root's selected closure is formed by recursively expanding each selected member's explicit <code>members</code> declaration, subject to <code>exclude</code>; a path dependency does not imply membership.</li>
+<li>A member may declare explicit child members, producing hierarchical sub-Loaves. Each non-root member has exactly one direct parent in the selected closure.</li>
+<li>Membership and parent/child hierarchy are never dependency, linkage, or publication edges. Those edges arise only from declared typed dependency requirements; a path dependency does not imply membership, and membership does not imply a dependency.</li>
+<li>The root workspace is the sole authority for the resolved graph, <code>Oven.lock</code>, registry trust, workspace delivery policy, and receipt boundary. Child workspace declarations may add local membership and narrow local requirements, but may not create a lock, rebind registries, weaken trust, broaden target policy, or establish an independent publication authority.</li>
+<li>A manifest containing neither <code>[project]</code> nor <code>[workspace]</code> is invalid.</li>
+<li><code>incan.toml</code> is not a project manifest after this RFC. A directory that contains it but no <code>Loaf.toml</code> must receive a targeted diagnostic rather than legacy parsing.</li>
+<li>If a <code>Loaf.toml</code> project also contains <code>Cargo.toml</code>, Oven must warn and ignore Cargo configuration. The diagnostic must name the ignored file and explain explicit Cargo-compatibility selection.</li>
+</ol>
+<h3 id="project-metadata-and-source-domains">Project metadata and source domains<a class="headerlink" href="#project-metadata-and-source-domains" title="Permanent link">&para;</a></h3>
+<p><code>[project]</code> retains the project identity and publication fields from RFC 015: name, version, description, authors, maintainers, license, license files, readme, homepage, repository, documentation, issues, keywords, classifiers, toolchain constraint, privacy, entry points, and public features.</p>
+<p><code>requires-incan</code> remains an enforceable project compatibility requirement under RFC 073. It is a language/toolchain compatibility fact, not a claim that all implementation sources must be Incan.</p>
+<p>Supported source files below the conventional <code>src/</code> root participate according to their language extension and declared package facet. An implementation must not require an author to declare <code>incan = [...]</code> or <code>rust = [...]</code> merely because both file kinds appear under conventional roots. A later concrete schema may provide an optional source-root table for nonstandard roots, generated inputs, exclusions, or explicit source-domain policy.</p>
+<p>When a Loaf project contains Rust source, Oven determines its compilation/linkage path from the Loaf plan and declared crate/provider requirements. The presence of <code>Cargo.toml</code>, <code>build.rs</code>, or another Cargo convention does not grant that file execution or planning authority.</p>
+<h3 id="rust-source-facet">Rust source facet<a class="headerlink" href="#rust-source-facet" title="Permanent link">&para;</a></h3>
+<p>A Rust-bearing Loaf has a bounded, inspectable Rust facet. The planner must know, either through the conventional default or an explicit declaration, every compiled crate's package name, crate root, edition, crate type, entry point where applicable, enabled feature set, and linkage/dependency requirements. A conventional <code>src/lib.rs</code> or <code>src/main.rs</code> may supply a default root only when it yields one unambiguous crate; multiple crates, nonstandard roots, nondefault crate names, nondefault editions, additional crate types, binary entry points, or feature mapping require explicit facet data.</p>
+<p>The exact TOML table spelling remains an RFC 117 syntax decision, but no Rust compilation plan may be inferred from Cargo metadata. <code>Oven.lock</code> and the receipt must record the selected Rust facet, compiler/toolchain identity, crate dependency closure, feature choices, and all provider-produced inputs that affect the resulting <code>*.loaf</code> asset.</p>
+<p>The existence of <code>build.rs</code> must never execute it. A Loaf may support its intent only through an explicitly selected Oven provider or typed action whose inputs, outputs, capabilities, target/host role, policy decision, and receipt effects are declared and inspectable. Likewise, a procedural macro must be an explicitly resolved compiler-time provider with a recorded host identity and execution policy; an unsupported macro is a diagnostic, not a fallback to Cargo. Cargo compatibility remains the only mode in which Cargo itself is authoritative for these behaviors.</p>
+<p>RFC 119 owns the detailed native-Rust facet grammar, crate-provider graph, direct-<code>rustc</code> planner, build-time provider envelope, Rust test/IDE projections, and explicit Cargo interoperation. This RFC retains the one-manifest, one-lock, one-workspace-authority boundary those facilities must obey.</p>
+<h3 id="typed-dependencies-and-features">Typed dependencies and features<a class="headerlink" href="#typed-dependencies-and-features" title="Permanent link">&para;</a></h3>
+<p>Every dependency requirement has a <strong>unit kind</strong> and an <strong>origin</strong>.</p>
 <table>
 <thead>
 <tr>
-<th>Incan surface</th>
-<th>Rust caller projection</th>
+<th>Unit kind</th>
+<th>Default origin</th>
+<th>Contributes</th>
+<th>Does not become</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>bool</code></td>
-<td><code>bool</code></td>
+<td><code>loaf</code></td>
+<td><code>incan.pub</code></td>
+<td>checked Incan semantic/provider facts and public package features</td>
+<td>a Cargo crate or generated Rust source contract</td>
 </tr>
 <tr>
-<td><code>int</code></td>
-<td>checked <code>i64</code> boundary unless a narrower constrained carrier is explicitly exposed</td>
+<td><code>crate</code></td>
+<td>crates.io</td>
+<td>Rust interop metadata and backend implementation/linkage requirements</td>
+<td>a public Incan feature namespace by accident</td>
 </tr>
 <tr>
-<td><code>float</code></td>
-<td><code>f64</code></td>
-</tr>
-<tr>
-<td><code>str</code></td>
-<td><code>String</code> or borrowed input forms where explicitly generated</td>
-</tr>
-<tr>
-<td><code>Option[T]</code></td>
-<td><code>Option&lt;T&gt;</code></td>
-</tr>
-<tr>
-<td><code>Result[T, E]</code></td>
-<td><code>Result&lt;T, E&gt;</code> for domain result values</td>
-</tr>
-<tr>
-<td><code>List[T]</code></td>
-<td><code>Vec&lt;T&gt;</code></td>
-</tr>
-<tr>
-<td><code>Dict[K, V]</code></td>
-<td>map type with documented ordering/hash requirements</td>
-</tr>
-<tr>
-<td><code>model</code></td>
-<td>Rust caller struct</td>
-</tr>
-<tr>
-<td><code>enum</code></td>
-<td>Rust caller enum</td>
-</tr>
-<tr>
-<td><code>newtype</code></td>
-<td>Rust caller newtype with checked construction</td>
+<td><code>capability</code></td>
+<td>Oven-managed system/foreign catalog</td>
+<td>target-specific library, SDK, toolchain, runtime, or deployment requirement</td>
+<td>an ambient host discovery result</td>
 </tr>
 </tbody>
 </table>
-<p>Borrowed Rust signatures may be generated as an optimization, but the semantic contract must first be expressible with owned values. Borrowed projections must not expose Incan lifetime or ownership details as user-authored Incan concepts.</p>
-<h3 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h3>
-<p>The generated caller API should use two layers of errors:</p>
+<p>An entry may override its default origin through a registered registry, Git, path, or another supported source form. The resolved provider contract determines the legal source forms; a Loaf registry must not be accepted as a Cargo registry merely because it has a URL.</p>
+<p>Project features remain additive public Loaf capabilities as defined by RFC 114. They may enable optional Loaf dependencies and request public features from Loaf dependencies. A project may explicitly request a provider-specific crate feature as part of a crate dependency requirement, but that request is not exposed as a public project feature unless the project explicitly maps it through its public feature definition. Cargo feature names, generated crate names, and backend module paths remain implementation details.</p>
+<p>Workspace inheritance remains explicit. A workspace may own a dependency identity and members may opt into it. A member may refine only the usage properties RFC 114 and the selected dependency kind allow; it may not silently replace the source, registry, package identity, or trust policy selected by the workspace.</p>
+<h3 id="registry-registration-and-trust">Registry registration and trust<a class="headerlink" href="#registry-registration-and-trust" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Oven provides the built-in origins <code>incan.pub</code> for <code>loaf</code> dependencies and crates.io for <code>crate</code> dependencies.</li>
+<li>Additional registries are registered through Oven-controlled user or organization configuration, never by an unreviewed dependency or an implicit network lookup.</li>
+<li>A registry registration must declare a stable identity, unit kind/protocol, endpoint/index, and trust policy. Credentials are referenced from secure user/organization storage rather than copied into project files.</li>
+<li>A Loaf or workspace may allow-list registered registry identities. It may select an allowed alias but may not define credentials, rebind an alias, or weaken a user/organization trust policy.</li>
+<li>The lock records canonical registry identity, protocol, exact resolved package/crate/capability identity, version, immutable digest, source reference, and signature/trust outcome. An alias alone is insufficient for reproducibility or audit.</li>
+<li>Resolution in locked or offline mode must not query an unrecorded registry, substitute an ambient local package, or accept a source with different trust facts.</li>
+</ol>
+<p>RFC 034 remains the protocol and publication authority for <code>incan.pub</code>; this RFC defines how <code>incan.pub</code> participates in the generic Loaf graph. A future Cargo-registry adapter must respect Cargo registry identity and integrity semantics without making Cargo the authority for a Loaf bake.</p>
+<h3 id="targets-carriers-profiles-and-delivery-policy">Targets, carriers, profiles, and delivery policy<a class="headerlink" href="#targets-carriers-profiles-and-delivery-policy" title="Permanent link">&para;</a></h3>
+<p>Target selection has three distinct levels:</p>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Responsibility</th>
+<th>Constraint rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Loaf</td>
+<td>Declares supported platform/interface/carrier combinations and package requirements</td>
+<td>Defines the maximum compatibility surface the package claims</td>
+</tr>
+<tr>
+<td>Workspace</td>
+<td>Declares named delivery policy, allowed targets, selected members, shared provider rules, and defaults</td>
+<td>May narrow a member's support; must not broaden it</td>
+</tr>
+<tr>
+<td>Bake invocation</td>
+<td>Selects the concrete target, carrier, profile, feature closure, and optional delivery policy</td>
+<td>Must satisfy both workspace policy and every selected Loaf</td>
+</tr>
+</tbody>
+</table>
+<p>The resolved plan must distinguish:</p>
 <ul>
-<li>domain errors produced by Incan functions that return <code>Result[T, E]</code></li>
-<li>caller errors produced by the boundary itself</li>
+<li>the <strong>build host</strong> on which Oven executes;</li>
+<li>the <strong>platform target</strong> such as <code>aarch64-apple-ios</code>;</li>
+<li>the <strong>carrier</strong> such as framework, static library, JNI shared library, Python wheel, executable, or Rust-host caller projection;</li>
+<li>the <strong>profile</strong> such as development or release;</li>
+<li>the enabled public features and selected provider requirements; and</li>
+<li>the destination/deployment policy when relevant.</li>
 </ul>
-<p>For a function whose Incan signature returns <code>Result[Quote, PricingError]</code>, the Rust caller may expose a nested result or a generated convenience type, but it must preserve the distinction between <code>PricingError</code> and boundary failures such as conversion failure, missing host capability, incompatible artifact version, or contained panic.</p>
-<h3 id="async-and-runtime-policy">Async and runtime policy<a class="headerlink" href="#async-and-runtime-policy" title="Permanent link">&para;</a></h3>
-<p>Async caller exports must not assume that the caller package owns the process runtime. The Rust host should either provide an async context by calling async functions or explicitly opt into a blocking wrapper that documents runtime behavior.</p>
-<p>Caller metadata should state whether an export is synchronous, async, blocking, or requires host-provided runtime services. This should compose with RFC 092 target and host capability metadata when those contracts mature.</p>
-<h3 id="diagnostics-and-observability">Diagnostics and observability<a class="headerlink" href="#diagnostics-and-observability" title="Permanent link">&para;</a></h3>
-<p>Caller failures should identify the caller export name, the Incan function name, and source-span metadata when available. Logging and telemetry should route through host-provided hooks where configured, rather than unconditionally initializing global logging from the caller package.</p>
-<h3 id="compatibility-and-migration">Compatibility and migration<a class="headerlink" href="#compatibility-and-migration" title="Permanent link">&para;</a></h3>
-<p>This RFC is additive but reframes older generated-crate consumption as transitional. Existing direct generated-crate consumers may continue while that path exists, but it must be documented as a lower-level implementation-artifact path rather than the recommended Rust-hosted integration path.</p>
-<p>Once caller artifacts exist, docs should steer Rust application authors toward caller APIs and reserve backend artifacts for debugging, compiler tests, inspection, or advanced toolchain integration. Migration reporting must classify direct generated-crate use as supported through the caller facet, temporarily retained for migration/debugging, or unsupported with an explicit diagnostic.</p>
+<p>An explicit invocation has the highest selection precedence but cannot override package support or workspace policy. A workspace delivery policy may narrow a project choice but cannot make a package claim an unsupported target. An unqualified local bake may choose a deterministic host-development target and profile, and the receipt must record that choice. Publication or deployment must require an explicit target/carrier or named delivery policy; it must not silently publish a host-default artifact.</p>
+<h3 id="plans-effects-extensions-and-receipts">Plans, effects, extensions, and receipts<a class="headerlink" href="#plans-effects-extensions-and-receipts" title="Permanent link">&para;</a></h3>
+<p>Oven uses the following boundary:</p>
+<div class="language-text highlight"><pre><span></span><code>authored Loaf configuration
+  -&gt; resolution
+  -&gt; inspectable plan
+  -&gt; policy/capability decision
+  -&gt; bake
+  -&gt; artifacts and receipt
+</code></pre></div>
+<p>The resolver may fetch, verify, and stage immutable declared inputs according to the selected mode, but it must not execute package-provided code merely to resolve a dependency, inspect an import, discover a source file, or find a manifest.</p>
+<p>Every execution edge in a bake must belong to one of these categories:</p>
+<ol>
+<li><strong>Oven-managed provider operation:</strong> a known provider kind performs typed work, such as compiling declared Rust sources, verifying C headers, compiling a declared C/C++ shim, or materializing a selected SDK component.</li>
+<li><strong>Declared generator operation:</strong> a generator has typed inputs, outputs, provider identity, target constraints, capability requirements, and generated-output ownership. It may not overwrite authored source through an ordinary bake.</li>
+<li><strong>Explicit workflow action:</strong> an action from RFC 078 is selected by the user or an authorized tool and is evaluated under RFC 076 policy before execution.</li>
+</ol>
+<p>An extension must have a versioned, typed schema and a known provider/action identity. Unknown extension kinds are invalid; they are not a generic <code>[tool.*]</code> escape hatch. A provider or action may advertise a required capability, network requirement, external executable, or mutation class, but it must not gain authority merely by being selected as a dependency.</p>
+<p>Before executing a nontrivial plan, Oven must be able to inspect the selected members, dependency/provider identities, target/carrier/profile, toolchains, declared inputs and outputs, execution categories, capabilities, mutation classes, and expected receipt facts. Policy may require approval for a plan according to RFC 076. After execution, the receipt must identify the actual provider/toolchain selections, input identities, output artifacts, declared and observed effects, and deviations or denials.</p>
+<p>RFC 104 owns capability-enforcement and receipt semantics. RFC 112 owns crash-safe publication and file coordination. This RFC requires their identities to be included in the Loaf/Oven plan rather than recreated through hidden backend behavior.</p>
+<h3 id="environments-and-actions">Environments and actions<a class="headerlink" href="#environments-and-actions" title="Permanent link">&para;</a></h3>
+<p>The following authored concepts move into <code>Loaf.toml</code> under Oven ownership. Their table roots are intentionally typed and reserved; arbitrary <code>[tool.*]</code> namespaces do not carry forward:</p>
+<table>
+<thead>
+<tr>
+<th>Concept</th>
+<th>Semantic owner</th>
+<th>Oven responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>project and environment toolchain constraints</td>
+<td>RFC 073</td>
+<td>resolve and enforce compatible toolchains</td>
+</tr>
+<tr>
+<td>named environments and matrices</td>
+<td>RFC 073</td>
+<td>materialize the resolved environment and expand matrix cells deterministically</td>
+</tr>
+<tr>
+<td>typed workflow actions</td>
+<td>RFC 078</td>
+<td>resolve scope, show plan, policy-gate, and execute explicit actions</td>
+</tr>
+<tr>
+<td>mutation policy</td>
+<td>RFC 076</td>
+<td>evaluate receiver authority over planned changes/effects</td>
+</tr>
+</tbody>
+</table>
+<p>RFC 015 is implemented, so RFC 117 supersedes its <code>incan.toml</code> discovery and <code>[tool.incan.envs]</code> configuration placement. RFCs 073, 076, and 078 are still Draft and must be amended to name the new Loaf/Oven tables and terminology rather than preserving legacy configuration compatibility.</p>
+<p>The initial table roots are <code>[oven.envs]</code>, <code>[oven.actions]</code>, <code>[oven.policy]</code>, <code>[oven.capabilities]</code>, and <code>[oven.templates]</code>. Their dedicated RFCs own the detailed schema and semantics. They must remain explicit, scoped, inspectable, and free of implicit lifecycle execution. RFC 118 owns whether users invoke those semantics through <code>incan</code>, <code>oven</code>, aliases, or another command arrangement.</p>
+<h3 id="interop-package-envelope">Interop package envelope<a class="headerlink" href="#interop-package-envelope" title="Permanent link">&para;</a></h3>
+<p>RFC 116's current <code>[oven.interop]</code> shape is package-owned requirement data, not a record of a host toolchain already selected. Under this RFC it remains Oven-owned in the Loaf-level <code>[oven.interop]</code> namespace: C declarations use <code>[oven.interop.c]</code>. The file name changes from <code>incan.toml</code> to <code>Loaf.toml</code>; the ownership boundary does not.</p>
+<p>The interop envelope must be binding-kind neutral. It represents declared headers, shims, foreign artifacts, toolchain/SDK capabilities, target variants, carrier requirements, lock identities, plan inputs, generated verification records, artifact staging, and receipts. It does not make C pointer types, C ownership, JNI handles, Python reference counts, or another runtime's safety rules universal. Each binding-kind RFC continues to define its own source vocabulary and checking rules.</p>
+<h3 id="locks-and-derived-state">Locks and derived state<a class="headerlink" href="#locks-and-derived-state" title="Permanent link">&para;</a></h3>
+<p><code>Oven.lock</code> is the canonical generated resolution state for a project or workspace. A workspace has one root lock that represents every member's selected dependency/provider graph and target-relevant resolution facts. <code>incan.lock</code> is not read after this RFC.</p>
+<p>The lock must include every semantic or physical input whose change can alter checking, linking, target compatibility, generated output, or the baked artifact closure. It must not contain credentials, mutable cache paths, arbitrary environment values, or unreviewed host discovery output.</p>
+<p><code>*.loaf</code> is the immutable, target-bound distribution/build asset derived from the lock and the selected bake plan. It must identify its project/facet, target, carrier, profile, resolved graph identity, payload digest, and receipt identity; it is not an editable project manifest or a replacement lockfile. The artifact store, provider payload store, staged deployment files, generated Rust, target intermediates, and receipts are separate from the lock. They are inspectable and may be content-addressed, but they are not user-authored package configuration or semantic authority.</p>
+<h2 id="design-details">Design details<a class="headerlink" href="#design-details" title="Permanent link">&para;</a></h2>
+<h3 id="manifest-ownership-map">Manifest ownership map<a class="headerlink" href="#manifest-ownership-map" title="Permanent link">&para;</a></h3>
+<p><code>Loaf.toml</code> is the authored envelope. Existing RFCs continue to own the meaning of their respective content:</p>
+<div class="language-text highlight"><pre><span></span><code>Loaf.toml
+├── [project]                 RFC 117
+├── [workspace]               RFC 117; prospectively supersedes RFC 077&#39;s flat-workspace restriction
+├── dependencies/features     RFC 117 + RFC 114
+├── registry selection        RFC 117 + RFC 034
+├── [oven.envs]               RFC 073, rehomed by RFC 117
+├── [oven.actions]            RFC 078, rehomed by RFC 117
+├── [oven.policy]             RFC 076, rehomed by RFC 117
+├── [oven.capabilities]       RFC 075, governed by RFC 076
+├── [oven.templates]          RFC 074, governed by RFC 076
+├── [oven.interop]            RFC 116 now; future binding RFCs later
+├── Oven.lock                 resolved graph, RFCs 020, 104, 112, and 114
+└── *.loaf + receipt          immutable target-bound artifact, RFC 117; wire format deferred
+</code></pre></div>
+<p>This map does not make RFC 117 the owner of every detailed sub-schema. It establishes one manifest root and prevents every feature family from inventing its own root file, discovery rule, or source-language split.</p>
+<h3 id="source-language-and-authored-rust">Source language and authored Rust<a class="headerlink" href="#source-language-and-authored-rust" title="Permanent link">&para;</a></h3>
+<p>The Loaf package model is language-neutral; it does not relax Incan's authoring policy. Incan products and dogfooding projects should remain Incan-authored and use <code>rust::</code> interop for existing Rust capabilities. New authored Rust still requires a demonstrated Incan limitation and a tracked removal path.</p>
+<p>That policy is distinct from the manifest contract. Oven must be capable of baking a Loaf whose implementation is Rust, Incan, or mixed because the build system cannot make a package's identity depend on the language mix. Project governance can constrain which sources its maintainers choose to author.</p>
+<p>The Rust facet is the language-neutral planner contract for Rust-authored or mixed Loaves. It does not license authored Rust in Incan products without the demonstrated limitation and tracked removal path required above.</p>
+<h3 id="cargo-compatibility-boundary">Cargo compatibility boundary<a class="headerlink" href="#cargo-compatibility-boundary" title="Permanent link">&para;</a></h3>
+<p>Cargo compatibility has two valid states:</p>
+<ol>
+<li><strong>Cargo project:</strong> a directory has <code>Cargo.toml</code> and no <code>Loaf.toml</code>. An explicitly selected Oven Cargo-compatibility operation delegates to Cargo. Cargo retains authority over its manifest and side effects.</li>
+<li><strong>Loaf project:</strong> a directory has <code>Loaf.toml</code>, with or without <code>Cargo.toml</code>. Oven uses only the Loaf graph. Cargo is not an implicit source of build policy.</li>
+</ol>
+<p>There is no mixed automatic state. In particular, Oven must not merge dependency tables, inherit Cargo workspace membership, execute a discovered <code>build.rs</code>, or allow a Cargo feature to silently change a Loaf's public feature API.</p>
+<h3 id="inspectability-and-diagnostics">Inspectability and diagnostics<a class="headerlink" href="#inspectability-and-diagnostics" title="Permanent link">&para;</a></h3>
+<p>Oven must make the following facts inspectable without reading generated Rust, private compiler IR, a cache directory, or an implementation-specific backend manifest:</p>
+<ul>
+<li>discovered manifest root, project/workspace shape, members, and selected scope;</li>
+<li>source roots and ignored adjacent <code>Cargo.toml</code> files;</li>
+<li>each dependency's unit kind, configured/default origin, resolved canonical source, integrity/trust facts, and public feature closure;</li>
+<li>registry registrations and allow-list/policy decision, with credentials redacted;</li>
+<li>selected target, build host, carrier, profile, delivery policy, toolchain/SDK/provider identities, and compatibility constraints;</li>
+<li>planned execution categories, inputs, outputs, capabilities, mutation classes, policy outcome, and expected receipts;</li>
+<li>actual baked artifacts, receipt identities, cache status, and declared-versus-observed effects.</li>
+</ul>
+<p>For each <code>*.loaf</code> asset, inspection must report the project/facet, target, carrier, profile, resolved graph identity, payload digest, signature/trust facts where applicable, and receipt identity without requiring an author to inspect a cache path or container implementation.</p>
+<p>Diagnostics must distinguish configuration errors, unsupported target/carrier combinations, unmet package requirements, unavailable registered registries, trust failures, stale or incompatible locks, missing provider/toolchain capabilities, explicit Cargo compatibility, and accidental Cargo coexistence. They must explain which declaration or policy constraint led to the outcome.</p>
+<h2 id="compatibility-and-migration">Compatibility and migration<a class="headerlink" href="#compatibility-and-migration" title="Permanent link">&para;</a></h2>
+<p>This RFC is intentionally breaking and should land before Incan 1.0.</p>
+<ul>
+<li><code>incan.toml</code> is replaced wholesale with <code>Loaf.toml</code>.</li>
+<li><code>incan.lock</code> is replaced with <code>Oven.lock</code>.</li>
+<li>Existing implemented project/workspace/environment code must be updated to discover and write the new schema; it must not retain a legacy <code>incan.toml</code> parser.</li>
+<li>Existing Draft RFCs that refer to <code>[tool.incan.*]</code> must be amended before their implementation is scheduled.</li>
+<li>Existing project authors must explicitly adopt the Loaf contract; a raw rename is valid only when the resulting tables satisfy the new schema.</li>
+<li>Cargo-only repositories require no adoption to be runnable in explicit Cargo-compatibility mode.</li>
+</ul>
+<p>The tool should emit a targeted diagnostic when it finds <code>incan.toml</code> without <code>Loaf.toml</code>, but it must not silently interpret the old file. This keeps the authority transition explicit and avoids supporting every interaction between old Incan configuration, Cargo configuration, and the new Oven model.</p>
 <h2 id="alternatives-considered">Alternatives considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Tell Rust users to depend on the generated crate directly</strong> — Rejected because it makes generated Rust internals the compatibility path. Rust hosts need a stable caller ABI/package contract even if the current backend happens to emit Rust.</li>
-<li><strong>Use a dynamic plugin or C ABI boundary</strong> — Rejected for this RFC because Incan already emits Rust, and Rust-hosted applications should get normal Cargo type checking, optimization, and dependency resolution.</li>
-<li><strong>Use only a <code>build.rs</code> helper in the Rust application</strong> — A development helper may hydrate or validate a selected caller artifact, but it is insufficient as the whole model because published artifacts and registry workflows must not require every consumer to run the Incan compiler.</li>
-<li><strong>Make every public Incan export Rust-callable automatically</strong> — Rejected as the default because Incan's <code>pub</code> system should be enriched with host-facing profiles instead of flattening every public Incan symbol into the same Rust-hosted contract.</li>
-<li><strong>Generate only untyped stringly dynamic calls</strong> — Rejected because it gives up the main benefit of compiling Incan into the Rust ecosystem: typed, auditable integration.</li>
-</ul>
+<h3 id="add-oventoml-beside-loaftoml">Add <code>Oven.toml</code> beside <code>Loaf.toml</code><a class="headerlink" href="#add-oventoml-beside-loaftoml" title="Permanent link">&para;</a></h3>
+<p>Rejected for now. A separate root file makes the package-versus-workspace vocabulary literal, but it creates two canonical documents, discovery precedence, and synchronization questions. A single <code>Loaf.toml</code> with explicit <code>[project]</code> and <code>[workspace]</code> scopes supports single projects, rooted workspaces, and virtual workspaces without losing capability. A future RFC may introduce a separate file only if independently versioned workspace policy demonstrates a real need.</p>
+<h3 id="keep-incantoml-and-add-loaf-concepts-inside-it">Keep <code>incan.toml</code> and add Loaf concepts inside it<a class="headerlink" href="#keep-incantoml-and-add-loaf-concepts-inside-it" title="Permanent link">&para;</a></h3>
+<p>Rejected. The filename embeds a source-language assumption that the package model is deliberately outgrowing. Keeping it would make Rust-authored and mixed projects second-class by name even when the model is technically neutral.</p>
+<h3 id="keep-separate-incan-and-rust-dependency-tables">Keep separate Incan and Rust dependency tables<a class="headerlink" href="#keep-separate-incan-and-rust-dependency-tables" title="Permanent link">&para;</a></h3>
+<p>Rejected. The package graph must be one user-facing graph. Resolver, feature, semantic-provider, and linkage differences remain typed provider facts, but should not force authors to split their logical dependencies by implementation language.</p>
+<h3 id="treat-all-registries-as-equivalent-urls">Treat all registries as equivalent URLs<a class="headerlink" href="#treat-all-registries-as-equivalent-urls" title="Permanent link">&para;</a></h3>
+<p>Rejected. <code>incan.pub</code> packages, Cargo ecosystem crates, and foreign/system catalogs have different package formats, integrity, semantic metadata, and execution/linkage contracts. Registry identity requires a kind/protocol and trust policy, not only an endpoint string.</p>
+<h3 id="infer-workspace-members-or-build-behavior-from-the-directory-tree">Infer workspace members or build behavior from the directory tree<a class="headerlink" href="#infer-workspace-members-or-build-behavior-from-the-directory-tree" title="Permanent link">&para;</a></h3>
+<p>Rejected. A <code>loaves/</code> directory is a useful convention, not authority. Implicit membership and implicit Cargo conventions make plans surprising and make receipt identity incomplete.</p>
+<h3 id="run-dependency-hooks-like-cargo-buildrs-or-npm-lifecycle-scripts">Run dependency hooks like Cargo <code>build.rs</code> or npm lifecycle scripts<a class="headerlink" href="#run-dependency-hooks-like-cargo-buildrs-or-npm-lifecycle-scripts" title="Permanent link">&para;</a></h3>
+<p>Rejected. Oven must know what it intends to execute before it executes it. Typed provider operations, declared generators, and explicit policy-gated actions preserve practical integration without hidden lifecycle behavior.</p>
+<h3 id="let-tool-be-an-unbounded-extension-namespace">Let <code>[tool.*]</code> be an unbounded extension namespace<a class="headerlink" href="#let-tool-be-an-unbounded-extension-namespace" title="Permanent link">&para;</a></h3>
+<p>Rejected. Unconstrained tool tables make the canonical manifest a dumping ground and prevent Oven from planning effects or validating ownership. Extensions need versioned schemas and explicit provider/action identities.</p>
 <h2 id="drawbacks">Drawbacks<a class="headerlink" href="#drawbacks" title="Permanent link">&para;</a></h2>
 <ul>
-<li>The proposal introduces another artifact boundary and support crate.</li>
-<li>Caller projection rules can become complex around generics, constrained newtypes, borrowed data, async values, and Rust-backed types.</li>
-<li>Opt-in caller exports add ceremony for small libraries.</li>
-<li>Rust host ergonomics may pressure Incan APIs toward Rust-shaped design unless the boundary keeps projections separate from source semantics.</li>
-<li>Version and compatibility metadata add maintenance burden to the build pipeline.</li>
+<li>This is a breaking pre-1.0 configuration change touching project creation, discovery, documentation, workspaces, locking, environments, package resolution, interop, and tooling.</li>
+<li>Typed dependencies and registered registries are more explicit than one string version requirement; good defaults and concise syntax are necessary for everyday use.</li>
+<li>A strict Cargo boundary means Rust projects that adopt <code>Loaf.toml</code> cannot rely on arbitrary Cargo manifest behavior without an explicit supported Oven provider/action model.</li>
+<li>Plans, policies, and receipts impose vocabulary and implementation work beyond a simple compiler wrapper.</li>
+<li>One manifest filename means a virtual workspace has a <code>Loaf.toml</code> without a <code>[project]</code> table. The explicit table scopes must make that form obvious.</li>
 </ul>
-<h2 id="implementation-architecture">Implementation architecture<a class="headerlink" href="#implementation-architecture" title="Permanent link">&para;</a></h2>
-<p>The recommended architecture is to extend library builds with a caller adapter generation pass that consumes checked public API metadata, semantic facts, ABI metadata, and caller export declarations. Oven plans that adapter, its implementation dependencies, target/profile requirements, and native linkage as one caller build-unit graph. The adapter calls backend-owned implementation artifacts through compiler-owned internal paths or ABI entrypoints while exposing only the caller namespace to host Rust code.</p>
-<p>The support crate should remain narrow and versioned. Caller artifacts should declare the caller ABI version they were emitted against and validate it at initialization. Metadata, source maps, and Oven receipts should be inspectable by docs, LSP, registry tooling, and hosts so Rust-hosted integration can be documented and discovered without building the package.</p>
-<p>Local development may later add a Cargo helper that hydrates or validates a selected Oven caller artifact from a Rust workspace, but the helper must not define a second caller boundary or require Cargo to compile the Incan library.</p>
-<p>Borrowed non-<code>Copy</code> callable parameters illustrate why implementation artifacts are not enough as the public contract. The caller adapter must generate a compatible caller projection or reject the unsupported export before producing a caller artifact. It must not publish a boundary whose generated Rust shape is incompatible with its declared caller signature.</p>
 <h2 id="layers-affected">Layers affected<a class="headerlink" href="#layers-affected" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Library artifact model</strong>: library builds must be able to include caller metadata, ABI/package metadata, caller adapters, and semantic manifests alongside backend implementation artifacts.</li>
-<li><strong>Typechecker / API metadata</strong>: caller export validation must prove that selected entrypoints and boundary types are representable for Rust-hosted calls.</li>
-<li><strong>IR Lowering / Emission</strong>: backend output must preserve a stable caller namespace or ABI entrypoint and avoid making internal generated modules part of the Rust-hosted contract.</li>
-<li><strong>Stdlib / Runtime (<code>incan_stdlib</code>)</strong>: host-facing runtime hooks, errors, logging, telemetry, async, and capability surfaces may need caller-compatible contracts.</li>
-<li><strong>Oven / Tooling</strong>: Oven must plan, materialize, inspect, and verify caller build units and <code>*.loaf</code> assets under RFC 117's project/asset contract; tooling must report diagnostics for unsupported caller exports and incompatible caller artifacts.</li>
-<li><strong>LSP / Docs tooling</strong>: tooling should surface caller-visible exports, Rust-facing signatures, compatibility metadata, and unsupported-boundary diagnostics.</li>
-<li><strong>Registry / Package metadata</strong>: published packages should advertise whether they provide a Rust-hosted caller surface and which caller ABI version they require.</li>
+<li><strong>Manifest discovery and validation</strong> — must recognize only <code>Loaf.toml</code>, validate rooted/virtual workspace shapes, reject unknown or conflicting scope, and diagnose legacy or coexisting manifests precisely.</li>
+<li><strong>Workspace resolution</strong> — must preserve explicit membership, shared lock ownership, scoped command selection, and typed dependency inheritance while replacing <code>incan.toml</code> paths and tables.</li>
+<li><strong>Provider and dependency resolution</strong> — must normalize typed dependencies, apply default origins, resolve registered registries, preserve provider-specific semantics, verify trust/integrity, and construct one session-owned plan.</li>
+<li><strong>Source and backend planning</strong> — must discover conventional supported sources, require explicit nonstandard declarations, define the bounded Rust facet needed to plan Rust compilation, and prevent Cargo conventions from participating in Loaf planning.</li>
+<li><strong>Target and interop planning</strong> — must resolve host/target/carrier/profile/delivery combinations, select providers/toolchains, and reuse RFC 116's checked C package facts without C-specific assumptions in the envelope.</li>
+<li><strong>Environment and action tooling</strong> — must rehome RFC 073 and RFC 078 configuration to Loaf/Oven while retaining matrix, scope, dry-run, policy, and receipt contracts.</li>
+<li><strong>Locking, stores, and publication</strong> — must rename the canonical lock to <code>Oven.lock</code>, preserve deterministic whole-workspace resolution, reserve immutable target-bound <code>*.loaf</code> identities, and keep locks, receipts, caches, and publication artifacts distinct.</li>
+<li><strong>Cargo compatibility adapter</strong> — must run Cargo only when explicitly selected, report its mode and side-effect boundary, and never act as a fallback inside a Loaf build.</li>
+<li><strong>CLI and inspection</strong> — must expose manifest shape, plan, target selection, registry/trust facts, effects, <code>*.loaf</code> assets, and receipts; RFC 118 owns final binary/subcommand spelling and alias behavior.</li>
+<li><strong>Documentation, templates, LSP, and IDEs</strong> — must create, discover, edit, display, and diagnose <code>Loaf.toml</code> consistently without making generated Rust or hidden backend state the public model.</li>
+</ul>
+<h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<p>RFC 117 is ready to move beyond Draft when its normative rules and updated related RFCs establish all of the following:</p>
+<ul>
+<li>A standalone project, rooted workspace, and virtual workspace have unambiguous <code>Loaf.toml</code> examples and discovery rules.</li>
+<li>The dependency grammar distinguishes unit kind from origin and explains defaults, source overrides, features, integrity, and trust.</li>
+<li>The <code>incan.pub</code> and crates.io defaults, explicit registry registration, project allow-list, credential boundary, and lock identity are defined precisely enough to implement.</li>
+<li>A Loaf containing Incan, Rust, and mixed conventional sources has defined planning behavior, including bounded Rust-facet inputs and no implicit Cargo participation.</li>
+<li>Target, carrier, profile, workspace delivery policy, and invocation precedence have explicit validation and receipt requirements.</li>
+<li>Provider operations, generators, actions, policy, and receipts have a complete no-hidden-effects boundary.</li>
+<li>RFCs 015, 073, 076, 077, 078, 114, and 116 identify exactly which manifest/discovery clauses RFC 117 supersedes or amends.</li>
+<li>The lock rename and legacy-manifest rejection have a complete pre-1.0 compatibility decision.</li>
+<li>RFC 118 has a clear command-ownership and alias boundary that does not reopen the manifest model.</li>
+</ul>
+<h2 id="implementation-plan">Implementation plan<a class="headerlink" href="#implementation-plan" title="Permanent link">&para;</a></h2>
+<h3 id="phase-1-manifest-and-workspace-authority">Phase 1: Manifest and workspace authority<a class="headerlink" href="#phase-1-manifest-and-workspace-authority" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Introduce <code>Loaf.toml</code> discovery and validation; remove <code>incan.toml</code> discovery from project-aware operations.</li>
+<li>Implement rooted and virtual workspace shapes, explicit member selection, and precise coexisting-Cargo diagnostics.</li>
+<li>Update project creation, documentation, LSP/IDE manifest discovery, and fixtures.</li>
+</ul>
+<h3 id="phase-2-typed-graph-registries-and-lock">Phase 2: Typed graph, registries, and lock<a class="headerlink" href="#phase-2-typed-graph-registries-and-lock" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Normalize Loaf, crate, and capability dependencies into one resolver-owned graph.</li>
+<li>Implement default origins, registered registry identities, workspace allow-lists, integrity/trust facts, and the <code>Oven.lock</code> format.</li>
+<li>Amend RFC 034 integration and retain RFC 114's public-feature/provider boundaries.</li>
+</ul>
+<h3 id="phase-3-target-plan-and-controlled-effects">Phase 3: Target plan and controlled effects<a class="headerlink" href="#phase-3-target-plan-and-controlled-effects" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Implement target/carrier/profile/delivery validation and receipt identity.</li>
+<li>Make provider operations and declared generators plan-visible; connect policy and receipt facts from RFCs 076 and 104.</li>
+<li>Rehome RFC 116 package requirements into the generic interop envelope.</li>
+</ul>
+<h3 id="phase-4-environment-and-action-rehoming">Phase 4: Environment and action rehoming<a class="headerlink" href="#phase-4-environment-and-action-rehoming" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Amend and implement the <code>Loaf.toml</code> configuration location for RFC 073 environments/matrices and RFC 078 typed actions.</li>
+<li>Make Oven materialization, scope selection, dry-run, and policy gating consume the same project/workspace plan.</li>
+</ul>
+<h3 id="phase-5-explicit-cargo-compatibility-and-documentation">Phase 5: Explicit Cargo compatibility and documentation<a class="headerlink" href="#phase-5-explicit-cargo-compatibility-and-documentation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Implement the distinct Cargo compatibility adapter and receipt/reporting boundary.</li>
+<li>Add compatibility fixtures for Cargo-only projects, Loaf-only Rust projects, mixed-source Loaves, workspaces, private registries, and C ABI target carriers.</li>
+<li>Document the command-surface handoff to RFC 118 without defining aliases or final command spelling here.</li>
 </ul>
 <h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
-<ul>
-<li>What is the exact source syntax for marking caller-visible exports?</li>
-<li>Should a Cargo-compatible caller package live beside the target caller artifact or be materialized as a separate compatibility projection?</li>
-<li>What is the first stable shape of the Rust support crate API?</li>
-<li>Should synchronous wrappers around async Incan exports be generated by default, opt-in only, or disallowed?</li>
-<li>How should nested domain results and boundary errors be represented ergonomically in Rust signatures?</li>
-<li>Which derives should caller-projected models and enums receive by default?</li>
-<li>How should generic Incan functions and generic model types be projected into Rust caller APIs?</li>
-<li>How should host capability metadata from RFC 092 connect to caller initialization before RFC 092 is fully implemented?</li>
-<li>What local Rust-host hydration or validation workflow is sufficient without making Cargo compile the Incan library?</li>
-</ul>
-<!-- Rename this section to "Design Decisions" once all questions have been resolved.
-     An RFC cannot move from Draft to Planned until no unresolved questions remain. -->
+<ol>
+<li>What is the final compact TOML syntax for typed dependency entries and provider-specific feature requests, while preserving the unit-kind/origin distinction?</li>
+<li>What exact table names should environments, matrices, actions, policy, and interop use under <code>Loaf.toml</code> after RFCs 073, 076, 078, and 116 are amended?</li>
+<li>Which nonstandard source-root and generated-input declarations are necessary for the first 0.6 implementation, beyond convention-first <code>src/</code> discovery?</li>
+<li>How should an organization distribute and administer trusted registry registrations without letting a checked-out project overwrite user or organization trust policy?</li>
+<li>Which target/carrier combinations and named delivery-policy grammar constitute the first 0.6 proof set?</li>
+<li>What is the smallest typed generator/provider extension API that supports real code generation and native shims without becoming a generic script hook?</li>
+<li>Which <code>*.loaf</code> container or wire format, registry transport, and multi-asset publication protocol best carries the already-reserved immutable target-bound identity without changing its authored/lock/receipt contract?</li>
+<li>What precise inspection meaning, if any, should cold, warm, and hot Loaves have after the Oven's cache and lifecycle model is settled?</li>
+</ol>
+<!-- Rename this section to "Design Decisions" once all questions have been resolved. -->
 
 
 

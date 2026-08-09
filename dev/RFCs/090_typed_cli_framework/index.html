@@ -7101,11 +7101,13 @@
 <li>RFC 073 (environment matrices and toolchain constraints)</li>
 <li>RFC 083 (symbol and method aliases)</li>
 <li>RFC 089 (<code>std.environ</code> runtime environment access)</li>
+<li>RFC 117 (<code>Loaf.toml</code> and Oven's language-neutral project model)</li>
+<li>RFC 118 (Incan and Oven command-line surfaces)</li>
 </ul>
 </li>
 <li><strong>Issue:</strong> https://github.com/encero-systems/incan/issues/87</li>
 <li><strong>RFC PR:</strong> —</li>
-<li><strong>Written against:</strong> v0.3</li>
+<li><strong>Written against:</strong> ~~v0.3~~ v0.5</li>
 <li><strong>Shipped in:</strong> —</li>
 </ul>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
@@ -7141,7 +7143,7 @@
 <ul>
 <li>Requiring the <code>incan</code> compiler CLI to adopt this framework.</li>
 <li>Replacing <code>std.process.Command</code>, <code>Pipeline</code>, or shell DSL execution from RFC 063.</li>
-<li>Replacing project lifecycle env execution, matrix execution, or <code>incan env run</code> behavior from RFC 015 and RFC 073.</li>
+<li>Replacing Oven project lifecycle env execution, matrix execution, or <code>oven env run</code> behavior from RFCs 073 and 117.</li>
 <li>Replacing direct runtime environment access from RFC 089.</li>
 <li>Defining terminal UI widgets, progress bars, prompts, interactive menus, curses-style interfaces, or rich text styling.</li>
 <li>Defining shell completion script generation in full detail, though the spec should preserve enough structure for a later RFC or extension to add it.</li>
@@ -7448,7 +7450,7 @@
 <p><code>std.cli</code> may read environment variables only as declared fallbacks for arguments. Direct environment access remains owned by <code>std.environ</code>.</p>
 <p>When a CLI argument has <code>env</code>, parsing should use the same missing, malformed, parse, validation, and secrecy principles as <code>std.environ</code>. That gives users one environment story instead of two subtly different ones.</p>
 <h3 id="boundary-with-project-lifecycle-tooling">Boundary with project lifecycle tooling<a class="headerlink" href="#boundary-with-project-lifecycle-tooling" title="Permanent link">&para;</a></h3>
-<p>This RFC is for applications written in Incan. It does not change <code>incan env run</code>, matrix expansion, project scripts, or compiler lifecycle commands. Those remain owned by RFC 015, RFC 019, and RFC 073.</p>
+<p>This RFC is for applications written in Incan. It does not change <code>oven env run</code>, matrix expansion, project scripts, or Oven lifecycle commands. Those remain owned by RFCs 019, 073, 117, and 118.</p>
 <p>The long-term compiler CLI may eventually dogfood <code>std.cli</code>, but this RFC deliberately does not make compiler CLI migration part of the contract. A forced migration would make the RFC larger and tie framework design to current compiler implementation details.</p>
 <h3 id="compatibility-and-migration">Compatibility and migration<a class="headerlink" href="#compatibility-and-migration" title="Permanent link">&para;</a></h3>
 <p>This RFC is additive. Existing Incan programs, stdlib modules, project manifests, and compiler CLI behavior continue to work.</p>

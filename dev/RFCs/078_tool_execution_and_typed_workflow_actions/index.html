@@ -7017,15 +7017,17 @@
 <li>RFC 077 (workspace and multi-package projects)</li>
 <li>RFC 079 (<code>incan.pub</code> artifact graph)</li>
 <li>RFC 080 (AI assets and agent metadata)</li>
+<li>RFC 117 (<code>Loaf.toml</code> and Oven's language-neutral project model)</li>
+<li>RFC 118 (Incan and Oven command-line surfaces)</li>
 </ul>
 </li>
 <li><strong>Issue:</strong> https://github.com/encero-systems/incan/issues/406</li>
 <li><strong>RFC PR:</strong> —</li>
-<li><strong>Written against:</strong> v0.3</li>
+<li><strong>Written against:</strong> ~~v0.3~~ v0.5</li>
 <li><strong>Shipped in:</strong> —</li>
 </ul>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
-<p>This RFC defines a typed workflow-action and tool-execution model for Incan projects. It gives Incan the ergonomic center of gravity that npm scripts and uv tool execution provide, while avoiding arbitrary install-time mutation as the default: packages, starters, capabilities, and AI assets may advertise actions, but lifecycle tooling exposes them as typed, inspectable, policy-gated commands.</p>
+<p>This RFC defines a typed workflow-action and tool-execution model for Loaf projects. It gives Oven the inspectable lifecycle center of gravity that npm scripts and uv tool execution provide, while avoiding arbitrary install-time mutation as the default: packages, starters, capabilities, and AI assets may advertise actions, but Oven exposes them as typed, inspectable, policy-gated commands.</p>
 <h2 id="core-model">Core model<a class="headerlink" href="#core-model" title="Permanent link">&para;</a></h2>
 <p>Read this RFC as seven foundations:</p>
 <ol>
@@ -7064,14 +7066,14 @@
 <h2 id="guide-level-explanation">Guide-level explanation<a class="headerlink" href="#guide-level-explanation" title="Permanent link">&para;</a></h2>
 <h3 id="declaring-actions">Declaring actions<a class="headerlink" href="#declaring-actions" title="Permanent link">&para;</a></h3>
 <p>A project or capability may declare typed actions:</p>
-<div class="language-toml highlight"><pre><span></span><code><span class="k">[[tool.incan.actions]]</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[[oven.actions]]</span>
 <span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;test&quot;</span>
 <span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;test&quot;</span>
 <span class="n">command</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;incan&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;test&quot;</span><span class="p">]</span>
 <span class="n">scope</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;member&quot;</span>
 <span class="n">mutates</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
 
-<span class="k">[[tool.incan.actions]]</span>
+<span class="k">[[oven.actions]]</span>
 <span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;generate-client&quot;</span>
 <span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;generate&quot;</span>
 <span class="n">tool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;pub:openapi-client&quot;</span>
@@ -7083,15 +7085,15 @@
 <p>The exact encoding is not normative in this Draft. The key requirement is that actions are inspectable before they run.</p>
 <h3 id="running-project-actions">Running project actions<a class="headerlink" href="#running-project-actions" title="Permanent link">&para;</a></h3>
 <p>A user can run a project action:</p>
-<div class="language-text highlight"><pre><span></span><code>incan action run test
-incan action run generate-client --dry-run
+<div class="language-text highlight"><pre><span></span><code>oven action run test
+oven action run generate-client --dry-run
 </code></pre></div>
 <p>The dry run shows the tool source, inputs, outputs, workspace scope, env, mutation risk categories, and policy outcome.</p>
 <p>For capability-aware actions, the dry run should also show required capabilities, optional capabilities, expected receipt kinds, redaction-sensitive fields, replay expectations, and whether any capability requirement comes from the action itself, a package descriptor, a capability pack, a tool source, or policy expansion.</p>
 <h3 id="running-one-off-tools">Running one-off tools<a class="headerlink" href="#running-one-off-tools" title="Permanent link">&para;</a></h3>
 <p>Incan may support isolated tool execution:</p>
-<div class="language-text highlight"><pre><span></span><code>incan tool run formatter@1.2.0 -- src/
-incan tool run pub:docs-preview --port 8000
+<div class="language-text highlight"><pre><span></span><code>oven tool run formatter@1.2.0 -- src/
+oven tool run pub:docs-preview --port 8000
 </code></pre></div>
 <p>An isolated tool should not become a project dependency merely because it was executed once. If it mutates the project, the mutation must still be visible and policy-gated.</p>
 <h2 id="reference-level-explanation">Reference-level explanation<a class="headerlink" href="#reference-level-explanation" title="Permanent link">&para;</a></h2>
@@ -7204,12 +7206,12 @@ incan tool run pub:docs-preview --port 8000
 <li>Policy-gated action execution may feel heavier than simple scripts.</li>
 </ul>
 <h2 id="implementation-architecture">Implementation architecture<a class="headerlink" href="#implementation-architecture" title="Permanent link">&para;</a></h2>
-<p>The recommended implementation shape is to build an action registry from built-ins, project manifests, workspace manifests, package metadata, starter/capability descriptors, and AI assets. <code>incan action list</code> and IDE tooling consume this registry. <code>incan action run</code> resolves source, scope, env, policy, and execution mode before invoking anything.</p>
+<p>The recommended implementation shape is to build an action registry from built-ins, <code>Loaf.toml</code> project and workspace data, package metadata, starter/capability descriptors, and AI assets. <code>oven action list</code> and IDE tooling consume this registry. <code>oven action run</code> resolves source, inherited workspace scope, env, policy, target context, and execution mode before invoking anything. RFC 118 may expose an Incan convenience that delegates downward to this operation, but it must not resolve or execute actions independently.</p>
 <h2 id="layers-affected">Layers affected<a class="headerlink" href="#layers-affected" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Manifest schema / configuration validation:</strong> projects need typed action metadata, tool source references, execution modes, inputs, outputs, and mutation categories.</li>
 <li><strong>CLI / tooling:</strong> commands need action listing, dry-run planning, isolated tool execution, source resolution, capability preview, receipt expectation display, and policy gating.</li>
-<li><strong>Workspace tooling:</strong> actions must support member scope and workspace-level execution.</li>
+<li><strong>Workspace tooling:</strong> actions must support hierarchical sub-Loaf selection within one inherited root-workspace authority and must show the selected closure in plans and receipts.</li>
 <li><strong>LSP / IDE tooling:</strong> editor integrations should surface actions, run/debug affordances, policy outcomes, and mutation previews.</li>
 <li><strong>Package and catalog integration:</strong> packages and catalogs may advertise tool binaries and action descriptors.</li>
 <li><strong>Runtime / reporting:</strong> actions that execute through capability-aware runtimes should produce RFC 104-compatible report identities so declared authority and actual receipts can be compared.</li>
@@ -7219,7 +7221,7 @@ incan tool run pub:docs-preview --port 8000
 <h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Which action kinds should be standardized in v1?</li>
-<li>Should <code>incan run</code> and <code>incan test</code> become aliases for typed actions, or remain separate command families?</li>
+<li>Should <code>oven run</code> and <code>oven test</code> become aliases for typed actions, or remain separate command families? RFC 118 separately decides which, if any, Incan aliases delegate to those Oven operations.</li>
 <li>What is the minimum useful dry-run contract for mutating external tools?</li>
 <li>Should isolated tool execution use a global cache, per-project cache, or always temporary environment?</li>
 <li>How should action inputs and outputs be represented for tools that cannot predict outputs?</li>

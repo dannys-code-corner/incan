@@ -7023,11 +7023,13 @@
 <li>RFC 034 (<code>incan.pub</code> package registry)</li>
 <li>RFC 074 (template rendering and boilerplate provenance)</li>
 <li>RFC 075 (starter profiles and capability packs)</li>
+<li>RFC 117 (<code>Loaf.toml</code> and Oven's language-neutral project model)</li>
+<li>RFC 118 (Incan and Oven command-line surfaces)</li>
 </ul>
 </li>
 <li><strong>Issue:</strong> https://github.com/encero-systems/incan/issues/404</li>
 <li><strong>RFC PR:</strong> —</li>
-<li><strong>Written against:</strong> v0.3</li>
+<li><strong>Written against:</strong> ~~v0.3~~ v0.5</li>
 <li><strong>Shipped in:</strong> —</li>
 </ul>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
@@ -7070,14 +7072,14 @@
 <h2 id="guide-level-explanation">Guide-level explanation<a class="headerlink" href="#guide-level-explanation" title="Permanent link">&para;</a></h2>
 <h3 id="policy-as-a-receiver-side-contract">Policy as a receiver-side contract<a class="headerlink" href="#policy-as-a-receiver-side-contract" title="Permanent link">&para;</a></h3>
 <p>A project can define a policy that describes which mutation sources are allowed and which categories require review:</p>
-<div class="language-toml highlight"><pre><span></span><code><span class="k">[tool.incan.policy.sources]</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[oven.policy.sources]</span>
 <span class="n">builtin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;allow&quot;</span>
 <span class="n">local</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;warn&quot;</span>
 <span class="n">git</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;require-immutable-pin&quot;</span>
 <span class="n">public-catalog</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;require-review&quot;</span>
 <span class="n">private-catalog</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;allow&quot;</span>
 
-<span class="k">[tool.incan.policy.risk]</span>
+<span class="k">[oven.policy.risk]</span>
 <span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;require-review&quot;</span>
 <span class="n">dependency</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;require-review&quot;</span>
 <span class="n">script</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;require-review&quot;</span>
@@ -7089,7 +7091,7 @@
 <p>The exact policy encoding is not normative in this Draft. The contract is that policy is evaluated by the receiver's lifecycle tooling against the mutation plan that would actually change the project.</p>
 <h3 id="policy-check-before-mutation">Policy check before mutation<a class="headerlink" href="#policy-check-before-mutation" title="Permanent link">&para;</a></h3>
 <p>When a user previews a capability, policy evaluation appears alongside the mutation plan:</p>
-<div class="language-text highlight"><pre><span></span><code>incan capability add cli --dry-run
+<div class="language-text highlight"><pre><span></span><code>oven capability add cli --dry-run
 </code></pre></div>
 <p>Example output:</p>
 <div class="language-text highlight"><pre><span></span><code>Capability: cli
@@ -7099,7 +7101,7 @@ Policy: requires review
 Risk categories:
   source            src/main.incn
   source            tests/test_cli.incn
-  script            [tool.incan.envs.default.scripts].run
+  script            [oven.envs.default.scripts].run
   dependency        app-cli = &quot;0.3.1&quot;
   agent-guidance    cli.write-commands
 
@@ -7112,18 +7114,18 @@ Next:
 <p>The important behavior is not the exact wording. The important behavior is that the receiver sees why a plan is allowed, blocked, or review-gated before project files change.</p>
 <h3 id="automated-proposal-flow">Automated proposal flow<a class="headerlink" href="#automated-proposal-flow" title="Permanent link">&para;</a></h3>
 <p>Automation may detect that a template or capability source has a newer compatible version or a known advisory:</p>
-<div class="language-text highlight"><pre><span></span><code>incan mutation propose --stale --security
+<div class="language-text highlight"><pre><span></span><code>oven mutation propose --stale --security
 </code></pre></div>
 <p>A valid implementation may choose a different command name, but the behavior should be review-first. Automation creates a patch-sized proposal containing source identity changes, integrity or advisory changes, rendered receiver-side diffs, and policy outcomes. It does not merge, approve, or apply the proposal by itself when policy requires review.</p>
 <p>For capability version updates, automation should follow the same shape a user would run manually:</p>
-<div class="language-text highlight"><pre><span></span><code>incan capability status cli
-incan capability diff cli --to 1.6.0
-incan capability update cli --to 1.6.0 --dry-run
+<div class="language-text highlight"><pre><span></span><code>oven capability status cli
+oven capability diff cli --to 1.6.0
+oven capability update cli --to 1.6.0 --dry-run
 </code></pre></div>
 <p>Automation may package that dry-run output as a pull-request-sized patch or review artifact, but it must not turn a detected <code>1.3.0 -&gt; 1.6.0</code> opportunity into an unattended write unless receiver policy explicitly allows that class of mutation. Even then, source identity changes, newly introduced scripts, CI/workflow edits, env changes, executable source changes, dependency upgrades, generated-file ownership changes, and agent guidance changes remain policy-visible events.</p>
 <h3 id="recovery-after-an-unsafe-source">Recovery after an unsafe source<a class="headerlink" href="#recovery-after-an-unsafe-source" title="Permanent link">&para;</a></h3>
 <p>If a previously applied template or capability is later yanked, revoked, or marked unsafe, status should show a receiver-actionable state:</p>
-<div class="language-text highlight"><pre><span></span><code>incan mutation status
+<div class="language-text highlight"><pre><span></span><code>oven mutation status
 </code></pre></div>
 <p>Example output:</p>
 <div class="language-text highlight"><pre><span></span><code>origin                         state       reason
@@ -7259,7 +7261,7 @@ Recovery options:
 <p>The same policy result should power terminal diagnostics, machine-readable JSON, IDE code actions, CI checks, and automation-generated proposals. Tooling should avoid duplicating policy logic in editor plugins or agents.</p>
 <h2 id="layers-affected">Layers affected<a class="headerlink" href="#layers-affected" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Manifest schema / configuration validation:</strong> project tooling needs a place to describe project-local policy and record policy-related audit metadata, whether in <code>incan.toml</code>, a sidecar state file, or a future lock/state artifact.</li>
+<li><strong>Manifest schema / configuration validation:</strong> project tooling needs a place to describe project-local policy and record policy-related audit metadata, whether in a typed <code>Loaf.toml</code> policy table or an explicit tool-owned policy state artifact. <code>Oven.lock</code> is not a general policy store.</li>
 <li><strong>CLI / tooling:</strong> lifecycle commands must evaluate policy before applying template, starter, capability, update, reset, refresh, or recovery mutations.</li>
 <li><strong>LSP / IDE tooling:</strong> editor-facing tools should surface policy outcomes, blocked mutation reasons, review requirements, and recovery actions from machine-readable lifecycle output.</li>
 <li><strong>Package and catalog integration:</strong> registries and catalogs may provide source identity, integrity, yanking, revocation, advisory, compatibility, and trust-tier metadata that policy can consume.</li>
@@ -7268,7 +7270,7 @@ Recovery options:
 </ul>
 <h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Where should project-local mutation policy live: <code>incan.toml</code>, a sidecar policy file, or a future lock/state artifact?</li>
+<li>Should project-local mutation policy live in a typed <code>Loaf.toml</code> table or an explicit tool-owned policy state artifact, and which audit facts belong in receipts rather than either location?</li>
 <li>What is the minimum useful policy syntax for v1?</li>
 <li>Which risk categories should be standardized in v1, and which should remain extension labels?</li>
 <li>Should policy support explicit reviewer or owner requirements, or should it only emit categories for external review systems to interpret?</li>
