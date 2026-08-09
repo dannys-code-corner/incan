@@ -1451,7 +1451,11 @@ mod tests {
         fs::write(temp.path().join("outside.txt"), "outside\n")?;
         std::os::unix::fs::symlink(temp.path().join("outside.txt"), package.join("linked.txt"))?;
         let special = package.join("special-entry");
-        let _special_listener = std::os::unix::net::UnixListener::bind(&special)?;
+        // A FIFO exercises the same unsupported filesystem-entry branch without opening a Unix-domain socket.
+        // Some otherwise valid macOS execution sandboxes refuse socket creation, which made this filesystem test
+        // depend on an unrelated process-network capability.
+        let status = std::process::Command::new("mkfifo").arg(&special).status()?;
+        assert!(status.success(), "mkfifo failed with {status}");
 
         let invalid_values = [
             ("\"present.txt\"", "must be an array of paths"),

@@ -171,6 +171,7 @@ pub(crate) fn check_path_report_with_interop_target_selection(
         rust_edition: manifest
             .as_ref()
             .and_then(|manifest| manifest.build.as_ref().and_then(|build| build.rust_edition.clone())),
+        provider_plan: &provider_plan,
     })?;
 
     let typecheck = typecheck_modules_with_import_graph_detailed_for_c_abi_target(
