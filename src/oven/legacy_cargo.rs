@@ -5983,6 +5983,7 @@ struct PublisherRegistryLeafCatalogRequest<'a> {
     inspection_packages: Option<&'a [OvenLegacyCargoInspectionPackage]>,
 }
 
+/// Build the immutable registry-leaf catalog from one explicit publisher result.
 fn publisher_registry_leaf_catalog(
     request: PublisherRegistryLeafCatalogRequest<'_>,
 ) -> Result<(Vec<OvenRustcRegistryLeaf>, Vec<OvenRustcSupportingArtifact>), OvenLegacyCargoError> {

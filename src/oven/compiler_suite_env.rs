@@ -53,6 +53,7 @@ pub(crate) struct OvenCompilerSuiteCapability {
 }
 
 impl OvenCompilerSuiteCapability {
+    /// Construct the complete typed direct-Rustc closure selected for one suite child.
     pub(crate) fn new(
         rustc: PathBuf,
         dependency_search_paths: Vec<PathBuf>,
