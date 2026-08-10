@@ -861,7 +861,7 @@ mod tests {
             toolchain
                 .arguments
                 .windows(2)
-                .any(|arguments| { arguments[0] == std::ffi::OsString::from("-isysroot") && !arguments[1].is_empty() }),
+                .any(|arguments| arguments[0] == "-isysroot" && !arguments[1].is_empty()),
             "macOS C ABI verification must provide the Xcode SDK sysroot"
         );
         Ok(())
@@ -880,7 +880,7 @@ mod tests {
         let toolchain = ClangToolchain::discover(&plan)?;
         assert!(
             toolchain.arguments.windows(2).any(|arguments| {
-                arguments[0] == std::ffi::OsString::from("-isysroot")
+                arguments[0] == "-isysroot"
                     && arguments[1].to_string_lossy().contains("iPhoneSimulator")
                     && arguments[1].to_string_lossy().ends_with(".sdk")
             }),

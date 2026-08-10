@@ -154,7 +154,9 @@ wat = "1"
 [package.metadata.cargo-udeps.ignore]
 # `regex` deliberately anchors generated std.regex consumers in Cargo.lock for offline test shards; the Rust test
 # harness does not link it directly.
-development = ["regex"]
+# `uuid` likewise anchors the compiler-suite's supported `rust::uuid` smoke closure; it is consumed by the explicit
+# legacy publisher, not by the Rust test harness.
+development = ["regex", "uuid"]
 
 # The named, receipt-bound compatibility profile used only by Oven's explicit compiler-suite publisher. Normal
 # `incan build`, `incan run`, and `incan test` consume the resulting direct-rustc Oven Loaf and never select this

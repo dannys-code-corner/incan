@@ -134,10 +134,10 @@ Canonical forms:
 - **RFC:** `RFC 116`
 - **Stability:** `Experimental`
 - **Activation:** Import `c` from `std.interop`, then declare a `binding` in the importing module.
-- **Use instead of:** Unverified Rust wrappers, ambient header discovery, or string-based dynamic symbol lookup.
+- **Use instead of:** Unverified Rust wrappers, ambient header discovery, string-based dynamic symbol lookup, or general raw-pointer access.
 - **References:** [std.interop](stdlib/interop.md), [RFC 116](../../RFCs/116_typed_c_abi_interop.md), [Release 0.5](../../release_notes/0_5.md)
 
-Explicit C headers, scalar signatures, opaque resources, output positions, bounded C-string text bridges, enum carriers, and plain layouts are verified before private generated C ABI calls.
+Explicit C headers, exact scalar signatures (`i8`–`i128`, `u8`–`u128`, `usize`, `f32`, `f64`), opaque resources, output positions, paired byte or `f32` spans, bounded C-string text bridges, enum carriers, and plain layouts are verified before private generated C ABI calls.
 
 Canonical forms:
 

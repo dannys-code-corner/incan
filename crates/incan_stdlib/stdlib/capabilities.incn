@@ -139,9 +139,9 @@ static checked_c_binding: RegistryEntry[CapabilityId, CapabilityDescriptor] = ca
         rfc="RFC 116",
         stability=CapabilityStability.Experimental,
         activation="Import `c` from `std.interop`, then declare a `binding` in the importing module.",
-        summary="Explicit C headers, scalar signatures, opaque resources, output positions, bounded C-string text bridges, enum carriers, and plain layouts are verified before private generated C ABI calls.",
+        summary="Explicit C headers, exact scalar signatures (`i8`–`i128`, `u8`–`u128`, `usize`, `f32`, `f64`), opaque resources, output positions, paired byte or `f32` spans, bounded C-string text bridges, enum carriers, and plain layouts are verified before private generated C ABI calls.",
         canonical_forms=checked_c_binding_forms,
-        prefer_over="Unverified Rust wrappers, ambient header discovery, or string-based dynamic symbol lookup.",
+        prefer_over="Unverified Rust wrappers, ambient header discovery, string-based dynamic symbol lookup, or general raw-pointer access.",
         references=checked_c_binding_references,
     ),
 )

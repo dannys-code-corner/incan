@@ -3037,7 +3037,7 @@ mod tests {
                         ..
                     },
                 },
-            }) if target == "aarch64-apple-ios-sim" && output == PathBuf::from("target/interop-stage")
+            }) if target == "aarch64-apple-ios-sim" && output == Path::new("target/interop-stage")
         ));
         Ok(())
     }

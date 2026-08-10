@@ -701,17 +701,18 @@ pub(crate) fn bake_interop_native_plan(
     })
 }
 
-/// Verify that a matching final receipt still selects a complete, receipt-bound interop plan before reuse.
-///
-/// Selection already validates the direct-Rustc plan shape and retains an execution lease. This additional check
-/// verifies every retained materialized file, requires the private provenance record, and rejects a plan whose
-/// selected compiler/SDK identity does not exactly equal this bake request. A stale or incomplete hit is therefore
-/// never mistaken for a cheap warm reuse.
+/// Complete, receipt-bound interop-plan evidence selected for a warm reuse.
 struct ValidatedInteropPlan {
     artifacts: Vec<crate::oven::rustc::OvenRustcMaterializedArtifact>,
     provenance: OvenInteropExecutionProvenance,
 }
 
+/// Validate a matching final receipt's complete, receipt-bound interop plan before reuse.
+///
+/// Selection already validates the direct-Rustc plan shape and retains an execution lease. This additional check
+/// verifies every retained materialized file, requires the private provenance record, and rejects a plan whose
+/// selected compiler/SDK identity does not exactly equal this bake request. A stale or incomplete hit is therefore
+/// never mistaken for a cheap warm reuse.
 fn validate_existing_interop_plan(
     selected: &crate::oven::store::OvenStoreExecutionPayload,
     receipt: &OvenReceipt,
@@ -1718,17 +1719,21 @@ fn digest_serialized(value: &impl Serialize, label: &str) -> Result<String, Stri
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use super::selected_interop_toolchain_identity;
     use super::{
         OVEN_INTEROP_ADAPTER_MANIFEST_PATH, OVEN_INTEROP_EXECUTION_PROVENANCE_PATH, OVEN_INTEROP_NATIVE_DIRECTORY,
         OvenInteropAdapter, OvenInteropAdapterStageRequest, OvenInteropBakedArchive, OvenInteropBakedBundle,
         OvenInteropCapabilitySelection, OvenInteropNativeBakeRequest, bake_interop_native_plan,
         bind_interop_native_archives, default_interop_execution_receipt_path, interop_adapter_bundle_path,
         interop_execution_build_unit_inputs, load_interop_execution_receipt, receipt_interop_execution,
-        selected_interop_toolchain_identity, stage_interop_adapter, validate_interop_execution_receipt,
-        write_interop_execution_receipt,
+        stage_interop_adapter, validate_interop_execution_receipt, write_interop_execution_receipt,
     };
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenRustcSupportingArtifact,
+    };
+    #[cfg(target_os = "macos")]
+    use crate::oven::rustc::{
         OvenStoredDirectRustcRunRequest, bake_stored_direct_rustc_run, resolve_active_rustc, rustc_identity,
         select_direct_rustc_plan_for_execution,
     };
