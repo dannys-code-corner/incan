@@ -33,6 +33,7 @@ This RFC defines proof-aware contracts for Incan: a source-level contract surfac
 8. **The graph carries repair context:** RFC 106 is the delivery substrate for contract declarations, generated obligations, outcomes, counterexamples, runtime checks, and proof receipts so agents receive targeted repair context.
 9. **Proof is bounded:** Incan proves a clearly defined subset and records assumptions; it must not claim full program correctness beyond the authored contracts and supported reasoning fragment.
 10. **Trust is inspectable:** every proof result must record enough provenance for tools to distinguish compiler-local checks, solver-backed checks, runtime checks, cached results, unsupported fragments, and degraded work-in-progress output.
+11. **Contract authority and proof scope are explicit:** source presence, a passing verification result, and a project approval are distinct facts. A proof establishes only the named formal obligation under recorded assumptions; it does not establish business correctness, operational suitability, or human approval.
 
 ## Motivation
 
@@ -55,6 +56,7 @@ This also keeps Incan honest about correctness. A spec can be wrong, incomplete,
 - Define when proved obligations may allow a generated runtime check to be skipped because proof made it unnecessary, and require visible proof or verification receipts for that skipped-check decision.
 - Define how unproved obligations remain protected by runtime checks when runtime enforcement is sound and configured.
 - Define RFC 106 graph fact families for contracts, obligations, outcomes, counterexamples, runtime checks, and verification receipts.
+- Preserve contract declaration identity, origin, review or approval status when a project supplies it, and the exact scope of every verification result without treating any one of those facts as another.
 - Keep the Rust backend as the ordinary emission target while making proof facts backend-independent where possible.
 - Learn from Ada/SPARK-like systems, Dafny, F*, Why3, and ACSL while preserving Incan's Python-like authoring surface and agent-native tooling model.
 
@@ -67,6 +69,7 @@ This also keeps Incan honest about correctness. A spec can be wrong, incomplete,
 - This RFC does not require a particular SMT solver, theorem prover, storage engine, MCP server, or hosted verification service.
 - This RFC does not claim that all Incan programs become formally verified.
 - This RFC does not prove correctness of specifications themselves.
+- This RFC does not infer that a source contract was human-approved, policy-approved, complete, suitable for a particular business purpose, or true about the external world merely because it parsed or was proved.
 - This RFC does not remove runtime validation from validated newtypes, model constructors, or library contracts unless a matching proof result and configuration justify skipping the redundant generated check.
 - This RFC does not define every possible contract predicate in the first release.
 - This RFC does not make agent output correct by default; it makes agent output more mechanically checkable against human-authored contracts.
@@ -198,6 +201,12 @@ Contract declarations must be typechecked before they produce verification oblig
 
 An `assert` statement is not a contract declaration under this RFC. It retains RFC 018's always-on runtime assertion semantics: it checks an implementation fact at a specific program point, may produce a local verification obligation, and may become a fact available to later obligations only after that assertion is itself checked, proved, or runtime-protected. An implementation-local `assert` must not be exported as a caller-visible precondition or postcondition unless the source also declares `requires` or `ensures`.
 
+### Contract provenance and approval boundary
+
+Every contract declaration must have a stable declaration identity, source anchor, and source revision or digest suitable for its checked metadata and RFC 106 graph facts. The compiler may record a declaration origin such as source-authored, generated, imported through a checked interface, or agent-proposed when that fact is available. It must not infer a human author, reviewer, approver, or business owner from source presence, a commit identity, a passing check, or a provider result.
+
+A project may attach an explicit review or approval record through a trusted project-policy or checked-metadata boundary. That record must identify the exact contract declaration or immutable contract set, the applicable policy, its scope, and its revision. Approval metadata is not part of logical proof and must not change whether an obligation is `proved`, `violated`, `unknown`, `unsupported`, or `runtime_enforced`. Conversely, a proof result must not upgrade an unreviewed contract to approved. Agent-generated contract text must remain distinguishable from an explicit approved declaration until the project records a separate approval.
+
 ### Verification obligations
 
 A verification obligation is a compiler-generated question derived from checked source semantics and contract declarations. The compiler must generate obligations for at least:
@@ -223,6 +232,10 @@ Every obligation must receive one of these outcomes:
 - `runtime_enforced`: the obligation is not statically proved, but generated code or an existing validated construction path enforces the same property at runtime.
 
 `runtime_enforced` may be reported alongside `unknown` or `unsupported` in detailed tooling, but user-facing summaries must make the fallback explicit. A build must not silently present an unproved runtime-enforced obligation as `proved`.
+
+### Scope of proof
+
+Every verification result must identify the exact contract declaration or obligation, checked source and semantic revision, verification provider and configuration, material assumptions, supported-fragment version, and runtime-enforcement or skipped-check status. A result classified as `proved` means only that the named obligation was established under that recorded scope. It does not establish that the contract captures the intended business rule, that external systems behave as modeled, that a user approved the contract, that a model-generated implementation is safe for every deployment, or that a required effect was authorized. Tooling and generated documentation must preserve this distinction in their vocabulary.
 
 ### Build and verification modes
 
@@ -253,6 +266,7 @@ The agent context graph should support these node kinds when this RFC is impleme
 - `runtime_check`: a generated or preserved runtime enforcement site.
 - `verification_receipt`: a cacheable proof or verification-result identity that records provider, configuration, assumptions, source identity, and checked fragment.
 - `verification_assumption`: a fact used by one or more verification results.
+- `contract_provenance`: an optional project-supplied origin, review, or approval record attached to an exact contract identity without changing proof semantics.
 
 The graph should support these edge kinds when this RFC is implemented:
 
@@ -264,6 +278,7 @@ The graph should support these edge kinds when this RFC is implemented:
 - `elides_check`: from a proved result to a runtime check that was removed or skipped.
 - `assumes`: from an obligation or result to a verification assumption.
 - `repairs_context_for`: from a verification result to task-ranked context packs or advisory records that explain likely repair targets.
+- `has_provenance`: from a contract declaration to an optional contract-provenance record.
 
 These records must preserve RFC 106 provenance. A solver-backed result must not be marked as `compiler_checked` unless the compiler owns the validation of that result under the graph schema. Provider-specific facts should identify the provider while preserving a stable Incan outcome vocabulary.
 
@@ -411,7 +426,7 @@ This section is non-normative. The recommended architecture is to introduce a ve
 - **Stdlib / Runtime (`incan_stdlib`)**: validation helpers, result/option predicates, assertion behavior, and domain constructors may need stable contract summaries that verification can trust.
 - **Formatter**: contract statements should be formatted predictably and kept visually attached to the function or loop they constrain.
 - **LSP / Tooling**: editors, CLI, and MCP consumers should show verification outcomes, counterexamples, assumptions, strict/permissive mode state, runtime fallback status, and graph-backed repair context.
-- **Checked metadata and docs**: public contract declarations, supported predicates, proof outcomes where appropriate, and runtime-enforcement status should be exposed through checked metadata and generated documentation without exposing provider internals as the source of truth.
+- **Checked metadata and docs**: public contract declarations, declaration identity and optional explicit approval provenance, supported predicates, proof outcomes where appropriate, proof scope, and runtime-enforcement status should be exposed through checked metadata and generated documentation without exposing provider internals as the source of truth or turning proof into a business-correctness claim.
 - **Agent context graph**: RFC 106 graph export and context packing should expose contract, obligation, result, counterexample, assumption, runtime-check, and verification-receipt records with provenance and source anchors.
 - **Packaging / Workspaces**: packages may need to record verification configuration, provider requirements, cached receipt identities, and policy around strict verification or runtime fallback.
 
@@ -425,6 +440,7 @@ This section is non-normative. The recommended architecture is to introduce a ve
 - How should trusted summaries for Rust interop, stdlib functions, and generated behavior be authored, reviewed, versioned, and exposed through metadata?
 - Should proof receipts be cacheable across packages and machines, or should the first implementation limit receipts to local deterministic result caching?
 - How much counterexample translation is required before this RFC can move to Planned status?
+- Which checked-metadata or project-policy boundary can carry explicit contract review and approval records without making author identity or approval a compiler inference?
 
 <!-- Rename this section to "Design Decisions" once all questions have been resolved.
      An RFC cannot move from Draft to Planned until no unresolved questions remain. -->
