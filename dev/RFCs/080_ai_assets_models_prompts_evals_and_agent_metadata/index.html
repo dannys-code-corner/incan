@@ -8581,6 +8581,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#model-execution-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model execution profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#prompt-and-system-metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8679,6 +8690,17 @@
     <span class="md-ellipsis">
       
         Relationship to RFC 078
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relationship-to-rfc-104" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relationship to RFC 104
       
     </span>
   </a>
@@ -8849,6 +8871,7 @@
 <li>RFC 076 (project mutation policy and recovery)</li>
 <li>RFC 078 (tool execution and typed workflow actions)</li>
 <li>RFC 079 (<code>incan.pub</code> artifact graph)</li>
+<li>RFC 104 (ambient runtime capabilities and receipts)</li>
 </ul>
 </li>
 <li><strong>Issue:</strong> https://github.com/encero-systems/incan/issues/408</li>
@@ -8880,6 +8903,7 @@
 <li>Require prompt templates, system messages, and agent guidance to be inspectable and provenance-aware.</li>
 <li>Define how AI assets connect to capabilities, actions, policies, and the <code>incan.pub</code> artifact graph.</li>
 <li>Define evaluation metadata so AI-backed capabilities can declare quality and regression checks.</li>
+<li>Distinguish a declared model asset from a captured execution profile and measured execution observation.</li>
 <li>Leave room for multiple model providers and local runtimes without hardcoding one AI platform.</li>
 </ul>
 <h2 id="non-goals">Non-Goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
@@ -8955,6 +8979,11 @@
 <li>privacy and data-retention labels when remote execution is involved</li>
 <li>intended use and limitations</li>
 </ul>
+<h3 id="model-execution-profiles">Model execution profiles<a class="headerlink" href="#model-execution-profiles" title="Permanent link">&para;</a></h3>
+<p>A model asset declaration identifies what a capability may use. It does not establish that a particular runtime, device, or provider can execute that asset, nor does it make a universal quality, latency, privacy, or compatibility claim. Those are separate versioned execution-profile and execution-observation records.</p>
+<p>An execution profile should identify the model asset and immutable source or artifact identity it evaluated, plus the runtime engine and version, local or remote execution class, device and operating-environment facts that materially affect compatibility, configured context and batching limits, quantization or adapter configuration when applicable, and declared data-handling constraints. It must not contain credentials, raw prompts, raw user data, or endpoint secrets.</p>
+<p>An execution observation should additionally identify its workload or eval suite, environment scope, measurement method, warm or cold state where relevant, result status, and any measured latency, throughput, memory, failure, fallback, or quality value. Measurements are scoped observations, not portable properties of the model. Tooling must show a missing, incompatible, stale, or non-comparable profile as such instead of borrowing a nearby model or device record.</p>
+<p>Model selection may use declared compatibility requirements and available execution profiles, but its result must preserve the selected asset and profile identities, rejected alternatives when they materially affected the decision, and any fallback. Non-interactive execution must not silently replace a pinned local asset with a remote provider, a different model revision, a different quantization, or a weaker data-handling profile. This RFC defines descriptive selection provenance only; it does not grant an agent authority to invoke a model, select a tool, or perform another effect.</p>
 <h3 id="prompt-and-system-metadata">Prompt and system metadata<a class="headerlink" href="#prompt-and-system-metadata" title="Permanent link">&para;</a></h3>
 <p>Prompt templates and system messages must be inspectable artifacts. They should include:</p>
 <ul>
@@ -8976,6 +9005,7 @@
 <li>eval kind such as golden, benchmark, safety, regression, human-review, or policy-check</li>
 <li>dataset reference</li>
 <li>target model, prompt, capability, or action</li>
+<li>execution-profile or environment constraint when the result depends on one</li>
 <li>metric names and expected thresholds when applicable</li>
 <li>local or remote execution requirement</li>
 <li>privacy labels for data used during evaluation</li>
@@ -8996,6 +9026,7 @@
 <li>dataset hash or version</li>
 <li>eval suite version</li>
 <li>runtime version when available</li>
+<li>selected execution-profile identity and scoped execution-observation identities when an action actually ran</li>
 <li>parameter values such as temperature, context length, seed, or embedding dimensions when relevant</li>
 </ul>
 <p>If an AI action affects project files, generated artifacts, or diagnostics, the action output should reference the AI asset provenance used.</p>
@@ -9012,6 +9043,7 @@
 <li>agent tool permissions</li>
 <li>project mutation by AI-backed actions</li>
 <li>use of unpinned or unknown model versions</li>
+<li>execution profiles or fallback paths that violate declared locality, data-handling, or compatibility constraints</li>
 </ul>
 <p>Policy outcomes must be visible in machine-readable action and asset inspection.</p>
 <h2 id="design-details">Design details<a class="headerlink" href="#design-details" title="Permanent link">&para;</a></h2>
@@ -9019,6 +9051,8 @@
 <p>Capabilities may declare AI assets when the capability needs a model, prompt, eval, dataset, or agent guidance. Applying the capability records metadata; it does not run inference or agents implicitly.</p>
 <h3 id="relationship-to-rfc-078">Relationship to RFC 078<a class="headerlink" href="#relationship-to-rfc-078" title="Permanent link">&para;</a></h3>
 <p>AI-backed operations should be exposed as typed actions. Evaluation, embedding generation, prompt validation, model conversion, and agent workflows are action kinds or action providers subject to policy.</p>
+<h3 id="relationship-to-rfc-104">Relationship to RFC 104<a class="headerlink" href="#relationship-to-rfc-104" title="Permanent link">&para;</a></h3>
+<p>RFC 104 owns ambient runtime capabilities and their run receipts. This RFC's model execution profiles describe asset compatibility and observed inference conditions; they do not grant a process a runtime capability, authorize model invocation, or replace RFC 104's effect and receipt boundary. An action that runs a model must satisfy both the selected profile's declared constraints and the applicable runtime capability and policy contract.</p>
 <h3 id="relationship-to-rfc-079">Relationship to RFC 079<a class="headerlink" href="#relationship-to-rfc-079" title="Permanent link">&para;</a></h3>
 <p>AI assets are artifact graph nodes. <code>incan.pub</code> and private catalogs may use cards to expose model lineage, datasets, evals, license, intended use, limitations, and compatibility.</p>
 <h3 id="relationship-to-rfc-033">Relationship to RFC 033<a class="headerlink" href="#relationship-to-rfc-033" title="Permanent link">&para;</a></h3>
@@ -9048,6 +9082,7 @@
 <li><strong>Manifest schema / configuration validation:</strong> packages and projects need AI asset metadata for models, prompts, evals, datasets, and agent guidance.</li>
 <li><strong>CLI / tooling:</strong> lifecycle tooling needs AI asset inspection, status, provenance, and policy evaluation.</li>
 <li><strong>Action execution:</strong> RFC 078 actions need AI-backed execution modes and risk categories.</li>
+<li><strong>Execution profiles and observations:</strong> tooling must keep declared model assets, selected execution profiles, and measured observations distinct, versioned, and scope-aware.</li>
 <li><strong>Package and catalog integration:</strong> <code>incan.pub</code> should index AI assets as artifact graph nodes with cards and relationships.</li>
 <li><strong>LSP / IDE tooling:</strong> editor tooling may surface AI capabilities, prompts, evals, and policy warnings.</li>
 <li><strong>Agentic tooling:</strong> agents may consume asset metadata but must respect policy and explicit user approval.</li>
@@ -9063,6 +9098,7 @@
 <li>What privacy labels are required before remote AI actions can be considered safe enough to standardize?</li>
 <li>Should model downloads be handled by <code>incan tool</code>, <code>incan pub</code>, provider-specific CLIs, or a future AI runtime command?</li>
 <li>How should agent guidance reference skills without becoming an agent marketplace spec?</li>
+<li>Which execution-profile fields and measurement methods are required before an observation can support a compatibility, fallback, or performance decision?</li>
 </ul>
 <!-- Rename this section to "Design Decisions" once all questions have been resolved.
      An RFC cannot move from Draft to Planned until no unresolved questions remain. -->
