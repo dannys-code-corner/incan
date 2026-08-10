@@ -1738,13 +1738,15 @@ mod tests {
         interop_execution_build_unit_inputs, load_interop_execution_receipt, receipt_interop_execution,
         stage_interop_adapter, validate_interop_execution_receipt, write_interop_execution_receipt,
     };
+    #[cfg(target_os = "macos")]
+    use crate::oven::rustc::select_direct_rustc_plan_for_execution;
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenRustcSupportingArtifact,
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use crate::oven::rustc::{
         OvenStoredDirectRustcRunRequest, bake_stored_direct_rustc_run, resolve_active_rustc, rustc_host_target,
-        rustc_identity, select_direct_rustc_plan_for_execution,
+        rustc_identity,
     };
     use crate::oven::store::{
         OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreLimits,
