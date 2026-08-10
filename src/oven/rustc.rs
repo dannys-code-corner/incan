@@ -3465,9 +3465,11 @@ fn append_native_runtime_rpaths(command: &mut Command, target: &str, native_sear
 /// Return whether a target produces an executable that can resolve this host's selected native-store directories.
 fn is_host_native_unix_target(target: &str) -> bool {
     let host_architecture = std::env::consts::ARCH;
-    target.starts_with(&format!("{host_architecture}-"))
-        && ((cfg!(target_os = "macos") && target.ends_with("-apple-darwin"))
-            || (cfg!(target_os = "linux") && target.contains("-unknown-linux-")))
+    (cfg!(target_os = "macos") && target == format!("{host_architecture}-apple-darwin"))
+        || (cfg!(all(target_os = "linux", target_env = "gnu"))
+            && target == format!("{host_architecture}-unknown-linux-gnu"))
+        || (cfg!(all(target_os = "linux", target_env = "musl"))
+            && target == format!("{host_architecture}-unknown-linux-musl"))
 }
 
 /// Return the caller-owned sidecar path without accepting an output that lacks a safe file name.
@@ -4418,12 +4420,23 @@ mod tests {
 
         #[cfg(target_os = "linux")]
         {
-            assert!(is_host_native_unix_target(&format!(
-                "{host_architecture}-unknown-linux-gnu"
-            )));
+            let host_target = if cfg!(target_env = "gnu") {
+                format!("{host_architecture}-unknown-linux-gnu")
+            } else if cfg!(target_env = "musl") {
+                format!("{host_architecture}-unknown-linux-musl")
+            } else {
+                String::new()
+            };
+            if !host_target.is_empty() {
+                assert!(is_host_native_unix_target(&host_target));
+            }
             assert!(!is_host_native_unix_target(&format!(
                 "{host_architecture}-apple-darwin"
             )));
+            assert!(
+                !is_host_native_unix_target(&format!("{host_architecture}-unknown-linux-musl"))
+                    || cfg!(target_env = "musl")
+            );
             assert!(!is_host_native_unix_target("aarch64-linux-android"));
         }
 
