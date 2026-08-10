@@ -2,10 +2,7 @@
 
 `incan inspect interop-plan` projects one declared and locked Oven interop target into a deterministic handoff for Gradle, Xcode, or another platform adapter. The report is binding-kind-neutral: it describes physical target inputs and actions without treating C headers, C ownership, or one platform command protocol as universal package metadata.
 
-> **Availability:** v0.5 ships this locked inspection handoff and the explicit `incan oven interop bake` and `stage`
-> commands. Baking selects only supplied toolchain/SDK evidence, verifies the current lock, and seals declared native
-> inputs into a direct-`rustc` plan. Staging copies digest-verified bundled runtime files into fixed Android or iOS
-> consumer layouts. Neither command invokes Cargo, Gradle, Xcode, platform discovery, signing, or a physical device.
+> **Availability:** v0.5 ships this locked inspection handoff and the explicit `incan oven interop bake` and `stage` commands. Baking selects only supplied toolchain/SDK evidence, verifies the current lock, and seals declared native inputs into a direct-`rustc` plan. Staging copies digest-verified bundled runtime files into fixed Android or iOS consumer layouts. Neither command invokes Cargo, Gradle, Xcode, platform discovery, signing, or a physical device.
 
 ## Command
 
@@ -40,12 +37,7 @@ incan oven interop stage \
   --output target/interop-stage
 ```
 
-`stage` reads the lock-fresh target and project-owned selected-execution receipt, reconstructs the final immutable
-plan receipt, holds that plan's lease, and atomically creates the requested new output directory. Android maps bundles
-to `jniLibs/arm64-v8a`; iOS device and simulator targets map them to `Frameworks`. Its
-`incan-interop-adapter.json` manifest contains target and receipt/plan identities, declared placement, digest, and
-output-relative paths only. It never invokes Cargo, Gradle, Xcode, a signing tool, or platform discovery, and never
-replaces an existing caller-owned output directory.
+`stage` reads the lock-fresh target and project-owned selected-execution receipt, reconstructs the final immutable plan receipt, holds that plan's lease, and atomically creates the requested new output directory. Android maps bundles to `jniLibs/arm64-v8a`; iOS device and simulator targets map them to `Frameworks`. Its `incan-interop-adapter.json` manifest contains target and receipt/plan identities, declared placement, digest, and output-relative paths only. It never invokes Cargo, Gradle, Xcode, a signing tool, or platform discovery, and never replaces an existing caller-owned output directory.
 
 ## Top-level fields
 
