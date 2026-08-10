@@ -2,6 +2,7 @@
 
 use super::type_info::{
     CBindingDescriptor, CBindingParameter, CBindingResource, CBindingSymbol, CBindingType, CResourceAccess,
+    c_binding_descriptor_identity,
 };
 use super::*;
 use crate::frontend::api_metadata::{
@@ -43,6 +44,7 @@ use incan_core::lang::c_abi::ScalarTypeId;
 use incan_core::lang::surface::constructors::{self as surface_constructors, ConstructorId};
 use incan_core::lang::traits::{self as builtin_traits, TraitId};
 use incan_core::lang::types::collections::{self as collection_types, CollectionTypeId};
+use incan_core::lang::types::numerics::NumericTypeId;
 use std::collections::{BTreeSet, HashMap};
 #[cfg(feature = "rust_inspect")]
 use std::fs;
@@ -20905,6 +20907,7 @@ fn scalar_c_binding_descriptor() -> CBindingDescriptor {
         class_name: "Fixture".to_string(),
         header: "fixture.h".to_string(),
         system_library: "fixture".to_string(),
+        link_capability: incan_core::lang::c_abi::LinkCapabilityId::SystemLibrary,
         resources: Vec::new(),
         symbols: vec![CBindingSymbol {
             name: "add".to_string(),
@@ -20914,11 +20917,35 @@ fn scalar_c_binding_descriptor() -> CBindingDescriptor {
                 ty: CBindingType::Scalar(ScalarTypeId::I32),
             }],
             return_type: CBindingType::Scalar(ScalarTypeId::I32),
+            buffers: Vec::new(),
             outcomes: Vec::new(),
         }],
         enums: Vec::new(),
         structs: Vec::new(),
     }
+}
+
+#[test]
+fn checked_c_binding_identity_is_relocation_stable_and_contract_sensitive() {
+    let module_path = vec!["bindings".to_string(), "fixture".to_string()];
+    let descriptor = scalar_c_binding_descriptor();
+    let identity = c_binding_descriptor_identity(&module_path, &descriptor);
+
+    let mut relocated = descriptor.clone();
+    relocated.span = Span::new(4_096, 8_192);
+    assert_eq!(
+        c_binding_descriptor_identity(&module_path, &relocated),
+        identity,
+        "source spans and their machine-local locations must not affect a checked binding identity"
+    );
+
+    let mut changed_contract = descriptor;
+    changed_contract.symbols[0].native = "fixture_add_v2".to_string();
+    assert_ne!(
+        c_binding_descriptor_identity(&module_path, &changed_contract),
+        identity,
+        "the descriptor identity must change when its native ABI contract changes"
+    );
 }
 
 fn scalar_c_binding_call(span: Span) -> Spanned<Expr> {
@@ -20960,16 +20987,264 @@ fn checked_c_scalar_call_requires_unsafe_and_records_the_descriptor_call() {
     checker.errors.clear();
     checker.unsafe_depth = 1;
     let result = checker.check_expr(&scalar_c_binding_call(span));
-    assert_eq!(result, ResolvedType::Int);
+    assert_eq!(result, ResolvedType::Numeric(NumericTypeId::I32));
     assert!(checker.errors.is_empty(), "unexpected errors: {:?}", checker.errors);
     assert_eq!(
         checker.type_info.c_abi.raw_calls,
         vec![super::type_info::CBindingRawCall {
             span,
+            owner: None,
             binding: "Fixture".to_string(),
             symbol: "add".to_string(),
         }]
     );
+}
+
+#[test]
+fn checked_c_raw_call_records_its_owning_private_bridge() -> Result<(), String> {
+    let mut checker = TypeChecker::new();
+    let descriptor = scalar_c_binding_descriptor();
+    checker
+        .type_info
+        .c_abi
+        .bindings
+        .insert(descriptor.class_name.clone(), descriptor);
+    checker.unsafe_depth = 1;
+    checker.current_c_abi_raw_call_owner = Some(super::type_info::CBindingRawCallOwner {
+        name: "increment_bridge".to_string(),
+        visibility: crate::frontend::ast::Visibility::Private,
+        declaration_span: Span::new(100, 200),
+    });
+    let _ = checker.check_expr(&scalar_c_binding_call(Span::new(120, 140)));
+
+    let raw_call = checker
+        .type_info()
+        .c_abi
+        .raw_calls
+        .first()
+        .ok_or_else(|| "expected one checked C raw call".to_string())?;
+    let owner = raw_call
+        .owner
+        .as_ref()
+        .ok_or_else(|| "expected the direct native call to retain its owning bridge".to_string())?;
+    assert_eq!(owner.name, "increment_bridge");
+    assert_eq!(owner.visibility, crate::frontend::ast::Visibility::Private);
+    Ok(())
+}
+
+#[test]
+fn checked_c_public_raw_call_warns_once_and_preserves_low_level_support() -> Result<(), String> {
+    let mut checker = TypeChecker::new();
+    let descriptor = scalar_c_binding_descriptor();
+    checker
+        .type_info
+        .c_abi
+        .bindings
+        .insert(descriptor.class_name.clone(), descriptor);
+    checker.unsafe_depth = 1;
+    checker.current_c_abi_raw_call_owner = Some(super::type_info::CBindingRawCallOwner {
+        name: "public_raw_api".to_string(),
+        visibility: crate::frontend::ast::Visibility::Public,
+        declaration_span: Span::new(100, 200),
+    });
+
+    let _ = checker.check_expr(&scalar_c_binding_call(Span::new(120, 140)));
+    let _ = checker.check_expr(&scalar_c_binding_call(Span::new(150, 170)));
+
+    assert_eq!(
+        checker
+            .warnings()
+            .iter()
+            .filter(|warning| warning.message.contains("public function `public_raw_api`"))
+            .count(),
+        1,
+        "a public raw bridge should receive one actionable advisory without rejecting low-level packages"
+    );
+    assert!(
+        checker.errors.is_empty(),
+        "the advisory must not make checked C calls fail: {:?}",
+        checker.errors
+    );
+    Ok(())
+}
+
+#[test]
+fn checked_c_facades_require_a_same_module_checked_bridge() {
+    let private_bridge = super::type_info::CBindingRawCallOwner {
+        name: "bridge".to_string(),
+        visibility: crate::frontend::ast::Visibility::Private,
+        declaration_span: Span::new(10, 30),
+    };
+    let public_facade = super::type_info::CBindingRawCallOwner {
+        name: "facade".to_string(),
+        visibility: crate::frontend::ast::Visibility::Public,
+        declaration_span: Span::new(40, 60),
+    };
+    let imported_lookalike = super::type_info::CBindingRawCallOwner {
+        name: "external_facade".to_string(),
+        visibility: crate::frontend::ast::Visibility::Public,
+        declaration_span: Span::new(70, 90),
+    };
+    let mut artifacts = super::type_info::CAbiInteropArtifacts::default();
+    artifacts.raw_calls.push(super::type_info::CBindingRawCall {
+        span: Span::new(15, 25),
+        owner: Some(private_bridge.clone()),
+        binding: "Fixture".to_string(),
+        symbol: "open".to_string(),
+    });
+    artifacts.function_calls.push(super::type_info::CBindingFunctionCall {
+        span: Span::new(45, 55),
+        caller: public_facade.clone(),
+        target: super::type_info::SourceTargetInfo {
+            module_path: vec!["app".to_string()],
+            name: "bridge".to_string(),
+            kind: "function".to_string(),
+        },
+    });
+    artifacts.function_calls.push(super::type_info::CBindingFunctionCall {
+        span: Span::new(75, 85),
+        caller: imported_lookalike,
+        target: super::type_info::SourceTargetInfo {
+            module_path: vec!["dependency".to_string()],
+            name: "bridge".to_string(),
+            kind: "function".to_string(),
+        },
+    });
+
+    artifacts.resolve_checked_facades(Some(&["app".to_string()]));
+
+    assert_eq!(
+        artifacts.facades,
+        vec![super::type_info::CBindingFacade {
+            facade: public_facade,
+            bridge: private_bridge,
+            call_span: Span::new(45, 55),
+        }],
+        "only the compiler-proven same-module bridge may become a facade relation"
+    );
+}
+
+#[test]
+fn checked_c_string_pointer_requires_unsafe_acknowledgement() {
+    let errors = check_str_err(
+        r#"
+from std.interop import c
+
+def pointer_without_unsafe(value: str) -> Result[None, str]:
+  text = c.cstr(value)?
+  text.as_const_ptr()
+  return Ok(None)
+"#,
+        "checked C string pointer without unsafe acknowledgement",
+    );
+    assert!(
+        errors.iter().any(|error| {
+            error
+                .message
+                .contains("extracting a checked C string pointer requires an enclosing `unsafe:` acknowledgement")
+        }),
+        "expected checked C string pointer acknowledgement diagnostic, got {errors:?}"
+    );
+}
+
+#[test]
+fn checked_c_string_view_copy_requires_unsafe_and_a_named_bound() {
+    let span = Span::new(1, 20);
+    let mut checker = TypeChecker::new();
+    checker.symbols.define(crate::frontend::symbols::Symbol {
+        name: "view".to_string(),
+        kind: crate::frontend::symbols::SymbolKind::Variable(crate::frontend::symbols::VariableInfo {
+            ty: ResolvedType::Named(incan_core::lang::c_abi::SCOPED_C_STRING_VIEW_TYPE_ID.to_string()),
+            is_mutable: false,
+            is_used: false,
+        }),
+        span,
+        scope: 0,
+    });
+    let view = Spanned::new(Expr::Ident("view".to_string()), span);
+    let copy = Spanned::new(
+        Expr::MethodCall(
+            Box::new(view.clone()),
+            "copy_utf8".to_string(),
+            Vec::new(),
+            vec![CallArg::Named(
+                "max_bytes".to_string(),
+                Spanned::new(Expr::Literal(Literal::Int(IntLiteral::synthetic(64))), span),
+            )],
+        ),
+        span,
+    );
+
+    assert_eq!(checker.check_expr(&copy), ResolvedType::Unknown);
+    assert!(
+        checker.errors.iter().any(|error| error
+            .message
+            .contains("copying a scoped C string view requires an enclosing `unsafe:`")),
+        "expected scoped-view unsafe diagnostic, got {:?}",
+        checker.errors
+    );
+
+    checker.errors.clear();
+    checker.unsafe_depth = 1;
+    assert_eq!(
+        checker.check_expr(&copy),
+        ResolvedType::Generic("Result".to_string(), vec![ResolvedType::Str, ResolvedType::Str])
+    );
+    assert!(
+        checker.errors.is_empty(),
+        "unexpected scoped-view copy errors: {:?}",
+        checker.errors
+    );
+    assert!(checker.type_info.c_abi.uses_scoped_c_string_views);
+
+    let missing_name = Spanned::new(
+        Expr::MethodCall(
+            Box::new(view),
+            "copy_utf8".to_string(),
+            Vec::new(),
+            vec![CallArg::Positional(Spanned::new(
+                Expr::Literal(Literal::Int(IntLiteral::synthetic(64))),
+                span,
+            ))],
+        ),
+        span,
+    );
+    assert_eq!(checker.check_expr(&missing_name), ResolvedType::Unknown);
+    assert!(
+        checker
+            .errors
+            .iter()
+            .any(|error| error.message.contains("copy_utf8(max_bytes=<positive int>)")),
+        "expected explicit-bound diagnostic, got {:?}",
+        checker.errors
+    );
+}
+
+#[test]
+fn checked_c_binding_rejects_general_pointer_calls() {
+    let span = Span::new(1, 20);
+    let mut checker = TypeChecker::new();
+    let mut descriptor = scalar_c_binding_descriptor();
+    descriptor.symbols[0].parameters[0].ty = CBindingType::Pointer {
+        mutable: false,
+        pointee: Box::new(CBindingType::Scalar(ScalarTypeId::I32)),
+    };
+    checker
+        .type_info
+        .c_abi
+        .bindings
+        .insert(descriptor.class_name.clone(), descriptor);
+    checker.unsafe_depth = 1;
+
+    assert_eq!(checker.check_expr(&scalar_c_binding_call(span)), ResolvedType::Unknown);
+    assert!(
+        checker.errors.iter().any(|error| error
+            .message
+            .contains("requires native ownership or ABI emission that is not implemented yet")),
+        "expected general-pointer rejection, got {:?}",
+        checker.errors
+    );
+    assert!(checker.type_info.c_abi.raw_calls.is_empty());
 }
 
 fn resource_c_binding_descriptor() -> CBindingDescriptor {
@@ -20978,6 +21253,7 @@ fn resource_c_binding_descriptor() -> CBindingDescriptor {
         class_name: "Fixture".to_string(),
         header: "fixture.h".to_string(),
         system_library: "fixture".to_string(),
+        link_capability: incan_core::lang::c_abi::LinkCapabilityId::SystemLibrary,
         resources: vec![CBindingResource {
             span: Span::default(),
             name: "Handle".to_string(),
@@ -20996,6 +21272,7 @@ fn resource_c_binding_descriptor() -> CBindingDescriptor {
                     },
                 }],
                 return_type: CBindingType::Void,
+                buffers: Vec::new(),
                 outcomes: Vec::new(),
             },
             CBindingSymbol {
@@ -21009,6 +21286,7 @@ fn resource_c_binding_descriptor() -> CBindingDescriptor {
                     },
                 }],
                 return_type: CBindingType::Void,
+                buffers: Vec::new(),
                 outcomes: Vec::new(),
             },
         ],

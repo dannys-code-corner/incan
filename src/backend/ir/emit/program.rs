@@ -27,7 +27,7 @@ use crate::frontend::symbols::{
     NewtypePrimitiveConstraint, overload_emitted_name_prefix, overload_source_name_from_emitted,
 };
 use crate::provider::SDK_PROVIDER_BUILD_ENV;
-use incan_core::lang::c_abi::ScalarTypeId;
+use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId};
 use incan_core::lang::surface::result_methods::ResultMethodId;
 use incan_core::lang::types::numerics::{self, NumericFamily};
 use incan_core::lang::{conventions, magic_methods, stdlib as core_stdlib, trait_capabilities};
@@ -55,6 +55,18 @@ struct OrdinalValueEnumBridgeSpec {
     value_type: IrEnumValueType,
     trait_path: TokenStream,
     error_path: TokenStream,
+}
+
+/// Render the one checked native-link declaration retained from the C binding descriptor.
+///
+/// Framework linkage is not a linker-search fallback. The checked descriptor owns its framework link while the
+/// locked Oven target plan owns its explicit toolchain and SDK requirements. A later packaging adapter must validate
+/// their declared correspondence before producing a target package; this emitter does not invent that correspondence.
+fn checked_c_link_attribute(library: &str, capability: LinkCapabilityId) -> TokenStream {
+    match capability {
+        LinkCapabilityId::SystemLibrary => quote! { #[link(name = #library)] },
+        LinkCapabilityId::Framework => quote! { #[link(name = #library, kind = "framework")] },
+    }
 }
 
 /// Builder for generated Rust item/import usage facts.
@@ -1345,14 +1357,36 @@ impl<'a> IrEmitter<'a> {
             let wrapper = format_ident!("{}", function.rust_name());
             let ffi = format_ident!("{}", function.ffi_rust_name());
             let library = &function.system_library;
+            let link = checked_c_link_attribute(library, function.link_capability);
             let native_symbol = &function.native_symbol;
+            let scalar_generic_bounds = function
+                .parameters
+                .iter()
+                .enumerate()
+                .filter_map(|(index, parameter)| {
+                    let IrCheckedCType::Scalar(scalar) = parameter else {
+                        return None;
+                    };
+                    let generic = format_ident!("__IncanCheckedCArg{index}");
+                    let carrier = Self::checked_c_scalar_rust_type(*scalar);
+                    Some(quote! { #generic: ::core::convert::TryInto<#carrier> })
+                })
+                .collect::<Vec<_>>();
+            let scalar_generic_clause =
+                (!scalar_generic_bounds.is_empty()).then(|| quote! { <#(#scalar_generic_bounds),*> });
             let wrapper_params = function
                 .parameters
                 .iter()
                 .enumerate()
                 .map(|(index, parameter)| {
                     let name = format_ident!("__incan_arg_{index}");
-                    let ty = Self::checked_c_wrapper_parameter_type(function, index, parameter);
+                    let ty = match parameter {
+                        IrCheckedCType::Scalar(_) => {
+                            let generic = format_ident!("__IncanCheckedCArg{index}");
+                            quote! { #generic }
+                        }
+                        _ => Self::checked_c_wrapper_parameter_type(function, index, parameter),
+                    };
                     quote! { #name: #ty }
                 })
                 .collect::<Vec<_>>();
@@ -1377,7 +1411,7 @@ impl<'a> IrEmitter<'a> {
                 .collect::<Vec<_>>();
             let foreign = match &function.return_type {
                 IrCheckedCType::Void => quote! {
-                    #[link(name = #library)]
+                    #link
                     unsafe extern "C" {
                         #[link_name = #native_symbol]
                         fn #ffi(#(#ffi_params),*);
@@ -1386,7 +1420,7 @@ impl<'a> IrEmitter<'a> {
                 return_type => {
                     let return_type = Self::checked_c_ffi_type(return_type);
                     quote! {
-                        #[link(name = #library)]
+                        #link
                         unsafe extern "C" {
                             #[link_name = #native_symbol]
                             fn #ffi(#(#ffi_params),*) -> #return_type;
@@ -1398,7 +1432,7 @@ impl<'a> IrEmitter<'a> {
             let wrapper_item = match &function.return_type {
                 IrCheckedCType::Void => quote! {
                     #[inline]
-                    fn #wrapper(#(#wrapper_params),*) {
+                    fn #wrapper #scalar_generic_clause (#(#wrapper_params),*) {
                         unsafe { #ffi(#(#ffi_args),*); }
                     }
                 },
@@ -1406,7 +1440,7 @@ impl<'a> IrEmitter<'a> {
                     let conversion = Self::checked_c_wrapper_return(function, return_type);
                     quote! {
                         #[inline]
-                        fn #wrapper(#(#wrapper_params),*) -> #wrapper_return {
+                        fn #wrapper #scalar_generic_clause (#(#wrapper_params),*) -> #wrapper_return {
                             let __incan_result = unsafe { #ffi(#(#ffi_args),*) };
                             #conversion
                         }
@@ -1420,6 +1454,67 @@ impl<'a> IrEmitter<'a> {
             }
         }));
         items
+    }
+
+    /// Emit the private fallible constructor used by checked C string temporaries in this module.
+    fn emit_checked_c_string_constructor() -> TokenStream {
+        let constructor = format_ident!("{}", incan_core::lang::c_abi::C_STRING_CONSTRUCTOR_RUST_NAME);
+        quote! {
+            #[inline]
+            fn #constructor(value: String) -> Result<::std::ffi::CString, String> {
+                ::std::ffi::CString::new(value)
+                    .map_err(|_| "C strings cannot contain an interior NUL byte".to_string())
+            }
+        }
+    }
+
+    /// Emit the private bounded owning conversion for one returned C string view.
+    fn emit_checked_c_scoped_string_copy() -> TokenStream {
+        let helper = format_ident!("{}", incan_core::lang::c_abi::SCOPED_C_STRING_COPY_UTF8_RUST_NAME);
+        quote! {
+            #[inline]
+            fn #helper(value: *const ::std::os::raw::c_char, max_bytes: i64) -> Result<String, String> {
+                if value.is_null() {
+                    return Err("cannot copy text from a null C string view".to_string());
+                }
+                let limit = match usize::try_from(max_bytes) {
+                    Ok(limit) if limit > 0 => limit,
+                    Ok(_) => return Err("copy_utf8(max_bytes=...) requires a positive bound".to_string()),
+                    Err(_) => return Err("copy_utf8(max_bytes=...) exceeds the platform addressable range".to_string()),
+                };
+                // SAFETY: the explicit source bound limits the scan; the checked C declaration and enclosing unsafe
+                // acknowledgement remain responsible for the foreign view being readable for that bounded range.
+                let bytes = unsafe { ::std::slice::from_raw_parts(value.cast::<u8>(), limit) };
+                let Some(terminator) = bytes.iter().position(|byte| *byte == 0) else {
+                    return Err("C string view has no terminator within max_bytes".to_string());
+                };
+                ::std::str::from_utf8(&bytes[..terminator])
+                    .map(str::to_owned)
+                    .map_err(|_| "C string view is not valid UTF-8".to_string())
+            }
+        }
+    }
+
+    /// Emit the private validation boundary that returns an existing caller-owned typed allocation after a C write.
+    fn emit_checked_c_span_finish() -> TokenStream {
+        let helper = format_ident!("{}", incan_core::lang::c_abi::MUTABLE_SPAN_FINISH_RUST_NAME);
+        quote! {
+            #[inline]
+            fn #helper<T, W>(mut value: Vec<T>, written: W) -> Result<Vec<T>, String>
+            where
+                W: ::core::convert::TryInto<usize>,
+            {
+                let written = match <W as ::core::convert::TryInto<usize>>::try_into(written) {
+                    Ok(written) => written,
+                    Err(_) => return Err("C span result count is outside the platform addressable range".to_string()),
+                };
+                if written > value.len() {
+                    return Err("C span result count exceeds the declared caller-owned capacity".to_string());
+                }
+                value.truncate(written);
+                Ok(value)
+            }
+        }
     }
 
     /// Emit one non-cloneable release-guard wrapper for each opaque C resource used by emitted calls.
@@ -1439,6 +1534,7 @@ impl<'a> IrEmitter<'a> {
                 let wrapper = format_ident!("{name}");
                 let release = format_ident!("{name}__release");
                 let library = resource.system_library;
+                let link = checked_c_link_attribute(&library, resource.link_capability);
                 let native = resource.release_native_symbol;
                 let release_return = Self::checked_c_ffi_type(&resource.release_return_type);
                 quote! {
@@ -1447,7 +1543,7 @@ impl<'a> IrEmitter<'a> {
                         ptr: *mut ::core::ffi::c_void,
                     }
 
-                    #[link(name = #library)]
+                    #link
                     unsafe extern "C" {
                         #[link_name = #native]
                         fn #release(ptr: *mut ::core::ffi::c_void) -> #release_return;
@@ -1504,6 +1600,7 @@ impl<'a> IrEmitter<'a> {
                     match value.as_ref() {
                         IrCheckedCType::Scalar(scalar) => {
                             let carrier = Self::checked_c_scalar_rust_type(*scalar);
+                            let source_carrier = Self::checked_c_source_scalar_rust_type(*scalar);
                             let argument_message = format!(
                                 "checked C in/out value for {}.{}.{parameter} is outside the declared {} range",
                                 function.binding,
@@ -1514,6 +1611,26 @@ impl<'a> IrEmitter<'a> {
                                 "checked C output value for {}.{}.{parameter} cannot be represented by Incan int",
                                 function.binding, function.symbol
                             );
+                            let from_incan_value = if incan_core::lang::c_abi::scalar_numeric_type(*scalar).is_some() {
+                                quote! { value }
+                            } else {
+                                quote! {
+                                    match <#carrier>::try_from(value) {
+                                        Ok(value) => value,
+                                        Err(_) => panic!(#argument_message),
+                                    }
+                                }
+                            };
+                            let take_value = if incan_core::lang::c_abi::scalar_numeric_type(*scalar).is_some() {
+                                quote! { value }
+                            } else {
+                                quote! {
+                                    match i64::try_from(value) {
+                                        Ok(value) => value,
+                                        Err(_) => panic!(#result_message),
+                                    }
+                                }
+                            };
                             Some(quote! {
                                 struct #slot { value: ::core::mem::MaybeUninit<#carrier> }
 
@@ -1522,11 +1639,8 @@ impl<'a> IrEmitter<'a> {
                                     fn uninit() -> Self { Self { value: ::core::mem::MaybeUninit::uninit() } }
 
                                     #[inline]
-                                    fn from_incan_value(value: i64) -> Self {
-                                        let value = match <#carrier>::try_from(value) {
-                                            Ok(value) => value,
-                                            Err(_) => panic!(#argument_message),
-                                        };
+                                    fn from_incan_value(value: #source_carrier) -> Self {
+                                        let value = #from_incan_value;
                                         Self { value: ::core::mem::MaybeUninit::new(value) }
                                     }
 
@@ -1534,12 +1648,9 @@ impl<'a> IrEmitter<'a> {
                                     fn as_mut_ptr(&mut self) -> *mut #carrier { self.value.as_mut_ptr() }
 
                                     #[inline]
-                                    fn take(self) -> i64 {
+                                    fn take(self) -> #source_carrier {
                                         let value = unsafe { self.value.assume_init() };
-                                        match i64::try_from(value) {
-                                            Ok(value) => value,
-                                            Err(_) => panic!(#result_message),
-                                        }
+                                        #take_value
                                     }
                                 }
                             })
@@ -1577,7 +1688,7 @@ impl<'a> IrEmitter<'a> {
         ty: &IrCheckedCType,
     ) -> TokenStream {
         match ty {
-            IrCheckedCType::Scalar(_) => quote! { i64 },
+            IrCheckedCType::Scalar(scalar) => Self::checked_c_source_scalar_rust_type(*scalar),
             IrCheckedCType::Resource { access, resource } => {
                 let resource = format_ident!(
                     "{}",
@@ -1597,6 +1708,7 @@ impl<'a> IrEmitter<'a> {
                 );
                 quote! { &mut #slot }
             }
+            IrCheckedCType::Pointer { .. } => Self::checked_c_ffi_type(ty),
             IrCheckedCType::Nullable(_) | IrCheckedCType::Void => quote! { () },
         }
     }
@@ -1605,6 +1717,14 @@ impl<'a> IrEmitter<'a> {
     fn checked_c_ffi_type(ty: &IrCheckedCType) -> TokenStream {
         match ty {
             IrCheckedCType::Scalar(scalar) => Self::checked_c_scalar_rust_type(*scalar),
+            IrCheckedCType::Pointer { mutable, pointee } => {
+                let pointee = Self::checked_c_ffi_type(pointee);
+                if *mutable {
+                    quote! { *mut #pointee }
+                } else {
+                    quote! { *const #pointee }
+                }
+            }
             IrCheckedCType::Resource { .. } => quote! { *mut ::core::ffi::c_void },
             IrCheckedCType::Output { value, .. } => {
                 let value = Self::checked_c_ffi_type(value);
@@ -1631,7 +1751,12 @@ impl<'a> IrEmitter<'a> {
                     function.symbol,
                     incan_core::lang::c_abi::scalar_type_as_str(*scalar),
                 );
-                quote! { match <#carrier>::try_from(#name) { Ok(value) => value, Err(_) => panic!(#message) } }
+                quote! {
+                    match <_ as ::core::convert::TryInto<#carrier>>::try_into(#name) {
+                        Ok(value) => value,
+                        Err(_) => panic!(#message),
+                    }
+                }
             }
             IrCheckedCType::Resource { access, .. } => match access {
                 crate::frontend::typechecker::CResourceAccess::Owned => quote! { #name.into_raw() },
@@ -1639,6 +1764,7 @@ impl<'a> IrEmitter<'a> {
                 | crate::frontend::typechecker::CResourceAccess::BorrowedMut => quote! { #name.as_raw() },
             },
             IrCheckedCType::Output { .. } => quote! { #name.as_mut_ptr() },
+            IrCheckedCType::Pointer { .. } => quote! { #name },
             IrCheckedCType::Nullable(_) | IrCheckedCType::Void => quote! { () },
         }
     }
@@ -1646,7 +1772,8 @@ impl<'a> IrEmitter<'a> {
     /// Return the generated ordinary-Rust result carrier for one bounded checked-C value contract.
     fn checked_c_value_rust_type(binding: &str, ty: &IrCheckedCType) -> TokenStream {
         match ty {
-            IrCheckedCType::Scalar(_) => quote! { i64 },
+            IrCheckedCType::Scalar(scalar) => Self::checked_c_source_scalar_rust_type(*scalar),
+            IrCheckedCType::Pointer { .. } => Self::checked_c_ffi_type(ty),
             IrCheckedCType::Resource { resource, .. } => {
                 let resource = format_ident!("{}", IrCheckedCFunction::resource_rust_type_name(binding, resource));
                 quote! { #resource }
@@ -1663,6 +1790,9 @@ impl<'a> IrEmitter<'a> {
     fn checked_c_wrapper_return(function: &IrCheckedCFunction, ty: &IrCheckedCType) -> TokenStream {
         match ty {
             IrCheckedCType::Scalar(scalar) => {
+                if incan_core::lang::c_abi::scalar_numeric_type(*scalar).is_some() {
+                    return quote! { __incan_result };
+                }
                 let message = format!(
                     "checked C result for {}.{} cannot be represented by Incan int ({})",
                     function.binding,
@@ -1690,6 +1820,7 @@ impl<'a> IrEmitter<'a> {
                 }
                 _ => quote! { () },
             },
+            IrCheckedCType::Pointer { .. } => quote! { __incan_result },
             IrCheckedCType::Void | IrCheckedCType::Output { .. } => quote! { () },
         }
     }
@@ -1705,9 +1836,26 @@ impl<'a> IrEmitter<'a> {
             ScalarTypeId::U32 => quote! { u32 },
             ScalarTypeId::I64 => quote! { i64 },
             ScalarTypeId::U64 => quote! { u64 },
+            ScalarTypeId::I128 => quote! { i128 },
+            ScalarTypeId::U128 => quote! { u128 },
+            ScalarTypeId::F32 => quote! { f32 },
+            ScalarTypeId::F64 => quote! { f64 },
             ScalarTypeId::Size => quote! { usize },
             ScalarTypeId::CChar => quote! { ::std::os::raw::c_char },
             ScalarTypeId::CInt => quote! { ::std::os::raw::c_int },
+        }
+    }
+
+    /// Return the generated source-visible Rust representation for one checked C scalar.
+    ///
+    /// Fixed-width and selected-target `size_t` carriers retain their exact Incan numeric representation. The two
+    /// target-defined C aliases remain on the legacy checked `i64` façade until receipt-selected target layout facts
+    /// can name a stable Incan numeric identity.
+    fn checked_c_source_scalar_rust_type(scalar: ScalarTypeId) -> TokenStream {
+        if incan_core::lang::c_abi::scalar_numeric_type(scalar).is_some() {
+            Self::checked_c_scalar_rust_type(scalar)
+        } else {
+            quote! { i64 }
         }
     }
 
@@ -3727,6 +3875,15 @@ impl<'a> IrEmitter<'a> {
 
         let compiler_version = crate::version::INCAN_VERSION;
         items.push(quote! { incan_stdlib::__incan_stdlib_version_check!(#compiler_version); });
+        if program.uses_checked_c_strings {
+            items.push(Self::emit_checked_c_string_constructor());
+        }
+        if program.uses_scoped_c_string_views {
+            items.push(Self::emit_checked_c_scoped_string_copy());
+        }
+        if program.uses_checked_c_span_buffers {
+            items.push(Self::emit_checked_c_span_finish());
+        }
         items.extend(Self::emit_checked_c_functions(&program.checked_c_functions));
 
         let needs_json_serialize_trait_scope = emitted_declarations.iter().any(|decl| {
@@ -3981,7 +4138,8 @@ mod tests {
     use super::IrEmitter;
     use crate::backend::ir::types::{IR_UNION_TYPE_NAME, IrType};
     use crate::backend::ir::{IrCheckedCFunction, IrCheckedCType, IrProgram};
-    use incan_core::lang::c_abi::ScalarTypeId;
+    use crate::frontend::typechecker::COutputMode;
+    use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId};
     use std::collections::HashMap;
 
     fn union(members: Vec<IrType>) -> IrType {
@@ -4077,6 +4235,7 @@ mod tests {
             symbol: "absolute".to_string(),
             native_symbol: "abs".to_string(),
             system_library: "c".to_string(),
+            link_capability: LinkCapabilityId::SystemLibrary,
             parameters: vec![IrCheckedCType::Scalar(ScalarTypeId::I32)],
             parameter_names: vec!["value".to_string()],
             return_type: IrCheckedCType::Scalar(ScalarTypeId::I32),
@@ -4087,9 +4246,129 @@ mod tests {
         let normalized = generated.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
         assert!(normalized.contains("#[link(name=\"c\")]unsafeextern\"C\""));
         assert!(normalized.contains("#[link_name=\"abs\"]fn__incan_c_Fixture__absolute__ffi(__incan_arg_0:i32)->i32;"));
-        assert!(normalized.contains("fn__incan_c_Fixture__absolute(__incan_arg_0:i64)->i64"));
-        assert!(normalized.contains("match<i32>::try_from(__incan_arg_0)"));
-        assert!(normalized.contains("matchi64::try_from(__incan_result)"));
+        assert!(normalized.contains("fn__incan_c_Fixture__absolute<__IncanCheckedCArg0:"));
+        assert!(normalized.contains("::core::convert::TryInto<i32>"));
+        assert!(normalized.contains("(__incan_arg_0:__IncanCheckedCArg0,)->i32"));
+        assert!(normalized.contains("TryInto<i32>>::try_into(__incan_arg_0)"));
+        assert!(
+            !normalized.contains("try_from(__incan_arg_0)"),
+            "an exact c.i32 carrier must not normalize its argument through another integer type"
+        );
+        assert!(
+            !normalized.contains("try_from(__incan_result)"),
+            "an exact c.i32 carrier must not normalize its result through another integer type"
+        );
+        assert!(!normalized.contains(".expect("));
+        Ok(())
+    }
+
+    #[test]
+    fn checked_c_output_slots_preserve_every_exact_scalar_carrier() -> Result<(), String> {
+        let mut program = IrProgram::new();
+        let scalars = [
+            (ScalarTypeId::I8, "i8"),
+            (ScalarTypeId::U8, "u8"),
+            (ScalarTypeId::I16, "i16"),
+            (ScalarTypeId::U16, "u16"),
+            (ScalarTypeId::I32, "i32"),
+            (ScalarTypeId::U32, "u32"),
+            (ScalarTypeId::I64, "i64"),
+            (ScalarTypeId::U64, "u64"),
+            (ScalarTypeId::I128, "i128"),
+            (ScalarTypeId::U128, "u128"),
+            (ScalarTypeId::F32, "f32"),
+            (ScalarTypeId::F64, "f64"),
+            (ScalarTypeId::Size, "usize"),
+        ];
+        for (index, (scalar, _)) in scalars.iter().enumerate() {
+            program.checked_c_functions.push(IrCheckedCFunction {
+                binding: "Fixture".to_string(),
+                symbol: format!("write_scalar_{index}"),
+                native_symbol: format!("fixture_write_scalar_{index}"),
+                system_library: "fixture".to_string(),
+                link_capability: LinkCapabilityId::SystemLibrary,
+                parameters: vec![IrCheckedCType::Output {
+                    mode: COutputMode::InOut,
+                    value: Box::new(IrCheckedCType::Scalar(*scalar)),
+                }],
+                parameter_names: vec!["value".to_string()],
+                return_type: IrCheckedCType::Void,
+                resources: Vec::new(),
+            });
+        }
+
+        let mut emitter = IrEmitter::new(&program.function_registry);
+        let generated = emitter.emit_program(&program).map_err(|error| error.to_string())?;
+        let normalized = generated.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+        for (_, rust_type) in scalars {
+            assert!(
+                normalized.contains(&format!("fnfrom_incan_value(value:{rust_type})->Self")),
+                "checked C output storage must accept exact {rust_type} values"
+            );
+            assert!(
+                normalized.contains(&format!("fntake(self)->{rust_type}")),
+                "checked C output storage must return exact {rust_type} values"
+            );
+        }
+        assert!(
+            !normalized.contains("i64::try_from(value)"),
+            "exact C output carriers must not normalize results through i64"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checked_c_string_input_emits_private_cstring_and_const_character_pointer_bridge() -> Result<(), String> {
+        let mut program = IrProgram::new();
+        program.uses_checked_c_strings = true;
+        program.checked_c_functions.push(IrCheckedCFunction {
+            binding: "LibC".to_string(),
+            symbol: "string_length".to_string(),
+            native_symbol: "strlen".to_string(),
+            system_library: "c".to_string(),
+            link_capability: LinkCapabilityId::SystemLibrary,
+            parameters: vec![IrCheckedCType::Pointer {
+                mutable: false,
+                pointee: Box::new(IrCheckedCType::Scalar(ScalarTypeId::CChar)),
+            }],
+            parameter_names: vec!["value".to_string()],
+            return_type: IrCheckedCType::Scalar(ScalarTypeId::Size),
+            resources: Vec::new(),
+        });
+
+        let mut emitter = IrEmitter::new(&program.function_registry);
+        let generated = emitter.emit_program(&program).map_err(|error| error.to_string())?;
+        let normalized = generated.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+
+        assert!(normalized.contains("fn__incan_checked_c_cstr(value:String)->Result<::std::ffi::CString,String>"));
+        assert!(normalized.contains("CString::new(value)"));
+        assert!(
+            normalized.contains(
+                "fn__incan_c_LibC__string_5flength__ffi(__incan_arg_0:*const::std::os::raw::c_char,)->usize;"
+            )
+        );
+        assert!(
+            normalized
+                .contains("fn__incan_c_LibC__string_5flength(__incan_arg_0:*const::std::os::raw::c_char,)->usize")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checked_c_string_view_emits_bounded_utf8_copy_helper() -> Result<(), String> {
+        let mut program = IrProgram::new();
+        program.uses_scoped_c_string_views = true;
+        let mut emitter = IrEmitter::new(&program.function_registry);
+        let generated = emitter.emit_program(&program).map_err(|error| error.to_string())?;
+        let normalized = generated.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+
+        assert!(normalized.contains("fn__incan_checked_c_copy_utf8"));
+        assert!(normalized.contains("max_bytes:i64"));
+        assert!(normalized.contains("value.is_null()"));
+        assert!(normalized.contains("usize::try_from(max_bytes)"));
+        assert!(normalized.contains("from_raw_parts(value.cast::<u8>(),limit)"));
+        assert!(normalized.contains("bytes.iter().position(|byte|*byte==0)"));
+        assert!(normalized.contains("::std::str::from_utf8(&bytes[..terminator])"));
         assert!(!normalized.contains(".expect("));
         Ok(())
     }

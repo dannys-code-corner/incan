@@ -50,7 +50,7 @@ pub use stmt::{IrStmt, IrStmtKind};
 pub use types::{IrType, Mutability, Ownership};
 
 use crate::frontend::ast::Span;
-use incan_core::lang::c_abi::ScalarTypeId;
+use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId};
 use std::collections::HashMap;
 
 /// Function signature for call-site type checking
@@ -276,6 +276,13 @@ pub struct IrNewtypeConstructionPlan {
 pub enum IrCheckedCType {
     /// One exact C scalar category represented by the ordinary Incan integer carrier.
     Scalar(ScalarTypeId),
+    /// A checked raw pointer whose pointee contract remains distinct from an integer address.
+    Pointer {
+        /// Whether native code may mutate the pointed-to value.
+        mutable: bool,
+        /// Exact checked pointee contract.
+        pointee: Box<IrCheckedCType>,
+    },
     /// An opaque resource passed by value, shared borrow, or exclusive borrow.
     Resource {
         /// Call-site ownership relationship declared by the binding.
@@ -309,6 +316,8 @@ pub struct IrCheckedCResource {
     pub release_return_type: IrCheckedCType,
     /// Logical system-library capability selected by the checked binding.
     pub system_library: String,
+    /// Exact native linker form selected by the checked binding declaration.
+    pub link_capability: LinkCapabilityId,
 }
 
 /// One source-checked C function that lowering has authorized for direct emission.
@@ -326,6 +335,8 @@ pub struct IrCheckedCFunction {
     pub native_symbol: String,
     /// Logical system library selected by the checked binding.
     pub system_library: String,
+    /// Exact native linker form selected by the checked binding declaration.
+    pub link_capability: LinkCapabilityId,
     /// Exact checked parameters in declaration order.
     pub parameters: Vec<IrCheckedCType>,
     /// Source parameter names paired positionally with `parameters`.
@@ -411,6 +422,12 @@ pub struct IrProgram {
     pub newtype_construction: std::collections::HashMap<String, IrNewtypeConstructionPlan>,
     /// Checked C functions selected by source calls in this module.
     pub checked_c_functions: Vec<IrCheckedCFunction>,
+    /// Whether this module uses compiler-private checked C string temporaries.
+    pub uses_checked_c_strings: bool,
+    /// Whether this module copies returned scoped C string views through the bounded compiler-private helper.
+    pub uses_scoped_c_string_views: bool,
+    /// Whether this module finishes caller-owned checked byte buffers through the bounded compiler-private helper.
+    pub uses_checked_c_span_buffers: bool,
 }
 
 impl IrProgram {
@@ -426,6 +443,9 @@ impl IrProgram {
             rust_module_path: None,
             newtype_construction: std::collections::HashMap::new(),
             checked_c_functions: Vec::new(),
+            uses_checked_c_strings: false,
+            uses_scoped_c_string_views: false,
+            uses_checked_c_span_buffers: false,
         }
     }
 }
@@ -455,6 +475,7 @@ impl From<Span> for IrSpan {
 #[cfg(test)]
 mod tests {
     use super::{IrCheckedCFunction, IrCheckedCType, ScalarTypeId};
+    use incan_core::lang::c_abi::LinkCapabilityId;
 
     fn checked_c_function(binding: &str, symbol: &str) -> IrCheckedCFunction {
         IrCheckedCFunction {
@@ -462,6 +483,7 @@ mod tests {
             symbol: symbol.to_string(),
             native_symbol: "fixture".to_string(),
             system_library: "fixture".to_string(),
+            link_capability: LinkCapabilityId::SystemLibrary,
             parameters: vec![IrCheckedCType::Scalar(ScalarTypeId::I32)],
             parameter_names: vec!["value".to_string()],
             return_type: IrCheckedCType::Scalar(ScalarTypeId::I32),

@@ -17987,6 +17987,28 @@ def main() -> Result[None, SessionError]:
     }
 
     #[test]
+    fn consumer_check_resolves_a_manifest_declared_package_relative_c_header() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let tmp = tempfile::tempdir()?;
+        let header = tmp.path().join("interop/include/fixture.h");
+        std::fs::create_dir_all(header.parent().ok_or("fixture header has no parent")?)?;
+        std::fs::write(&header, "int fixture_abs(int value);\n")?;
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"package_relative_c_header\"\n\n[sdk]\nprofile = \"minimal\"\n\n[oven.interop]\nschema = 1\n\n[[oven.interop.targets]]\ntarget = \"aarch64-apple-darwin\"\nheaders = [\"interop/include/fixture.h\"]\n",
+            "from std.interop import c\n\nbinding Fixture:\n    header = \"interop/include/fixture.h\"\n    link = c.system_library(\"c\")\n\n    symbol absolute(value: c.i32) -> c.i32:\n        native = \"fixture_abs\"\n\ndef main() -> None:\n    pass\n",
+        )?;
+        let output = run_check_against_checkout_sdk(&main_path, &tmp.path().join("generated-cargo-target"))?;
+        assert!(
+            output.status.success(),
+            "expected a package-relative checked C header to resolve through [oven.interop].\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn consumer_check_verifies_checked_c_resource_and_output_contracts() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
         let fixture_header = tmp.path().join("fixture.h");
@@ -17995,7 +18017,7 @@ def main() -> Result[None, SessionError]:
             "typedef unsigned long size_t;\nvoid free(void *);\nint posix_memalign(void **, size_t, size_t);\nunsigned int rand_r(unsigned int *);\n#define FIXTURE_OK 0\n",
         )?;
         let source = format!(
-            "from std.interop import c\n\nbinding Fixture:\n    header = \"{}\"\n    link = c.system_library(\"c\")\n\n    resource Memory:\n        native = \"void\"\n        release = close\n\n    symbol close(handle: c.Owned[Memory]) -> None:\n        native = \"free\"\n\n    enum Status:\n        OK: c.i32 = FIXTURE_OK\n\n    symbol open(output: c.Out[c.Owned[Memory]], alignment: c.Size, size: c.Size) -> c.i32:\n        native = \"posix_memalign\"\n\n        outcome Status.OK:\n            initializes = [output]\n\n    symbol random(seed: c.InOut[c.u32]) -> c.u32:\n        native = \"rand_r\"\n\ndef main() -> None:\n    unsafe:\n        handle = c.out[c.Owned[Memory]]()\n        status = Fixture.open(handle, 8, 8)\n        if status == Fixture.Status.OK:\n            resource = handle.take()\n            Fixture.close(resource)\n\n        seed = c.inout(7)\n        Fixture.random(seed)\n        seed.take()\n",
+            "from std.interop import c\n\nbinding Fixture:\n    header = \"{}\"\n    link = c.system_library(\"c\")\n\n    resource Memory:\n        native = \"void\"\n        release = close\n\n    symbol close(handle: c.Owned[Memory]) -> None:\n        native = \"free\"\n\n    enum Status:\n        OK: c.i32 = FIXTURE_OK\n\n    symbol open(output: c.Out[c.Owned[Memory]], alignment: c.Size, size: c.Size) -> c.i32:\n        native = \"posix_memalign\"\n\n        outcome Status.OK:\n            initializes = [output]\n\n    symbol random(seed: c.InOut[c.u32]) -> c.u32:\n        native = \"rand_r\"\n\ndef main() -> None:\n    unsafe:\n        handle = c.out[c.Owned[Memory]]()\n        status = Fixture.open(handle, 8, 8)\n        if status == Fixture.Status.OK:\n            resource = handle.take()\n            Fixture.close(resource)\n\n        seed_value: u32 = 7\n        seed = c.inout(seed_value)\n        Fixture.random(seed)\n        seed.take()\n",
             fixture_header.display()
         );
         let main_path = write_project_files(
@@ -18029,6 +18051,1060 @@ def main() -> Result[None, SessionError]:
             String::from_utf8_lossy(&run_output.stdout),
             String::from_utf8_lossy(&run_output.stderr)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_run_passes_checked_c_string_to_a_pointer_parameter() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let fixture_header = tmp.path().join("checked_c_string_fixture.h");
+        std::fs::write(
+            &fixture_header,
+            "typedef unsigned long size_t;\nsize_t strlen(const char *value);\n",
+        )?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding LibC:
+    header = "{}"
+    link = c.system_library("c")
+
+    symbol string_length(value: c.ConstPtr[c.c_char]) -> c.Size:
+        native = "strlen"
+
+def checked_length(value: str) -> Result[usize, str]:
+    text = c.cstr(value)?
+    unsafe:
+        return Ok(LibC.string_length(text.as_const_ptr()))
+
+def main() -> Result[None, str]:
+    assert checked_length("incan")? == 5
+    match c.cstr("not{nul}allowed"):
+        Err(_) => return Ok(None)
+        Ok(_) => return Err("expected c.cstr to reject an interior terminator")
+"#,
+            fixture_header.display(),
+            nul = '\0',
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_string\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected a checked C string to typecheck.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let run_output = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["run", main_path.to_string_lossy().as_ref()])
+            .output()?;
+        assert!(
+            run_output.status.success(),
+            "expected a checked C string to compile and run.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_hides_owned_c_resources_behind_an_incan_facade() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let fixture_header = tmp.path().join("fixture.h");
+        std::fs::write(
+            &fixture_header,
+            r#"typedef struct fixture_file FILE;
+int fclose(FILE *);
+FILE *tmpfile(void);
+int fflush(FILE *);
+int fileno(FILE *);
+int close(int);
+"#,
+        )?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding CFile:
+    header = "{}"
+    link = c.system_library("c")
+
+    resource File:
+        native = "FILE"
+        release = close
+
+    symbol close(file: c.Owned[File]) -> c.i32:
+        native = "fclose"
+
+    symbol open() -> Option[c.Owned[File]]:
+        native = "tmpfile"
+
+    symbol flush(file: c.BorrowedMut[File]) -> c.i32:
+        native = "fflush"
+
+    symbol descriptor(file: c.Borrowed[File]) -> c.i32:
+        native = "fileno"
+
+    symbol close_descriptor(descriptor: c.i32) -> c.i32:
+        native = "close"
+
+def temporary_descriptor() -> int:
+    unsafe:
+        if let Some(open_file) = CFile.open():
+            mut file = open_file
+            if CFile.flush(file) != 0:
+                return -1
+            return CFile.descriptor(file)
+        return -1
+
+def temporary_file_is_released() -> bool:
+    descriptor = temporary_descriptor()
+    if descriptor < 0:
+        return False
+    unsafe:
+        return CFile.close_descriptor(descriptor) == -1
+
+def main() -> None:
+    assert temporary_file_is_released()
+"#,
+            fixture_header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_resource_facade\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected a same-module Incan façade to hide an owned C resource.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let run_output = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["run", main_path.to_string_lossy().as_ref()])
+            .output()?;
+        assert!(
+            run_output.status.success(),
+            concat!(
+                "expected the Incan façade to borrow, flush, and release its encapsulated C resource.\n",
+                "stdout:\n{}\nstderr:\n{}",
+            ),
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+        Ok(())
+    }
+
+    fn sqlite_checked_c_source(sqlite_header: &Path) -> String {
+        format!(
+            r#"from std.interop import c
+
+binding SQLite:
+    header = "{}"
+    link = c.system_library("sqlite3")
+
+    resource Database:
+        native = "sqlite3"
+        release = close
+
+    enum Status:
+        OK: c.i32 = SQLITE_OK
+
+    symbol close(database: c.Owned[Database]) -> c.i32:
+        native = "sqlite3_close"
+
+    symbol open(path: c.ConstPtr[c.c_char], database: c.Out[c.Owned[Database]]) -> c.i32:
+        native = "sqlite3_open"
+
+        outcome Status.OK:
+            initializes = [database]
+
+    symbol error_message(database: c.Borrowed[Database]) -> c.ConstPtr[c.c_char]:
+        native = "sqlite3_errmsg"
+
+def memory_database_error_is_owned_text() -> Result[str, str]:
+    path = c.cstr(":memory:")?
+    unsafe:
+        database_slot = c.out[c.Owned[Database]]()
+        status = SQLite.open(path.as_const_ptr(), database_slot)
+        if status == SQLite.Status.OK:
+            database = database_slot.take()
+            view = SQLite.error_message(database)
+            text = view.copy_utf8(max_bytes=4096)?
+            SQLite.close(database)
+            return Ok(text)
+        return Err("sqlite open failed")
+
+def main() -> Result[None, str]:
+    assert memory_database_error_is_owned_text()? != ""
+"#,
+            sqlite_header.display()
+        )
+    }
+
+    fn sqlite_header_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+        [
+            "/usr/include/sqlite3.h",
+            "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sqlite3.h",
+            "/opt/homebrew/include/sqlite3.h",
+            "/usr/local/include/sqlite3.h",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .ok_or_else(|| "SQLite acceptance requires a system sqlite3.h header".into())
+    }
+
+    #[test]
+    fn consumer_check_copies_a_sqlite_error_view_with_an_explicit_bound() -> Result<(), Box<dyn std::error::Error>> {
+        let sqlite_header = sqlite_header_path()?;
+        let tmp = tempfile::tempdir()?;
+        let source = sqlite_checked_c_source(&sqlite_header);
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"sqlite_checked_c_facade\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected SQLite to use an owned output handle, a borrowed error view, and bounded copied text.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let emitted = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["--emit-rust", main_path.to_string_lossy().as_ref(), "--strict"])
+            .output()?;
+        assert!(
+            emitted.status.success(),
+            "expected the bounded SQLite view bridge to lower and emit strict Rust.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&emitted.stdout),
+            String::from_utf8_lossy(&emitted.stderr)
+        );
+        let generated = String::from_utf8_lossy(&emitted.stdout);
+        assert!(
+            generated.contains("__incan_checked_c_copy_utf8"),
+            "expected the generated SQLite façade to use the compiler-private bounded copy helper:\n{generated}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_models_a_sqlite_caller_owned_byte_buffer_through_a_declared_shim()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let sqlite_header = sqlite_header_path()?;
+        let tmp = tempfile::tempdir()?;
+        let shim_header = tmp.path().join("sqlite_span_bridge.h");
+        std::fs::write(
+            &shim_header,
+            format!(
+                "#include \"{}\"\n#include <stddef.h>\n#include <stdint.h>\nsize_t incan_sqlite_random_bytes(uint8_t *destination, size_t destination_capacity);\n",
+                sqlite_header.display()
+            ),
+        )?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding SQLiteBuffer:
+    header = "{}"
+    link = c.system_library("sqlite3")
+
+    symbol random_bytes(destination: c.MutPtr[c.u8], destination_capacity: c.Size) -> c.Size:
+        native = "incan_sqlite_random_bytes"
+        bounds = {{ destination: destination_capacity }}
+
+def random_bytes() -> Result[bytes, str]:
+    mut destination = c.mutable_bytes_span(b"\0\0\0\0\0\0\0\0")
+    unsafe:
+        written = SQLiteBuffer.random_bytes(destination.as_mut_ptr(), destination.byte_capacity())
+        return destination.into_bytes(written)
+"#,
+            shim_header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"sqlite_checked_c_span\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected the SQLite shim boundary to retain one checked byte buffer contract.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let emitted = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["--emit-rust", main_path.to_string_lossy().as_ref(), "--strict"])
+            .output()?;
+        assert!(
+            emitted.status.success(),
+            "expected the SQLite caller-owned buffer bridge to emit strict Rust.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&emitted.stdout),
+            String::from_utf8_lossy(&emitted.stderr)
+        );
+        let generated = String::from_utf8_lossy(&emitted.stdout);
+        assert!(
+            generated.contains("__incan_checked_c_finish_span")
+                && generated.contains("*mut u8")
+                && generated.contains("-> usize"),
+            "expected a bounded byte buffer and exact c.Size carrier, got:\n{generated}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_models_an_accelerate_f32_span_through_a_declared_framework_shim()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let shim_header = tmp.path().join("accelerate_span_bridge.h");
+        std::fs::write(
+            &shim_header,
+            "#include <stddef.h>\n#define INCAN_ACCELERATE_OK 0\nint incan_accelerate_sum_f32(const float *values, size_t value_count, float *output);\n",
+        )?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding Accelerate:
+    header = "{}"
+    link = c.framework("Accelerate")
+
+    enum Status:
+        OK: c.i32 = INCAN_ACCELERATE_OK
+
+    symbol sum(values: c.ConstPtr[c.f32], value_count: c.Size, output: c.Out[c.f32]) -> c.i32:
+        native = "incan_accelerate_sum_f32"
+        bounds = {{ values: value_count }}
+
+        outcome Status.OK:
+            initializes = [output]
+
+def sum(values: list[f32]) -> Result[f32, str]:
+    source = c.f32_span(values)
+    unsafe:
+        output = c.out[c.f32]()
+        status = Accelerate.sum(source.as_const_ptr(), source.element_count(), output)
+        if status == Accelerate.Status.OK:
+            return Ok(output.take())
+        return Err("Accelerate sum failed")
+"#,
+            shim_header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"accelerate_checked_c_span\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected the Accelerate-shaped shim boundary to retain one checked f32 span and output contract.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let emitted = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["--emit-rust", main_path.to_string_lossy().as_ref(), "--strict"])
+            .output()?;
+        assert!(
+            emitted.status.success(),
+            "expected the Accelerate f32 span bridge to emit strict Rust.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&emitted.stdout),
+            String::from_utf8_lossy(&emitted.stderr)
+        );
+        let generated = String::from_utf8_lossy(&emitted.stdout);
+        assert!(
+            generated.contains("*const f32")
+                && generated.contains("fn from_incan_value(value: f32)")
+                && generated.contains("fn take(self) -> f32")
+                && generated.contains("#[link(name = \"Accelerate\", kind = \"framework\")]")
+                && !generated.contains("i64::try_from(value)"),
+            "expected an exact f32 span/output carrier and source-selected framework link without i64 normalization, got:\n{generated}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_supports_checked_byte_spans_and_caller_owned_buffers() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let header = tmp.path().join("span_fixture.h");
+        std::fs::write(
+            &header,
+            "#include <stddef.h>\n#include <stdint.h>\nsize_t fixture_copy_prefix(const uint8_t *source, size_t source_length, uint8_t *destination, size_t destination_capacity);\n",
+        )?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding Fixture:
+    header = "{}"
+    link = c.system_library("c")
+
+    symbol copy_prefix(
+        source: c.ConstPtr[c.u8],
+        source_length: c.Size,
+        destination: c.MutPtr[c.u8],
+        destination_capacity: c.Size,
+    ) -> c.Size:
+        native = "fixture_copy_prefix"
+        bounds = {{
+            source: source_length,
+            destination: destination_capacity,
+        }}
+
+def copy_bounded(data: bytes) -> Result[bytes, str]:
+    source = c.bytes_span(data)
+    mut destination = c.mutable_bytes_span(b"\0\0\0\0")
+    unsafe:
+        written = Fixture.copy_prefix(
+            source.as_const_ptr(),
+            source.byte_length(),
+            destination.as_mut_ptr(),
+            destination.byte_capacity(),
+        )
+        return Ok(destination.into_bytes(written)?)
+
+def main() -> Result[None, str]:
+    assert copy_bounded(b"abc")? == b"abc"
+    return Ok(None)
+"#,
+            header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_spans\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected bounded byte spans and a caller-owned output buffer to typecheck.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let emitted = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["--emit-rust", main_path.to_string_lossy().as_ref(), "--strict"])
+            .output()?;
+        assert!(
+            emitted.status.success(),
+            "expected bounded byte spans and caller-owned buffer finishing to emit strict Rust.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&emitted.stdout),
+            String::from_utf8_lossy(&emitted.stderr)
+        );
+        let generated = String::from_utf8_lossy(&emitted.stdout);
+        assert!(
+            generated.contains("__incan_checked_c_finish_span"),
+            "expected generated Rust to validate the returned count before returning caller-owned storage:\n{generated}"
+        );
+        assert!(
+            generated.contains(".as_mut_ptr()") && generated.contains(".as_ptr()"),
+            "expected generated Rust to extract only the checked pointer forms:\n{generated}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_rejects_unpaired_or_immutable_checked_byte_buffer_arguments()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let header = tmp.path().join("span_fixture.h");
+        std::fs::write(
+            &header,
+            "#include <stddef.h>\n#include <stdint.h>\nsize_t fixture_copy_prefix(const uint8_t *source, size_t source_length, uint8_t *destination, size_t destination_capacity);\n",
+        )?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding Fixture:
+    header = "{}"
+    link = c.system_library("c")
+
+    symbol copy_prefix(
+        source: c.ConstPtr[c.u8],
+        source_length: c.Size,
+        destination: c.MutPtr[c.u8],
+        destination_capacity: c.Size,
+    ) -> c.Size:
+        native = "fixture_copy_prefix"
+        bounds = {{
+            source: source_length,
+            destination: destination_capacity,
+        }}
+
+def reject_unchecked_pair(data: bytes) -> None:
+    source = c.bytes_span(data)
+    other = c.bytes_span(b"not the same owner")
+    destination = c.mutable_bytes_span(b"\0\0\0\0")
+    unsafe:
+        Fixture.copy_prefix(
+            source.as_const_ptr(),
+            other.byte_length(),
+            destination.as_mut_ptr(),
+            destination.byte_capacity(),
+        )
+"#,
+            header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_span_rejections\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            !output.status.success(),
+            "expected invalid checked byte-span source to be rejected.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            diagnostics.contains("to come from the same checked immutable byte span"),
+            "expected the declared pointer/length relationship diagnostic, got:\n{diagnostics}"
+        );
+        assert!(
+            diagnostics.contains("requires a mutable borrow of 'destination'"),
+            "expected an immutable caller-owned buffer to be rejected, got:\n{diagnostics}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_rejects_checked_byte_span_escape_and_reuse() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let source = r#"from std.interop import c
+
+def reject_escape_and_reuse(data: bytes) -> Result[None, str]:
+    source = c.bytes_span(data)
+    escaped = [source]
+    mut destination = c.mutable_bytes_span(b"\0\0\0\0")
+    unsafe:
+        completed = destination.into_bytes(0)?
+        destination.into_bytes(0)?
+    return Ok(None)
+"#;
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_span_escape_rejections\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            !output.status.success(),
+            "expected an escaped or reused checked byte carrier to be rejected.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            diagnostics.contains("has no ordinary value surface"),
+            "expected a checked byte-carrier escape diagnostic, got:\n{diagnostics}"
+        );
+        assert!(
+            diagnostics.contains("was already consumed"),
+            "expected a checked mutable byte-buffer consumption diagnostic, got:\n{diagnostics}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_preserves_checked_c_f32_scalar_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let header = tmp.path().join("float_fixture.h");
+        std::fs::write(&header, "float fixture_absolute_f32(float value);\n")?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding FloatFixture:
+    header = "{}"
+    link = c.system_library("m")
+
+    symbol absolute(value: c.f32) -> c.f32:
+        native = "fixture_absolute_f32"
+
+def absolute(value: f32) -> f32:
+    unsafe:
+        return FloatFixture.absolute(value)
+
+def main() -> None:
+    value: f32 = 1.5
+    assert absolute(value) == value
+"#,
+            header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_f32_scalar\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected an exact checked c.f32 signature to typecheck.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let emitted = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["--emit-rust", main_path.to_string_lossy().as_ref(), "--strict"])
+            .output()?;
+        assert!(
+            emitted.status.success(),
+            "expected an exact checked c.f32 signature to emit strict Rust.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&emitted.stdout),
+            String::from_utf8_lossy(&emitted.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&emitted.stdout).contains("f32"),
+            "expected generated Rust to retain the f32 ABI carrier"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_preserves_exact_checked_c_scalar_carriers() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let header = tmp.path().join("scalar_fixture.h");
+        std::fs::write(
+            &header,
+            "#include <stddef.h>\n#include <stdint.h>\nint8_t fixture_i8(int8_t value);\nuint8_t fixture_u8(uint8_t value);\nint16_t fixture_i16(int16_t value);\nuint16_t fixture_u16(uint16_t value);\nint32_t fixture_i32(int32_t value);\nuint32_t fixture_u32(uint32_t value);\nint64_t fixture_i64(int64_t value);\nuint64_t fixture_u64(uint64_t value);\n__int128 fixture_i128(__int128 value);\nunsigned __int128 fixture_u128(unsigned __int128 value);\nfloat fixture_f32(float value);\ndouble fixture_f64(double value);\nsize_t fixture_size(size_t value);\n",
+        )?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding Scalars:
+    header = "{}"
+    link = c.system_library("c")
+
+    symbol i8(value: c.i8) -> c.i8:
+        native = "fixture_i8"
+    symbol u8(value: c.u8) -> c.u8:
+        native = "fixture_u8"
+    symbol i16(value: c.i16) -> c.i16:
+        native = "fixture_i16"
+    symbol u16(value: c.u16) -> c.u16:
+        native = "fixture_u16"
+    symbol i32(value: c.i32) -> c.i32:
+        native = "fixture_i32"
+    symbol u32(value: c.u32) -> c.u32:
+        native = "fixture_u32"
+    symbol i64(value: c.i64) -> c.i64:
+        native = "fixture_i64"
+    symbol u64(value: c.u64) -> c.u64:
+        native = "fixture_u64"
+    symbol i128(value: c.i128) -> c.i128:
+        native = "fixture_i128"
+    symbol u128(value: c.u128) -> c.u128:
+        native = "fixture_u128"
+    symbol f32(value: c.f32) -> c.f32:
+        native = "fixture_f32"
+    symbol f64(value: c.f64) -> c.f64:
+        native = "fixture_f64"
+    symbol size(value: c.Size) -> c.Size:
+        native = "fixture_size"
+
+def exact_i8(value: i8) -> i8:
+    unsafe:
+        return Scalars.i8(value)
+
+def exact_u8(value: u8) -> u8:
+    unsafe:
+        return Scalars.u8(value)
+
+def exact_i16(value: i16) -> i16:
+    unsafe:
+        return Scalars.i16(value)
+
+def exact_u16(value: u16) -> u16:
+    unsafe:
+        return Scalars.u16(value)
+
+def exact_i32(value: i32) -> i32:
+    unsafe:
+        return Scalars.i32(value)
+
+def exact_u32(value: u32) -> u32:
+    unsafe:
+        return Scalars.u32(value)
+
+def exact_i64(value: i64) -> i64:
+    unsafe:
+        return Scalars.i64(value)
+
+def exact_u64(value: u64) -> u64:
+    unsafe:
+        return Scalars.u64(value)
+
+def exact_i128(value: i128) -> i128:
+    unsafe:
+        return Scalars.i128(value)
+
+def exact_u128(value: u128) -> u128:
+    unsafe:
+        return Scalars.u128(value)
+
+def exact_f32(value: f32) -> f32:
+    unsafe:
+        return Scalars.f32(value)
+
+def exact_f64(value: f64) -> f64:
+    unsafe:
+        return Scalars.f64(value)
+
+def exact_size(value: usize) -> usize:
+    unsafe:
+        return Scalars.size(value)
+"#,
+            header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_exact_scalars\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected checked fixed-width C carriers to retain exact Incan representations.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let emitted = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["--emit-rust", main_path.to_string_lossy().as_ref(), "--strict"])
+            .output()?;
+        assert!(
+            emitted.status.success(),
+            "expected exact checked C carriers to emit strict Rust.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&emitted.stdout),
+            String::from_utf8_lossy(&emitted.stderr)
+        );
+        let generated = String::from_utf8_lossy(&emitted.stdout);
+        for rust_type in [
+            "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "i128", "u128", "f32", "f64", "usize",
+        ] {
+            assert!(
+                generated.contains(&format!("__incan_arg_0: {rust_type}")),
+                "expected generated Rust to preserve exact {rust_type} checked-C carrier, got:\n{generated}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_supports_checked_f32_spans_for_paired_numeric_pointers() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let tmp = tempfile::tempdir()?;
+        let header = tmp.path().join("float_span_fixture.h");
+        std::fs::write(
+            &header,
+            "#include <stddef.h>\nfloat fixture_sum_f32(const float *values, size_t value_count);\nsize_t fixture_fill_f32(float *destination, size_t destination_capacity);\n",
+        )?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding FloatSpanFixture:
+    header = "{}"
+    link = c.system_library("m")
+
+    symbol sum(values: c.ConstPtr[c.f32], value_count: c.Size) -> c.f32:
+        native = "fixture_sum_f32"
+        bounds = {{ values: value_count }}
+
+    symbol fill(destination: c.MutPtr[c.f32], destination_capacity: c.Size) -> c.Size:
+        native = "fixture_fill_f32"
+        bounds = {{ destination: destination_capacity }}
+
+def sum(values: list[f32]) -> f32:
+    source = c.f32_span(values)
+    unsafe:
+        return FloatSpanFixture.sum(source.as_const_ptr(), source.element_count())
+
+def fill() -> Result[list[f32], str]:
+    mut destination = c.mutable_f32_span([0.0, 0.0, 0.0])
+    unsafe:
+        written = FloatSpanFixture.fill(destination.as_mut_ptr(), destination.element_capacity())
+        return destination.into_f32s(written)
+"#,
+            header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_f32_spans\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            output.status.success(),
+            "expected paired checked f32 span calls to typecheck.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bindings = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args([
+                "inspect",
+                "bindings",
+                main_path.to_string_lossy().as_ref(),
+                "--format",
+                "json",
+            ])
+            .output()?;
+        assert!(
+            bindings.status.success(),
+            "expected binding inspection to project the checked f32 span association.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&bindings.stdout),
+            String::from_utf8_lossy(&bindings.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&bindings.stdout)?;
+        let sum = report["bindings"][0]["symbols"]
+            .as_array()
+            .and_then(|symbols| symbols.iter().find(|symbol| symbol["name"] == serde_json::json!("sum")))
+            .ok_or("binding inspection did not retain FloatSpanFixture.sum")?;
+        assert_eq!(
+            sum["buffers"],
+            serde_json::json!([{
+                "pointer_parameter": "values",
+                "length_parameter": "value_count",
+                "element": "c.f32",
+            }]),
+            "binding inspection must project the descriptor-owned span association"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consumer_check_rejects_unpaired_checked_f32_span_arguments() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let header = tmp.path().join("float_span_fixture.h");
+        std::fs::write(
+            &header,
+            "#include <stddef.h>\nfloat fixture_sum_f32(const float *values, size_t value_count);\n",
+        )?;
+        let source = format!(
+            r#"from std.interop import c
+
+binding FloatSpanFixture:
+    header = "{}"
+    link = c.system_library("m")
+
+    symbol sum(values: c.ConstPtr[c.f32], value_count: c.Size) -> c.f32:
+        native = "fixture_sum_f32"
+        bounds = {{ values: value_count }}
+
+def reject_mismatched_owner(left: list[f32], right: list[f32]) -> f32:
+    source = c.f32_span(left)
+    other = c.f32_span(right)
+    unsafe:
+        return FloatSpanFixture.sum(source.as_const_ptr(), other.element_count())
+"#,
+            header.display()
+        );
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"checked_c_f32_span_rejection\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &source,
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+        let output = run_check_against_checkout_sdk(&main_path, &generated_cargo_target)?;
+        assert!(
+            !output.status.success(),
+            "expected independently owned f32 pointer/count arguments to be rejected.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("same checked immutable f32 span"),
+            "expected the declared f32 pointer/count relationship diagnostic, got:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sqlite_checked_c_tooling_projects_the_shared_descriptor() -> Result<(), Box<dyn std::error::Error>> {
+        let sqlite_header = sqlite_header_path()?;
+        let tmp = tempfile::tempdir()?;
+        let main_path = write_project_files(
+            tmp.path(),
+            "[project]\nname = \"sqlite_checked_c_tooling\"\n\n[sdk]\nprofile = \"minimal\"\n",
+            &sqlite_checked_c_source(&sqlite_header),
+        )?;
+        let generated_cargo_target = tmp.path().join("generated-cargo-target");
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let entry_path = main_path.to_string_lossy();
+
+        let bindings = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["inspect", "bindings", entry_path.as_ref(), "--format", "json"])
+            .output()?;
+        assert!(
+            bindings.status.success(),
+            "expected binding inspection to reuse the checked SQLite descriptor.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&bindings.stdout),
+            String::from_utf8_lossy(&bindings.stderr)
+        );
+        let binding_report: serde_json::Value = serde_json::from_slice(&bindings.stdout)?;
+        let sqlite = binding_report["bindings"]
+            .as_array()
+            .and_then(|bindings| {
+                bindings
+                    .iter()
+                    .find(|binding| binding["name"] == serde_json::json!("SQLite"))
+            })
+            .ok_or("binding inspection did not retain the SQLite descriptor")?;
+        assert_eq!(sqlite["link_capability"], serde_json::json!("system_library"));
+        assert_eq!(sqlite["resources"][0]["name"], serde_json::json!("Database"));
+        assert_eq!(sqlite["resources"][0]["release"], serde_json::json!("close"));
+        let error_message = sqlite["symbols"]
+            .as_array()
+            .and_then(|symbols| {
+                symbols
+                    .iter()
+                    .find(|symbol| symbol["name"] == serde_json::json!("error_message"))
+            })
+            .ok_or("binding inspection did not retain SQLite.error_message")?;
+        assert_eq!(
+            error_message["parameters"][0]["type"]["access"],
+            serde_json::json!("borrowed")
+        );
+        assert_eq!(error_message["return_type"]["kind"], serde_json::json!("pointer"));
+        assert_eq!(error_message["return_type"]["mutable"], serde_json::json!(false));
+        assert_eq!(
+            error_message["return_type"]["pointee"]["spelling"],
+            serde_json::json!("c.c_char")
+        );
+
+        let codegraph = super::incan_command()
+            .env("INCAN_SOURCE_ROOT", checkout)
+            .env("INCAN_STDLIB", checkout.join("crates/incan_stdlib/stdlib"))
+            .env_remove("INCAN_STDLIB_DIR")
+            .env("INCAN_TOOLCHAIN_CRATES_DIR", checkout.join("crates"))
+            .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_cargo_target)
+            .env("INCAN_LOCK_PREHEAT", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["inspect", "codegraph", entry_path.as_ref(), "--format", "jsonl"])
+            .output()?;
+        assert!(
+            codegraph.status.success(),
+            "expected codegraph to reuse the checked SQLite descriptor.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&codegraph.stdout),
+            String::from_utf8_lossy(&codegraph.stderr)
+        );
+        let records = String::from_utf8(codegraph.stdout)?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        let binding = records
+            .iter()
+            .find(|record| {
+                record["record"] == serde_json::json!("c_binding") && record["name"] == serde_json::json!("SQLite")
+            })
+            .ok_or("codegraph did not retain the checked SQLite binding")?;
+        assert_eq!(binding["provenance"], serde_json::json!("checked"));
+        let error_call = records
+            .iter()
+            .find(|record| {
+                record["record"] == serde_json::json!("c_binding_call")
+                    && record["binding"] == serde_json::json!("SQLite")
+                    && record["symbol"] == serde_json::json!("error_message")
+            })
+            .ok_or("codegraph did not retain the checked SQLite.error_message call")?;
+        assert_eq!(error_call["binding_id"], binding["id"]);
+        assert_eq!(error_call["unsafe_acknowledged"], serde_json::json!(true));
+        assert_eq!(error_call["provenance"], serde_json::json!("checked"));
         Ok(())
     }
 

@@ -14,7 +14,7 @@ use incan_core::lang::types::collections::CollectionTypeId;
 use incan_core::{NumericTy, result_numeric_type};
 use incan_semantics_core::SurfaceStmtTypeCheck;
 
-use super::{CBindingType, COutputMode, LoopContextKind, TypeChecker};
+use super::{CAbiSpanLocal, CBindingType, COutputMode, LoopContextKind, TypeChecker};
 use crate::frontend::typechecker::helpers::{collection_type_id, ensure_bool_condition, option_ty};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -440,6 +440,7 @@ impl TypeChecker {
                 }
             }
         }
+        self.reject_unbound_c_abi_span_constructors();
     }
 
     /// Validate assignment to an object field, including generic-owner field substitution.
@@ -728,6 +729,7 @@ impl TypeChecker {
             scope: 0,
         });
         self.bind_c_abi_output_slot_assignment(&assign.name, assign.value.span);
+        self.bind_c_abi_span_assignment(&assign.name, assign.value.span);
         self.bind_c_abi_raw_result_assignment(&assign.name, assign.value.span);
         self.consumed_iterator_bindings.remove(&assign.name);
         self.transferred_c_resource_bindings.remove(&assign.name);
@@ -742,6 +744,39 @@ impl TypeChecker {
             return;
         };
         self.pending_c_abi_output_slots.insert(name.to_string(), slot);
+    }
+
+    /// Bind an opaque checked typed span only when its constructor is the exact value of one ordinary local.
+    fn bind_c_abi_span_assignment(&mut self, name: &str, value_span: Span) {
+        let Some(kind) = self
+            .unbound_c_abi_span_constructors
+            .remove(&(value_span.start, value_span.end))
+        else {
+            return;
+        };
+        let Some(binding_span) = self
+            .symbols
+            .lookup(name)
+            .and_then(|symbol_id| self.symbols.get(symbol_id))
+            .map(|symbol| symbol.span)
+        else {
+            return;
+        };
+        self.c_abi_span_bindings
+            .insert(name.to_string(), CAbiSpanLocal { kind, binding_span });
+    }
+
+    /// Reject constructors that were nested in a return, collection, field, callback, or ordinary call instead of
+    /// receiving the compiler-tracked local owner required by the checked bridge.
+    fn reject_unbound_c_abi_span_constructors(&mut self) {
+        let constructors = std::mem::take(&mut self.unbound_c_abi_span_constructors);
+        for ((start, end), _kind) in constructors {
+            self.errors.push(crate::frontend::diagnostics::CompileError::type_error(
+                "a checked byte carrier must be assigned directly to one local before its closed bridge methods are used"
+                    .to_string(),
+                Span::new(start, end),
+            ));
+        }
     }
 
     /// Give a checked C raw call result the ordinary local name supplied by its enclosing assignment.

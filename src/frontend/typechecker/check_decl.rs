@@ -5294,6 +5294,16 @@ impl TypeChecker {
         self.in_async_body = func.is_async();
         let previous_consumed_iterator_bindings = std::mem::take(&mut self.consumed_iterator_bindings);
         let previous_transferred_c_resource_bindings = std::mem::take(&mut self.transferred_c_resource_bindings);
+        let previous_unbound_c_abi_span_constructors = std::mem::take(&mut self.unbound_c_abi_span_constructors);
+        let previous_c_abi_span_bindings = std::mem::take(&mut self.c_abi_span_bindings);
+        let previous_consumed_c_abi_span_bindings = std::mem::take(&mut self.consumed_c_abi_span_bindings);
+        let previous_c_abi_raw_call_owner =
+            self.current_c_abi_raw_call_owner
+                .replace(crate::frontend::typechecker::CBindingRawCallOwner {
+                    name: func.name.clone(),
+                    visibility: func.visibility,
+                    declaration_span: decl_span,
+                });
 
         // Check body
         for stmt in &func.body {
@@ -5302,6 +5312,10 @@ impl TypeChecker {
 
         self.consumed_iterator_bindings = previous_consumed_iterator_bindings;
         self.transferred_c_resource_bindings = previous_transferred_c_resource_bindings;
+        self.unbound_c_abi_span_constructors = previous_unbound_c_abi_span_constructors;
+        self.c_abi_span_bindings = previous_c_abi_span_bindings;
+        self.consumed_c_abi_span_bindings = previous_consumed_c_abi_span_bindings;
+        self.current_c_abi_raw_call_owner = previous_c_abi_raw_call_owner;
         self.in_async_body = prev_in_async_body;
         self.current_yield_context = prev_yield_context;
         self.current_return_error_type = None;
@@ -5594,11 +5608,17 @@ impl TypeChecker {
             self.in_async_body = method.is_async();
             let previous_consumed_iterator_bindings = std::mem::take(&mut self.consumed_iterator_bindings);
             let previous_transferred_c_resource_bindings = std::mem::take(&mut self.transferred_c_resource_bindings);
+            let previous_unbound_c_abi_span_constructors = std::mem::take(&mut self.unbound_c_abi_span_constructors);
+            let previous_c_abi_span_bindings = std::mem::take(&mut self.c_abi_span_bindings);
+            let previous_consumed_c_abi_span_bindings = std::mem::take(&mut self.consumed_c_abi_span_bindings);
             for stmt in body {
                 self.check_statement(stmt);
             }
             self.consumed_iterator_bindings = previous_consumed_iterator_bindings;
             self.transferred_c_resource_bindings = previous_transferred_c_resource_bindings;
+            self.unbound_c_abi_span_constructors = previous_unbound_c_abi_span_constructors;
+            self.c_abi_span_bindings = previous_c_abi_span_bindings;
+            self.consumed_c_abi_span_bindings = previous_consumed_c_abi_span_bindings;
             self.in_async_body = prev_in_async_body;
             self.current_yield_context = prev_yield_context;
         }

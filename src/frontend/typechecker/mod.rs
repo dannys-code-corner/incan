@@ -56,15 +56,17 @@ mod validate_rust_module;
 pub use const_eval::ConstValue;
 pub(crate) use type_info::ClassFieldDefaultInfo;
 pub use type_info::{
-    CAbiInteropArtifacts, CAbiOutputSlot, CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingOutcome,
-    CBindingParameter, CBindingRawCall, CBindingResource, CBindingStruct, CBindingStructField, CBindingSymbol,
-    CBindingType, COutputMode, CResourceAccess, ComputedPropertyAccessInfo, DecoratedFunctionBindingInfo,
-    DecoratedMethodBindingInfo, FixedUnpackPlan, FunctionBindingInfo, IdentKind, ImportedRegistryDefinitionInfo,
-    PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind, ProtocolIterationInfo,
-    RegistryArtifacts, RegistryDefinitionInfo, RegistryDescriptionRegistry, RegistryExplicitEntryInfo,
-    ResolvedMethodCall, ResolvedMethodDispatch, ResolvedOperatorCall, ResolvedOperatorKind, RustArgCoercionInfo,
-    RustArgCoercionKind, SourceTargetInfo, StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo,
+    CAbiInteropArtifacts, CAbiOutputSlot, CAbiSpan, CAbiSpanAccess, CAbiSpanAccessKind, CAbiSpanKind, CBindingBuffer,
+    CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingFacade, CBindingFunctionCall, CBindingOutcome,
+    CBindingParameter, CBindingRawCall, CBindingRawCallOwner, CBindingResource, CBindingStruct, CBindingStructField,
+    CBindingSymbol, CBindingType, COutputMode, CResourceAccess, ComputedPropertyAccessInfo,
+    DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FixedUnpackPlan, FunctionBindingInfo, IdentKind,
+    ImportedRegistryDefinitionInfo, PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind,
+    ProtocolIterationInfo, RegistryArtifacts, RegistryDefinitionInfo, RegistryDescriptionRegistry,
+    RegistryExplicitEntryInfo, ResolvedMethodCall, ResolvedMethodDispatch, ResolvedOperatorCall, ResolvedOperatorKind,
+    RustArgCoercionInfo, RustArgCoercionKind, SourceTargetInfo, StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo,
     ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode, ValidatedNewtypeCoercionStep,
+    c_binding_descriptor_identity,
 };
 #[cfg(test)]
 mod tests;
@@ -208,6 +210,19 @@ pub(crate) struct PendingCAbiOutputSlot {
     pub bound: bool,
 }
 
+/// Source-local ownership state for one opaque checked C typed span carrier.
+///
+/// This state is deliberately frontend-only. The accepted constructor and bridge operations are retained as
+/// [`CAbiInteropArtifacts`] facts; this record only prevents the source local that carries them from escaping or
+/// being consumed twice while the body is typechecked.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CAbiSpanLocal {
+    /// Exact element representation and mutability selected by its direct constructor.
+    pub kind: CAbiSpanKind,
+    /// Ordinary local declaration span, retained so lexical shadowing cannot reuse a stale name-state entry.
+    pub binding_span: Span,
+}
+
 /// Result-local relationship between one raw C call and the slots it may initialize or invalidate.
 #[derive(Debug, Clone)]
 pub(crate) struct CAbiRawCallResult {
@@ -244,6 +259,12 @@ pub struct TypeChecker {
     pub(crate) consumed_iterator_bindings: HashMap<String, Span>,
     /// Resource bindings transferred to an owning C ABI parameter in the current local checking flow.
     pub(crate) transferred_c_resource_bindings: HashMap<String, Span>,
+    /// Checked span constructors waiting for the enclosing direct assignment to name their only legal owner.
+    pub(crate) unbound_c_abi_span_constructors: HashMap<(usize, usize), CAbiSpanKind>,
+    /// Opaque checked typed span carriers keyed by their direct source local.
+    pub(crate) c_abi_span_bindings: HashMap<String, CAbiSpanLocal>,
+    /// Checked mutable spans already consumed by their finish bridge in the active local flow.
+    pub(crate) consumed_c_abi_span_bindings: HashMap<(usize, usize), Span>,
     /// Local output handles created by `c.out[...]()` or `c.inout(...)` before a raw symbol binds them.
     pub(crate) pending_c_abi_output_slots: HashMap<String, PendingCAbiOutputSlot>,
     /// Constructor facts waiting for their enclosing ordinary assignment to supply a local slot name.
@@ -284,6 +305,10 @@ pub struct TypeChecker {
     pub(crate) current_method_owner: Option<String>,
     /// Active `@classmethod` owner type exposed to the method body as `cls`.
     pub(crate) current_classmethod_self_ty: Option<ResolvedType>,
+    /// Named function currently checked as the owner of a direct C raw call.
+    pub(crate) current_c_abi_raw_call_owner: Option<CBindingRawCallOwner>,
+    /// Public function declarations already warned for direct checked C calls in the active program check.
+    pub(crate) warned_public_c_abi_raw_call_owners: HashSet<(String, usize, usize)>,
     /// In-scope generic type-parameter trait bounds, preserving generic arguments for RFC 025 dispatch.
     pub(crate) current_type_param_bound_details: Vec<HashMap<String, Vec<TypeBoundInfo>>>,
     /// Deduplicate missing-`@requires` diagnostics within a single trait default method body.
@@ -478,6 +503,9 @@ impl TypeChecker {
             mutable_bindings: HashSet::new(),
             consumed_iterator_bindings: HashMap::new(),
             transferred_c_resource_bindings: HashMap::new(),
+            unbound_c_abi_span_constructors: HashMap::new(),
+            c_abi_span_bindings: HashMap::new(),
+            consumed_c_abi_span_bindings: HashMap::new(),
             pending_c_abi_output_slots: HashMap::new(),
             unbound_c_abi_output_slot_constructors: HashMap::new(),
             unbound_c_abi_raw_call_results: HashMap::new(),
@@ -498,6 +526,8 @@ impl TypeChecker {
             current_trait_name: None,
             current_method_owner: None,
             current_classmethod_self_ty: None,
+            current_c_abi_raw_call_owner: None,
+            warned_public_c_abi_raw_call_owners: HashSet::new(),
             current_type_param_bound_details: Vec::new(),
             current_trait_missing_requires_emitted: None,
             const_decls: HashMap::new(),
@@ -1885,6 +1915,21 @@ impl TypeChecker {
                 kind: kind.into(),
             },
         );
+    }
+
+    /// Retain one compiler-proven ordinary function call for checked C bridge/facade projection.
+    ///
+    /// The general semantic source-target map remains the authority for all codegraph targets. This narrow retained
+    /// view merely records which active callable made a resolved function call so C-ABI tooling can identify a
+    /// public facade without reparsing source or generated Rust.
+    pub(crate) fn record_c_abi_function_call_target(&mut self, span: Span, target: SourceTargetInfo) {
+        let Some(caller) = self.current_c_abi_raw_call_owner.clone() else {
+            return;
+        };
+        self.type_info
+            .c_abi
+            .function_calls
+            .push(CBindingFunctionCall { span, caller, target });
     }
 
     /// Return the canonical declaration origin for a source binding, if it is part of the supported codegraph target
@@ -4614,6 +4659,7 @@ impl TypeChecker {
         self.static_decls.clear();
         self.local_function_decls.clear();
         self.current_module_function_symbols.clear();
+        self.warned_public_c_abi_raw_call_owners.clear();
         self.static_decl_positions.clear();
         self.const_eval_state.clear();
         self.const_eval_cache.clear();
@@ -4665,6 +4711,10 @@ impl TypeChecker {
                 self.check_declaration(decl);
             }
         }
+
+        self.type_info
+            .c_abi
+            .resolve_checked_facades(self.current_module_path.as_deref());
 
         self.record_trait_metadata_for_lowering();
         self.record_model_field_visibilities_for_lowering(program);

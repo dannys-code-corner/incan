@@ -146,6 +146,12 @@ definitions = ["FEATURE_ENABLED=1"]
 name = "bridge"
 kind = "static"
 path = "interop/lib/libbridge.a"
+origin = { source = "https://example.invalid/bridge", revision = "v1.2.3", license = "MIT" }
+
+[[oven.interop.targets.bindings]]
+module = ["bridge"]
+name = "Bridge"
+artifacts = ["bridge"]
 
 [[oven.interop.targets.shims]]
 name = "bridge_shim"
@@ -177,15 +183,27 @@ A capability requirement is an inline table with a non-empty `capability` and an
 toolchain = { capability = "clang", version = ">=18, <19" }
 ```
 
-Oven will record its eventual concrete compiler, executable, SDK, and sysroot selections in a build receipt or store. Those resolved machine and tool identities are not package-authored manifest facts.
+`incan oven interop bake` records explicitly selected concrete compiler, executable, SDK, and sysroot evidence in a receipt-bound direct-`rustc` plan. Those resolved machine and tool identities are not package-authored manifest facts and are never inferred from ambient search paths.
 
 Each `[[oven.interop.targets.artifacts]]` entry has a package-local `name`, a `kind`, and optional `dependencies` naming other artifacts in the same target. The remaining fields depend on `kind`:
 
 | Kind | Required fields | Meaning |
 | --- | --- | --- |
-| `static` | `path` | A package-owned archive linked into the generated product. |
-| `bundled` | `path`, `runtime-name`, `placement`, `minimum-platform` | A package-owned dynamic library or framework staged by the platform packager. |
+| `static` | `path` | A package-owned archive linked into the generated product. An optional `origin` records the upstream `source`, `revision`, and `license` retained in the selected plan provenance. |
+| `bundled` | `path`, `runtime-name`, `placement`, `minimum-platform` | A package-owned dynamic library or framework staged by the platform packager. An optional `origin` has the same provenance shape as a static artifact. |
 | `system` | `capability` | A library or framework that Oven must obtain from the selected toolchain or SDK. |
+
+`origin` describes the upstream provenance of a package-owned copy; it is not a download instruction or an admission decision. Its `source` is an HTTPS URL, and its non-empty `revision` and `license` values are locked and retained alongside the artifact digest. A `system` artifact has no package file and therefore cannot declare `origin`.
+
+Each `[[oven.interop.targets.bindings]]` entry is an explicit, target-specific correspondence between one checked C binding and one or more declared artifacts:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `module` | list of strings | Non-empty logical Incan module path containing the binding. |
+| `name` | string | Checked binding declaration name in that module. |
+| `artifacts` | list of strings | One or more distinct artifact names declared for the same target. |
+
+Oven never infers this association from a header spelling, system-library name, generated Rust, artifact filename, or search result. `incan lock` freezes the authored relation with the target contract. `incan inspect bindings --format receipt --target <triple>` refuses a relation whose exact module/name pair was not produced by the compiler, and otherwise retains only the logical artifact names beside the checked descriptor identity.
 
 Each `[[oven.interop.targets.shims]]` entry accepts:
 
@@ -195,11 +213,11 @@ Each `[[oven.interop.targets.shims]]` entry accepts:
 | `language` | `c` or `cxx` | Source language used when Oven builds the shim. |
 | `sources` | list of paths | One or more package-relative authored source files. |
 | `headers` | list of paths | Package-relative headers describing the bounded exported contract. |
-| `output` | string | Logical name of the artifact Oven will eventually produce. |
+| `output` | string | Logical name of the static archive that an explicit Oven bake produces. |
 
 All declared paths must be normalized relative paths to regular package files. Absolute paths, parent traversal, symlinks, directories, backslashes, and ambient search paths are rejected.
 
-`incan lock` writes the normalized requirements and content hashes for package-owned files under `semantic.oven.interop`. It does not resolve the requirements, compile shims, download artifacts, or emit a platform handover plan. Changing a declared file or requirement makes the lock stale; moving an unchanged package does not change its package-relative entries.
+`incan lock` writes the normalized requirements and content hashes for package-owned files under `semantic.oven.interop`. Locking itself does not resolve requirements, compile shims, download artifacts, or emit a platform handover plan. The separate explicit `incan oven interop bake` publisher verifies a current lock, accepts selected compiler/SDK evidence, compiles declared C/C++ shims, seals static archives into the direct-`rustc` search path, and retains bundled runtime files plus declared system capabilities in the immutable plan provenance; it never invokes Cargo or searches host paths. Changing a declared file or requirement makes the lock stale; moving an unchanged package does not change its package-relative entries.
 
 For an end-to-end binding example, see [Checked C bindings](../../language/how-to/checked_c_bindings.md#freeze-oven-interop-requirements-for-a-target).
 

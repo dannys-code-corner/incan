@@ -5,7 +5,7 @@
 //! publish the declared inputs.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
 
@@ -27,33 +27,54 @@ pub enum InteropPlanInspectionFormat {
     Json,
 }
 
+/// One exact package root and target declaration validated against the canonical Oven interop lock.
+///
+/// Inspection, execution baking, and future platform adapters consume this one lock-fresh projection rather than
+/// each reconstructing workspace-member and standalone lock policy independently.
+pub(crate) struct LockedInteropPlanTarget {
+    /// Package root that owns the locked package-relative header, artifact, and shim inputs.
+    pub(crate) project_root: PathBuf,
+    /// Current lock-fresh target-specific interop contract.
+    pub(crate) target: LockedInteropTarget,
+}
+
 /// Inspect one declared target's canonical locked Oven interop deployment handoff.
 pub fn inspect_interop_plan(path: &Path, target: &str, format: InteropPlanInspectionFormat) -> CliResult<ExitCode> {
+    let locked = locked_interop_plan_target(path, target)?;
+    let plan = interop_deployment_plan(&locked.target).map_err(CliError::failure)?;
+    render_interop_plan(&plan, format)
+}
+
+/// Resolve one package-owned target only when its canonical standalone or workspace lock remains current.
+pub(crate) fn locked_interop_plan_target(path: &Path, target: &str) -> CliResult<LockedInteropPlanTarget> {
     // ---- Discover the selected package and canonical lock owner ----
     let manifest = ProjectManifest::discover(path)
         .map_err(|error| CliError::failure(error.to_string()))?
-        .ok_or_else(|| CliError::failure("interop plan inspection requires an incan.toml manifest"))?;
+        .ok_or_else(|| CliError::failure("Oven interop baking requires an incan.toml manifest"))?;
     let context = interop_plan_lock_context(&manifest)?;
 
     // ---- Require exact Oven interop lock freshness ----
     if context.locked != context.current {
         return Err(CliError::failure(
-            "incan.lock Oven interop requirements are out of date; run `incan lock` before inspecting a deployment plan",
+            "incan.lock Oven interop requirements are out of date; run `incan lock` before inspecting or baking a deployment plan",
         ));
     }
 
-    // ---- Select and render one exact target ----
-    let locked_target = context
+    // ---- Select one package-owned immutable target contract ----
+    let target = context
         .locked
         .iter()
         .find(|candidate| candidate.target == target)
+        .cloned()
         .ok_or_else(|| {
             CliError::failure(format!(
                 "Oven interop target `{target}` is not declared and locked by this package"
             ))
         })?;
-    let plan = interop_deployment_plan(locked_target).map_err(CliError::failure)?;
-    render_interop_plan(&plan, format)
+    Ok(LockedInteropPlanTarget {
+        project_root: manifest.project_root().to_path_buf(),
+        target,
+    })
 }
 
 /// Oven interop lock facts selected from either a standalone package or one canonical workspace member projection.
@@ -197,6 +218,14 @@ fn render_interop_plan_text(plan: &InteropDeploymentPlan) {
         if !artifact.dependencies.is_empty() {
             println!("    dependencies: {}", artifact.dependencies.join(", "));
         }
+    }
+    for binding in &plan.bindings {
+        println!(
+            "  binding {}::{}: {}",
+            binding.module.join("::"),
+            binding.name,
+            binding.artifacts.join(", ")
+        );
     }
 
     // ---- Shim input evidence ----

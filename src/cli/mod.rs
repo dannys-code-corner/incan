@@ -207,6 +207,16 @@ pub enum OvenOutputFormat {
     Json,
 }
 
+/// Fixed caller-owned native layout selected by `incan oven interop stage`.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OvenInteropAdapterArgument {
+    /// Android arm64 JNI runtime layout.
+    Android,
+    /// iOS device or simulator framework runtime layout.
+    Ios,
+}
+
 /// Built-in compiler-owned Loaf envelope selected by the hidden baker.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OvenLoafEnvelopeArgument {
@@ -775,6 +785,10 @@ pub enum InspectCommand {
         /// Select a non-persistent SDK profile for this binding projection
         #[command(flatten)]
         sdk_profile: SdkProfileCliFlags,
+        /// Optional locked Oven interop target to join into a redaction-safe binding-use receipt; requires `--format
+        /// receipt`
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
     },
     /// Inspect one locked Oven interop deployment handoff
     InteropPlan {
@@ -934,6 +948,15 @@ pub enum CacheCommand {
 /// Explicit Oven Alpha lifecycle commands.
 #[derive(Subcommand, Debug)]
 pub enum OvenCommand {
+    /// Explicitly materialize or reuse sealed toolchain Loafs for an Incan library project
+    Bake {
+        /// Library project root containing incan.toml and src/lib.incn
+        #[arg(long, value_name = "PATH", default_value = ".")]
+        project: PathBuf,
+        /// Output format
+        #[arg(long = "format", value_enum, default_value = "text")]
+        format: OvenOutputFormat,
+    },
     /// Import frozen Cargo declarations as receipt evidence without launching Cargo
     Import {
         /// Root of the frozen Cargo package to import
@@ -960,6 +983,11 @@ pub enum OvenCommand {
         /// Output format
         #[arg(long = "format", value_enum, default_value = "text")]
         format: OvenOutputFormat,
+    },
+    /// Bake locked C/C++ interop shims and static inputs into one receipt-bound direct-rustc plan
+    Interop {
+        #[command(subcommand)]
+        command: OvenInteropCommand,
     },
     /// Hidden `legacy_cargo` publisher; never used by normal build, run, or test execution
     LegacyCargo {
@@ -1066,6 +1094,72 @@ pub enum OvenCommand {
         /// Arguments forwarded after compilation only to the native binary
         #[arg(last = true, allow_hyphen_values = true, value_name = "ARG")]
         arguments: Vec<OsString>,
+        #[command(flatten)]
+        store: OvenStoreCliFlags,
+        /// Output format
+        #[arg(long = "format", value_enum, default_value = "text")]
+        format: OvenOutputFormat,
+    },
+}
+
+/// Explicit Oven-owned native interop baking commands.
+#[derive(Subcommand, Debug)]
+pub enum OvenInteropCommand {
+    /// Select declared native tools, compile locked shims, and publish one complete direct-rustc interop plan
+    Bake {
+        /// Package root containing incan.toml and the locked interop inputs
+        #[arg(long, value_name = "PATH", default_value = ".")]
+        project: PathBuf,
+        /// Exact locked target triple to bake
+        #[arg(long, value_name = "TRIPLE")]
+        target: String,
+        /// Existing runtime-only Oven receipt used to select the sealed base Loaf plan
+        #[arg(long = "base-receipt", value_name = "PATH")]
+        base_receipt: PathBuf,
+        /// Explicit selected C compiler for a declared C shim or toolchain requirement
+        #[arg(long = "c-compiler", value_name = "PATH")]
+        c_compiler: Option<PathBuf>,
+        /// Explicit selected C++ compiler for a declared C++ shim
+        #[arg(long = "cxx-compiler", value_name = "PATH")]
+        cxx_compiler: Option<PathBuf>,
+        /// Explicit selected static archiver for declared C/C++ shims
+        #[arg(long, value_name = "PATH")]
+        archiver: Option<PathBuf>,
+        /// Semantic version of the explicitly selected compiler required by the locked toolchain capability
+        #[arg(long = "toolchain-version", value_name = "VERSION")]
+        toolchain_version: Option<String>,
+        /// Explicit selected SDK root required by the locked SDK capability
+        #[arg(long = "sdk-root", value_name = "PATH")]
+        sdk_root: Option<PathBuf>,
+        /// Semantic version of the explicitly selected SDK required by the locked SDK capability
+        #[arg(long = "sdk-version", value_name = "VERSION")]
+        sdk_version: Option<String>,
+        /// Regular identity file below --sdk-root whose content records the selected SDK provider identity
+        #[arg(long = "sdk-identity-file", value_name = "PATH")]
+        sdk_identity_file: Option<PathBuf>,
+        #[command(flatten)]
+        store: OvenStoreCliFlags,
+        /// Output format
+        #[arg(long = "format", value_enum, default_value = "text")]
+        format: OvenOutputFormat,
+    },
+    /// Atomically stage a baked interop plan's bundled runtime files without starting a platform build tool
+    Stage {
+        /// Package root containing incan.toml, incan.lock, and the selected interop receipt
+        #[arg(long, value_name = "PATH", default_value = ".")]
+        project: PathBuf,
+        /// Exact locked target triple whose already baked plan will be staged
+        #[arg(long, value_name = "TRIPLE")]
+        target: String,
+        /// Existing runtime-only Oven receipt used to reconstruct the final immutable interop plan receipt
+        #[arg(long = "base-receipt", value_name = "PATH")]
+        base_receipt: PathBuf,
+        /// Fixed Android or iOS output layout; this does not invoke Gradle, Xcode, or signing
+        #[arg(long, value_enum)]
+        adapter: OvenInteropAdapterArgument,
+        /// New caller-owned output directory; existing output is never replaced
+        #[arg(long, value_name = "PATH")]
+        output: PathBuf,
         #[command(flatten)]
         store: OvenStoreCliFlags,
         /// Output format
@@ -1396,7 +1490,14 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                 format,
                 package_features,
                 sdk_profile,
-            } => commands::inspect_bindings(&path, format, &package_features.into(), sdk_profile.profile()),
+                target,
+            } => commands::inspect_bindings(
+                &path,
+                format,
+                &package_features.into(),
+                sdk_profile.profile(),
+                target.as_deref(),
+            ),
             InspectCommand::InteropPlan { path, target, format } => {
                 commands::inspect_interop_plan(&path, &target, format)
             }
@@ -1595,6 +1696,7 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
             ),
         },
         Some(Command::Oven { command }) => match command {
+            OvenCommand::Bake { project, format } => commands::oven_bake_project(project, format),
             OvenCommand::Import {
                 project,
                 target,
@@ -1614,6 +1716,52 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                 output,
                 format,
             }),
+            OvenCommand::Interop { command } => match command {
+                OvenInteropCommand::Bake {
+                    project,
+                    target,
+                    base_receipt,
+                    c_compiler,
+                    cxx_compiler,
+                    archiver,
+                    toolchain_version,
+                    sdk_root,
+                    sdk_version,
+                    sdk_identity_file,
+                    store,
+                    format,
+                } => commands::oven_interop_bake(commands::OvenInteropBakeCommandOptions {
+                    project,
+                    target,
+                    base_receipt,
+                    c_compiler,
+                    cxx_compiler,
+                    archiver,
+                    toolchain_version,
+                    sdk_root,
+                    sdk_version,
+                    sdk_identity_file,
+                    store: store.into(),
+                    format,
+                }),
+                OvenInteropCommand::Stage {
+                    project,
+                    target,
+                    base_receipt,
+                    adapter,
+                    output,
+                    store,
+                    format,
+                } => commands::oven_interop_stage(commands::OvenInteropStageCommandOptions {
+                    project,
+                    target,
+                    base_receipt,
+                    adapter,
+                    output,
+                    store: store.into(),
+                    format,
+                }),
+            },
             OvenCommand::LegacyCargo { command } => match command {
                 OvenLegacyCargoCommand::Prepare {
                     receipt,
@@ -2727,6 +2875,24 @@ mod tests {
 
     #[test]
     fn test_cli_parse_oven_commands() -> Result<(), clap::Error> {
+        let bake = parse_cli([
+            "incan",
+            "oven",
+            "bake",
+            "--project",
+            "examples/library",
+            "--format",
+            "json",
+        ])?;
+        let Some(Command::Oven {
+            command: OvenCommand::Bake { project, format },
+        }) = bake.command
+        else {
+            return Err(expected_command("oven bake"));
+        };
+        assert_eq!(project, PathBuf::from("examples/library"));
+        assert_eq!(format, OvenOutputFormat::Json);
+
         let import = parse_cli([
             "incan",
             "oven",
@@ -2843,6 +3009,36 @@ mod tests {
         };
         assert_eq!(plan_identity, "sha256:plan");
         assert_eq!(arguments, [OsString::from("--consumer-flag")]);
+
+        let interop_stage = parse_cli([
+            "incan",
+            "oven",
+            "interop",
+            "stage",
+            "--project",
+            "examples/interop",
+            "--target",
+            "aarch64-apple-ios-sim",
+            "--base-receipt",
+            "runtime-receipt.json",
+            "--adapter",
+            "ios",
+            "--output",
+            "target/interop-stage",
+        ])?;
+        assert!(matches!(
+            interop_stage.command,
+            Some(Command::Oven {
+                command: OvenCommand::Interop {
+                    command: OvenInteropCommand::Stage {
+                        target,
+                        adapter: OvenInteropAdapterArgument::Ios,
+                        output,
+                        ..
+                    },
+                },
+            }) if target == "aarch64-apple-ios-sim" && output == PathBuf::from("target/interop-stage")
+        ));
         Ok(())
     }
 

@@ -415,6 +415,7 @@ impl AstLowering {
         let return_type = self.lower_callable_return_type(&f.return_type.node, Some(&type_param_names));
         let is_generator = return_type_is_generator(&return_type) && body_contains_yield(&f.body);
         self.push_callable_param_scope(&params);
+        self.push_callable_return_type(&return_type);
         let body_result = self.lower_statements(&f.body);
         if body_result.is_ok() {
             for param in &mut params {
@@ -427,6 +428,7 @@ impl AstLowering {
             }
         }
         self.pop_callable_param_scope();
+        self.pop_callable_return_type();
         let body = match body_result {
             Ok(body) => body,
             Err(err) => {

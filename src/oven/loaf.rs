@@ -17,6 +17,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::interop::{OVEN_INTEROP_EXECUTION_RECEIPT_INPUT, OVEN_INTEROP_PLAN_SCHEMA_INPUT};
 use super::legacy_cargo::{
     OvenLegacyCargoError, OvenLegacyCargoInspectionPackage, OvenLegacyCargoInspectionSource,
     OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind, canonicalize_supporting_artifacts,
@@ -47,7 +48,7 @@ pub const OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION: u32 = 2;
 /// trusted standard-provider identity as the SDK publisher, but it never authorizes Cargo for a caller command.
 pub(crate) const OVEN_LOAF_ENV: &str = "INCAN_OVEN_LOAF";
 /// Actionable user guidance for a normal-command miss without turning the hidden baker into a fallback.
-pub const OVEN_LOAF_MISS_GUIDANCE: &str = "Action: install or reinstall an Oven-enabled Incan toolchain for this target, or remove caller-owned Rust dependencies outside the documented Alpha envelope. Maintainers preparing a toolchain use `incan oven legacy-cargo bake-loafs`; this normal command will not run it automatically.";
+pub const OVEN_LOAF_MISS_GUIDANCE: &str = "Action: first run `incan oven bake --project <library-root>` to materialize the active toolchain's sealed Loaf into the bounded local store. If that reports no compatible shipped Loaf, install or reinstall an Oven-enabled Incan toolchain for this target, or remove caller-owned Rust dependencies outside the documented Alpha envelope. Maintainers preparing a toolchain use `incan oven legacy-cargo bake-loafs`; normal commands and `incan oven bake` will not run it automatically.";
 const TOOLCHAIN_LOAF_RELATIVE_ROOT: &str = "share/incan/oven/loafs";
 static LOAF_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const OVEN_LOAF_ENVELOPE_LOCK_FILE: &str = ".envelope.lock";
@@ -225,7 +226,7 @@ const COMPILER_SUITE_LOAFS: [OvenLoafSpecification; 6] = [
     },
 ];
 
-const RELEASE_LOAFS: [OvenLoafSpecification; 2] = [
+const RELEASE_LOAFS: [OvenLoafSpecification; 4] = [
     OvenLoafSpecification {
         label: "core-release",
         project_name: "oven_release_core",
@@ -242,6 +243,24 @@ const RELEASE_LOAFS: [OvenLoafSpecification; 2] = [
         action: OvenLoafFixtureAction::Run,
         source: include_str!("fixtures/release_foundation.incn"),
         manifest: include_str!("fixtures/release_foundation.toml"),
+        seals_envelope_inspection_sources: false,
+    },
+    OvenLoafSpecification {
+        label: "interop-debug",
+        project_name: "oven_release_interop",
+        profile: "debug",
+        action: OvenLoafFixtureAction::Run,
+        source: include_str!("fixtures/release_interop.incn"),
+        manifest: include_str!("fixtures/release_interop.toml"),
+        seals_envelope_inspection_sources: false,
+    },
+    OvenLoafSpecification {
+        label: "interop-release",
+        project_name: "oven_release_interop",
+        profile: "release",
+        action: OvenLoafFixtureAction::Build,
+        source: include_str!("fixtures/release_interop.incn"),
+        manifest: include_str!("fixtures/release_interop.toml"),
         seals_envelope_inspection_sources: false,
     },
 ];
@@ -594,6 +613,11 @@ impl OvenLoafCompatibility {
         let provider_records = runtime_inputs.remove("providers").unwrap_or_default();
         let _ = runtime_inputs.remove("rust-dependencies");
         let _ = runtime_inputs.remove("stdlib-features");
+        // The selected interop receipt proves package-owned archives and headers, not a compiler-owned runtime
+        // capability. Its immutable final plan is independently reconstructed and verified before execution; using
+        // it as a Loaf compatibility key would require one shipped Loaf per consumer package.
+        let _ = runtime_inputs.remove(OVEN_INTEROP_EXECUTION_RECEIPT_INPUT);
+        let _ = runtime_inputs.remove(OVEN_INTEROP_PLAN_SCHEMA_INPUT);
         let provider_plan = runtime_inputs
             .remove("provider-plan")
             .ok_or_else(|| OvenLoafError::Preparation {
@@ -3120,7 +3144,7 @@ mod tests {
     use super::{
         CompatibleLoaf, OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf,
         OvenLoafCompatibility, OvenLoafEnvelope, OvenLoafEnvelopeManifest, OvenLoafEnvelopeMember, OvenLoafError,
-        OvenLoafSelection, acquire_exclusive_loaf_generation_lock, acquire_loaf_generation_lock,
+        OvenLoafFixtureAction, OvenLoafSelection, acquire_exclusive_loaf_generation_lock, acquire_loaf_generation_lock,
         committed_loaf_envelope_identity, committed_loaf_paths, digest_runtime_crate_source,
         loaf_envelope_inspection_packages, loaf_envelope_specifications, loaf_from_loaf, materialize_loaf_from_loaf,
         materialize_loaf_from_loaf_with_selection, merge_loaf_inspection_sources,
@@ -3329,7 +3353,7 @@ mod tests {
 
     #[test]
     fn built_in_envelopes_are_checked_complete_and_unambiguous() {
-        for (envelope, expected_len) in [(OvenLoafEnvelope::Release, 2), (OvenLoafEnvelope::CompilerSuite, 6)] {
+        for (envelope, expected_len) in [(OvenLoafEnvelope::Release, 4), (OvenLoafEnvelope::CompilerSuite, 6)] {
             let specifications = loaf_envelope_specifications(envelope);
             assert_eq!(specifications.len(), expected_len);
             let identities = specifications
@@ -3341,9 +3365,26 @@ mod tests {
                 assert!(!specification.source.trim().is_empty());
                 assert!(!specification.manifest.trim().is_empty());
                 assert!(matches!(specification.profile, "debug" | "release"));
+                assert!(
+                    specification.profile != "debug" || specification.action != OvenLoafFixtureAction::Build,
+                    "a debug Loaf fixture must use `run` so the canonical receipt records debug intent"
+                );
                 assert!(specification.manifest.contains(specification.project_name));
             }
         }
+        let release = loaf_envelope_specifications(OvenLoafEnvelope::Release);
+        let interop_profiles = release
+            .iter()
+            .filter(|specification| specification.label.starts_with("interop-"))
+            .map(|specification| specification.profile)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(interop_profiles, BTreeSet::from(["debug", "release"]));
+        assert!(
+            release
+                .iter()
+                .filter(|specification| specification.label.starts_with("interop-"))
+                .all(|specification| specification.source.contains("from std.interop import c"))
+        );
     }
 
     #[test]
@@ -3356,7 +3397,7 @@ mod tests {
                 .iter()
                 .map(|package| package.package.as_str())
                 .collect::<Vec<_>>(),
-            ["bitflags", "semver", "serde_json"]
+            ["bitflags", "rand", "semver", "serde", "serde_json", "uuid"]
         );
         let foundation = specifications
             .iter()
@@ -3368,8 +3409,24 @@ mod tests {
                 .iter()
                 .map(|package| package.package.as_str())
                 .collect::<Vec<_>>(),
-            ["bitflags", "semver", "serde_json"]
+            ["bitflags", "rand", "semver", "serde", "serde_json", "uuid"]
         );
+        for imported_crate in ["rand", "uuid"] {
+            assert!(
+                foundation.source.contains(&format!("from rust::{imported_crate}")),
+                "the foundation Loaf must retain an actual checked source import for `{imported_crate}` so reachable dependency resolution produces its direct-rustc leaf"
+            );
+        }
+        assert!(
+            foundation.source.contains("from std.serde"),
+            "the foundation Loaf must retain the checked stdlib serde surface that produces its derive-enabled direct-rustc leaf"
+        );
+        for reachable_use in ["Uuid.new_v4()", "thread_rng()", ".gen_range("] {
+            assert!(
+                foundation.source.contains(reachable_use),
+                "the foundation Loaf must exercise `{reachable_use}` so its declared raw Rust dependency is usable rather than merely imported"
+            );
+        }
         assert!(foundation.seals_envelope_inspection_sources);
         for specification in specifications
             .iter()
@@ -3797,6 +3854,39 @@ mod tests {
             !ordinary_compatibility.authorizes_provider_subset(&private_sdk_link)?,
             "a loaf without the direct SDK rlib cannot authorize a provider's private link root"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn an_interop_execution_receipt_does_not_fragment_compiler_owned_loaf_compatibility()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let source = project.path().join("main.rs");
+        fs::write(&source, "fn main() {}\n")?;
+        let base = runtime_receipt(
+            &source,
+            "incan-stdlib|std.interop|ffi",
+            "empty-rust-dependencies",
+            "interop",
+        )?;
+        let mut selected_interop = base.clone();
+        selected_interop.sources.build_unit_inputs.insert(
+            "oven-interop-execution-receipt".to_string(),
+            "sha256:selected-package-interop-plan".to_string(),
+        );
+        selected_interop
+            .sources
+            .build_unit_inputs
+            .insert("oven-interop-plan-schema".to_string(), "2".to_string());
+
+        let compatibility = OvenLoafCompatibility::from_receipt(&base)?;
+        assert!(compatibility.authorizes_provider_subset(&selected_interop)?);
+
+        selected_interop
+            .sources
+            .build_unit_inputs
+            .insert("unrelated-compiler-input".to_string(), "changed".to_string());
+        assert!(!compatibility.authorizes_provider_subset(&selected_interop)?);
         Ok(())
     }
 

@@ -13,19 +13,19 @@ use std::sync::Arc;
 
 use clap::ValueEnum;
 use incan_codegraph::{
-    CODEGRAPH_SCHEMA_VERSION, CodegraphCBindingCallRecord, CodegraphCBindingEnum, CodegraphCBindingEnumVariant,
-    CodegraphCBindingOutcome, CodegraphCBindingParameter, CodegraphCBindingRecord, CodegraphCBindingResource,
-    CodegraphCBindingStruct, CodegraphCBindingStructField, CodegraphCBindingSymbol, CodegraphCBindingType,
-    CodegraphCallRecord, CodegraphComponentSelectionReason, CodegraphContainmentRecord, CodegraphDeclarationRecord,
-    CodegraphDependencyFeatureProjection, CodegraphDiagnosticRecord, CodegraphDiagnosticRelatedSpan,
-    CodegraphExportRecord, CodegraphFeatureActivationReason, CodegraphFeatureReasonProjection, CodegraphFileRecord,
-    CodegraphHeaderRecord, CodegraphImportRecord, CodegraphLanguage, CodegraphMode, CodegraphModuleRecord,
-    CodegraphPackage, CodegraphPackageFeatureProjection, CodegraphProvenance, CodegraphProviderParticipation,
-    CodegraphProviderProjection, CodegraphProviderProvenance, CodegraphRecord, CodegraphReferenceRecord,
-    CodegraphRegistryRecord, CodegraphRegistryReexportProjection, CodegraphSdkComponentProjection,
-    CodegraphSdkProjection, CodegraphSemanticContext, CodegraphSourceSpan, to_jsonl,
+    CODEGRAPH_SCHEMA_VERSION, CodegraphCBindingBuffer, CodegraphCBindingCallRecord, CodegraphCBindingEnum,
+    CodegraphCBindingEnumVariant, CodegraphCBindingFacadeRecord, CodegraphCBindingOutcome, CodegraphCBindingParameter,
+    CodegraphCBindingRecord, CodegraphCBindingResource, CodegraphCBindingStruct, CodegraphCBindingStructField,
+    CodegraphCBindingSymbol, CodegraphCBindingType, CodegraphCallRecord, CodegraphComponentSelectionReason,
+    CodegraphContainmentRecord, CodegraphDeclarationRecord, CodegraphDependencyFeatureProjection,
+    CodegraphDiagnosticRecord, CodegraphDiagnosticRelatedSpan, CodegraphExportRecord, CodegraphFeatureActivationReason,
+    CodegraphFeatureReasonProjection, CodegraphFileRecord, CodegraphHeaderRecord, CodegraphImportRecord,
+    CodegraphLanguage, CodegraphMode, CodegraphModuleRecord, CodegraphPackage, CodegraphPackageFeatureProjection,
+    CodegraphProvenance, CodegraphProviderParticipation, CodegraphProviderProjection, CodegraphProviderProvenance,
+    CodegraphRecord, CodegraphReferenceRecord, CodegraphRegistryRecord, CodegraphRegistryReexportProjection,
+    CodegraphSdkComponentProjection, CodegraphSdkProjection, CodegraphSemanticContext, CodegraphSourceSpan, to_jsonl,
 };
-use incan_core::lang::c_abi::scalar_type_as_str;
+use incan_core::lang::c_abi::{link_capability_as_str, scalar_type_as_str};
 use incan_semantics_core::{CompilerNodeId, SemanticModuleSnapshot, SemanticSourceTarget};
 use serde_json::{Value, json};
 
@@ -44,6 +44,7 @@ use crate::frontend::registry_metadata::{
 use crate::frontend::typechecker::{
     CAbiInteropArtifacts, CBindingEnum, CBindingEnumVariant, CBindingOutcome, CBindingParameter, CBindingResource,
     CBindingStruct, CBindingStructField, CBindingSymbol, CBindingType, COutputMode, CResourceAccess,
+    c_binding_descriptor_identity,
 };
 use crate::provider::{
     BackendImplementationRequirement, ComponentSelectionReason, FeatureActivationReason, FeatureSelection,
@@ -962,6 +963,7 @@ impl CodegraphBuilder {
         });
         for descriptor in bindings {
             let binding_id = c_binding_record_id(module_id, &descriptor.class_name);
+            let binding_identity = c_binding_descriptor_identity(&module.path_segments, descriptor);
             let Some(declaration_id) = c_binding_declaration_id(module, &descriptor.class_name) else {
                 continue;
             };
@@ -971,8 +973,10 @@ impl CodegraphBuilder {
                 module_id: module_id.to_string(),
                 declaration_id,
                 name: descriptor.class_name.clone(),
+                binding_identity: binding_identity.clone(),
                 header: descriptor.header.clone(),
                 system_library: descriptor.system_library.clone(),
+                link_capability: link_capability_as_str(descriptor.link_capability).to_string(),
                 resources: descriptor.resources.iter().map(c_binding_resource_record).collect(),
                 symbols: descriptor.symbols.iter().map(c_binding_symbol_record).collect(),
                 enums: descriptor.enums.iter().map(c_binding_enum_record).collect(),
@@ -992,7 +996,7 @@ impl CodegraphBuilder {
             )));
         }
 
-        let mut raw_calls = c_abi.raw_calls;
+        let mut raw_calls = c_abi.raw_calls.iter().collect::<Vec<_>>();
         raw_calls.sort_by(|left, right| {
             left.span
                 .start
@@ -1002,6 +1006,9 @@ impl CodegraphBuilder {
                 .then_with(|| left.symbol.cmp(&right.symbol))
         });
         for raw_call in raw_calls {
+            let Some(descriptor) = c_abi.bindings.get(&raw_call.binding) else {
+                continue;
+            };
             let id = c_binding_call_record_id(module_id, &raw_call.binding, &raw_call.symbol, raw_call.span);
             self.records
                 .push(CodegraphRecord::CBindingCall(CodegraphCBindingCallRecord {
@@ -1010,10 +1017,68 @@ impl CodegraphBuilder {
                     module_id: module_id.to_string(),
                     call_id: self.call_record_id_at_span(module_id, raw_call.span),
                     binding_id: c_binding_record_id(module_id, &raw_call.binding),
-                    binding: raw_call.binding,
-                    symbol: raw_call.symbol,
+                    binding_identity: c_binding_descriptor_identity(&module.path_segments, descriptor),
+                    owner_declaration_id: raw_call
+                        .owner
+                        .as_ref()
+                        .and_then(|owner| c_binding_raw_call_owner_declaration_id(module, owner)),
+                    owner_visibility: raw_call
+                        .owner
+                        .as_ref()
+                        .map(|owner| visibility_spelling(owner.visibility).to_string()),
+                    binding: raw_call.binding.clone(),
+                    symbol: raw_call.symbol.clone(),
                     unsafe_acknowledged: true,
                     span: source_span(&module.file_path, &module.source, raw_call.span),
+                    provenance: CodegraphProvenance::Checked,
+                    degraded: false,
+                }));
+        }
+
+        let mut facades = c_abi.facades.iter().collect::<Vec<_>>();
+        facades.sort_by(|left, right| {
+            left.facade
+                .declaration_span
+                .start
+                .cmp(&right.facade.declaration_span.start)
+                .then_with(|| {
+                    left.bridge
+                        .declaration_span
+                        .start
+                        .cmp(&right.bridge.declaration_span.start)
+                })
+                .then_with(|| left.call_span.start.cmp(&right.call_span.start))
+        });
+        for facade in facades {
+            let Some(facade_declaration_id) = c_binding_raw_call_owner_declaration_id(module, &facade.facade) else {
+                continue;
+            };
+            let Some(bridge_declaration_id) = c_binding_raw_call_owner_declaration_id(module, &facade.bridge) else {
+                continue;
+            };
+            let mut raw_call_ids = c_abi
+                .raw_calls
+                .iter()
+                .filter(|raw_call| {
+                    raw_call.owner.as_ref() == Some(&facade.bridge) && c_abi.bindings.contains_key(&raw_call.binding)
+                })
+                .map(|raw_call| c_binding_call_record_id(module_id, &raw_call.binding, &raw_call.symbol, raw_call.span))
+                .collect::<Vec<_>>();
+            raw_call_ids.sort();
+            raw_call_ids.dedup();
+            if raw_call_ids.is_empty() {
+                continue;
+            }
+            self.records
+                .push(CodegraphRecord::CBindingFacade(CodegraphCBindingFacadeRecord {
+                    id: c_binding_facade_record_id(module_id, &facade.facade, &facade.bridge, facade.call_span),
+                    language: CodegraphLanguage::Incan,
+                    module_id: module_id.to_string(),
+                    facade_declaration_id,
+                    bridge_declaration_id,
+                    call_id: self.call_record_id_at_span(module_id, facade.call_span),
+                    raw_call_ids,
+                    span: source_span(&module.file_path, &module.source, facade.call_span),
                     provenance: CodegraphProvenance::Checked,
                     degraded: false,
                 }));
@@ -1960,6 +2025,22 @@ fn c_binding_call_record_id(module_id: &str, binding: &str, symbol: &str, span: 
     )
 }
 
+/// Construct a deterministic identity for one compiler-proven facade-to-bridge relation.
+fn c_binding_facade_record_id(
+    module_id: &str,
+    facade: &crate::frontend::typechecker::CBindingRawCallOwner,
+    bridge: &crate::frontend::typechecker::CBindingRawCallOwner,
+    call_span: Span,
+) -> String {
+    format!(
+        "c_binding_facade:{module_id}:{}:{}:{}:{}",
+        sanitize_record_label(&facade.name),
+        sanitize_record_label(&bridge.name),
+        call_span.start,
+        call_span.end
+    )
+}
+
 /// Return the ordinary class declaration record that owns one compiler-checked C binding descriptor.
 ///
 /// A descriptor is expected to originate from the vocabulary-desugared class declaration. When a partially parsed
@@ -1973,6 +2054,29 @@ fn c_binding_declaration_id(module: &ParsedModule, binding_name: &str) -> Option
         .enumerate()
         .find_map(|(index, declaration)| match &declaration.node {
             Declaration::Class(class) if class.name == binding_name => Some(declaration_id(module, declaration, index)),
+            _ => None,
+        })
+}
+
+/// Return the ordinary function declaration record that compiler typechecking retained as the owner of one raw call.
+///
+/// A missing record is represented as absent rather than guessed: methods and malformed tolerant-mode input gain no
+/// fabricated bridge relationship.
+fn c_binding_raw_call_owner_declaration_id(
+    module: &ParsedModule,
+    owner: &crate::frontend::typechecker::CBindingRawCallOwner,
+) -> Option<String> {
+    module
+        .ast
+        .declarations
+        .iter()
+        .enumerate()
+        .find_map(|(index, declaration)| match &declaration.node {
+            Declaration::Function(function)
+                if function.name == owner.name && declaration.span == owner.declaration_span =>
+            {
+                Some(declaration_id(module, declaration, index))
+            }
             _ => None,
         })
 }
@@ -1993,7 +2097,17 @@ fn c_binding_symbol_record(symbol: &CBindingSymbol) -> CodegraphCBindingSymbol {
         native: symbol.native.clone(),
         parameters: symbol.parameters.iter().map(c_binding_parameter_record).collect(),
         return_type: c_binding_type_record(&symbol.return_type),
+        buffers: symbol.buffers.iter().map(c_binding_buffer_record).collect(),
         outcomes: symbol.outcomes.iter().map(c_binding_outcome_record).collect(),
+    }
+}
+
+/// Convert one compiler-owned pointer-to-length association without inferring it from names or generated Rust.
+fn c_binding_buffer_record(buffer: &crate::frontend::typechecker::CBindingBuffer) -> CodegraphCBindingBuffer {
+    CodegraphCBindingBuffer {
+        pointer_parameter: buffer.pointer_parameter.clone(),
+        length_parameter: buffer.length_parameter.clone(),
+        element: scalar_type_as_str(buffer.element).to_string(),
     }
 }
 
@@ -2108,6 +2222,7 @@ fn record_degraded(record: &CodegraphRecord) -> bool {
         CodegraphRecord::Registry(record) => record.degraded,
         CodegraphRecord::CBinding(record) => record.degraded,
         CodegraphRecord::CBindingCall(record) => record.degraded,
+        CodegraphRecord::CBindingFacade(record) => record.degraded,
     }
 }
 
@@ -2761,6 +2876,9 @@ fn path_string(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::{lexer, parser, typechecker};
+    use incan_core::lang::c_abi::ScalarTypeId;
+    use std::path::PathBuf;
 
     #[test]
     fn nested_public_imports_preserve_canonical_codegraph_paths_and_bindings_issue948() {
@@ -2803,5 +2921,71 @@ mod tests {
             )
         );
         assert_eq!(import_export_names(&from_import), vec!["Index".to_string()]);
+    }
+
+    #[test]
+    fn checked_c_codegraph_consumes_a_framework_link_from_the_source_descriptor() -> Result<(), String> {
+        let source = r#"
+from std.interop import BindingDeclaration, c
+
+@c.binding(header="fixture.h", link=c.framework("Accelerate"))
+class Accelerate extends BindingDeclaration:
+    marker: str
+"#;
+        let tokens = lexer::lex(source).map_err(|errors| format!("lexer failed: {errors:?}"))?;
+        let ast = parser::parse(&tokens).map_err(|errors| format!("parser failed: {errors:?}"))?;
+        let interop_source = include_str!("../../../crates/incan_stdlib/stdlib/interop.incn");
+        let interop_tokens =
+            lexer::lex(interop_source).map_err(|errors| format!("interop lexer failed: {errors:?}"))?;
+        let interop = parser::parse(&interop_tokens).map_err(|errors| format!("interop parser failed: {errors:?}"))?;
+        let mut checker = typechecker::TypeChecker::new();
+        checker
+            .check_with_imports(&ast, &[("std.interop", &interop)])
+            .map_err(|errors| format!("typecheck failed: {errors:?}"))?;
+
+        let file_path = PathBuf::from("/checked-c-framework.incn");
+        let module = ParsedModule {
+            name: "checked_c_framework".to_string(),
+            path_segments: vec!["checked_c_framework".to_string()],
+            file_path: file_path.clone(),
+            source: source.to_string(),
+            ast,
+        };
+        let mut builder = CodegraphBuilder::new(&file_path, None, false);
+        builder.set_c_abi_artifacts(BTreeMap::from([(file_path, checker.type_info().c_abi.clone())]));
+        builder.collect_parsed_module(&module, Vec::new());
+
+        let binding = builder
+            .records
+            .iter()
+            .find_map(|record| match record {
+                CodegraphRecord::CBinding(binding) if binding.name == "Accelerate" => Some(binding),
+                _ => None,
+            })
+            .ok_or_else(|| "expected checked framework binding record".to_string())?;
+        assert_eq!(binding.link_capability, "framework");
+        Ok(())
+    }
+
+    #[test]
+    fn checked_c_codegraph_projects_descriptor_owned_span_bounds_without_name_inference() {
+        let symbol = CBindingSymbol {
+            name: "sum".to_string(),
+            native: "accelerate_sum".to_string(),
+            parameters: Vec::new(),
+            return_type: CBindingType::Void,
+            buffers: vec![crate::frontend::typechecker::CBindingBuffer {
+                pointer_parameter: "values".to_string(),
+                length_parameter: "value_count".to_string(),
+                element: ScalarTypeId::F32,
+            }],
+            outcomes: Vec::new(),
+        };
+
+        let record = c_binding_symbol_record(&symbol);
+        assert_eq!(record.buffers.len(), 1);
+        assert_eq!(record.buffers[0].pointer_parameter, "values");
+        assert_eq!(record.buffers[0].length_parameter, "value_count");
+        assert_eq!(record.buffers[0].element, "c.f32");
     }
 }

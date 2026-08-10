@@ -1146,7 +1146,14 @@ impl AstLowering {
             }
 
             ast::Statement::Return(opt) => {
-                IrStmtKind::Return(opt.as_ref().map(|e| self.lower_expr_spanned(e)).transpose()?)
+                let value = opt
+                    .as_ref()
+                    .map(|expr| {
+                        self.lower_expr_spanned(expr)
+                            .map(|value| self.coerce_checked_c_return_value(expr, value))
+                    })
+                    .transpose()?;
+                IrStmtKind::Return(value)
             }
 
             ast::Statement::If(i) => {

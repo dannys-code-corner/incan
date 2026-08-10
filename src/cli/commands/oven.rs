@@ -17,12 +17,21 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{CliError, CliResult, ExitCode, OvenLoafEnvelopeArgument, OvenOutputFormat};
+use crate::cli::commands::interop_plan::locked_interop_plan_target;
+use crate::cli::{
+    CliError, CliResult, ExitCode, OvenInteropAdapterArgument, OvenLoafEnvelopeArgument, OvenOutputFormat,
+};
 use crate::oven::compiler_suite_env::{
     OVEN_COMPILER_SUITE_CAPABILITY_ENV, OVEN_COMPILER_SUITE_FIXTURE_CARGO_LOG_ENV,
     OVEN_COMPILER_SUITE_FIXTURE_CARGO_REAL_ENV, OVEN_COMPILER_SUITE_FIXTURE_RUSTC_REAL_ENV,
     OVEN_COMPILER_SUITE_RUSTC_ENV, OVEN_COMPILER_SUITE_VOCAB_CAPABILITY_ENV, OvenCompilerSuiteCapability,
     OvenCompilerSuiteTargetCapabilities,
+};
+use crate::oven::interop::{
+    OvenInteropAdapter, OvenInteropAdapterStageRequest, OvenInteropCapabilitySelection, OvenInteropNativeBakeRequest,
+    bake_interop_native_plan, default_interop_execution_receipt_path, load_interop_execution_receipt,
+    receipt_interop_execution, selected_interop_toolchain_identity, stage_interop_adapter,
+    write_interop_execution_receipt,
 };
 use crate::oven::legacy_cargo::{
     OVEN_COMPILER_TEST_SUITE_FOUNDATION_SCHEMA_VERSION, OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION,
@@ -66,6 +75,7 @@ use crate::oven::{
     OvenBuildIntent, OvenCompilerSuiteRequest, OvenImportRequest, OvenReceipt, default_receipt_path, digest_bytes,
     import_frozen_project, receipt_native_compiler_suite, write_receipt,
 };
+use crate::oven_interop::{CapabilityRequirement, LockedInteropTarget};
 #[cfg(feature = "rust_inspect")]
 use crate::rust_inspect::{OvenInspectionRegistrySource, write_oven_inspection_source_authority};
 
@@ -204,6 +214,54 @@ pub struct OvenLegacyCargoPrepareCommandOptions {
     pub format: OvenOutputFormat,
 }
 
+/// Inputs for `incan oven interop bake`.
+#[derive(Debug, Clone)]
+pub struct OvenInteropBakeCommandOptions {
+    /// Package root containing the canonical manifest, lock, and package-owned interop inputs.
+    pub project: PathBuf,
+    /// Exact locked target triple to select and bake.
+    pub target: String,
+    /// Runtime-only receipt that selects the existing sealed direct-rustc Loaf plan.
+    pub base_receipt: PathBuf,
+    /// Explicit selected C compiler for a declared toolchain requirement or C shim.
+    pub c_compiler: Option<PathBuf>,
+    /// Explicit selected C++ compiler for a declared C++ shim.
+    pub cxx_compiler: Option<PathBuf>,
+    /// Explicit selected static archiver for declared C/C++ shims.
+    pub archiver: Option<PathBuf>,
+    /// Semantic version of the selected compiler capability.
+    pub toolchain_version: Option<String>,
+    /// Explicit selected SDK root when the locked target requires an SDK capability.
+    pub sdk_root: Option<PathBuf>,
+    /// Semantic version of the selected SDK capability.
+    pub sdk_version: Option<String>,
+    /// Regular selected SDK identity file below `sdk_root`.
+    pub sdk_identity_file: Option<PathBuf>,
+    /// Bounded store selection and policy.
+    pub store: OvenStoreCommandOptions,
+    /// Requested rendering format.
+    pub format: OvenOutputFormat,
+}
+
+/// Inputs for `incan oven interop stage`.
+#[derive(Debug, Clone)]
+pub struct OvenInteropStageCommandOptions {
+    /// Package root containing the canonical manifest, current lock, and selected interop receipt.
+    pub project: PathBuf,
+    /// Exact locked target triple whose final interop plan will be staged.
+    pub target: String,
+    /// Runtime-only receipt used to reconstruct the immutable final interop plan receipt.
+    pub base_receipt: PathBuf,
+    /// Fixed native consumer layout to stage without invoking platform build tools.
+    pub adapter: OvenInteropAdapterArgument,
+    /// New caller-owned output directory. Existing output is deliberately never replaced.
+    pub output: PathBuf,
+    /// Bounded store selection and policy.
+    pub store: OvenStoreCommandOptions,
+    /// Requested rendering format.
+    pub format: OvenOutputFormat,
+}
+
 /// Inputs for the hidden baker that emits one complete compiler-owned Loaf envelope.
 #[derive(Debug, Clone)]
 pub struct OvenLoafBakeCommandOptions {
@@ -316,6 +374,37 @@ pub struct OvenRunCommandOptions {
     pub format: OvenOutputFormat,
 }
 
+/// Explicitly materialize or reuse sealed toolchain Loafs for one supported Incan library project.
+///
+/// Unlike the hidden `legacy_cargo` publisher, this command only consumes the active toolchain's already sealed
+/// release envelope. It records project receipt evidence and delegates admission, atomic publication, and leases to
+/// the normal Oven store selector; Cargo is neither discovered nor launched.
+pub fn oven_bake_project(project: PathBuf, format: OvenOutputFormat) -> CliResult<ExitCode> {
+    let report = super::build::bake_oven_library_project(&project)?;
+    match format {
+        OvenOutputFormat::Text => {
+            for profile in &report.profiles {
+                let verb = match profile.action {
+                    "reused" => "Reused",
+                    "materialized" => "Materialized",
+                    "compiler_suite_native" => "Selected",
+                    _ => "Prepared",
+                };
+                println!(
+                    "{verb} Oven {profile} plan {} for {} without Cargo.",
+                    profile.plan_identity,
+                    report.project.display(),
+                    profile = profile.profile,
+                );
+                println!("  Receipt: {}", profile.receipt.display());
+            }
+            println!("Store: {}", report.store.display());
+        }
+        OvenOutputFormat::Json => print_json(&report)?,
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 /// Import frozen project declarations, record named source digests, and atomically publish a portable Oven receipt.
 pub fn oven_import(options: OvenImportCommandOptions) -> CliResult<ExitCode> {
     let mut request = OvenImportRequest::new(
@@ -415,6 +504,269 @@ pub fn oven_legacy_cargo_prepare(options: OvenLegacyCargoPrepareCommandOptions) 
         OvenOutputFormat::Json => print_json(&result)?,
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Stable terminal and JSON evidence emitted by one explicit Oven native interop bake.
+#[derive(Debug, Serialize)]
+struct OvenInteropBakeReport {
+    /// Selected locked target triple.
+    target: String,
+    /// Project-local selected execution receipt written only after final plan publication succeeds.
+    execution_receipt: PathBuf,
+    /// Selected-execution identity bound into the final direct-rustc build unit.
+    execution_receipt_identity: String,
+    /// Final immutable direct-rustc plan identity.
+    plan_identity: String,
+    /// Final receipt identity whose build unit authorizes the immutable direct-Rustc plan.
+    final_receipt_identity: String,
+    /// Static package inputs and compiled shim outputs exposed through the plan's sealed native search path.
+    archives: Vec<String>,
+    /// Locked dynamic runtime files retained as digest-verified plan artifacts for a target-native packaging adapter.
+    bundles: Vec<String>,
+    /// Whether this command reused an existing verified interop plan without starting a native tool.
+    reused: bool,
+    /// The baker never invokes Cargo.
+    cargo_process_started: bool,
+}
+
+/// Stable terminal and JSON evidence emitted after staging a selected interop plan for one native adapter.
+#[derive(Debug, Serialize)]
+struct OvenInteropStageReport {
+    /// Exact locked target triple retained in the adapter manifest.
+    target: String,
+    /// Fixed caller-selected Android or iOS layout.
+    adapter: OvenInteropAdapterArgument,
+    /// Caller-owned manifest with only output-relative staged paths.
+    manifest: PathBuf,
+    /// Reconstructed immutable plan receipt used for selection.
+    final_receipt_identity: String,
+    /// Immutable direct-Rustc plan identity whose bundled files were copied.
+    plan_identity: String,
+    /// Number of digest-verified bundled runtime files staged.
+    bundled_files: usize,
+    /// The staging operation never invokes Cargo, Gradle, Xcode, or a signing tool.
+    cargo_process_started: bool,
+    /// The staging operation never starts a platform build tool.
+    platform_build_process_started: bool,
+}
+
+/// Select declared native tools, bake locked C/C++ inputs, and publish one receipt-bound direct-rustc plan.
+///
+/// This is an explicit Oven publisher, not a normal command fallback. It consumes only the canonical package lock,
+/// selected tool/SDK evidence, a sealed runtime receipt, and declared package files. Cargo, `pkg-config`, and ambient
+/// include or link path discovery are intentionally absent.
+pub fn oven_interop_bake(options: OvenInteropBakeCommandOptions) -> CliResult<ExitCode> {
+    let locked = locked_interop_plan_target(&options.project, &options.target)?;
+    let base_receipt = read_receipt(&options.base_receipt)?;
+    let toolchain = selected_compiler_capability(&locked.target, &options)?;
+    let sdk = selected_sdk_capability(&locked.target, &options)?;
+    let execution_receipt = receipt_interop_execution(&locked.target, toolchain, sdk).map_err(CliError::failure)?;
+    let store = open_store(&options.store)?;
+    let baked = bake_interop_native_plan(OvenInteropNativeBakeRequest {
+        store: &store,
+        project_root: &locked.project_root,
+        target: &locked.target,
+        base_receipt: &base_receipt,
+        execution_receipt: &execution_receipt,
+        c_compiler: options.c_compiler.as_deref(),
+        cxx_compiler: options.cxx_compiler.as_deref(),
+        archiver: options.archiver.as_deref(),
+        sdk_root: options.sdk_root.as_deref(),
+        sdk_identity_file: options.sdk_identity_file.as_deref(),
+    })
+    .map_err(CliError::failure)?;
+    let receipt_path = default_interop_execution_receipt_path(&locked.project_root, &locked.target.target);
+    write_interop_execution_receipt(&execution_receipt, &receipt_path).map_err(CliError::failure)?;
+    let report = OvenInteropBakeReport {
+        target: locked.target.target,
+        execution_receipt: receipt_path,
+        execution_receipt_identity: execution_receipt.identity,
+        plan_identity: baked.plan_identity,
+        final_receipt_identity: baked.receipt.identity,
+        archives: baked.archive_names,
+        bundles: baked.bundle_names,
+        reused: baked.reused,
+        cargo_process_started: false,
+    };
+    match options.format {
+        OvenOutputFormat::Text => println!(
+            "{} Oven interop target {} direct-rustc plan {} without Cargo.",
+            if report.reused { "Reused" } else { "Baked" },
+            report.target,
+            report.plan_identity
+        ),
+        OvenOutputFormat::Json => print_json(&report)?,
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Stage one already baked selected interop plan in a fixed caller-owned Android or iOS layout.
+///
+/// This command reads the lock-fresh target and its project-owned selected execution receipt, reconstructs the exact
+/// final receipt, and copies only digest-verified bundled runtime files from the selected store plan. It never probes
+/// or starts Cargo, Gradle, Xcode, platform signing, or a native compiler.
+pub fn oven_interop_stage(options: OvenInteropStageCommandOptions) -> CliResult<ExitCode> {
+    let locked = locked_interop_plan_target(&options.project, &options.target)?;
+    let base_receipt = read_receipt(&options.base_receipt)?;
+    let execution_receipt_path = default_interop_execution_receipt_path(&locked.project_root, &locked.target.target);
+    let execution_receipt = load_interop_execution_receipt(&execution_receipt_path).map_err(CliError::failure)?;
+    let store = open_store(&options.store)?;
+    let adapter = match options.adapter {
+        OvenInteropAdapterArgument::Android => OvenInteropAdapter::Android,
+        OvenInteropAdapterArgument::Ios => OvenInteropAdapter::Ios,
+    };
+    let staged = stage_interop_adapter(OvenInteropAdapterStageRequest {
+        store: &store,
+        target: &locked.target,
+        base_receipt: &base_receipt,
+        execution_receipt: &execution_receipt,
+        adapter,
+        output: &options.output,
+    })
+    .map_err(CliError::failure)?;
+    let report = OvenInteropStageReport {
+        target: locked.target.target,
+        adapter: options.adapter,
+        manifest: staged.manifest_path,
+        final_receipt_identity: staged.receipt.identity,
+        plan_identity: staged.plan_identity,
+        bundled_files: staged.bundled_files,
+        cargo_process_started: false,
+        platform_build_process_started: false,
+    };
+    match options.format {
+        OvenOutputFormat::Text => println!(
+            "Staged {} bundled Oven interop runtime file(s) for {} at {} without Cargo or a platform build tool.",
+            report.bundled_files,
+            report.target,
+            report.manifest.display()
+        ),
+        OvenOutputFormat::Json => print_json(&report)?,
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Construct the selected compiler capability record from one explicit executable and semantic-version assertion.
+fn selected_compiler_capability(
+    target: &LockedInteropTarget,
+    options: &OvenInteropBakeCommandOptions,
+) -> CliResult<Option<OvenInteropCapabilitySelection>> {
+    let Some(requirement) = target.toolchain.as_ref() else {
+        if options.c_compiler.is_some() || options.toolchain_version.is_some() {
+            return Err(CliError::failure(
+                "Oven interop bake received compiler capability inputs for a target that declares no toolchain capability",
+            ));
+        }
+        return Ok(None);
+    };
+    let compiler = options.c_compiler.as_deref().ok_or_else(|| {
+        CliError::failure(format!(
+            "locked Oven interop target `{}` requires explicit --c-compiler for capability `{}`",
+            target.target, requirement.capability
+        ))
+    })?;
+    let version = required_selected_version(options.toolchain_version.as_deref(), "toolchain", requirement)?;
+    let identity = selected_interop_toolchain_identity(
+        target,
+        Some(compiler),
+        options.cxx_compiler.as_deref(),
+        options.archiver.as_deref(),
+    )
+    .map_err(CliError::failure)?;
+    Ok(Some(OvenInteropCapabilitySelection {
+        capability: requirement.capability.clone(),
+        version,
+        identity,
+    }))
+}
+
+/// Construct the selected SDK capability record from a declared root and an explicit regular identity file beneath it.
+fn selected_sdk_capability(
+    target: &LockedInteropTarget,
+    options: &OvenInteropBakeCommandOptions,
+) -> CliResult<Option<OvenInteropCapabilitySelection>> {
+    let Some(requirement) = target.sdk.as_ref() else {
+        if options.sdk_root.is_some() || options.sdk_version.is_some() || options.sdk_identity_file.is_some() {
+            return Err(CliError::failure(
+                "Oven interop bake received SDK capability inputs for a target that declares no SDK capability",
+            ));
+        }
+        return Ok(None);
+    };
+    let sdk_root = options.sdk_root.as_deref().ok_or_else(|| {
+        CliError::failure(format!(
+            "locked Oven interop target `{}` requires --sdk-root for capability `{}`",
+            target.target, requirement.capability
+        ))
+    })?;
+    let root = fs::canonicalize(sdk_root).map_err(|error| {
+        CliError::failure(format!(
+            "could not canonicalize selected SDK root {}: {error}",
+            sdk_root.display()
+        ))
+    })?;
+    if !root.is_dir() {
+        return Err(CliError::failure(format!(
+            "selected SDK root is not a directory: {}",
+            root.display()
+        )));
+    }
+    let identity_file = options.sdk_identity_file.as_deref().ok_or_else(|| {
+        CliError::failure(format!(
+            "locked Oven interop target `{}` requires --sdk-identity-file below --sdk-root",
+            target.target
+        ))
+    })?;
+    let identity_file = fs::canonicalize(identity_file).map_err(|error| {
+        CliError::failure(format!(
+            "could not canonicalize selected SDK identity file {}: {error}",
+            identity_file.display()
+        ))
+    })?;
+    if !identity_file.starts_with(&root) {
+        return Err(CliError::failure(format!(
+            "selected SDK identity file {} is outside selected SDK root {}",
+            identity_file.display(),
+            root.display()
+        )));
+    }
+    let version = required_selected_version(options.sdk_version.as_deref(), "SDK", requirement)?;
+    let identity = selected_regular_file_identity(&identity_file, "selected SDK identity file")?;
+    Ok(Some(OvenInteropCapabilitySelection {
+        capability: requirement.capability.clone(),
+        version,
+        identity,
+    }))
+}
+
+/// Require one non-empty semantic version value from the explicitly selected local capability record.
+fn required_selected_version(
+    value: Option<&str>,
+    label: &str,
+    requirement: &CapabilityRequirement,
+) -> CliResult<String> {
+    let version = value.filter(|value| !value.trim().is_empty()).ok_or_else(|| {
+        CliError::failure(format!(
+            "selected {label} capability `{}` requires a version",
+            requirement.capability
+        ))
+    })?;
+    Ok(version.to_string())
+}
+
+/// Digest one explicitly selected regular file without representing its local path as portable receipt identity.
+fn selected_regular_file_identity(path: &Path, label: &str) -> CliResult<String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| CliError::failure(format!("could not inspect {label} {}: {error}", path.display())))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(CliError::failure(format!(
+            "{label} must be a regular file: {}",
+            path.display()
+        )));
+    }
+    let bytes = fs::read(path)
+        .map_err(|error| CliError::failure(format!("could not read {label} {}: {error}", path.display())))?;
+    Ok(digest_bytes(&bytes))
 }
 
 /// Result for one checked fixture in a built-in Loaf envelope.
@@ -4762,6 +5114,8 @@ mod tests {
         for (label, profile, action) in [
             ("core-release", "release", "build"),
             ("foundation-debug", "debug", "run"),
+            ("interop-debug", "debug", "run"),
+            ("interop-release", "release", "build"),
         ] {
             let build_unit_identity = digest_bytes(label.as_bytes());
             let loaf = OvenLoaf {
@@ -4832,7 +5186,7 @@ mod tests {
         .ok_or("matching complete envelope manifest was not reused")?;
 
         assert_eq!(report.action, "reused");
-        assert_eq!(report.reused_count, 2);
+        assert_eq!(report.reused_count, 4);
         assert_eq!(report.prepared_count, 0);
         assert!(!report.cargo_process_started);
         let json = serde_json::to_value(&report)?;

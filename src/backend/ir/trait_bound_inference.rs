@@ -3148,6 +3148,9 @@ mod tests {
             rust_module_path: None,
             newtype_construction: Default::default(),
             checked_c_functions: Vec::new(),
+            uses_checked_c_strings: false,
+            uses_scoped_c_string_views: false,
+            uses_checked_c_span_buffers: false,
         }
     }
 
@@ -3201,6 +3204,9 @@ mod tests {
             rust_module_path: None,
             newtype_construction: Default::default(),
             checked_c_functions: Vec::new(),
+            uses_checked_c_strings: false,
+            uses_scoped_c_string_views: false,
+            uses_checked_c_span_buffers: false,
         };
 
         infer_trait_bounds(&mut program);

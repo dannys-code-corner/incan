@@ -3,7 +3,7 @@
 //! This keeps decorator path resolution and validation logic out of the main collection flow while preserving RFC 022
 //! semantics.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::frontend::api_metadata::ApiDeclaration;
 use crate::frontend::ast::*;
@@ -12,12 +12,12 @@ use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::{ResolvedType, SymbolKind, SymbolTable, TypeInfo};
 use crate::frontend::typechecker::TypeChecker;
 use crate::frontend::typechecker::type_info::{
-    CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingOutcome, CBindingParameter, CBindingResource,
-    CBindingStruct, CBindingStructField, CBindingSymbol, CBindingType, COutputMode, CResourceAccess,
+    CBindingBuffer, CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingOutcome, CBindingParameter,
+    CBindingResource, CBindingStruct, CBindingStructField, CBindingSymbol, CBindingType, COutputMode, CResourceAccess,
 };
 use incan_core::lang::c_abi::{
     self, BindingArgumentId, BindingMemberId, LinkCapabilityId, ResourceArgumentId, ResourceTypeConstructorId,
-    SymbolOutcomeArgumentId,
+    SymbolArgumentId, SymbolOutcomeArgumentId,
 };
 use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::derives;
@@ -38,6 +38,9 @@ struct RawCBindingOutcome {
     invalidates: Vec<String>,
 }
 
+/// Raw data parsed from one C symbol before it becomes a checked binding descriptor.
+type RawCBindingSymbolData = (String, Vec<(String, String)>, Vec<RawCBindingOutcome>);
+
 /// Parsed C symbol data that must wait for the binding's complete enum namespace before outcome validation.
 struct RawCBindingSymbol {
     span: Span,
@@ -45,6 +48,7 @@ struct RawCBindingSymbol {
     native: String,
     parameters: Vec<CBindingParameter>,
     return_type: CBindingType,
+    bounds: Vec<(String, String)>,
     outcomes: Vec<RawCBindingOutcome>,
 }
 
@@ -568,16 +572,16 @@ impl TypeChecker {
                 String::new()
             }
         };
-        let system_library = link.and_then(|value| self.c_system_library_name(value));
-        let system_library = match system_library {
-            Some(library) => library,
+        let link = link.and_then(|value| self.c_system_library_name(value));
+        let (system_library, link_capability) = match link {
+            Some(link) => link,
             None => {
                 self.errors.push(CompileError::type_error(
-                    "@c.binding requires `link = c.system_library(\"name\")`".to_string(),
+                    "@c.binding requires `link = c.system_library(\"name\")` or `c.framework(\"name\")`".to_string(),
                     decorator.span,
                 ));
                 valid = false;
-                String::new()
+                (String::new(), LinkCapabilityId::SystemLibrary)
             }
         };
 
@@ -594,6 +598,7 @@ impl TypeChecker {
                     class_name: class.name.clone(),
                     header,
                     system_library,
+                    link_capability,
                     resources: members.resources,
                     symbols: members.symbols,
                     enums: members.enums,
@@ -730,7 +735,8 @@ impl TypeChecker {
                             ty: parameter_type,
                         });
                     }
-                    let Some((native, raw_outcomes)) = Self::c_symbol_data(member, span, &mut self.errors) else {
+                    let Some((native, bounds, raw_outcomes)) = Self::c_symbol_data(member, span, &mut self.errors)
+                    else {
                         valid = false;
                         continue;
                     };
@@ -740,6 +746,7 @@ impl TypeChecker {
                         native,
                         parameters,
                         return_type,
+                        bounds,
                         outcomes: raw_outcomes,
                     });
                 }
@@ -824,11 +831,22 @@ impl TypeChecker {
                 valid = false;
                 continue;
             };
+            let Some(buffers) = Self::c_symbol_buffer_contracts(
+                raw_symbol.bounds,
+                &raw_symbol.name,
+                &raw_symbol.parameters,
+                raw_symbol.span,
+                &mut self.errors,
+            ) else {
+                valid = false;
+                continue;
+            };
             symbols.push(CBindingSymbol {
                 name: raw_symbol.name,
                 native: raw_symbol.native,
                 parameters: raw_symbol.parameters,
                 return_type: raw_symbol.return_type,
+                buffers,
                 outcomes,
             });
         }
@@ -940,8 +958,9 @@ impl TypeChecker {
         member: &incan_vocab::VocabDeclaration,
         span: Span,
         errors: &mut Vec<CompileError>,
-    ) -> Option<(String, Vec<RawCBindingOutcome>)> {
+    ) -> Option<RawCBindingSymbolData> {
         let mut native = None;
+        let mut bounds = None;
         let mut outcomes = Vec::new();
         for item in &member.body {
             match item {
@@ -957,26 +976,40 @@ impl TypeChecker {
                             return None;
                         }
                     };
-                    if c_abi::symbol_argument_from_str(field).is_none() {
+                    let Some(argument) = c_abi::symbol_argument_from_str(field) else {
                         errors.push(CompileError::type_error(
-                            "C symbols accept only the `native` data field".to_string(),
-                            span,
-                        ));
-                        return None;
-                    }
-                    let incan_vocab::IncanExpr::Str(value) = value else {
-                        errors.push(CompileError::type_error(
-                            "C symbol `native` must be a non-empty string literal".to_string(),
+                            "C symbols accept only `native` and `bounds` data fields".to_string(),
                             span,
                         ));
                         return None;
                     };
-                    if value.is_empty() || native.replace(value.clone()).is_some() {
-                        errors.push(CompileError::type_error(
-                            "C symbols require exactly one non-empty `native` field".to_string(),
-                            span,
-                        ));
-                        return None;
+                    match (argument, value) {
+                        (SymbolArgumentId::Native, incan_vocab::IncanExpr::Str(value))
+                            if !value.is_empty() && native.replace(value.clone()).is_none() => {}
+                        (SymbolArgumentId::Native, _) => {
+                            errors.push(CompileError::type_error(
+                                "C symbol `native` must be one non-empty string literal".to_string(),
+                                span,
+                            ));
+                            return None;
+                        }
+                        (SymbolArgumentId::Bounds, value) => {
+                            let Some(parsed) = Self::c_symbol_bounds(value) else {
+                                errors.push(CompileError::type_error(
+                                    "C symbol `bounds` must be a non-empty dictionary of pointer parameter names to c.Size parameter names"
+                                        .to_string(),
+                                    span,
+                                ));
+                                return None;
+                            };
+                            if bounds.replace(parsed).is_some() {
+                                errors.push(CompileError::type_error(
+                                    "C symbols may state `bounds` once".to_string(),
+                                    span,
+                                ));
+                                return None;
+                            }
+                        }
                     }
                 }
                 incan_vocab::VocabBodyItem::Declaration(outcome) => {
@@ -991,13 +1024,120 @@ impl TypeChecker {
                 }
             }
         }
-        native.map(|native| (native, outcomes)).or_else(|| {
+        native
+            .map(|native| (native, bounds.unwrap_or_default(), outcomes))
+            .or_else(|| {
+                errors.push(CompileError::type_error(
+                    "C symbols require exactly one non-empty `native` field".to_string(),
+                    span,
+                ));
+                None
+            })
+    }
+
+    /// Parse the deliberately declarative pointer-to-length relation before checking it against one symbol signature.
+    fn c_symbol_bounds(value: &incan_vocab::IncanExpr) -> Option<Vec<(String, String)>> {
+        let incan_vocab::IncanExpr::Dict(entries) = value else {
+            return None;
+        };
+        if entries.is_empty() {
+            return None;
+        }
+        let mut pointer_names = HashSet::new();
+        let mut result = Vec::with_capacity(entries.len());
+        for (pointer, length) in entries {
+            let (incan_vocab::IncanExpr::Name(pointer), incan_vocab::IncanExpr::Name(length)) = (pointer, length)
+            else {
+                return None;
+            };
+            if pointer.is_empty() || length.is_empty() || !pointer_names.insert(pointer.clone()) {
+                return None;
+            }
+            result.push((pointer.clone(), length.clone()));
+        }
+        Some(result)
+    }
+
+    /// Check every typed-span declaration against the symbol it bounds before it can become a compiler fact.
+    fn c_symbol_buffer_contracts(
+        bounds: Vec<(String, String)>,
+        symbol: &str,
+        parameters: &[CBindingParameter],
+        span: Span,
+        errors: &mut Vec<CompileError>,
+    ) -> Option<Vec<CBindingBuffer>> {
+        let pointer_parameters = parameters
+            .iter()
+            .filter_map(|parameter| match &parameter.ty {
+                CBindingType::Pointer { pointee, .. }
+                    if matches!(
+                        pointee.as_ref(),
+                        CBindingType::Scalar(c_abi::ScalarTypeId::U8 | c_abi::ScalarTypeId::F32)
+                    ) =>
+                {
+                    let CBindingType::Scalar(element) = pointee.as_ref() else {
+                        return None;
+                    };
+                    Some((parameter.name.as_str(), *element))
+                }
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        if pointer_parameters.is_empty() {
+            if bounds.is_empty() {
+                return Some(Vec::new());
+            }
             errors.push(CompileError::type_error(
-                "C symbols require exactly one non-empty `native` field".to_string(),
+                format!("C symbol `{symbol}` declares checked-span bounds but has no c.ConstPtr[c.u8|c.f32] or c.MutPtr[c.u8|c.f32] parameter"),
                 span,
             ));
-            None
-        })
+            return None;
+        }
+        let declared_pointers = bounds
+            .iter()
+            .map(|(pointer, _)| pointer.as_str())
+            .collect::<HashSet<_>>();
+        if declared_pointers != pointer_parameters.keys().copied().collect::<HashSet<_>>() {
+            errors.push(CompileError::type_error(
+                format!(
+                    "C symbol `{symbol}` must declare `bounds` for every checked span-pointer parameter exactly once"
+                ),
+                span,
+            ));
+            return None;
+        }
+        let mut contracts = Vec::with_capacity(bounds.len());
+        for (pointer_parameter, length_parameter) in bounds {
+            let Some(length) = parameters.iter().find(|parameter| parameter.name == length_parameter) else {
+                errors.push(CompileError::type_error(
+                    format!(
+                        "C symbol `{symbol}` bounds `{pointer_parameter}` to unknown parameter `{length_parameter}`"
+                    ),
+                    span,
+                ));
+                return None;
+            };
+            if !matches!(length.ty, CBindingType::Scalar(c_abi::ScalarTypeId::Size)) {
+                errors.push(CompileError::type_error(
+                    format!("C symbol `{symbol}` bounds `{pointer_parameter}` with `{length_parameter}`, which must be c.Size"),
+                    span,
+                ));
+                return None;
+            }
+            let Some(element) = pointer_parameters.get(pointer_parameter.as_str()).copied() else {
+                errors.push(CompileError::type_error(
+                    format!("C symbol `{symbol}` bounds unknown checked span-pointer `{pointer_parameter}`"),
+                    span,
+                ));
+                return None;
+            };
+            contracts.push(CBindingBuffer {
+                pointer_parameter,
+                length_parameter,
+                element,
+            });
+        }
+        Some(contracts)
     }
 
     /// Extract one raw result declaration before checking it against a symbol's typed contract.
@@ -1521,8 +1661,8 @@ impl TypeChecker {
         })
     }
 
-    /// Extract the logical library name from an imported `c.system_library(...)` call.
-    fn c_system_library_name(&self, value: &Spanned<Expr>) -> Option<String> {
+    /// Extract the logical library name and exact link shape from an imported C link declaration.
+    fn c_system_library_name(&self, value: &Spanned<Expr>) -> Option<(String, LinkCapabilityId)> {
         let (namespace, method, type_args, arguments) = match &value.node {
             Expr::MethodCall(namespace, method, type_args, arguments) => (
                 namespace.as_ref(),
@@ -1543,9 +1683,10 @@ impl TypeChecker {
             }
             _ => return None,
         };
-        if !type_args.is_empty() || c_abi::link_capability_from_str(method) != Some(LinkCapabilityId::SystemLibrary) {
+        if !type_args.is_empty() {
             return None;
         }
+        let link_capability = c_abi::link_capability_from_str(method)?;
         let Expr::Ident(namespace_name) = &namespace.node else {
             return None;
         };
@@ -1558,7 +1699,7 @@ impl TypeChecker {
         }
         match arguments {
             [CallArg::Positional(value)] => match &value.node {
-                Expr::Literal(Literal::String(value)) if !value.is_empty() => Some(value.clone()),
+                Expr::Literal(Literal::String(value)) if !value.is_empty() => Some((value.clone(), link_capability)),
                 _ => None,
             },
             _ => None,

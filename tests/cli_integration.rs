@@ -3433,10 +3433,10 @@ def main() -> None:
     Ok(())
 }
 
-fn assert_codegraph_v05_record_contract(records: &[serde_json::Value]) {
+fn assert_codegraph_record_contract(records: &[serde_json::Value]) {
     assert!(!records.is_empty(), "codegraph export should include a header record");
     assert_eq!(records[0]["record"], serde_json::json!("header"));
-    assert_eq!(records[0]["schema_version"], serde_json::json!(3));
+    assert_eq!(records[0]["schema_version"], serde_json::json!(6));
     assert_eq!(records[0]["languages"], serde_json::json!(["incan"]));
     assert!(
         records[0]["degraded"].is_boolean(),
@@ -3568,7 +3568,7 @@ def main() -> None:
         "incan inspect codegraph --format jsonl semantic inspection fixture",
     );
     let records = parse_jsonl_stdout(&codegraph)?;
-    assert_codegraph_v05_record_contract(&records);
+    assert_codegraph_record_contract(&records);
     // Codegraph is a separate versioned projection. RFC 113 adds checked registry records under codegraph schema v2,
     // while build reports retain their independently versioned schema.
     assert_eq!(build_json["schema_version"], serde_json::json!(1));
@@ -3614,6 +3614,23 @@ version = "0.1.0"
 
 [project.scripts]
 main = "src/main.incn"
+
+[oven.interop]
+schema = 1
+
+[[oven.interop.targets]]
+target = "aarch64-apple-darwin"
+headers = ["fixture.h"]
+
+[[oven.interop.targets.artifacts]]
+name = "fixture"
+kind = "system"
+capability = "system.fixture"
+
+[[oven.interop.targets.bindings]]
+module = ["fixture"]
+name = "Fixture"
+artifacts = ["fixture"]
 "#,
     )?;
     fs::write(
@@ -3658,6 +3675,15 @@ binding Fixture:
 
 pub def fixture_name() -> str:
     return "fixture"
+
+def private_bridge() -> c.i32:
+    left: i32 = 2
+    right: i32 = 3
+    unsafe:
+        return Fixture.add(left, right)
+
+pub def checked_sum() -> c.i32:
+    return private_bridge()
 "#,
     )?;
     let main_path = src_dir.join("main.incn");
@@ -3674,7 +3700,7 @@ def main() -> None:
     let output = run_incan(tmp.path(), &["inspect", "bindings", project, "--format", "json"])?;
     assert_success(&output, "inspect checked C binding declarations as JSON");
     let report = parse_json_stdout(&output)?;
-    assert_eq!(report["schema_version"], serde_json::json!(1));
+    assert_eq!(report["schema_version"], serde_json::json!(2));
     let bindings = report["bindings"]
         .as_array()
         .ok_or("binding report did not contain bindings")?;
@@ -3684,6 +3710,12 @@ def main() -> None:
     assert_eq!(fixture["module"], serde_json::json!(["fixture"]));
     assert_eq!(fixture["header"], serde_json::json!("fixture.h"));
     assert_eq!(fixture["system_library"], serde_json::json!("fixture"));
+    assert!(
+        fixture["identity"]
+            .as_str()
+            .is_some_and(|identity| identity.starts_with("sha256:")),
+        "checked binding inspection must publish the compiler-owned portable descriptor identity: {fixture}"
+    );
     assert!(
         fixture["source"]["file"]
             .as_str()
@@ -3764,6 +3796,7 @@ def main() -> None:
         "unexpected binding report:\n{text}"
     );
     assert!(text.contains("fixture.h"), "unexpected binding report:\n{text}");
+    assert!(text.contains("identity: sha256:"), "unexpected binding report:\n{text}");
     assert!(text.contains("fixture_add"), "unexpected binding report:\n{text}");
     assert!(
         text.contains("resource Handle [native: fixture_handle, release: close]"),
@@ -3772,6 +3805,179 @@ def main() -> None:
     assert!(
         text.contains("outcome Status.OK [initializes: output, updates: attempts, invalidates: -]"),
         "unexpected binding report:\n{text}"
+    );
+
+    write_locked_oven_interop_plan(tmp.path())?;
+    let receipt = run_incan(
+        tmp.path(),
+        &[
+            "inspect",
+            "bindings",
+            project,
+            "--format",
+            "receipt",
+            "--target",
+            "aarch64-apple-darwin",
+        ],
+    )?;
+    assert_success(&receipt, "inspect redacted checked C binding usage receipt");
+    let receipt_stdout = String::from_utf8(receipt.stdout)?;
+    let receipt: serde_json::Value = serde_json::from_str(&receipt_stdout)?;
+    assert_eq!(receipt["schema_version"], serde_json::json!(2));
+    assert_eq!(
+        receipt["compatibility"]["binding_contract"],
+        serde_json::json!("exact_descriptor_identity")
+    );
+    assert_eq!(
+        receipt["compatibility"]["target_contract"],
+        serde_json::json!("exact_locked_target_identity")
+    );
+    assert_eq!(receipt["target"]["target"], serde_json::json!("aarch64-apple-darwin"));
+    assert!(
+        receipt["target"]["locked_target_identity"]
+            .as_str()
+            .is_some_and(|identity| identity.starts_with("sha256:")),
+        "binding usage receipt must join the compiler-owned locked target identity: {receipt}"
+    );
+    assert!(
+        receipt["target"].get("selected_execution_identity").is_none(),
+        "a receipt must omit an execution identity when no selected interop execution receipt exists: {receipt}"
+    );
+    assert_eq!(receipt["bindings"].as_array().map(Vec::len), Some(1));
+    assert_eq!(receipt["bindings"][0]["name"], serde_json::json!("Fixture"));
+    assert_eq!(
+        receipt["bindings"][0]["target_artifacts"],
+        serde_json::json!(["fixture"])
+    );
+    assert!(
+        receipt["bindings"][0]["identity"]
+            .as_str()
+            .is_some_and(|identity| identity.starts_with("sha256:")),
+        "binding usage receipt must retain the checked descriptor identity: {receipt}"
+    );
+    assert_eq!(receipt["calls"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        receipt["calls"][0]["binding_identity"], receipt["bindings"][0]["identity"],
+        "raw-call usage must join its checked binding by compiler-owned identity"
+    );
+    assert_eq!(receipt["calls"][0]["symbol"], serde_json::json!("add"));
+    assert_eq!(
+        receipt["calls"][0]["owner"]["name"],
+        serde_json::json!("private_bridge")
+    );
+    assert_eq!(receipt["calls"][0]["owner"]["visibility"], serde_json::json!("private"));
+    assert_eq!(receipt["facades"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        receipt["facades"][0]["facade"]["name"],
+        serde_json::json!("checked_sum")
+    );
+    assert_eq!(
+        receipt["facades"][0]["facade"]["visibility"],
+        serde_json::json!("public")
+    );
+    assert_eq!(
+        receipt["facades"][0]["bridge"]["name"],
+        serde_json::json!("private_bridge")
+    );
+    assert_eq!(
+        receipt["facades"][0]["bridge"]["visibility"],
+        serde_json::json!("private")
+    );
+    assert_eq!(
+        receipt["facades"][0]["calls"][0]["binding_identity"], receipt["bindings"][0]["identity"],
+        "the facade receipt must link its bridge raw call through the exact descriptor identity"
+    );
+    assert_eq!(receipt["facades"][0]["calls"][0]["symbol"], serde_json::json!("add"));
+    assert!(
+        !receipt_stdout.contains(&tmp.path().to_string_lossy().to_string())
+            && !receipt_stdout.contains("fixture.h")
+            && !receipt_stdout.contains("source"),
+        "binding usage receipt must not retain local paths, header declarations, or source spans: {receipt_stdout}"
+    );
+
+    let relocated_temp = tempfile::tempdir()?;
+    let relocated_root = relocated_temp.path().join("binding-inspection-relocated");
+    fs::create_dir_all(relocated_root.join("src"))?;
+    for relative_path in [
+        "incan.toml",
+        "incan.lock",
+        "fixture.h",
+        "src/fixture.incn",
+        "src/main.incn",
+    ] {
+        fs::copy(tmp.path().join(relative_path), relocated_root.join(relative_path))?;
+    }
+    let relocated_project = relocated_root
+        .to_str()
+        .ok_or("relocated project path was not valid UTF-8")?;
+    let relocated_receipt = run_incan(
+        &relocated_root,
+        &[
+            "inspect",
+            "bindings",
+            relocated_project,
+            "--format",
+            "receipt",
+            "--target",
+            "aarch64-apple-darwin",
+        ],
+    )?;
+    assert_success(&relocated_receipt, "relocated redacted checked C binding usage receipt");
+    assert_eq!(
+        receipt_stdout.as_bytes(),
+        relocated_receipt.stdout.as_slice(),
+        "a relocated locked package changed its redacted binding receipt"
+    );
+
+    let manifest_path = tmp.path().join("incan.toml");
+    let manifest = fs::read_to_string(&manifest_path)?;
+    let dangling_manifest = manifest.replacen(
+        "module = [\"fixture\"]\nname = \"Fixture\"",
+        "module = [\"fixture\"]\nname = \"MissingFixture\"",
+        1,
+    );
+    assert_ne!(
+        manifest, dangling_manifest,
+        "fixture manifest must contain the declared binding relation"
+    );
+    fs::write(&manifest_path, dangling_manifest)?;
+    write_locked_oven_interop_plan(tmp.path())?;
+    let dangling = run_incan(
+        tmp.path(),
+        &[
+            "inspect",
+            "bindings",
+            project,
+            "--format",
+            "receipt",
+            "--target",
+            "aarch64-apple-darwin",
+        ],
+    )?;
+    assert_failure(&dangling, "dangling target binding-artifact correspondence");
+    assert!(
+        String::from_utf8_lossy(&dangling.stderr).contains("did not produce that checked binding"),
+        "a receipt must reject an authored correspondence without a compiler-produced binding:\n{}",
+        String::from_utf8_lossy(&dangling.stderr)
+    );
+
+    let ignored_target = run_incan(
+        tmp.path(),
+        &[
+            "inspect",
+            "bindings",
+            project,
+            "--format",
+            "json",
+            "--target",
+            "aarch64-apple-darwin",
+        ],
+    )?;
+    assert_failure(&ignored_target, "binding target outside receipt mode");
+    assert!(
+        String::from_utf8_lossy(&ignored_target.stderr).contains("requires `--format receipt`"),
+        "a target outside receipt mode must fail instead of being silently ignored:\n{}",
+        String::from_utf8_lossy(&ignored_target.stderr)
     );
 
     let broken_path = src_dir.join("broken.incn");
@@ -3856,15 +4062,20 @@ binding Fixture:
 def inspect_contract() -> None:
     unsafe:
         handle = c.out[c.Owned[Handle]]()
-        attempts = c.inout(0)
+        attempts_value: i32 = 0
+        attempts = c.inout(attempts_value)
         status = Fixture.open(handle, attempts)
         if status == Fixture.Status.OK:
             resource = handle.take()
             Fixture.close(resource)
 
-        seed = c.inout(7)
+        seed_value: u32 = 7
+        seed = c.inout(seed_value)
         Fixture.random(seed)
         seed.take()
+
+pub def public_facade() -> None:
+    inspect_contract()
 "#,
             header_path.display()
         ),
@@ -3881,7 +4092,7 @@ def inspect_contract() -> None:
     );
 
     let records = parse_jsonl_stdout(&first)?;
-    assert_codegraph_v05_record_contract(&records);
+    assert_codegraph_record_contract(&records);
     let binding = records
         .iter()
         .find(|record| record["record"] == serde_json::json!("c_binding"))
@@ -3889,6 +4100,12 @@ def inspect_contract() -> None:
     assert_eq!(binding["name"], serde_json::json!("Fixture"));
     assert_eq!(binding["header"], serde_json::json!(header_path.to_string_lossy()));
     assert_eq!(binding["system_library"], serde_json::json!("c"));
+    assert!(
+        binding["binding_identity"]
+            .as_str()
+            .is_some_and(|identity| identity.starts_with("sha256:")),
+        "checked C codegraph record must publish the portable descriptor identity: {binding}"
+    );
     assert_eq!(binding["provenance"], serde_json::json!("checked"));
     let declaration_id = binding["declaration_id"]
         .as_str()
@@ -3927,6 +4144,52 @@ def inspect_contract() -> None:
         })
         .ok_or("codegraph did not emit the checked raw C call record")?;
     assert_eq!(raw_call["binding_id"], binding["id"]);
+    assert_eq!(raw_call["binding_identity"], binding["binding_identity"]);
+    assert_eq!(raw_call["owner_visibility"], serde_json::json!("private"));
+    let owner_declaration_id = raw_call["owner_declaration_id"]
+        .as_str()
+        .ok_or("checked raw C call did not retain its compiler-known owning bridge")?;
+    assert!(records.iter().any(|record| {
+        record["record"] == serde_json::json!("declaration")
+            && record["id"] == serde_json::json!(owner_declaration_id)
+            && record["name"] == serde_json::json!("inspect_contract")
+    }));
+    let facade_declaration_id = records
+        .iter()
+        .find(|record| {
+            record["record"] == serde_json::json!("declaration")
+                && record["kind"] == serde_json::json!("function")
+                && record["name"] == serde_json::json!("public_facade")
+                && record["visibility"] == serde_json::json!("public")
+        })
+        .and_then(|record| record["id"].as_str())
+        .ok_or("codegraph did not emit the public C-ABI facade declaration")?;
+    assert!(records.iter().any(|record| {
+        record["record"] == serde_json::json!("call")
+            && record["callee"] == serde_json::json!("inspect_contract")
+            && record["owner_id"] == serde_json::json!(facade_declaration_id)
+            && record["target_id"] == serde_json::json!(owner_declaration_id)
+            && record["provenance"] == serde_json::json!("checked")
+    }));
+    let facade = records
+        .iter()
+        .find(|record| record["record"] == serde_json::json!("c_binding_facade"))
+        .ok_or("codegraph did not emit the compiler-proven C-ABI facade relation")?;
+    assert_eq!(
+        facade["facade_declaration_id"],
+        serde_json::json!(facade_declaration_id)
+    );
+    assert_eq!(facade["bridge_declaration_id"], serde_json::json!(owner_declaration_id));
+    assert_eq!(facade["provenance"], serde_json::json!("checked"));
+    assert_eq!(facade["degraded"], serde_json::json!(false));
+    assert!(
+        facade["call_id"].is_string(),
+        "facade relation must link to its compiler-proven ordinary call: {facade}"
+    );
+    assert!(
+        facade["raw_call_ids"].as_array().is_some_and(|ids| !ids.is_empty()),
+        "facade relation must link the private bridge to its direct raw calls: {facade}"
+    );
     assert_eq!(raw_call["unsafe_acknowledged"], serde_json::json!(true));
     assert_eq!(raw_call["provenance"], serde_json::json!("checked"));
     let call_id = raw_call["call_id"]
@@ -4695,7 +4958,7 @@ pub def entrypoint() -> int:
     assert_eq!(first.stdout, second.stdout, "codegraph JSONL should be deterministic");
 
     let records = parse_jsonl_stdout(&first)?;
-    assert_codegraph_v05_record_contract(&records);
+    assert_codegraph_record_contract(&records);
     assert_eq!(records[0]["record"], serde_json::json!("header"));
     assert_eq!(records[0]["package"]["name"], serde_json::json!("graph_demo"));
     assert!(records.iter().any(|record| {
@@ -5316,7 +5579,7 @@ def main() -> None:
     )?;
     assert_success(&graph, "compiler codegraph export for importer example");
     let graph_records = parse_jsonl_stdout(&graph)?;
-    assert_codegraph_v05_record_contract(&graph_records);
+    assert_codegraph_record_contract(&graph_records);
 
     let importer_dir = tmp.path().join("importer");
     let importer_src = importer_dir.join("src");
@@ -5342,7 +5605,7 @@ def main() -> None:
     assert_eq!(first.stdout, second.stdout, "importer summary must be deterministic");
 
     let summary = parse_json_stdout(&first)?;
-    assert_eq!(summary["schema_version"], serde_json::json!(3));
+    assert_eq!(summary["schema_version"], serde_json::json!(6));
     assert_eq!(summary["mode"], serde_json::json!("strict"));
     assert_eq!(summary["metadata_record_count"], serde_json::json!(1));
     assert!(
@@ -5421,7 +5684,7 @@ fn inspect_codegraph_tolerant_directory_keeps_parseable_facts_and_diagnostics() 
     )?;
     assert_success(&tolerant, "tolerant incan inspect codegraph");
     let records = parse_jsonl_stdout(&tolerant)?;
-    assert_codegraph_v05_record_contract(&records);
+    assert_codegraph_record_contract(&records);
     assert_eq!(records[0]["degraded"], serde_json::json!(true));
     assert!(records.iter().any(|record| {
         record["record"] == serde_json::json!("declaration")
@@ -5487,7 +5750,7 @@ fn inspect_codegraph_strict_directory_rejects_semantic_diagnostics() -> Result<(
         "tolerant incan inspect codegraph should keep syntax facts for directory typecheck diagnostics",
     );
     let records = parse_jsonl_stdout(&tolerant)?;
-    assert_codegraph_v05_record_contract(&records);
+    assert_codegraph_record_contract(&records);
     assert_eq!(records[0]["degraded"], serde_json::json!(true));
     assert!(records.iter().any(|record| {
         record["record"] == serde_json::json!("declaration")
@@ -5940,6 +6203,11 @@ name = "log"
 kind = "system"
 capability = "android.library.log"
 
+[[oven.interop.targets.bindings]]
+module = ["runtime"]
+name = "Runtime"
+artifacts = ["llama", "tflite", "log"]
+
 [[oven.interop.targets.shims]]
 name = "llama_bridge"
 language = "cxx"
@@ -5977,7 +6245,13 @@ output = "llama_bridge"
     )?;
     assert_success(&output, "locked Android interop plan inspection");
     let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    assert_eq!(plan["schema_version"].as_u64(), Some(1));
+    assert_eq!(plan["schema_version"].as_u64(), Some(3));
+    assert!(
+        plan["locked_target_identity"]
+            .as_str()
+            .is_some_and(|identity| identity.starts_with("sha256:")),
+        "interop deployment plan must retain the portable locked-target join identity: {plan}"
+    );
     assert_eq!(plan["target"].as_str(), Some("aarch64-linux-android"));
     assert_eq!(plan["toolchain"]["capability"].as_str(), Some("android-ndk"));
     assert_eq!(plan["sdk"]["capability"].as_str(), Some("android"));
@@ -5998,6 +6272,12 @@ output = "llama_bridge"
     assert_eq!(plan["artifacts"][1]["deployment"].as_str(), Some("bundle"));
     assert_eq!(plan["artifacts"][1]["placement"].as_str(), Some("jniLibs/arm64-v8a"));
     assert_eq!(plan["artifacts"][2]["deployment"].as_str(), Some("static_link"));
+    assert_eq!(plan["bindings"][0]["module"], serde_json::json!(["runtime"]));
+    assert_eq!(plan["bindings"][0]["name"], serde_json::json!("Runtime"));
+    assert_eq!(
+        plan["bindings"][0]["artifacts"],
+        serde_json::json!(["llama", "log", "tflite"])
+    );
     assert_eq!(plan["shims"][0]["output"].as_str(), Some("llama_bridge"));
     assert!(
         !String::from_utf8_lossy(&output.stdout).contains(&package.to_string_lossy().to_string()),

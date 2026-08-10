@@ -27,7 +27,8 @@ use crate::frontend::library_manifest_index::LibraryManifestIndexEntry;
 use crate::frontend::partial_projection::{PartialPresetRef, merge_named_partial_args};
 use crate::frontend::symbols::ResolvedType;
 use crate::frontend::typechecker::{
-    IdentKind, PartialProjectionTargetKind, ResolvedMethodDispatch, ResolvedOperatorKind, RustArgCoercionKind,
+    CAbiSpanAccessKind, IdentKind, PartialProjectionTargetKind, ResolvedMethodDispatch, ResolvedOperatorKind,
+    RustArgCoercionKind,
 };
 use incan_core::interop::RustCollectionFamily;
 use incan_core::lang::magic_methods::{self, MagicMethodId};
@@ -43,7 +44,10 @@ impl AstLowering {
     /// Convert a contained checked-C value contract into its private generated-Rust carrier.
     fn checked_c_value_ir_type(binding: &str, ty: &IrCheckedCType) -> IrType {
         match ty {
-            IrCheckedCType::Scalar(_) => IrType::Int,
+            IrCheckedCType::Scalar(scalar) => incan_core::lang::c_abi::scalar_numeric_type(*scalar)
+                .map(IrType::Numeric)
+                .unwrap_or(IrType::Int),
+            IrCheckedCType::Pointer { mutable, pointee } => Self::checked_c_pointer_ir_type(*mutable, pointee),
             IrCheckedCType::Resource { resource, .. } => {
                 IrType::Struct(IrCheckedCFunction::resource_rust_type_name(binding, resource))
             }
@@ -51,6 +55,32 @@ impl AstLowering {
             IrCheckedCType::Void => IrType::Unit,
             IrCheckedCType::Output { .. } => IrType::Unknown,
         }
+    }
+
+    /// Convert the bounded pointer subset into its exact private Rust carrier.
+    fn checked_c_pointer_ir_type(mutable: bool, pointee: &IrCheckedCType) -> IrType {
+        let pointee = match pointee {
+            IrCheckedCType::Scalar(scalar) => match scalar {
+                incan_core::lang::c_abi::ScalarTypeId::I8 => "i8",
+                incan_core::lang::c_abi::ScalarTypeId::U8 => "u8",
+                incan_core::lang::c_abi::ScalarTypeId::I16 => "i16",
+                incan_core::lang::c_abi::ScalarTypeId::U16 => "u16",
+                incan_core::lang::c_abi::ScalarTypeId::I32 => "i32",
+                incan_core::lang::c_abi::ScalarTypeId::U32 => "u32",
+                incan_core::lang::c_abi::ScalarTypeId::I64 => "i64",
+                incan_core::lang::c_abi::ScalarTypeId::U64 => "u64",
+                incan_core::lang::c_abi::ScalarTypeId::I128 => "i128",
+                incan_core::lang::c_abi::ScalarTypeId::U128 => "u128",
+                incan_core::lang::c_abi::ScalarTypeId::F32 => "f32",
+                incan_core::lang::c_abi::ScalarTypeId::F64 => "f64",
+                incan_core::lang::c_abi::ScalarTypeId::Size => "usize",
+                incan_core::lang::c_abi::ScalarTypeId::CChar => "::std::os::raw::c_char",
+                incan_core::lang::c_abi::ScalarTypeId::CInt => "::std::os::raw::c_int",
+            },
+            _ => return IrType::Unknown,
+        };
+        let qualifier = if mutable { "mut" } else { "const" };
+        IrType::RustDisplay(format!("*{qualifier} {pointee}"))
     }
 
     /// Convert one checked-C parameter to its call-site carrier, preserving compiler-managed output storage.
@@ -105,7 +135,7 @@ impl AstLowering {
             };
             let variable_access = match access {
                 crate::frontend::typechecker::CResourceAccess::Owned => VarAccess::Move,
-                crate::frontend::typechecker::CResourceAccess::Borrowed => VarAccess::Borrow,
+                crate::frontend::typechecker::CResourceAccess::Borrowed => VarAccess::CAbiBorrow,
                 crate::frontend::typechecker::CResourceAccess::BorrowedMut => VarAccess::BorrowMut,
             };
             Self::set_checked_c_argument_access(&mut argument.expr, variable_access);
@@ -186,6 +216,230 @@ impl AstLowering {
         )))
     }
 
+    /// Lower the sole approved raw extraction from a checked C string temporary.
+    fn lower_checked_c_string_pointer(
+        &mut self,
+        receiver: &ast::Spanned<ast::Expr>,
+        method: &str,
+        type_args: &[ast::Spanned<ast::Type>],
+        args: &[ast::CallArg],
+    ) -> Result<Option<TypedExpr>, LoweringError> {
+        if method != "as_const_ptr" || !type_args.is_empty() || !args.is_empty() {
+            return Ok(None);
+        }
+        let is_checked_c_string = self
+            .type_info
+            .as_ref()
+            .and_then(|info| info.expr_type(receiver.span))
+            .is_some_and(|ty| matches!(ty, ResolvedType::Named(identity) if identity == incan_core::lang::c_abi::C_STRING_TYPE_ID));
+        if !is_checked_c_string {
+            return Ok(None);
+        }
+        Ok(Some(TypedExpr::new(
+            IrExprKind::MethodCall {
+                receiver: Box::new(self.lower_expr_spanned(receiver)?),
+                method: "as_ptr".to_string(),
+                dispatch: None,
+                type_args: Vec::new(),
+                args: Vec::new(),
+                callable_signature: None,
+                arg_policy: MethodCallArgPolicy::Default,
+            },
+            Self::checked_c_pointer_ir_type(
+                false,
+                &IrCheckedCType::Scalar(incan_core::lang::c_abi::ScalarTypeId::CChar),
+            ),
+        )))
+    }
+
+    /// Lower closed typed-span bridge methods to direct owned-vector operations and bounded finish helpers.
+    fn lower_checked_c_span_method(
+        &mut self,
+        call_span: ast::Span,
+        receiver: &ast::Spanned<ast::Expr>,
+        method: &str,
+        type_args: &[ast::Spanned<ast::Type>],
+        args: &[ast::CallArg],
+    ) -> Result<Option<TypedExpr>, LoweringError> {
+        if !type_args.is_empty() {
+            return Ok(None);
+        }
+        let Some(span_access) = self
+            .type_info
+            .as_ref()
+            .and_then(|info| info.c_abi.span_accesses.iter().find(|access| access.span == call_span))
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let pointer = match (span_access.access, method) {
+            (CAbiSpanAccessKind::ConstPointer, "as_const_ptr") if args.is_empty() => Some(("as_ptr", false)),
+            (CAbiSpanAccessKind::MutPointer, "as_mut_ptr") if args.is_empty() => Some(("as_mut_ptr", true)),
+            _ => None,
+        };
+        if let Some((rust_method, mutable_pointer)) = pointer {
+            return Ok(Some(TypedExpr::new(
+                IrExprKind::MethodCall {
+                    receiver: Box::new(self.lower_expr_spanned(receiver)?),
+                    method: rust_method.to_string(),
+                    dispatch: None,
+                    type_args: Vec::new(),
+                    args: Vec::new(),
+                    callable_signature: None,
+                    arg_policy: MethodCallArgPolicy::Default,
+                },
+                Self::checked_c_pointer_ir_type(
+                    mutable_pointer,
+                    &IrCheckedCType::Scalar(span_access.span_kind.element),
+                ),
+            )));
+        }
+        if matches!(
+            (span_access.access, method),
+            (CAbiSpanAccessKind::ElementCount, _) | (CAbiSpanAccessKind::ElementCapacity, _)
+        ) && args.is_empty()
+        {
+            return Ok(Some(TypedExpr::new(
+                IrExprKind::BuiltinCall {
+                    func: BuiltinFn::Len,
+                    args: vec![self.lower_expr_spanned(receiver)?],
+                },
+                IrType::Numeric(incan_core::lang::types::numerics::NumericTypeId::USize),
+            )));
+        }
+        if span_access.access != CAbiSpanAccessKind::Finish || args.len() != 1 {
+            return Ok(None);
+        }
+        let mut receiver = self.lower_expr_spanned(receiver)?;
+        Self::set_checked_c_argument_access(&mut receiver, VarAccess::Move);
+        let mut lowered_args = self.lower_call_args(args)?;
+        let Some(written) = lowered_args.pop() else {
+            return Err(LoweringError {
+                message: "checked C span finish lost its written-count argument".to_string(),
+                span: call_span.into(),
+            });
+        };
+        if !lowered_args.is_empty() {
+            return Err(LoweringError {
+                message: "checked C span finish retained an unexpected argument".to_string(),
+                span: call_span.into(),
+            });
+        }
+        let storage = match span_access.span_kind.element {
+            incan_core::lang::c_abi::ScalarTypeId::U8 => IrType::Bytes,
+            incan_core::lang::c_abi::ScalarTypeId::F32 => IrType::List(Box::new(IrType::Numeric(
+                incan_core::lang::types::numerics::NumericTypeId::F32,
+            ))),
+            _ => return Ok(None),
+        };
+        let helper = incan_core::lang::c_abi::MUTABLE_SPAN_FINISH_RUST_NAME;
+        let return_type = IrType::Result(Box::new(storage.clone()), Box::new(IrType::String));
+        Ok(Some(TypedExpr::new(
+            IrExprKind::Call {
+                func: Box::new(TypedExpr::new(
+                    IrExprKind::Var {
+                        name: helper.to_string(),
+                        access: VarAccess::Copy,
+                        ref_kind: VarRefKind::Value,
+                    },
+                    IrType::Function {
+                        params: vec![
+                            storage,
+                            IrType::Numeric(incan_core::lang::types::numerics::NumericTypeId::USize),
+                        ],
+                        ret: Box::new(return_type.clone()),
+                    },
+                )),
+                type_args: Vec::new(),
+                args: vec![
+                    IrCallArg {
+                        name: None,
+                        kind: IrCallArgKind::Positional,
+                        expr: receiver,
+                    },
+                    IrCallArg {
+                        name: None,
+                        kind: IrCallArgKind::Positional,
+                        expr: written.expr,
+                    },
+                ],
+                callable_signature: None,
+                canonical_path: None,
+            },
+            return_type,
+        )))
+    }
+
+    /// Lower a bounded owning copy from a returned scoped C string view.
+    fn lower_checked_c_scoped_string_copy(
+        &mut self,
+        receiver: &ast::Spanned<ast::Expr>,
+        method: &str,
+        type_args: &[ast::Spanned<ast::Type>],
+        args: &[ast::CallArg],
+    ) -> Result<Option<TypedExpr>, LoweringError> {
+        if method != "copy_utf8" || !type_args.is_empty() || args.len() != 1 {
+            return Ok(None);
+        }
+        let is_scoped_c_string_view = self
+            .type_info
+            .as_ref()
+            .and_then(|info| info.expr_type(receiver.span))
+            .is_some_and(|ty| {
+                matches!(ty, ResolvedType::Named(identity) if identity == incan_core::lang::c_abi::SCOPED_C_STRING_VIEW_TYPE_ID)
+            });
+        if !is_scoped_c_string_view {
+            return Ok(None);
+        }
+        let return_type = IrType::Result(Box::new(IrType::String), Box::new(IrType::String));
+        let function = TypedExpr::new(
+            IrExprKind::Var {
+                name: incan_core::lang::c_abi::SCOPED_C_STRING_COPY_UTF8_RUST_NAME.to_string(),
+                access: VarAccess::Copy,
+                ref_kind: VarRefKind::Value,
+            },
+            IrType::Function {
+                params: vec![
+                    Self::checked_c_pointer_ir_type(
+                        false,
+                        &IrCheckedCType::Scalar(incan_core::lang::c_abi::ScalarTypeId::CChar),
+                    ),
+                    IrType::Int,
+                ],
+                ret: Box::new(return_type.clone()),
+            },
+        );
+        let max_bytes = self.lower_call_args(args)?;
+        Ok(Some(TypedExpr::new(
+            IrExprKind::Call {
+                func: Box::new(function),
+                type_args: Vec::new(),
+                args: vec![
+                    IrCallArg {
+                        name: None,
+                        kind: IrCallArgKind::Positional,
+                        expr: self.lower_expr_spanned(receiver)?,
+                    },
+                    IrCallArg {
+                        name: None,
+                        kind: IrCallArgKind::Positional,
+                        expr: max_bytes
+                            .into_iter()
+                            .next()
+                            .ok_or_else(|| LoweringError {
+                                message: "checked C scoped string copy lost its max_bytes argument".to_string(),
+                                span: receiver.span.into(),
+                            })?
+                            .expr,
+                    },
+                ],
+                callable_signature: None,
+                canonical_path: None,
+            },
+            return_type,
+        )))
+    }
+
     /// Lower compiler-managed output storage and direct checked C symbols outside the recursive expression frame.
     ///
     /// Large ordinary source expressions lower recursively. Keeping this bounded checked-C plan in a separate frame
@@ -202,7 +456,22 @@ impl AstLowering {
         if let Some((kind, ty)) = self.lower_checked_c_output_slot_constructor(call_span, args)? {
             return Ok(Some(TypedExpr::new(kind, ty)));
         }
+        if let Some((kind, ty)) = self.lower_checked_c_string_constructor(call_span, args)? {
+            return Ok(Some(TypedExpr::new(kind, ty)));
+        }
+        if let Some((kind, ty)) = self.lower_checked_c_span_constructor(call_span, args)? {
+            return Ok(Some(TypedExpr::new(kind, ty)));
+        }
         if let Some(lowered) = self.lower_checked_c_output_slot_take(call_span, receiver, method, type_args, args)? {
+            return Ok(Some(lowered));
+        }
+        if let Some(lowered) = self.lower_checked_c_string_pointer(receiver, method, type_args, args)? {
+            return Ok(Some(lowered));
+        }
+        if let Some(lowered) = self.lower_checked_c_span_method(call_span, receiver, method, type_args, args)? {
+            return Ok(Some(lowered));
+        }
+        if let Some(lowered) = self.lower_checked_c_scoped_string_copy(receiver, method, type_args, args)? {
             return Ok(Some(lowered));
         }
         let Some(c_function) = self.checked_c_function_for_call(call_span) else {

@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::manifest::{DependencySource, DependencySpec, GitReference, ProjectManifest};
 
 pub(crate) mod compiler_suite_env;
+pub(crate) mod interop;
 pub mod legacy_cargo;
 pub mod loaf;
 pub mod native_test;
@@ -496,6 +497,35 @@ pub fn receipt_generated_project(request: &OvenGeneratedProjectRequest) -> Resul
         intent,
         compatibility,
     })
+}
+
+/// Derive a new complete receipt whose reusable build unit carries one explicit selected-tool input.
+///
+/// This is an immutable value transformation; callers persist the returned receipt atomically only after their
+/// explicit publisher has verified the selected input. Replacing the same key is deliberate: a reselected compiler
+/// or SDK must invalidate a prior build unit rather than accumulate stale selection identities.
+pub(crate) fn receipt_with_build_unit_input(
+    receipt: &OvenReceipt,
+    input: impl Into<String>,
+    value: impl Into<String>,
+) -> Result<OvenReceipt, OvenError> {
+    receipt.verify_identity()?;
+    let input = normalized_value(&input.into(), "build-unit input")?;
+    let value = normalized_value(&value.into(), "build-unit input value")?;
+    let mut selected = receipt.clone();
+    selected.sources.build_unit_inputs.insert(input, value);
+    selected.identity = receipt_identity(
+        &selected.project,
+        &selected.sources,
+        &selected.intent,
+        &selected.compatibility,
+    )?;
+    selected.build_unit_identity = build_unit_identity(
+        &selected.intent,
+        &selected.compatibility,
+        &selected.sources.build_unit_inputs,
+    )?;
+    Ok(selected)
 }
 
 /// Receipt the compiler's full native workspace-test source closure without invoking Cargo.
@@ -1222,8 +1252,24 @@ mod tests {
 
     use super::{
         OvenCompilerSuiteRequest, OvenGeneratedProjectRequest, OvenImportRequest, OvenReceipt, default_receipt_path,
-        digest_bytes, import_frozen_project, receipt_generated_project, receipt_native_compiler_suite, write_receipt,
+        digest_bytes, import_frozen_project, receipt_generated_project, receipt_native_compiler_suite,
+        receipt_with_build_unit_input, write_receipt,
     };
+
+    fn receipt_without_build_unit_input(
+        receipt: &OvenReceipt,
+        input: &str,
+    ) -> Result<OvenReceipt, Box<dyn std::error::Error>> {
+        receipt.verify_identity()?;
+        let mut base = receipt.clone();
+        if base.sources.build_unit_inputs.remove(input).is_none() {
+            return Err(std::io::Error::other(format!("receipt has no build-unit input `{input}`")).into());
+        }
+        base.identity = super::receipt_identity(&base.project, &base.sources, &base.intent, &base.compatibility)?;
+        base.build_unit_identity =
+            super::build_unit_identity(&base.intent, &base.compatibility, &base.sources.build_unit_inputs)?;
+        Ok(base)
+    }
 
     #[test]
     fn receipt_identity_is_portable_and_observes_explicit_build_inputs() -> Result<(), Box<dyn std::error::Error>> {
@@ -1292,6 +1338,45 @@ mod tests {
             &generated_request(second.path()).with_build_unit_input("runtime-lock", "sha256:changed"),
         )?;
         assert_ne!(first_receipt.build_unit_identity, runtime_changed.build_unit_identity);
+        Ok(())
+    }
+
+    #[test]
+    fn publisher_base_receipt_removes_only_the_requested_interop_selection_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        write_generated_source_closure(project.path(), "fn main() {}\n")?;
+        let receipt = receipt_generated_project(
+            &generated_request(project.path())
+                .with_build_unit_input("runtime-lock", "sha256:runtime")
+                .with_build_unit_input("oven-interop-execution-receipt", "sha256:interop"),
+        )?;
+        let base = receipt_without_build_unit_input(&receipt, "oven-interop-execution-receipt")?;
+        assert_ne!(base.identity, receipt.identity);
+        assert_ne!(base.build_unit_identity, receipt.build_unit_identity);
+        assert_eq!(
+            base.sources.build_unit_inputs.get("runtime-lock"),
+            Some(&"sha256:runtime".to_string())
+        );
+        assert!(
+            !base
+                .sources
+                .build_unit_inputs
+                .contains_key("oven-interop-execution-receipt")
+        );
+        base.verify_identity()?;
+        assert!(receipt_without_build_unit_input(&base, "oven-interop-execution-receipt").is_err());
+        let reselected = receipt_with_build_unit_input(&base, "oven-interop-execution-receipt", "sha256:reselected")?;
+        assert_ne!(reselected.identity, base.identity);
+        assert_eq!(
+            reselected
+                .sources
+                .build_unit_inputs
+                .get("oven-interop-execution-receipt")
+                .map(String::as_str),
+            Some("sha256:reselected")
+        );
+        reselected.verify_identity()?;
         Ok(())
     }
 

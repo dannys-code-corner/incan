@@ -5,6 +5,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use sha2::{Digest, Sha256};
+
 use crate::frontend::ast::{Expr, ParamKind, Span, Spanned, Visibility};
 use crate::frontend::library_exports::{CheckedParamDefault, CheckedPresetValue};
 use crate::frontend::symbols::{
@@ -12,12 +14,12 @@ use crate::frontend::symbols::{
 };
 use crate::frontend::testing_markers::TestingFixtureScope;
 use incan_core::interop::{CoercionPolicy, RustFunctionSig};
-use incan_core::lang::c_abi::ScalarTypeId;
+use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId, link_capability_as_str, scalar_type_as_str};
 use incan_core::lang::types::collections::{self as collection_types, CollectionTypeId};
 use incan_semantics_core::{
     CompilerNodeId, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType, SemanticFact,
     SemanticFactKind, SemanticFactStore, SemanticFactValue, SemanticRegistryEntry, SemanticRegistrySubjectKind,
-    SemanticRegistryValue, SemanticSourceTarget,
+    SemanticRegistryValue, SemanticSourceTarget, SemanticSourceTargetKind,
 };
 
 use super::{ConstValue, const_eval};
@@ -77,12 +79,84 @@ pub struct CAbiInteropArtifacts {
     pub bindings: HashMap<String, CBindingDescriptor>,
     /// Direct binding calls admitted through an explicit `unsafe:` acknowledgement.
     pub raw_calls: Vec<CBindingRawCall>,
+    /// Compiler-proven ordinary function calls made by a named callable while typechecking.
+    ///
+    /// These are retained only for the C-ABI bridge/facade projection; general codegraph targets remain in
+    /// [`ExpressionArtifacts::source_targets`].
+    pub function_calls: Vec<CBindingFunctionCall>,
+    /// Public facade to private raw-bridge edges derived from checked function targets and raw-call owners.
+    pub facades: Vec<CBindingFacade>,
     /// Compiler-managed source slots bound to checked `Out` or `InOut` call parameters.
     pub output_slots: Vec<CAbiOutputSlot>,
     /// Source accesses to target-verified C enum constants.
     pub enum_accesses: Vec<CBindingEnumAccess>,
     /// Folded C enum values keyed by `(binding, enum, variant)` after Clang verification.
     pub enum_values: HashMap<(String, String, String), i64>,
+    /// Whether source lowering requires the compiler-private checked C string constructor.
+    pub uses_checked_c_strings: bool,
+    /// Whether source lowering requires the compiler-private bounded scoped C string copy helper.
+    pub uses_scoped_c_string_views: bool,
+    /// Whether source lowering requires a compiler-private checked caller-owned span finish helper.
+    pub uses_checked_c_span_buffers: bool,
+    /// Checked constructors that move owned Incan storage into opaque typed C bridge carriers.
+    pub spans: Vec<CAbiSpan>,
+    /// Checked bridge operations admitted on those opaque typed carriers.
+    pub span_accesses: Vec<CAbiSpanAccess>,
+}
+
+/// Exact scalar representation and mutability of one compiler-owned checked span carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CAbiSpanKind {
+    /// The exact checked C scalar representation of every element in the carrier.
+    pub element: ScalarTypeId,
+    /// Whether this is an immutable input view or a caller-owned mutable output buffer.
+    pub mutable: bool,
+}
+
+/// One checked source constructor for an opaque typed span carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CAbiSpan {
+    /// Full source range of a compiler-owned `c.*_span(...)` constructor.
+    pub constructor_span: Span,
+    /// Exact scalar representation and mutability selected by the constructor/typechecker.
+    pub kind: CAbiSpanKind,
+}
+
+/// One of the closed bridge operations admitted on a checked typed span carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CAbiSpanAccessKind {
+    /// Extract an immutable typed pointer only for a declared raw binding call.
+    ConstPointer,
+    /// Read the exact immutable element count that is paired with `ConstPointer`.
+    ElementCount,
+    /// Extract a mutable typed pointer only for a declared raw binding call.
+    MutPointer,
+    /// Read the exact mutable element capacity paired with `MutPointer`.
+    ElementCapacity,
+    /// Validate a foreign written element count and return the existing caller-owned allocation.
+    Finish,
+}
+
+/// A successful source bridge operation retained for lowering rather than rediscovered from AST spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CAbiSpanAccess {
+    /// Full source range of the method call.
+    pub span: Span,
+    /// Carrier representation selected by the constructor/typechecker.
+    pub span_kind: CAbiSpanKind,
+    /// Exact bridge action authorized at this source location.
+    pub access: CAbiSpanAccessKind,
+}
+
+/// Compiler-known callable body that owns one direct native call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingRawCallOwner {
+    /// Source-visible callable name.
+    pub name: String,
+    /// Source visibility of the owning callable.
+    pub visibility: Visibility,
+    /// Full source range of the owning declaration.
+    pub declaration_span: Span,
 }
 
 /// One direct source call to a checked C binding symbol.
@@ -90,10 +164,34 @@ pub struct CAbiInteropArtifacts {
 pub struct CBindingRawCall {
     /// Source range for the full call expression.
     pub span: Span,
+    /// Compiler-known callable body that owns this direct native call, when the call occurs in a named function.
+    pub owner: Option<CBindingRawCallOwner>,
     /// Lowered binding class that owns the native symbol.
     pub binding: String,
     /// Binding-local symbol selected by the call.
     pub symbol: String,
+}
+
+/// One ordinary function call whose target was resolved by the typechecker while a callable body was active.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingFunctionCall {
+    /// Full source range of the ordinary function call.
+    pub span: Span,
+    /// Callable containing the call.
+    pub caller: CBindingRawCallOwner,
+    /// Compiler-proven declaration target selected by the call.
+    pub target: SourceTargetInfo,
+}
+
+/// One explicit public-facade to private-raw-bridge relation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingFacade {
+    /// Public callable that invokes the bridge through a checked ordinary function target.
+    pub facade: CBindingRawCallOwner,
+    /// Private callable that owns one or more direct checked raw calls.
+    pub bridge: CBindingRawCallOwner,
+    /// Source range of the ordinary facade-to-bridge call.
+    pub call_span: Span,
 }
 
 /// One compiler-managed local storage slot used by a checked C output parameter.
@@ -144,6 +242,8 @@ pub struct CBindingDescriptor {
     pub header: String,
     /// Logical system-library capability selected by the declaration.
     pub system_library: String,
+    /// Exact native link shape selected by the checked declaration.
+    pub link_capability: LinkCapabilityId,
     /// Nominal opaque resources and their binding-local release associations.
     pub resources: Vec<CBindingResource>,
     /// Raw C functions declared by the binding.
@@ -165,8 +265,25 @@ pub struct CBindingSymbol {
     pub parameters: Vec<CBindingParameter>,
     /// Explicit return contract.
     pub return_type: CBindingType,
+    /// Explicit pointer-to-length contracts admitted for checked typed spans.
+    ///
+    /// Each record names a raw checked scalar-pointer parameter and the exact `c.Size` parameter
+    /// that bounds it. This lives with the descriptor so all later stages consume one checked association rather
+    /// than recovering one from argument names or generated Rust.
+    pub buffers: Vec<CBindingBuffer>,
     /// Raw outcomes that establish output-slot state after this call.
     pub outcomes: Vec<CBindingOutcome>,
+}
+
+/// One declared typed-pointer and C-size association on a raw C symbol.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CBindingBuffer {
+    /// Raw typed-pointer parameter name.
+    pub pointer_parameter: String,
+    /// Exact `c.Size` parameter that bounds this pointer for the call.
+    pub length_parameter: String,
+    /// Exact scalar representation validated for the pointer parameter.
+    pub element: ScalarTypeId,
 }
 
 /// One raw C function parameter.
@@ -293,6 +410,146 @@ pub struct CBindingStructField {
     pub ty: CBindingType,
 }
 
+/// Return a relocation-stable identity for one checked C binding declaration.
+///
+/// The compiler owns this identity so inspection, codegraph, language-server, lock, and Oven tooling can join the
+/// exact descriptor they consumed without reconstructing it from source spelling or generated Rust. It deliberately
+/// includes the checked declaration contract and logical module path, but excludes source spans and source-file
+/// locations. The declared header spelling remains part of the ABI contract, so authors who require relocation-stable
+/// identities must use a portable header spelling rather than a machine-local absolute path.
+pub fn c_binding_descriptor_identity(module_path: &[String], descriptor: &CBindingDescriptor) -> String {
+    let mut hasher = Sha256::new();
+    hash_c_binding_text(&mut hasher, "schema", "incan-checked-c-binding-v1");
+    hash_c_binding_list(&mut hasher, "module", module_path, |hasher, segment| {
+        hash_c_binding_text(hasher, "segment", segment);
+    });
+    hash_c_binding_text(&mut hasher, "class", &descriptor.class_name);
+    hash_c_binding_text(&mut hasher, "header", &descriptor.header);
+    hash_c_binding_text(&mut hasher, "system_library", &descriptor.system_library);
+    hash_c_binding_text(
+        &mut hasher,
+        "link_capability",
+        link_capability_as_str(descriptor.link_capability),
+    );
+    hash_c_binding_list(&mut hasher, "resources", &descriptor.resources, |hasher, resource| {
+        hash_c_binding_text(hasher, "name", &resource.name);
+        hash_c_binding_text(hasher, "native", &resource.native);
+        hash_c_binding_text(hasher, "release", &resource.release);
+    });
+    hash_c_binding_list(&mut hasher, "symbols", &descriptor.symbols, hash_c_binding_symbol);
+    hash_c_binding_list(&mut hasher, "enums", &descriptor.enums, |hasher, enumeration| {
+        hash_c_binding_text(hasher, "name", &enumeration.name);
+        hash_c_binding_text(hasher, "carrier", scalar_type_as_str(enumeration.carrier));
+        hash_c_binding_list(hasher, "variants", &enumeration.variants, |hasher, variant| {
+            hash_c_binding_text(hasher, "name", &variant.name);
+            hash_c_binding_text(hasher, "native", &variant.native);
+        });
+    });
+    hash_c_binding_list(&mut hasher, "structs", &descriptor.structs, |hasher, structure| {
+        hash_c_binding_text(hasher, "name", &structure.name);
+        hash_c_binding_text(hasher, "native", &structure.native);
+        hash_c_binding_list(hasher, "fields", &structure.fields, |hasher, field| {
+            hash_c_binding_text(hasher, "name", &field.name);
+            hash_c_binding_type(hasher, &field.ty);
+        });
+    });
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+/// Add one symbol's ordered checked ABI contract to a descriptor identity.
+fn hash_c_binding_symbol(hasher: &mut Sha256, symbol: &CBindingSymbol) {
+    hash_c_binding_text(hasher, "name", &symbol.name);
+    hash_c_binding_text(hasher, "native", &symbol.native);
+    hash_c_binding_list(hasher, "parameters", &symbol.parameters, |hasher, parameter| {
+        hash_c_binding_text(hasher, "name", &parameter.name);
+        hash_c_binding_type(hasher, &parameter.ty);
+    });
+    hash_c_binding_type(hasher, &symbol.return_type);
+    hash_c_binding_list(hasher, "buffers", &symbol.buffers, |hasher, buffer| {
+        hash_c_binding_text(hasher, "pointer_parameter", &buffer.pointer_parameter);
+        hash_c_binding_text(hasher, "length_parameter", &buffer.length_parameter);
+        hash_c_binding_text(hasher, "element", scalar_type_as_str(buffer.element));
+    });
+    hash_c_binding_list(hasher, "outcomes", &symbol.outcomes, |hasher, outcome| {
+        hash_c_binding_text(hasher, "result", &outcome.result);
+        hash_c_binding_list(hasher, "initializes", &outcome.initializes, |hasher, value| {
+            hash_c_binding_text(hasher, "value", value);
+        });
+        hash_c_binding_list(hasher, "updates", &outcome.updates, |hasher, value| {
+            hash_c_binding_text(hasher, "value", value);
+        });
+        hash_c_binding_list(hasher, "invalidates", &outcome.invalidates, |hasher, value| {
+            hash_c_binding_text(hasher, "value", value);
+        });
+    });
+}
+
+/// Add a structural checked-C type encoding to a descriptor identity.
+fn hash_c_binding_type(hasher: &mut Sha256, ty: &CBindingType) {
+    match ty {
+        CBindingType::Scalar(scalar) => {
+            hash_c_binding_text(hasher, "type", "scalar");
+            hash_c_binding_text(hasher, "scalar", scalar_type_as_str(*scalar));
+        }
+        CBindingType::Pointer { mutable, pointee } => {
+            hash_c_binding_text(hasher, "type", "pointer");
+            hash_c_binding_text(hasher, "mutable", if *mutable { "true" } else { "false" });
+            hash_c_binding_type(hasher, pointee);
+        }
+        CBindingType::Struct(name) => {
+            hash_c_binding_text(hasher, "type", "struct");
+            hash_c_binding_text(hasher, "name", name);
+        }
+        CBindingType::Resource { access, resource } => {
+            hash_c_binding_text(hasher, "type", "resource");
+            hash_c_binding_text(
+                hasher,
+                "access",
+                match access {
+                    CResourceAccess::Owned => "owned",
+                    CResourceAccess::Borrowed => "borrowed",
+                    CResourceAccess::BorrowedMut => "borrowed_mut",
+                },
+            );
+            hash_c_binding_text(hasher, "resource", resource);
+        }
+        CBindingType::Output { mode, value } => {
+            hash_c_binding_text(hasher, "type", "output");
+            hash_c_binding_text(
+                hasher,
+                "mode",
+                match mode {
+                    COutputMode::Out => "out",
+                    COutputMode::InOut => "in_out",
+                },
+            );
+            hash_c_binding_type(hasher, value);
+        }
+        CBindingType::Nullable(value) => {
+            hash_c_binding_text(hasher, "type", "nullable");
+            hash_c_binding_type(hasher, value);
+        }
+        CBindingType::Void => hash_c_binding_text(hasher, "type", "void"),
+    }
+}
+
+/// Delimit and hash an ordered descriptor list without ambiguous concatenation.
+fn hash_c_binding_list<T>(hasher: &mut Sha256, label: &str, values: &[T], hash_value: impl Fn(&mut Sha256, &T)) {
+    hash_c_binding_text(hasher, "list", label);
+    hash_c_binding_text(hasher, "length", &values.len().to_string());
+    for value in values {
+        hash_value(hasher, value);
+    }
+}
+
+/// Hash one labelled text field with explicit byte lengths for stable descriptor identities.
+fn hash_c_binding_text(hasher: &mut Sha256, label: &str, value: &str) {
+    hasher.update(label.len().to_be_bytes());
+    hasher.update(label.as_bytes());
+    hasher.update(value.len().to_be_bytes());
+    hasher.update(value.as_bytes());
+}
+
 impl CAbiInteropArtifacts {
     /// Return the verified C enum value selected by one recorded source access.
     pub fn enum_value_for_access(&self, span: Span) -> Option<i64> {
@@ -304,6 +561,50 @@ impl CAbiInteropArtifacts {
                 access.variant.clone(),
             ))
             .copied()
+    }
+
+    /// Derive facade edges only from typechecker-retained ordinary targets and direct raw-call owners.
+    ///
+    /// A public callable is a facade only when it directly calls a private callable in the same checked module that
+    /// owns a checked raw call. The relation is deliberately absent for imported name matches, syntax-only calls,
+    /// methods, and incomplete input.
+    pub fn resolve_checked_facades(&mut self, module_path: Option<&[String]>) {
+        self.facades.clear();
+        let Some(module_path) = module_path else {
+            return;
+        };
+        for function_call in &self.function_calls {
+            if function_call.caller.visibility != Visibility::Public
+                || !function_call.target.is_function()
+                || function_call.target.module_path != module_path
+            {
+                continue;
+            }
+            for raw_call in &self.raw_calls {
+                let Some(bridge) = raw_call.owner.as_ref() else {
+                    continue;
+                };
+                if bridge.visibility != Visibility::Private || bridge.name != function_call.target.name {
+                    continue;
+                }
+                let facade = CBindingFacade {
+                    facade: function_call.caller.clone(),
+                    bridge: bridge.clone(),
+                    call_span: function_call.span,
+                };
+                if !self.facades.contains(&facade) {
+                    self.facades.push(facade);
+                }
+            }
+        }
+        self.facades.sort_by(|left, right| {
+            left.facade
+                .name
+                .cmp(&right.facade.name)
+                .then_with(|| left.bridge.name.cmp(&right.bridge.name))
+                .then_with(|| left.call_span.start.cmp(&right.call_span.start))
+                .then_with(|| left.call_span.end.cmp(&right.call_span.end))
+        });
     }
 }
 
@@ -928,6 +1229,13 @@ pub struct SourceTargetInfo {
     pub name: String,
     /// Source declaration kind, matching the codegraph declaration `kind` spelling.
     pub kind: String,
+}
+
+impl SourceTargetInfo {
+    /// Return whether this recorded declaration target is the canonical function kind.
+    pub fn is_function(&self) -> bool {
+        SemanticSourceTargetKind::from_kind_str(&self.kind) == SemanticSourceTargetKind::Function
+    }
 }
 
 /// Coercion category selected by the typechecker for a Rust-boundary call argument.

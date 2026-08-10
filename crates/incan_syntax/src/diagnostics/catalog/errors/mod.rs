@@ -13,12 +13,14 @@
 //! | `const_eval`  | Const-expression evaluation & builtin calls              |
 //! | `rust_module` | `rust.module()` / `@rust.extern` diagnostics (RFC 023)   |
 
+mod c_abi;
 mod const_eval;
 mod modules;
 mod rust_module;
 mod syntax;
 mod types;
 
+pub use c_abi::*;
 pub use const_eval::*;
 pub use modules::*;
 pub use rust_module::*;

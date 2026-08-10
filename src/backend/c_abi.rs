@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::frontend::typechecker::{CBindingDescriptor, CBindingEnum, CBindingStruct, CBindingType};
-use crate::oven_interop::{InteropTargetPlatform, OvenInteropTarget};
+use crate::oven_interop::{InteropTargetPlatform, IosTargetKind, OvenInteropTarget, ios_target_kind};
 use incan_core::lang::c_abi::ScalarTypeId;
 
 type EnumValueProbeRequest = (String, String, String);
@@ -30,10 +30,12 @@ pub(crate) enum CAbiTarget {
         /// Android API level selected for the Clang target triple.
         api_level: u32,
     },
-    /// iOS arm64 ABI with its minimum deployment target.
+    /// iOS arm64 ABI with its minimum deployment target and device/simulator SDK selection.
     IosArm64 {
         /// Minimum iOS version selected for the Clang target triple.
         deployment_target: String,
+        /// Whether verification targets the simulator ABI rather than a physical device ABI.
+        simulator: bool,
     },
 }
 
@@ -44,7 +46,14 @@ impl CAbiTarget {
             Self::LinuxX86_64 => "x86_64-unknown-linux-gnu".to_string(),
             Self::MacosArm64 => "arm64-apple-macos11".to_string(),
             Self::AndroidArm64 { api_level } => format!("aarch64-linux-android{api_level}"),
-            Self::IosArm64 { deployment_target } => format!("arm64-apple-ios{deployment_target}"),
+            Self::IosArm64 {
+                deployment_target,
+                simulator: false,
+            } => format!("arm64-apple-ios{deployment_target}"),
+            Self::IosArm64 {
+                deployment_target,
+                simulator: true,
+            } => format!("arm64-apple-ios{deployment_target}-simulator"),
         }
     }
 
@@ -70,19 +79,24 @@ impl CAbiTarget {
             ("aarch64-linux-android", Some(InteropTargetPlatform::Android { api_level })) => {
                 Ok(Self::AndroidArm64 { api_level: *api_level })
             }
-            ("aarch64-apple-ios", Some(InteropTargetPlatform::Ios { deployment_target })) => Ok(Self::IosArm64 {
-                deployment_target: deployment_target.clone(),
-            }),
+            (_, Some(InteropTargetPlatform::Ios { deployment_target })) => {
+                let Some(kind) = ios_target_kind(&interop_target.target) else {
+                    return Err(format!(
+                        "Oven interop target `{}` has iOS platform facts but is not an iOS arm64 target",
+                        interop_target.target
+                    ));
+                };
+                Ok(Self::IosArm64 {
+                    deployment_target: deployment_target.clone(),
+                    simulator: matches!(kind, IosTargetKind::Simulator),
+                })
+            }
             (_, Some(InteropTargetPlatform::Android { .. })) => Err(format!(
                 "Oven interop target `{}` has Android platform facts but is not an Android arm64 target",
                 interop_target.target
             )),
-            (_, Some(InteropTargetPlatform::Ios { .. })) => Err(format!(
-                "Oven interop target `{}` has iOS platform facts but is not an iOS arm64 target",
-                interop_target.target
-            )),
             _ => Err(format!(
-                "Oven interop target `{}` is not supported by checked C ABI verification; declare one of `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `aarch64-linux-android` with Android platform facts, or `aarch64-apple-ios` with iOS platform facts",
+                "Oven interop target `{}` is not supported by checked C ABI verification; declare one of `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `aarch64-linux-android` with Android platform facts, or `aarch64-apple-ios`/`aarch64-apple-ios-sim` with iOS platform facts",
                 interop_target.target
             )),
         }
@@ -97,6 +111,12 @@ impl CAbiTarget {
     #[cfg(target_os = "macos")]
     fn is_ios(&self) -> bool {
         matches!(self, Self::IosArm64 { .. })
+    }
+
+    /// Return whether this iOS target must select Xcode's simulator SDK rather than the device SDK.
+    #[cfg(target_os = "macos")]
+    fn is_ios_simulator(&self) -> bool {
+        matches!(self, Self::IosArm64 { simulator: true, .. })
     }
 }
 
@@ -175,14 +195,23 @@ impl ClangToolchain {
         }
         #[cfg(target_os = "macos")]
         {
-            let sdk = plan.target().is_ios().then_some("iphoneos");
-            let executable = xcrun_value(sdk, &["--find", "clang"], "Xcode Clang")?;
-            let arguments = if let Some(sdk) = sdk {
-                let sysroot = xcrun_value(Some(sdk), &["--show-sdk-path"], "iPhoneOS SDK")?;
-                vec![OsString::from("-isysroot"), OsString::from(sysroot)]
+            let sdk = if plan.target().is_ios_simulator() {
+                "iphonesimulator"
+            } else if plan.target().is_ios() {
+                "iphoneos"
             } else {
-                Vec::new()
+                "macosx"
             };
+            let executable = xcrun_value(Some(sdk), &["--find", "clang"], "Xcode Clang")?;
+            let sysroot_description = if plan.target().is_ios_simulator() {
+                "iPhoneSimulator SDK"
+            } else if plan.target().is_ios() {
+                "iPhoneOS SDK"
+            } else {
+                "macOS SDK"
+            };
+            let sysroot = xcrun_value(Some(sdk), &["--show-sdk-path"], sysroot_description)?;
+            let arguments = vec![OsString::from("-isysroot"), OsString::from(sysroot)];
             Ok(Self {
                 executable: PathBuf::from(executable),
                 arguments,
@@ -642,6 +671,10 @@ fn c_scalar_spelling(scalar: ScalarTypeId) -> &'static str {
         ScalarTypeId::U32 => "__UINT32_TYPE__",
         ScalarTypeId::I64 => "__INT64_TYPE__",
         ScalarTypeId::U64 => "__UINT64_TYPE__",
+        ScalarTypeId::I128 => "__int128",
+        ScalarTypeId::U128 => "unsigned __int128",
+        ScalarTypeId::F32 => "float",
+        ScalarTypeId::F64 => "double",
         ScalarTypeId::Size => "__SIZE_TYPE__",
         ScalarTypeId::CChar => "char",
         ScalarTypeId::CInt => "int",
@@ -713,7 +746,7 @@ mod tests {
         CBindingSymbol, CBindingType,
     };
     use crate::oven_interop::{CapabilityRequirement, InteropTargetPlatform, OvenInteropTarget};
-    use incan_core::lang::c_abi::ScalarTypeId;
+    use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId};
 
     fn fixture_binding(header: String) -> CBindingDescriptor {
         CBindingDescriptor {
@@ -721,6 +754,7 @@ mod tests {
             class_name: "Fixture".to_string(),
             header,
             system_library: "fixture".to_string(),
+            link_capability: LinkCapabilityId::SystemLibrary,
             resources: Vec::new(),
             symbols: vec![CBindingSymbol {
                 name: "absolute".to_string(),
@@ -730,6 +764,7 @@ mod tests {
                     ty: CBindingType::Scalar(ScalarTypeId::I32),
                 }],
                 return_type: CBindingType::Scalar(ScalarTypeId::I32),
+                buffers: Vec::new(),
                 outcomes: Vec::new(),
             }],
             enums: vec![CBindingEnum {
@@ -773,9 +808,12 @@ mod tests {
                 version: None,
             }),
             sdk: Some(CapabilityRequirement {
-                capability: match &platform {
-                    InteropTargetPlatform::Android { .. } => "android",
-                    InteropTargetPlatform::Ios { .. } => "iphoneos",
+                capability: match (&platform, target) {
+                    (InteropTargetPlatform::Android { .. }, _) => "android",
+                    (InteropTargetPlatform::Ios { .. }, _) => match crate::oven_interop::ios_target_kind(target) {
+                        Some(kind) => kind.sdk_capability(),
+                        None => "invalid-ios-target",
+                    },
                 }
                 .to_string(),
                 version: None,
@@ -784,6 +822,7 @@ mod tests {
             headers: Vec::new(),
             definitions: definitions.into_iter().map(str::to_string).collect(),
             artifacts: Vec::new(),
+            bindings: Vec::new(),
             shims: Vec::new(),
         }
     }
@@ -796,6 +835,57 @@ mod tests {
         let Some(toolchain) = host_clang(&plan) else {
             return Ok(());
         };
+        let temporary = tempfile::tempdir()?;
+        let header = temporary.path().join("fixture.h");
+        std::fs::write(
+            &header,
+            "typedef struct fixture_pair { int left; int right; } fixture_pair;\n#define FIXTURE_OK 0\nint fixture_abs(int value);\n",
+        )?;
+        let receipt = verify_checked_c_binding(
+            &toolchain,
+            &plan,
+            &fixture_binding(header.to_string_lossy().into_owned()),
+        )?;
+        assert_eq!(receipt.enum_value("Status", "OK"), Some(0));
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn host_clang_selects_the_macos_sdk_sysroot() -> Result<(), Box<dyn std::error::Error>> {
+        let Some(plan) = CAbiVerificationPlan::host() else {
+            return Ok(());
+        };
+        let toolchain = ClangToolchain::discover(&plan)?;
+        assert!(
+            toolchain
+                .arguments
+                .windows(2)
+                .any(|arguments| { arguments[0] == std::ffi::OsString::from("-isysroot") && !arguments[1].is_empty() }),
+            "macOS C ABI verification must provide the Xcode SDK sysroot"
+        );
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn simulator_profile_verifies_with_the_iphone_simulator_sdk() -> Result<(), Box<dyn std::error::Error>> {
+        let plan = CAbiVerificationPlan::from_interop_target(&declared_interop_target(
+            "aarch64-apple-ios-sim",
+            InteropTargetPlatform::Ios {
+                deployment_target: "13.0".to_string(),
+            },
+            Vec::new(),
+        ))?;
+        let toolchain = ClangToolchain::discover(&plan)?;
+        assert!(
+            toolchain.arguments.windows(2).any(|arguments| {
+                arguments[0] == std::ffi::OsString::from("-isysroot")
+                    && arguments[1].to_string_lossy().contains("iPhoneSimulator")
+                    && arguments[1].to_string_lossy().ends_with(".sdk")
+            }),
+            "simulator C ABI verification must select the iPhoneSimulator SDK"
+        );
         let temporary = tempfile::tempdir()?;
         let header = temporary.path().join("fixture.h");
         std::fs::write(
@@ -916,6 +1006,15 @@ mod tests {
             Vec::new(),
         ))?;
         assert_eq!(ios.target().triple(), "arm64-apple-ios13.0");
+
+        let ios_simulator = CAbiVerificationPlan::from_interop_target(&declared_interop_target(
+            "aarch64-apple-ios-sim",
+            InteropTargetPlatform::Ios {
+                deployment_target: "13.0".to_string(),
+            },
+            Vec::new(),
+        ))?;
+        assert_eq!(ios_simulator.target().triple(), "arm64-apple-ios13.0-simulator");
         Ok(())
     }
 
