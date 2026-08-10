@@ -3793,6 +3793,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#use-the-bounded-text-bridge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use the bounded text bridge
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#verification-and-diagnostics" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8603,6 +8614,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#use-the-bounded-text-bridge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use the bounded text bridge
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#verification-and-diagnostics" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8658,7 +8680,7 @@
 <h1 id="stdinterop-checked-c-bindings"><code>std.interop</code>: checked C bindings<a class="headerlink" href="#stdinterop-checked-c-bindings" title="Permanent link">&para;</a></h1>
 <p><code>std.interop</code> activates the checked C binding vocabulary. This page is the exact contract: it lists accepted declaration forms, current execution limits, and verification behavior. Start with the <a href="../../../tutorials/checked_c_binding/">tutorial</a>, use the <a href="../../../how-to/checked_c_bindings/">how-to guide</a> for modelling and diagnostics, and read the <a href="../../../explanation/checked_c_interop/">architecture explanation</a> before choosing C over Rust interop.</p>
 <p>The surface lets a module declare a small, explicit C ABI contract and call supported scalar functions, opaque resources, and output positions without writing a Rust wrapper first. The compiler verifies declared signatures, enum carriers, and listed plain-structure layouts with Clang before generating Rust.</p>
-<p>This is a deliberately narrow foundation. It is useful for direct scalar C functions, opaque resource ownership, output positions, and ABI verification; bounded C strings and views, native artifact resolution, shims, and platform packaging have separate RFC 116 slices.</p>
+<p>This is a deliberately narrow foundation. It is useful for direct scalar C functions, opaque resource ownership, output positions, bounded NUL-terminated text input, and immediately copied UTF-8 error text. Native artifact resolution, shims, spans and caller-owned buffers, and platform packaging are separate RFC 116 work.</p>
 <h2 id="activate-the-vocabulary">Activate the vocabulary<a class="headerlink" href="#activate-the-vocabulary" title="Permanent link">&para;</a></h2>
 <p>Import the C namespace explicitly. The import activates <code>binding</code> only in that module; it does not make C syntax a global language keyword.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">std.interop</span><span class="w"> </span><span class="kn">import</span> <span class="n">c</span>
@@ -8705,25 +8727,38 @@
 <h2 id="checked-declaration-facts">Checked declaration facts<a class="headerlink" href="#checked-declaration-facts" title="Permanent link">&para;</a></h2>
 <p>The current surface accepts these declaration forms:</p>
 <ul>
-<li>Exact C scalar spellings: <code>c.i8</code>, <code>c.u8</code>, <code>c.i16</code>, <code>c.u16</code>, <code>c.i32</code>, <code>c.u32</code>, <code>c.i64</code>, <code>c.u64</code>, <code>c.Size</code>, <code>c.c_char</code>, and <code>c.c_int</code>.</li>
-<li>Read-only and mutable pointer descriptions: <code>c.ConstPtr[T]</code> and <code>c.MutPtr[T]</code>.</li>
+<li>Exact C scalar spellings: <code>c.i8</code>, <code>c.u8</code>, <code>c.i16</code>, <code>c.u16</code>, <code>c.i32</code>, <code>c.u32</code>, <code>c.i64</code>, <code>c.u64</code>, <code>c.i128</code>, <code>c.u128</code>, <code>c.f32</code>, <code>c.f64</code>, <code>c.Size</code>, <code>c.c_char</code>, and <code>c.c_int</code>. The fixed-width entries carry the same-width Incan numeric type; <code>c.Size</code> carries <code>usize</code>. <code>c.i128</code> and <code>c.u128</code> require the selected Clang target to accept its <code>__int128</code> extension.</li>
+<li>Read-only and mutable pointer descriptions: <code>c.ConstPtr[T]</code> and <code>c.MutPtr[T]</code>. They remain declaration facts unless the narrow text bridge below admits their use.</li>
 <li><code>enum</code> variants with one explicit scalar carrier and a native constant name.</li>
 <li>Plain <code>struct</code> declarations with an explicit native C type name and listed fields.</li>
 <li><code>resource</code> declarations that associate an opaque native type with one <code>c.Owned[...]</code> release symbol.</li>
 <li><code>c.Owned[T]</code>, <code>c.Borrowed[T]</code>, and <code>c.BorrowedMut[T]</code> resource parameters and owned or nullable-owned resource results.</li>
 <li><code>c.Out[T]</code> and <code>c.InOut[T]</code> parameters for scalar values and owned resources, plus an <code>outcome</code> declaration that makes output initialization explicit.</li>
 </ul>
-<p>For the executable subset, Incan carries scalar values as <code>int</code>, releases owned resources through their declared native operation, and keeps output storage in compiler-generated private slots. Generated wrappers range-check every scalar conversion; a value that cannot be represented by Incan <code>int</code> is not silently truncated. A verified enum constant is available as an ordinary integer expression such as <code>LibC.Status.OK</code>. <code>c.Out[...]</code> is readable only after its declared outcome, while a consumed <code>c.Owned[...]</code> resource cannot be used again. Pointer and by-value structure contracts are verified declarations in this slice, but calls using them stay rejected until the later view design is implemented.</p>
+<p>For the executable subset, fixed-width C scalar values retain their matching fixed-width Incan numeric type, and <code>c.Size</code> retains <code>usize</code>; they do not widen through Incan <code>int</code>. The target-defined <code>c.c_char</code> and <code>c.c_int</code> aliases retain checked range conversion until a selected target receipt can name their stable numeric layout. Owned resources release through their declared native operation, and output storage remains in compiler-generated private slots. A verified enum constant is available as an ordinary integer expression such as <code>LibC.Status.OK</code>. <code>c.Out[...]</code> is readable only after its declared outcome, while a consumed <code>c.Owned[...]</code> resource cannot be used again. Pointer and by-value structure contracts remain verified declarations rather than a general pointer-call API.</p>
+<h2 id="use-the-bounded-text-bridge">Use the bounded text bridge<a class="headerlink" href="#use-the-bounded-text-bridge" title="Permanent link">&para;</a></h2>
+<p><code>c.cstr(value)?</code> creates compiler-private NUL-terminated storage from an Incan <code>str</code>. It rejects an interior NUL. Inside <code>unsafe:</code>, its <code>as_const_ptr()</code> method can supply exactly a declared <code>c.ConstPtr[c.c_char]</code> parameter; the temporary stays live through that one call and cannot become a general raw pointer.</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">string_length</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="kt">usize</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="n">text</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">cstr</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="o">?</span>
+    <span class="n">unsafe</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nc">LibC</span><span class="o">.</span><span class="n">string_length</span><span class="p">(</span><span class="n">text</span><span class="o">.</span><span class="n">as_const_ptr</span><span class="p">()))</span>
+</code></pre></div>
+<p>A declared <code>c.ConstPtr[c.c_char]</code> result becomes an unnameable scoped text view, not an Incan pointer. Inside the same <code>unsafe:</code> region, immediately call <code>view.copy_utf8(max_bytes=...)</code>. The named positive bound limits the terminator scan, validates UTF-8, and produces <code>Result[str, str]</code>; the view cannot be returned, stored, captured, or passed onward.</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">last_error</span><span class="p">(</span><span class="n">database</span><span class="p">:</span> <span class="nc">Database</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="n">unsafe</span><span class="p">:</span>
+        <span class="n">view</span> <span class="o">=</span> <span class="nc">SQLite</span><span class="o">.</span><span class="n">error_message</span><span class="p">(</span><span class="n">database</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">view</span><span class="o">.</span><span class="n">copy_utf8</span><span class="p">(</span><span class="n">max_bytes</span><span class="o">=</span><span class="mi">4096</span><span class="p">)</span>
+</code></pre></div>
 <h2 id="verification-and-diagnostics">Verification and diagnostics<a class="headerlink" href="#verification-and-diagnostics" title="Permanent link">&para;</a></h2>
 <p>Before code generation, the compiler renders a non-executable C probe from the binding descriptor and invokes a Clang-compatible toolchain for the selected ABI. A normal invocation selects the host ABI; <code>incan check --interop-target &lt;triple&gt;</code> instead requires and selects the matching <code>[[oven.interop.targets]]</code> declaration. The probe checks the exact free-function signature, every enum constant's declared carrier, and the size, alignment, and field offsets of every listed plain structure. A mismatch is reported at the binding declaration before native execution.</p>
-<p>Headers and native names are explicit in source. The verifier neither scans arbitrary headers to infer an API nor searches for a library that happens to provide a symbol. The logical library name records the link capability. A package may separately declare package-relative interop inputs and compatibility requirements under <code>[oven.interop]</code> in <code>incan.toml</code>; <code>incan lock</code> records those requirements and the content-derived identities of package-owned files, but this experimental slice still does not resolve toolchains, download artifacts, or compile shims. See the <a href="../../../how-to/checked_c_bindings/#freeze-oven-interop-requirements-for-a-target">checked C binding how-to</a> for the current schema and its limits.</p>
-<p>The repository verifies the pure checked-ABI fixture in Linux x86-64 and macOS arm64 Clang target modes. Declared Android arm64 verification uses <code>aarch64-linux-android&lt;api-level&gt;</code> and the selected target's definitions; until Oven manages the toolchain, <code>INCAN_C_ABI_CLANG</code> must point at the corresponding NDK Clang executable. Declared iOS arm64 verification uses <code>arm64-apple-ios&lt;deployment-target&gt;</code> with Xcode's iPhoneOS SDK sysroot. <code>incan inspect interop-plan --target &lt;triple&gt;</code> separately projects the current lock into a deterministic, schema-versioned adapter input. It retains package-relative inputs, dependency-ordered deployment classes, runtime and placement facts, shim inputs, and platform constraints, but it does not cross-compile generated Rust, link or stage artifacts, attest compatible requirements against a concrete local installation, or produce a deployable application.</p>
+<p>Headers and native names are explicit in source. The verifier neither scans arbitrary headers to infer an API nor searches for a library that happens to provide a symbol. The logical library name records the link capability. A package may separately declare package-relative interop inputs and compatibility requirements under <code>[oven.interop]</code> in <code>incan.toml</code>; <code>incan lock</code> records those requirements and the content-derived identities of package-owned files. In v0.5, the explicit <code>incan oven interop bake</code> command turns those locked facts plus supplied compiler/SDK evidence into a selected direct-<code>rustc</code> native plan, and <code>stage</code> creates a fixed Android/iOS runtime layout. These commands do not discover host libraries, invoke Cargo or platform build tools, sign applications, or prove physical-device deployment. See the <a href="../../../how-to/checked_c_bindings/#freeze-oven-interop-requirements-for-a-target">checked C binding how-to</a> for the current declaration schema and limits.</p>
+<p>The repository verifies the pure checked-ABI fixture in Linux x86-64 and macOS arm64 Clang target modes. Declared Android arm64 verification uses <code>aarch64-linux-android&lt;api-level&gt;</code> and the selected target's definitions; <code>INCAN_C_ABI_CLANG</code> supplies the corresponding NDK Clang executable for this check. Declared iOS arm64 verification uses <code>arm64-apple-ios&lt;deployment-target&gt;</code> with Xcode's iPhoneOS SDK sysroot. <code>incan inspect interop-plan --target &lt;triple&gt;</code> separately projects the current lock into a deterministic, schema-versioned adapter input. It retains package-relative inputs, dependency-ordered deployment classes, explicit checked-binding-to-artifact-name correspondences, runtime and placement facts, shim inputs, and platform constraints. The explicit Oven baker, rather than this inspection command, attests selected compiler/SDK evidence, seals declared archives into its native search closure, and may stage bundled runtime files; neither route produces a signed or physical-device application.</p>
 <h2 id="not-included-yet">Not included yet<a class="headerlink" href="#not-included-yet" title="Permanent link">&para;</a></h2>
 <p>Do not use this surface for:</p>
 <ul>
-<li>C strings, spans, caller-owned buffers, scoped foreign views, pointer arithmetic, casts, dereferences, or dynamic symbol lookup;</li>
+<li>arbitrary pointer arguments or results, pointer arithmetic, casts, dereferences, or dynamic symbol lookup;</li>
 <li>callbacks, variadics, unions, and bitfields;</li>
-<li>interop artifact downloads, vendored libraries, C/C++ shim compilation, <code>incan.pub</code> publication policy, or final application assembly;</li>
+<li>interop artifact downloads, selected system/framework or bundled-artifact materialization, <code>incan.pub</code> publication policy, or final application assembly;</li>
 <li>cross-target toolchain provisioning, generated-Rust cross-compilation, artifact staging, Gradle/Xcode command execution, or signing.</li>
 </ul>
 <p>Those boundaries will build on the checked descriptor rather than adding a second source of ABI truth.</p>

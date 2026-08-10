@@ -6181,6 +6181,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#emit-a-redacted-binding-use-receipt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emit a redacted binding-use receipt
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#match-the-projects-selected-source-view" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8579,6 +8590,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#emit-a-redacted-binding-use-receipt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emit a redacted binding-use receipt
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#match-the-projects-selected-source-view" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8637,7 +8659,7 @@
 <p>Run the command from the project root:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>bindings
 </code></pre></div>
-<p>The default text output lists each checked binding with its source module, header, logical system-library capability, source location, resources, symbols, output outcomes, enums, and plain structures. This is the quickest form for reviewing whether a private binding says what its public façade expects.</p>
+<p>The default text output lists each checked binding with its source module, header, exact native link declaration (<code>c.system_library(...)</code> or <code>c.framework(...)</code>), source location, resources, symbols, descriptor-owned bounded span associations, output outcomes, enums, and plain structures. This is the quickest form for reviewing whether a private binding says what its public façade expects.</p>
 <p>Pass a source file when the binding is not reachable from the project's normal entrypoint:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>bindings<span class="w"> </span>src/sqlite.incn
 </code></pre></div>
@@ -8646,7 +8668,16 @@
 <p>Use the JSON format for an editor integration, audit tool, or reproducible review artifact:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>bindings<span class="w"> </span>.<span class="w"> </span>--format<span class="w"> </span>json
 </code></pre></div>
-<p>The report includes <code>schema_version: 1</code>, deterministic binding ordering, structural C types, and source anchors. Consumers should read the documented fields rather than parsing text output. See the <a href="../../reference/binding_inspection_schema/">binding inspection JSON schema</a> for the exact contract.</p>
+<p>The report includes <code>schema_version: 2</code>, deterministic binding ordering, a compiler-owned descriptor identity, structural C types, and source anchors. Consumers should read the documented fields rather than parsing text output. The identity retains the declared header spelling, so use a portable spelling when it must survive relocation. See the <a href="../../reference/binding_inspection_schema/">binding inspection JSON schema</a> for the exact contract.</p>
+<h2 id="emit-a-redacted-binding-use-receipt">Emit a redacted binding-use receipt<a class="headerlink" href="#emit-a-redacted-binding-use-receipt" title="Permanent link">&para;</a></h2>
+<p>Use the distinct receipt format when a build or audit system needs to retain only checked binding and direct raw-call identities:</p>
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>bindings<span class="w"> </span>.<span class="w"> </span>--format<span class="w"> </span>receipt
+</code></pre></div>
+<p>The receipt is JSON with <code>schema_version: 2</code>. It contains logical module names, compiler-owned binding identities, called native symbol names, and—when the compiler proves one—a direct public-function-to-private-bridge relation with that bridge's raw calls. It deliberately excludes source spans, package paths, declared headers, argument values, native bytes, and process-local addresses.</p>
+<p>Join the receipt to one current locked Oven target when target provenance matters:</p>
+<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>bindings<span class="w"> </span>.<span class="w"> </span>--format<span class="w"> </span>receipt<span class="w"> </span>--target<span class="w"> </span>aarch64-apple-darwin
+</code></pre></div>
+<p>This validates the target's <code>incan.lock</code> projection and emits its portable <code>locked_target_identity</code>. When an already-selected Oven interop execution receipt exists for that exact target, the receipt validates it and includes its execution identity. If the target explicitly maps a checked binding's module/name pair to declared artifacts, that binding includes <code>target_artifacts</code>; a mapping with no compiler-produced binding is rejected rather than guessed. The receipt's <code>compatibility</code> object makes the v0.5 policy explicit: descriptor/ownership/ABI changes require an identical descriptor identity, and a selected target/artifact closure requires an identical locked-target identity. <code>--target</code> is accepted only with <code>--format receipt</code>; it is never silently ignored by the declaration report formats.</p>
 <h2 id="match-the-projects-selected-source-view">Match the project's selected source view<a class="headerlink" href="#match-the-projects-selected-source-view" title="Permanent link">&para;</a></h2>
 <p>Pass the same package features and SDK profile that the build or review uses when declarations are conditional:</p>
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>bindings<span class="w"> </span>.<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>--features<span class="w"> </span>sqlite<span class="w"> </span>--sdk-profile<span class="w"> </span>minimal
@@ -8656,7 +8687,7 @@
 <p>Inspection is strict. If parsing, imports, typechecking, or the host-target C probe fails, the command emits the ordinary compiler diagnostic and no partial report.</p>
 <p>Use the diagnostic to correct the binding declaration or selected environment, then run the inspection again. Do not weaken an exact C type, ownership mode, output contract, enum carrier, or plain layout merely to obtain JSON: a partial or guessed report would defeat the purpose of the command.</p>
 <h2 id="know-where-the-report-stops">Know where the report stops<a class="headerlink" href="#know-where-the-report-stops" title="Permanent link">&para;</a></h2>
-<p>The report describes the checked language declaration. It does not read <code>incan.lock</code>, resolve or download artifacts, compile C/C++ shims, select a concrete compiler or SDK, classify a private bridge and public façade, or provide editor navigation. <code>incan inspect codegraph</code> additionally marks the checked binding and direct C calls admitted inside <code>unsafe:</code>, but it has the same boundary: those are language-contract facts, not artifact, runtime, façade, or editor receipts. Use <code>[oven.interop]</code> and <code>incan lock</code> for declared physical requirements and locked package inputs; later Oven resolution and editor projections have separate lifecycles.</p>
+<p>The declaration report describes the checked language declaration. The receipt can join that checked use to one locked target and an already-selected execution receipt, and can report an explicitly authored binding-to-artifact-name correspondence. Neither format resolves or downloads artifacts, compiles C/C++ shims, selects a concrete compiler or SDK, emits a generated bridge implementation or linker invocation, classifies a whole package or re-export graph, or provides editor navigation. Its facade relation is limited to a direct same-module public-function-to-private-bridge call proved by the typechecker. <code>incan inspect codegraph</code> provides the corresponding source graph edges. Use <code>[oven.interop]</code> and <code>incan lock</code> for declared physical requirements and locked package inputs; later Oven resolution and editor projections have separate lifecycles.</p>
 <p>For the language-side recipes, see <a href="../../../language/how-to/checked_c_bindings/">Work with checked C bindings</a>. For the reason these facts stay separate, see <a href="../../../language/explanation/checked_c_interop/">How checked C interop is structured</a>.</p>
 
 

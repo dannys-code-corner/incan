@@ -10126,10 +10126,10 @@
 <td>Interop</td>
 <td style="text-align: right;">0.5</td>
 <td>Import <code>c</code> from <code>std.interop</code>, then declare a <code>binding</code> in the importing module.</td>
-<td><code>from std.interop import c</code><br><code>binding LibC:</code><br><code>unsafe:     LibC.absolute(-7)</code></td>
-<td>Explicit C headers, scalar signatures, opaque resources, output positions, enum carriers, and plain layouts are verified before private generated C ABI calls.</td>
-<td>Unverified Rust wrappers, ambient header discovery, or string-based dynamic symbol lookup.</td>
-<td><a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/116_typed_c_abi_interop/">RFC 116</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></td>
+<td><code>from std.interop import c</code><br><code>binding LibC:</code><br><code>text = c.cstr(value)?</code><br><code>unsafe:     LibC.absolute(-7)</code></td>
+<td>Explicit C headers, exact scalar signatures (<code>i8</code>–<code>i128</code>, <code>u8</code>–<code>u128</code>, <code>usize</code>, <code>f32</code>, <code>f64</code>), opaque resources, output positions, paired byte or <code>f32</code> spans, bounded C-string text bridges, enum carriers, and plain layouts are verified before private generated C ABI calls.</td>
+<td>Unverified Rust wrappers, ambient header discovery, string-based dynamic symbol lookup, or general raw-pointer access.</td>
+<td><a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/closed/implemented/116_typed_c_abi_interop/">RFC 116</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></td>
 </tr>
 <tr>
 <td>Locked Oven interop requirements</td>
@@ -10139,7 +10139,7 @@
 <td><code>[oven.interop]</code><br><code>[[oven.interop.targets]]</code><br><code>incan lock</code></td>
 <td>Package-owned headers, artifacts, system capabilities, and C/C++ shim sources are declared explicitly alongside toolchain and SDK compatibility requirements, then frozen in the semantic lock.</td>
 <td>Ambient host discovery, untracked interop source trees, or package manifests that claim a concrete local compiler or SDK has already been selected.</td>
-<td><a href="../../../tooling/reference/project_configuration/#oveninterop">Project configuration</a>, <a href="../../how-to/checked_c_bindings/">Checked C bindings</a>, <a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/116_typed_c_abi_interop/">RFC 116</a></td>
+<td><a href="../../../tooling/reference/project_configuration/#oveninterop">Project configuration</a>, <a href="../../how-to/checked_c_bindings/">Checked C bindings</a>, <a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/closed/implemented/116_typed_c_abi_interop/">RFC 116</a></td>
 </tr>
 <tr>
 <td>Incan libraries and <code>pub::</code> imports</td>
@@ -10818,14 +10818,15 @@
 <li><strong>RFC:</strong> <code>RFC 116</code></li>
 <li><strong>Stability:</strong> <code>Experimental</code></li>
 <li><strong>Activation:</strong> Import <code>c</code> from <code>std.interop</code>, then declare a <code>binding</code> in the importing module.</li>
-<li><strong>Use instead of:</strong> Unverified Rust wrappers, ambient header discovery, or string-based dynamic symbol lookup.</li>
-<li><strong>References:</strong> <a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/116_typed_c_abi_interop/">RFC 116</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></li>
+<li><strong>Use instead of:</strong> Unverified Rust wrappers, ambient header discovery, string-based dynamic symbol lookup, or general raw-pointer access.</li>
+<li><strong>References:</strong> <a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/closed/implemented/116_typed_c_abi_interop/">RFC 116</a>, <a href="../../../release_notes/0_5/">Release 0.5</a></li>
 </ul>
-<p>Explicit C headers, scalar signatures, opaque resources, output positions, enum carriers, and plain layouts are verified before private generated C ABI calls.</p>
+<p>Explicit C headers, exact scalar signatures (<code>i8</code>–<code>i128</code>, <code>u8</code>–<code>u128</code>, <code>usize</code>, <code>f32</code>, <code>f64</code>), opaque resources, output positions, paired byte or <code>f32</code> spans, bounded C-string text bridges, enum carriers, and plain layouts are verified before private generated C ABI calls.</p>
 <p>Canonical forms:</p>
 <ul>
 <li><code>from std.interop import c</code></li>
 <li><code>binding LibC:</code></li>
+<li><code>text = c.cstr(value)?</code></li>
 <li><code>unsafe:
     LibC.absolute(-7)</code></li>
 </ul>
@@ -10838,7 +10839,7 @@
 <li><strong>Stability:</strong> <code>Experimental</code></li>
 <li><strong>Activation:</strong> Declare target-specific <code>[oven.interop]</code> requirements in <code>incan.toml</code>, then run <code>incan lock</code>.</li>
 <li><strong>Use instead of:</strong> Ambient host discovery, untracked interop source trees, or package manifests that claim a concrete local compiler or SDK has already been selected.</li>
-<li><strong>References:</strong> <a href="../../../tooling/reference/project_configuration/#oveninterop">Project configuration</a>, <a href="../../how-to/checked_c_bindings/">Checked C bindings</a>, <a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/116_typed_c_abi_interop/">RFC 116</a></li>
+<li><strong>References:</strong> <a href="../../../tooling/reference/project_configuration/#oveninterop">Project configuration</a>, <a href="../../how-to/checked_c_bindings/">Checked C bindings</a>, <a href="../stdlib/interop/">std.interop</a>, <a href="../../../RFCs/closed/implemented/116_typed_c_abi_interop/">RFC 116</a></li>
 </ul>
 <p>Package-owned headers, artifacts, system capabilities, and C/C++ shim sources are declared explicitly alongside toolchain and SDK compatibility requirements, then frozen in the semantic lock.</p>
 <p>Canonical forms:</p>

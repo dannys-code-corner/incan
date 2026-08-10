@@ -2686,10 +2686,32 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#start-with-the-binding-package-scaffold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Start with the binding-package scaffold
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#choose-exact-c-types" class="md-nav__link">
     <span class="md-ellipsis">
       
         Choose exact C types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pass-a-bounded-caller-owned-buffer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pass a bounded caller-owned buffer
       
     </span>
   </a>
@@ -2712,6 +2734,17 @@
     <span class="md-ellipsis">
       
         Use output positions only through compiler-managed storage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-text-at-the-boundary-not-to-a-raw-pointer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert text at the boundary, not to a raw pointer
       
     </span>
   </a>
@@ -8634,10 +8667,32 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#start-with-the-binding-package-scaffold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Start with the binding-package scaffold
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#choose-exact-c-types" class="md-nav__link">
     <span class="md-ellipsis">
       
         Choose exact C types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pass-a-bounded-caller-owned-buffer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pass a bounded caller-owned buffer
       
     </span>
   </a>
@@ -8660,6 +8715,17 @@
     <span class="md-ellipsis">
       
         Use output positions only through compiler-managed storage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-text-at-the-boundary-not-to-a-raw-pointer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert text at the boundary, not to a raw pointer
       
     </span>
   </a>
@@ -8766,7 +8832,7 @@
 <h1 id="work-with-checked-c-bindings">Work with checked C bindings<a class="headerlink" href="#work-with-checked-c-bindings" title="Permanent link">&para;</a></h1>
 <p>Use this guide when you already understand the first checked C binding tutorial and need to model a small C header, keep the raw boundary private, or diagnose a rejected declaration.</p>
 <h2 id="keep-the-binding-local-and-expose-a-facade">Keep the binding local and expose a façade<a class="headerlink" href="#keep-the-binding-local-and-expose-a-facade" title="Permanent link">&para;</a></h2>
-<p>Do not publish a raw binding merely because it has a useful native name. Leave the binding unexported and export only ordinary Incan functions or models that give the C API application meaning:</p>
+<p>Do not publish a raw binding merely because it has a useful native name. Leave the binding unexported, keep the direct call in a private bridge, and export only ordinary Incan functions or models that give the C API application meaning:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">std.interop</span><span class="w"> </span><span class="kn">import</span> <span class="n">c</span>
 
 <span class="n">binding</span> <span class="nc">LibC</span><span class="p">:</span>
@@ -8776,11 +8842,29 @@
     <span class="n">symbol</span> <span class="n">absolute</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">c</span><span class="o">.</span><span class="kt">i32</span><span class="p">:</span>
         <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;abs&quot;</span>
 
-<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">magnitude</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">absolute_bridge</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
     <span class="n">unsafe</span><span class="p">:</span>
         <span class="k">return</span> <span class="nc">LibC</span><span class="o">.</span><span class="n">absolute</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">magnitude</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">absolute_bridge</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
 </code></pre></div>
 <p>The <code>binding</code> vocabulary desugars to a <code>@c.binding(...)</code> declaration class extending <code>BindingDeclaration</code>. That is an implementation detail with a useful consequence: normal module visibility rules still apply, and no special compiler rule turns every native name into public API.</p>
+<p>The compiler emits one advisory when a <code>pub def</code> directly contains a checked C call. It does not reject that low-level form, but a package that promises a safe API should follow the private-bridge shape above. A declaration-only binding package remains supported because it has no public direct raw call to warn about.</p>
+<h2 id="start-with-the-binding-package-scaffold">Start with the binding-package scaffold<a class="headerlink" href="#start-with-the-binding-package-scaffold" title="Permanent link">&para;</a></h2>
+<p>Create an ordinary project with <code>incan new</code>, then keep the C boundary in the following source layout. The paths are a recommended scaffold, not magic package metadata: imports and the checked descriptor remain authoritative.</p>
+<div class="language-text highlight"><pre><span></span><code>src/
+  native/
+    contract.incn  # `binding` declarations only
+    bridge.incn    # private `unsafe:` raw calls and boundary conversion
+    api.incn       # public Incan models, errors, and facades
+  main.incn        # imports the public API only
+interop/
+  include/         # package-owned headers
+  src/             # governed C/C++ shims when needed
+  lib/             # declared package-owned static or bundled artifacts
+</code></pre></div>
+<p>Keep public application code out of <code>contract.incn</code> and <code>bridge.incn</code>. Put target files under <code>[oven.interop]</code>, run <code>incan lock</code>, and use the binding-use receipt when an audit needs to join checked raw use to a selected target. This layout supports intentionally low-level packages too: they may expose the contract deliberately, but should document that they do not provide a safe facade.</p>
 <h2 id="choose-exact-c-types">Choose exact C types<a class="headerlink" href="#choose-exact-c-types" title="Permanent link">&para;</a></h2>
 <p>Use the C namespace in the raw declaration, even when a type looks similar to Incan <code>int</code>:</p>
 <table>
@@ -8793,7 +8877,15 @@
 <tbody>
 <tr>
 <td>Exact signed or unsigned width</td>
-<td><code>c.i8</code> through <code>c.i64</code>, or <code>c.u8</code> through <code>c.u64</code></td>
+<td><code>c.i8</code> through <code>c.i64</code>, or <code>c.u8</code> through <code>c.u64</code>; the matching Incan carrier is the same-width numeric type</td>
+</tr>
+<tr>
+<td>Target-verified 128-bit extension</td>
+<td><code>c.i128</code> or <code>c.u128</code>; available only when the selected Clang target accepts <code>__int128</code></td>
+</tr>
+<tr>
+<td>Exact binary float</td>
+<td><code>c.f32</code> or <code>c.f64</code>; the matching Incan carrier is <code>f32</code> or <code>f64</code></td>
 </tr>
 <tr>
 <td>C <code>int</code></td>
@@ -8805,7 +8897,7 @@
 </tr>
 <tr>
 <td>Target-sized byte count</td>
-<td><code>c.Size</code></td>
+<td><code>c.Size</code>, carried as Incan <code>usize</code></td>
 </tr>
 <tr>
 <td>Required immutable or mutable pointer</td>
@@ -8814,6 +8906,14 @@
 <tr>
 <td>Nullable pointer</td>
 <td><code>Option[c.ConstPtr[T]]</code> or <code>Option[c.MutPtr[T]]</code></td>
+</tr>
+<tr>
+<td>NUL-terminated text input</td>
+<td><code>c.cstr(value)?</code>, then <code>text.as_const_ptr()</code> inside <code>unsafe:</code> for an exact <code>c.ConstPtr[c.c_char]</code> parameter</td>
+</tr>
+<tr>
+<td>Temporary <code>const char *</code> text result</td>
+<td><code>view.copy_utf8(max_bytes=&lt;positive int&gt;)</code> inside the same <code>unsafe:</code> region</td>
 </tr>
 <tr>
 <td>Opaque resource consumed by the native call</td>
@@ -8829,7 +8929,33 @@
 </tr>
 </tbody>
 </table>
-<p>The executable subset admits scalar calls, opaque resource calls, and scalar or owned-resource output positions. Pointer and by-value structure declarations are still useful because the compiler verifies their declared shape, but calls that would require pointer arithmetic, arbitrary dereference, or unimplemented view rules remain rejected.</p>
+<p>The executable subset admits exact scalar calls, opaque resource calls, scalar or owned-resource output positions, bounded typed spans, caller-owned output buffers, and the bounded text bridge. Pointer and by-value structure declarations are still useful because the compiler verifies their declared shape, but calls that would require pointer arithmetic, arbitrary dereference, a raw view that can escape, or an unimplemented representation rule remain rejected.</p>
+<h2 id="pass-a-bounded-caller-owned-buffer">Pass a bounded caller-owned buffer<a class="headerlink" href="#pass-a-bounded-caller-owned-buffer" title="Permanent link">&para;</a></h2>
+<p>Use a typed span only where the binding declares the matching pointer and count or capacity parameter through <code>bounds</code>. The span owns no raw pointer in source: it produces the paired argument from one compiler-tracked allocation, and a mutable span returns the original allocation only after a native-written count is within the declared capacity.</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">binding</span> <span class="nc">Vector</span><span class="p">:</span>
+    <span class="n">header</span> <span class="o">=</span> <span class="s2">&quot;vector.h&quot;</span>
+    <span class="n">link</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">system_library</span><span class="p">(</span><span class="s2">&quot;vector&quot;</span><span class="p">)</span>
+
+    <span class="n">symbol</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">values</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">ConstPtr</span><span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="kt">f32</span><span class="p">],</span> <span class="n">value_count</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">Size</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">c</span><span class="o">.</span><span class="kt">f32</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;vector_sum_f32&quot;</span>
+        <span class="n">bounds</span> <span class="o">=</span> <span class="p">{</span> <span class="nb">values</span><span class="p">:</span> <span class="n">value_count</span> <span class="p">}</span>
+
+    <span class="n">symbol</span> <span class="n">fill</span><span class="p">(</span><span class="n">destination</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">MutPtr</span><span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="kt">f32</span><span class="p">],</span> <span class="n">destination_capacity</span><span class="p">:</span> <span class="n">c</span><span class="o">.</span><span class="nc">Size</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">c</span><span class="o">.</span><span class="nc">Size</span><span class="p">:</span>
+        <span class="n">native</span> <span class="o">=</span> <span class="s2">&quot;vector_fill_f32&quot;</span>
+        <span class="n">bounds</span> <span class="o">=</span> <span class="p">{</span> <span class="n">destination</span><span class="p">:</span> <span class="n">destination_capacity</span> <span class="p">}</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">sum</span><span class="p">(</span><span class="nb">values</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="kt">f32</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kt">f32</span><span class="p">:</span>
+    <span class="n">source</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">f32_span</span><span class="p">(</span><span class="nb">values</span><span class="p">)</span>
+    <span class="n">unsafe</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nc">Vector</span><span class="o">.</span><span class="nb">sum</span><span class="p">(</span><span class="n">source</span><span class="o">.</span><span class="n">as_const_ptr</span><span class="p">(),</span> <span class="n">source</span><span class="o">.</span><span class="n">element_count</span><span class="p">())</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">fill</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="kt">f32</span><span class="p">],</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="k">mut</span> <span class="n">destination</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">mutable_f32_span</span><span class="p">([</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">])</span>
+    <span class="n">unsafe</span><span class="p">:</span>
+        <span class="n">written</span> <span class="o">=</span> <span class="nc">Vector</span><span class="o">.</span><span class="n">fill</span><span class="p">(</span><span class="n">destination</span><span class="o">.</span><span class="n">as_mut_ptr</span><span class="p">(),</span> <span class="n">destination</span><span class="o">.</span><span class="n">element_capacity</span><span class="p">())</span>
+        <span class="k">return</span> <span class="n">destination</span><span class="o">.</span><span class="n">into_f32s</span><span class="p">(</span><span class="n">written</span><span class="p">)</span>
+</code></pre></div>
+<p>Use <code>c.bytes_span(value)</code> and <code>c.mutable_bytes_span(value)</code> for a <code>c.u8</code> buffer. The byte-length methods are named <code>byte_length</code>, <code>byte_capacity</code>, and <code>into_bytes</code>; the <code>f32</code> methods use element counts. Mixing a span pointer with the count from another allocation, omitting the declared pairing, reusing a mutable span, or allowing it to escape the <code>unsafe:</code> region is rejected. The current bounded representation is intentionally byte and <code>f32</code> only; it is not a generic raw-pointer escape hatch.</p>
 <h2 id="associate-one-release-operation-with-an-opaque-resource">Associate one release operation with an opaque resource<a class="headerlink" href="#associate-one-release-operation-with-an-opaque-resource" title="Permanent link">&para;</a></h2>
 <p>Declare a resource once, name the exact native opaque type, and associate it with the binding symbol that consumes it:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="n">binding</span> <span class="nc">Fixture</span><span class="p">:</span>
@@ -8870,6 +8996,14 @@
     <span class="n">updated_attempts</span> <span class="o">=</span> <span class="n">attempts</span><span class="o">.</span><span class="nb">take</span><span class="p">()</span>
 </code></pre></div>
 <p><code>c.Out[...]</code> can be read only on an outcome that declares it initialized. <code>c.InOut[...]</code> begins initialized and is readable after a call unless an outcome explicitly invalidates it. Neither slot can be returned from a safe façade or reused for a second raw call.</p>
+<h2 id="convert-text-at-the-boundary-not-to-a-raw-pointer">Convert text at the boundary, not to a raw pointer<a class="headerlink" href="#convert-text-at-the-boundary-not-to-a-raw-pointer" title="Permanent link">&para;</a></h2>
+<p>Use <code>c.cstr(value)?</code> when a checked declaration takes exactly <code>c.ConstPtr[c.c_char]</code>. It rejects interior NUL values and the compiler keeps its private storage alive across the raw call:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">sqlite_version</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="n">unsafe</span><span class="p">:</span>
+        <span class="n">view</span> <span class="o">=</span> <span class="nc">SQLite</span><span class="o">.</span><span class="n">library_version</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">view</span><span class="o">.</span><span class="n">copy_utf8</span><span class="p">(</span><span class="n">max_bytes</span><span class="o">=</span><span class="mi">256</span><span class="p">)</span>
+</code></pre></div>
+<p>A <code>c.ConstPtr[c.c_char]</code> result is a scoped view. It has no public pointer API: call <code>copy_utf8(max_bytes=...)</code> immediately inside the same <code>unsafe:</code> region to receive an owned <code>str</code>. The argument must be named and positive, and the conversion validates a terminator and UTF-8 within that bound. Do not return, store, capture, or forward <code>view</code>; spans, mutable buffers, and zero-copy returned views are not part of this foundation.</p>
 <h2 id="declare-constants-and-a-plain-layout">Declare constants and a plain layout<a class="headerlink" href="#declare-constants-and-a-plain-layout" title="Permanent link">&para;</a></h2>
 <p>Use a binding enum for a C macro or named constant. Every variant uses the same explicit C scalar carrier:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="n">binding</span> <span class="nc">Fixture</span><span class="p">:</span>
@@ -8911,6 +9045,7 @@
 <span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;fixture&quot;</span>
 <span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;static&quot;</span>
 <span class="n">path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;interop/lib/libfixture.a&quot;</span>
+<span class="n">origin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;https://example.invalid/fixture&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">revision</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;v1.0.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">license</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;MIT&quot;</span><span class="w"> </span><span class="p">}</span>
 
 <span class="k">[[oven.interop.targets.artifacts]]</span>
 <span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;foundation&quot;</span>
@@ -8924,10 +9059,10 @@
 <span class="n">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;interop/include/bridge.h&quot;</span><span class="p">]</span>
 <span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;fixture_bridge&quot;</span>
 </code></pre></div>
-<p><code>static</code> artifacts name a package-owned archive. <code>bundled</code> artifacts name a package-owned dynamic library or framework and must also specify its <code>runtime-name</code>, <code>placement</code>, and <code>minimum-platform</code>. <code>system</code> artifacts instead name a required toolchain or SDK capability. Shims may be authored in C or C++, but Oven will expose C++ only behind the shim's bounded C contract.</p>
+<p><code>static</code> artifacts name a package-owned archive. <code>bundled</code> artifacts name a package-owned dynamic library or framework and must also specify its <code>runtime-name</code>, <code>placement</code>, and <code>minimum-platform</code>. Static and bundled artifacts may record an upstream HTTPS source, exact revision, and license in <code>origin</code>; that provenance is sealed with the selected plan, but it is not a download instruction or publication admission. <code>system</code> artifacts instead name a required toolchain or SDK capability. Shims may be authored in C or C++, but Oven exposes C++ only behind the shim's bounded C contract. The explicit Oven Alpha baker seals locked static inputs and selected C/C++ shim output archives into one direct-<code>rustc</code> plan, retaining bundled artifacts and selected system/framework capabilities in its immutable provenance.</p>
 <p>The target triple still names the CPU and operating-system identity. A mobile <code>platform</code> table supplies the additional version constraint that later ABI verification and a platform packager require. <code>kind = "android"</code> is valid only for <code>aarch64-linux-android</code>; it requires the <code>android</code> SDK capability and an <code>api-level</code> of 21 or later. <code>kind = "ios"</code> is valid only for <code>aarch64-apple-ios</code>; it requires the <code>iphoneos</code> SDK capability and a numeric <code>major.minor</code> <code>deployment-target</code>. These are package requirements, not paths or a record of the concrete SDK that Oven has selected.</p>
 <p>Every declared package file must be a regular, normalized relative path. Running <code>incan lock</code> hashes the exact header, artifact, and shim-source bytes into the semantic lock state with the target, compatibility requirements, definitions, and capability requirements. Changing any declared input makes the lock stale; relocating an unchanged package does not change these package-relative entries.</p>
-<p>The locked mobile profile records a package target constraint, not a local-toolchain selection. It preserves the Android API level or iOS deployment target that a future managed toolchain must use without embedding an NDK directory, Xcode path, Gradle configuration, or signing credential in the package.</p>
+<p>The locked mobile profile records a package target constraint, not a local-toolchain selection. It preserves the Android API level or iOS deployment target that the explicit Oven selection must use without embedding an NDK directory, Xcode path, Gradle configuration, or signing credential in the package.</p>
 <h2 id="check-a-declared-mobile-abi-target">Check a declared mobile ABI target<a class="headerlink" href="#check-a-declared-mobile-abi-target" title="Permanent link">&para;</a></h2>
 <p><code>incan check</code> verifies checked C declarations against the compiler host by default. Pass <code>--interop-target</code> to select exactly one target declared by the current package instead:</p>
 <div class="language-sh highlight"><pre><span></span><code><span class="nv">INCAN_C_ABI_CLANG</span><span class="o">=</span>/path/to/aarch64-linux-android34-clang<span class="w"> </span><span class="se">\</span>
@@ -8938,8 +9073,19 @@
 <p>After locking, inspect the same target requirements as a deterministic platform handoff:</p>
 <div class="language-sh highlight"><pre><span></span><code>incan<span class="w"> </span>inspect<span class="w"> </span>interop-plan<span class="w"> </span>--target<span class="w"> </span>aarch64-linux-android<span class="w"> </span>--format<span class="w"> </span>json
 </code></pre></div>
-<p>The plan gives a later Gradle or Xcode adapter consistent target, artifact, shim, and placement facts without freezing either adapter's task protocol. It is not an Oven resolution receipt or a deployable application: it contains no local SDK path, selected compiler executable, generated artifact, signing identity, licence admission, or credential.</p>
-<p>This declaration, lock, and plan slice deliberately does not download artifacts, discover a system library, compile a shim, or define a Gradle/Xcode handover protocol. Oven will resolve the requirements, select concrete compiler and SDK installations, build shims, cache outputs, and record those choices in its own receipt or store. Do not put signing, provenance admission, or license policy here: publication policy belongs to <code>incan.pub</code>.</p>
+<p>The plan gives an Oven, Gradle, or Xcode adapter consistent target, artifact, shim, and placement facts without freezing either adapter's task protocol. It is not an Oven resolution receipt or a deployable application: it contains no local SDK path, selected compiler executable, generated artifact, signing identity, licence admission, or credential.</p>
+<p>Use the explicit v0.5 baker after the package lock is current. First materialize the package's sealed base runtime Loafs; this writes the release receipt without selecting an interop execution receipt, so it is the required first half of an interop bake:</p>
+<div class="language-sh highlight"><pre><span></span><code>incan<span class="w"> </span>oven<span class="w"> </span>bake<span class="w"> </span>--project<span class="w"> </span>.
+</code></pre></div>
+<p>Then bake the checked package inputs against that release receipt:</p>
+<div class="language-sh highlight"><pre><span></span><code>incan<span class="w"> </span>oven<span class="w"> </span>interop<span class="w"> </span>bake<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--project<span class="w"> </span>.<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--target<span class="w"> </span>aarch64-linux-android<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--base-receipt<span class="w"> </span>.incan/oven/receipt.json<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--c-compiler<span class="w"> </span>/path/to/aarch64-linux-android-clang<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--archiver<span class="w"> </span>/path/to/llvm-ar
+</code></pre></div>
+<p>The baker does not download artifacts, discover a system library, or define a Gradle/Xcode handover protocol. It verifies locked package-owned inputs, compiles C/C++ shims, seals static link archives, and retains bundled runtime files, declared artifact provenance, and explicit system capabilities in its selected receipt-bound plan. A subsequent <code>incan oven interop stage</code> creates only a fixed consumer layout; final application assembly, signing, provenance admission, and license policy remain outside this command boundary.</p>
 <h2 id="interpret-common-failures">Interpret common failures<a class="headerlink" href="#interpret-common-failures" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -8972,6 +9118,10 @@
 <tr>
 <td>C resource was transferred or requires a mutable borrow</td>
 <td>Do not reuse a resource passed as <code>c.Owned[...]</code>; bind it as <code>mut</code> before a call declared <code>c.BorrowedMut[...]</code>.</td>
+</tr>
+<tr>
+<td><code>copy_utf8</code> is rejected</td>
+<td>Keep it inside the owning <code>unsafe:</code> region and write a named positive bound, for example <code>view.copy_utf8(max_bytes=4096)</code>.</td>
 </tr>
 <tr>
 <td>Missing system library at final link</td>

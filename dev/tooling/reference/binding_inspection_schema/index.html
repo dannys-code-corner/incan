@@ -6536,6 +6536,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#binding-use-receipt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binding-use receipt
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#compatibility" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8579,6 +8590,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#binding-use-receipt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binding-use receipt
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#compatibility" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8611,15 +8633,17 @@
 
 <h1 id="binding-inspection-json-schema">Binding inspection JSON schema<a class="headerlink" href="#binding-inspection-json-schema" title="Permanent link">&para;</a></h1>
 <p>This page specifies the schema-versioned output of <code>incan inspect bindings --format json</code>. Use the <a href="../../how-to/inspect_checked_c_bindings/">inspection how-to</a> to review a binding from the terminal and the <a href="../cli_reference/#incan-inspect-bindings">CLI reference</a> for command options.</p>
-<p>The top-level report has <code>schema_version: 1</code> and one <code>bindings</code> array:</p>
+<p>The top-level report has <code>schema_version: 2</code> and one <code>bindings</code> array:</p>
 <div class="language-json highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;bindings&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
 <span class="w">      </span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;sqlite&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;identity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sha256:checked-descriptor-digest&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;SQLite&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;header&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sqlite3.h&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;system_library&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sqlite3&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;link_capability&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;system_library&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="nt">&quot;file&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/workspace/src/sqlite.incn&quot;</span><span class="p">,</span>
 <span class="w">        </span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
@@ -8654,6 +8678,11 @@
 <td>Logical module path containing the declaration.</td>
 </tr>
 <tr>
+<td><code>identity</code></td>
+<td>string</td>
+<td>Compiler digest of the complete checked descriptor contract. It excludes source spans and source-file locations, but includes the declared header spelling; use a portable header spelling when the identity must survive relocation. It changes when an ABI-affecting declaration fact changes.</td>
+</tr>
+<tr>
 <td><code>name</code></td>
 <td>string</td>
 <td>Binding name visible to Incan source.</td>
@@ -8666,7 +8695,12 @@
 <tr>
 <td><code>system_library</code></td>
 <td>string</td>
-<td>Logical system-library capability named by <code>c.system_library(...)</code>.</td>
+<td>Stable historical field for the logical native link name. Its interpretation is qualified by <code>link_capability</code>.</td>
+</tr>
+<tr>
+<td><code>link_capability</code></td>
+<td>string</td>
+<td>Exact checked link kind: <code>system_library</code> for <code>c.system_library(...)</code>, or <code>framework</code> for <code>c.framework(...)</code>.</td>
 </tr>
 <tr>
 <td><code>source</code></td>
@@ -8695,7 +8729,7 @@
 </tr>
 </tbody>
 </table>
-<p>Each resource has <code>name</code>, <code>native</code>, and <code>release</code> strings. Each symbol has its Incan <code>name</code>, native linker spelling in <code>native</code>, named <code>parameters</code>, structural <code>return_type</code>, and declared <code>outcomes</code>. An outcome contains the binding-local result spelling and the output-position names in <code>initializes</code>, <code>updates</code>, and <code>invalidates</code>.</p>
+<p>Each resource has <code>name</code>, <code>native</code>, and <code>release</code> strings. Each symbol has its Incan <code>name</code>, native linker spelling in <code>native</code>, named <code>parameters</code>, structural <code>return_type</code>, descriptor-owned <code>buffers</code>, and declared <code>outcomes</code>. A buffer record has <code>pointer_parameter</code>, <code>length_parameter</code>, and exact scalar <code>element</code> spelling; it records a checked span association rather than a guessed relationship from names or generated Rust. An outcome contains the binding-local result spelling and the output-position names in <code>initializes</code>, <code>updates</code>, and <code>invalidates</code>.</p>
 <p>An enum has a binding-local <code>name</code>, a canonical scalar <code>carrier</code>, and <code>variants</code> containing Incan <code>name</code> and C constant <code>native</code> spellings. A structure has a binding-local <code>name</code>, its C spelling in <code>native</code>, and named structural <code>fields</code>.</p>
 <h2 id="structural-types">Structural types<a class="headerlink" href="#structural-types" title="Permanent link">&para;</a></h2>
 <p>Types use a <code>kind</code> discriminator and preserve the checked C vocabulary rather than generated-Rust text:</p>
@@ -8747,8 +8781,53 @@
 </table>
 <h2 id="source-spans">Source spans<a class="headerlink" href="#source-spans" title="Permanent link">&para;</a></h2>
 <p>The <code>source</code> object carries <code>file</code>, inclusive <code>start</code> and exclusive <code>end</code> byte offsets, and 1-based <code>start_line</code>, <code>start_column</code>, <code>end_line</code>, and <code>end_column</code> positions. Consumers should retain both coordinate forms: byte offsets anchor the inspected source buffer, while line and column values are appropriate for display.</p>
+<h2 id="binding-use-receipt">Binding-use receipt<a class="headerlink" href="#binding-use-receipt" title="Permanent link">&para;</a></h2>
+<p><code>incan inspect bindings --format receipt</code> is a separate, redaction-safe JSON contract with <code>schema_version: 2</code>. It contains no source anchors, header spellings, package paths, argument values, native bytes, or process-local addresses:</p>
+<div class="language-json highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;compatibility&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;binding_contract&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact_descriptor_identity&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;target_contract&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact_locked_target_identity&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;aarch64-apple-darwin&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;locked_target_identity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sha256:locked-target-digest&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;selected_execution_identity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sha256:optional-selected-receipt&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;bindings&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;sqlite&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;SQLite&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;identity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sha256:checked-descriptor-digest&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;target_artifacts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;sqlite&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;calls&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;binding_identity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sha256:checked-descriptor-digest&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;symbol&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sqlite3_open_v2&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;open_database&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;visibility&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;private&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;facades&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;facade&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;open&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;visibility&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;public&quot;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;bridge&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;open_database&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;visibility&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;private&quot;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;calls&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">&quot;binding_identity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sha256:checked-descriptor-digest&quot;</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">&quot;symbol&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sqlite3_open_v2&quot;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">      </span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>compatibility.binding_contract</code> is always <code>exact_descriptor_identity</code>: v0.5 treats any descriptor identity change as an ABI or ownership contract change. With <code>--target</code>, <code>compatibility.target_contract</code> is <code>exact_locked_target_identity</code>: a changed locked target identity is a changed selected target/artifact contract. The policy is intentionally exact until a future compiler-owned compatibility classifier can prove a narrower safe relation.</p>
+<p><code>target</code> is omitted without <code>--target</code>. With a target, <code>locked_target_identity</code> is the portable digest of the exact canonical locked target requirements. <code>selected_execution_identity</code> is present only when a current selected Oven interop execution receipt already exists and validates against that target. <code>target_artifacts</code> is present only when the selected target explicitly maps that exact checked module/name pair to declared artifact names; it is not inferred from a header, a library name, generated Rust, or a path. A call's <code>owner</code> is omitted when compiler checking cannot retain a named function owner; consumers must not infer one from source layout or naming. A <code>facades</code> entry is emitted only when the typechecker proves that a public function directly calls a private function in the same module and that bridge owns one or more checked raw calls. It lists the bridge's identity-linked raw calls, but does not infer transitive, imported, re-exported, method, or whole-package relationships.</p>
+<p>The receipt establishes checked declaration and direct-call usage, compiler-proven direct façade-to-bridge edges, and optionally joins them to a target selection. When the package explicitly declares a correspondence, it reports the selected artifact names for that exact compiler-checked binding. It does <strong>not</strong> infer or report a generated bridge implementation, linker invocation, physical artifact path, or platform package.</p>
 <h2 id="compatibility">Compatibility<a class="headerlink" href="#compatibility" title="Permanent link">&para;</a></h2>
-<p>Consumers must check <code>schema_version</code> before interpreting the report. Schema version 1 is a strict declaration projection from a successful compilation analysis. It does not contain a reusable target-verification receipt, resolved Oven artifact plan, generated bridge/façade relationship, or editor index.</p>
+<p>Consumers must check <code>schema_version</code> before interpreting the report. The declaration report and binding-use receipt are separately versioned; both currently use version 2. They are strict projections from a successful compilation analysis. Fields may be added additively within the same schema version; consumers must ignore fields they do not recognize. They do not contain a reusable target-verification receipt, resolved Oven artifact plan, generated bridge implementation, whole-package facade classification, or editor index.</p>
 
 
 
