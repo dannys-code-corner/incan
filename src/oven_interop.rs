@@ -446,7 +446,7 @@ pub struct InteropBindingArtifact {
 pub enum InteropArtifactKind {
     /// An archive linked directly into the generated product.
     Static,
-    /// A dynamic library or framework staged for a platform packager.
+    /// A dynamic library or framework sealed for receipt-bound execution and platform packaging.
     Bundled,
     /// A library or framework supplied by the resolved SDK or toolchain capability.
     System,

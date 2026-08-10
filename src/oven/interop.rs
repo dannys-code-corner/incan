@@ -39,12 +39,12 @@ pub(crate) const OVEN_INTEROP_EXECUTION_PROVENANCE_SCHEMA_VERSION: u32 = 3;
 /// receipt-compatible entry as reusable. Normal commands reconstruct this same input from the selected receipt.
 pub(crate) const OVEN_INTEROP_PLAN_SCHEMA_INPUT: &str = "oven-interop-plan-schema";
 /// Current immutable final-plan materialization contract.
-const OVEN_INTEROP_PLAN_SCHEMA: &str = "2";
+const OVEN_INTEROP_PLAN_SCHEMA: &str = "3";
 /// Receipt input key that binds a normal consumer to one selected native-execution contract.
 pub(crate) const OVEN_INTEROP_EXECUTION_RECEIPT_INPUT: &str = "oven-interop-execution-receipt";
 /// Store-owned directory containing static archives baked from declared interop shims or artifacts.
 pub(crate) const OVEN_INTEROP_NATIVE_DIRECTORY: &str = "interop-native";
-/// Store-owned directory containing locked bundled runtime files for a later target packager.
+/// Store-owned directory containing locked bundled runtime files for direct execution or a target packager.
 pub(crate) const OVEN_INTEROP_BUNDLED_DIRECTORY: &str = "interop-bundled";
 /// Store-owned provenance file that records the selected interop execution contract without local paths.
 pub(crate) const OVEN_INTEROP_EXECUTION_PROVENANCE_PATH: &str = "provenance/interop-execution.json";
@@ -138,7 +138,7 @@ pub(crate) struct OvenInteropExecutionProvenance {
     pub(crate) receipt: OvenInteropExecutionReceipt,
     /// Every archive available to direct Rustc through the plan's one native search directory.
     pub(crate) archives: Vec<OvenInteropBakedArchive>,
-    /// Every bundled runtime file retained for a later target-native packaging adapter.
+    /// Every bundled runtime file retained for receipt-bound direct execution or a target-native packaging adapter.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) bundles: Vec<OvenInteropBakedBundle>,
     /// Explicit target-native capabilities selected from the locked declaration without a package file hand-off.
@@ -253,7 +253,7 @@ pub(crate) struct OvenInteropNativeBake {
     pub(crate) plan_identity: String,
     /// Logical names of the copied static archives and compiled shim archives available to direct Rustc.
     pub(crate) archive_names: Vec<String>,
-    /// Logical names of locked bundled runtime files retained for a later target-native packaging adapter.
+    /// Logical names of locked bundled runtime files available to direct execution and target-native packaging.
     pub(crate) bundle_names: Vec<String>,
     /// Whether an already verified final plan was reused without starting a native tool.
     pub(crate) reused: bool,
@@ -370,9 +370,10 @@ pub(crate) fn validate_interop_execution_receipt(
 
 /// Combine a selected compiler runtime closure with interop-native archive evidence into one final Rustc plan.
 ///
-/// `base` is only a publisher input. The returned plan keeps its full runtime closure, adds one sealed native search
-/// directory, and includes a small provenance file as a regular digest-verified supporting artifact. Consumers see
-/// only the returned plan under the final receipt, preventing a native-only overlay from competing with its runtime.
+/// `base` is only a publisher input. The returned plan keeps its full runtime closure, adds sealed static and bundled
+/// native search directories, and includes a small provenance file as a regular digest-verified supporting artifact.
+/// Consumers see only the returned plan under the final receipt, preventing a native-only overlay from competing
+/// with its runtime.
 pub(crate) fn bind_interop_native_archives(
     base: &OvenRustcArtifactManifest,
     final_intent: &OvenBuildIntent,
@@ -490,6 +491,14 @@ pub(crate) fn bind_interop_native_archives(
         });
     }
     for bundle in &bundles {
+        // A bundled runtime is still selected only through this final receipt and its digest-verified supporting
+        // artifact. Giving Rustc its sealed parent directory lets a checked binding link that declared runtime
+        // directly; it never turns a mutable package directory into a native search path. The same stored file
+        // remains available to Android/iOS adapter staging below.
+        let native_search_path = format!("{OVEN_INTEROP_BUNDLED_DIRECTORY}/{}", bundle.name);
+        if !plan.native_search_paths.iter().any(|path| path == &native_search_path) {
+            plan.native_search_paths.push(native_search_path);
+        }
         if plan
             .supporting_artifacts
             .iter()
@@ -1264,9 +1273,9 @@ fn copy_locked_static_archives(
 
 /// Copy every package-declared bundled runtime file after rechecking its locked path and digest.
 ///
-/// Bundled inputs are not added to the direct-Rustc native search path. They remain digest-verified supporting
-/// artifacts in the same final plan so a Gradle/Xcode adapter can consume the selected receipt rather than rereading
-/// mutable package inputs.
+/// Bundled inputs become digest-verified supporting artifacts and sealed direct-Rustc native search directories in
+/// the same final plan. Direct linking therefore receives only the receipt-selected store copy, while a Gradle/Xcode
+/// adapter can stage that identical immutable file without rereading mutable package inputs.
 fn copy_locked_bundled_artifacts(
     project_root: &Path,
     target: &LockedInteropTarget,
@@ -1719,7 +1728,7 @@ fn digest_serialized(value: &impl Serialize, label: &str) -> Result<String, Stri
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use super::selected_interop_toolchain_identity;
     use super::{
         OVEN_INTEROP_ADAPTER_MANIFEST_PATH, OVEN_INTEROP_EXECUTION_PROVENANCE_PATH, OVEN_INTEROP_NATIVE_DIRECTORY,
@@ -1732,10 +1741,10 @@ mod tests {
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenRustcSupportingArtifact,
     };
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use crate::oven::rustc::{
-        OvenStoredDirectRustcRunRequest, bake_stored_direct_rustc_run, resolve_active_rustc, rustc_identity,
-        select_direct_rustc_plan_for_execution,
+        OvenStoredDirectRustcRunRequest, bake_stored_direct_rustc_run, resolve_active_rustc, rustc_host_target,
+        rustc_identity, select_direct_rustc_plan_for_execution,
     };
     use crate::oven::store::{
         OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreLimits,
@@ -1749,7 +1758,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     use std::path::Path;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use std::process::Command;
 
     fn selected(capability: &str, version: &str, identity: &str) -> OvenInteropCapabilitySelection {
@@ -1845,7 +1854,7 @@ mod tests {
         let inputs = interop_execution_build_unit_inputs(&receipt);
         assert_eq!(inputs.len(), 2);
         assert_eq!(inputs.get("oven-interop-execution-receipt"), Some(&receipt.identity));
-        assert_eq!(inputs.get("oven-interop-plan-schema"), Some(&"2".to_string()));
+        assert_eq!(inputs.get("oven-interop-plan-schema"), Some(&"3".to_string()));
 
         let mut changed = target;
         changed.shims[0].sources[0].digest = "sha256:changed-source".to_string();
@@ -3258,6 +3267,509 @@ fn main() {
         })?;
         assert!(!direct.cargo_process_started);
         assert!(Command::new(&direct.output).status()?.success());
+        Ok(())
+    }
+
+    /// Prove a declared bundled dylib remains linkable and runnable from its selected immutable plan.
+    ///
+    /// This compact CI-safe regression exercises the same path as a mobile runtime: the package owns a dynamic
+    /// artifact and a narrow C bridge, Oven seals both under one receipt, direct Rustc links only the store copy,
+    /// and the binary executes after inherited dynamic-loader paths are removed. The recorded rpath is necessary
+    /// because a store identity contains `sha256:`, which cannot be transported through colon-separated Unix loader
+    /// environment variables.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn selected_host_c_compiler_bakes_a_bundled_dynamic_library_for_direct_rustc_execution_without_cargo()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let include = project.path().join("interop/include");
+        let library_root = project.path().join("interop/lib");
+        fs::create_dir_all(&include)?;
+        fs::create_dir_all(&library_root)?;
+        let header = include.join("fixture_runtime.h");
+        fs::write(&header, "int fixture_runtime_answer(void);\n")?;
+        let runtime_source = project.path().join("interop/fixture_runtime.c");
+        fs::write(&runtime_source, "int fixture_runtime_answer(void) { return 42; }\n")?;
+        let runtime_name = if cfg!(target_os = "macos") {
+            "libfixture_runtime.dylib"
+        } else {
+            "libfixture_runtime.so"
+        };
+        let runtime = library_root.join(runtime_name);
+        let mut runtime_command = Command::new("/usr/bin/cc");
+        if cfg!(target_os = "macos") {
+            runtime_command.args(["-dynamiclib", "-Wl,-install_name,@rpath/libfixture_runtime.dylib"]);
+        } else {
+            runtime_command.args(["-shared", "-fPIC", "-Wl,-soname,libfixture_runtime.so"]);
+        }
+        let runtime_output = runtime_command.arg(&runtime_source).arg("-o").arg(&runtime).output()?;
+        if !runtime_output.status.success() {
+            return Err(format!(
+                "could not compile bundled runtime fixture: {}",
+                String::from_utf8_lossy(&runtime_output.stderr)
+            )
+            .into());
+        }
+        let shim_source = "#include <fixture_runtime.h>\nint incan_fixture_runtime_answer(void) { return fixture_runtime_answer(); }\n";
+        fs::write(project.path().join("interop/fixture_bridge.c"), shim_source)?;
+        let generated = project.path().join("generated.rs");
+        fs::write(
+            &generated,
+            r#"
+#[link(name = "fixture_bridge", kind = "static")]
+unsafe extern "C" {
+    fn incan_fixture_runtime_answer() -> i32;
+}
+#[link(name = "fixture_runtime", kind = "dylib")]
+unsafe extern "C" {}
+
+fn main() {
+    if unsafe { incan_fixture_runtime_answer() } != 42 {
+        std::process::exit(1);
+    }
+}
+"#,
+        )?;
+        let rustc = resolve_active_rustc()?;
+        let base_receipt = receipt_generated_project(
+            &OvenGeneratedProjectRequest::new(
+                project.path(),
+                "interop-bundled-dylib-runtime",
+                "0.1.0",
+                rustc_host_target(&rustc)?,
+                rustc_identity(&rustc)?,
+                "debug",
+                Vec::new(),
+            )
+            .with_generated_source("generated-root", &generated),
+        )?;
+        let store = OvenStore::new(
+            project.path().join("oven-store"),
+            OvenStoreLimits::new(128 * 1024 * 1024, 128 * 1024 * 1024, 128 * 1024 * 1024),
+        );
+        store.publish(&OvenArtifactPublishRequest {
+            receipt: base_receipt.clone(),
+            domain: "runtime".to_string(),
+            kind: OvenArtifactKind::DirectRustcPlan,
+            payload: serde_json::to_vec(&base_plan(base_receipt.intent.clone()))?,
+            materialized_files: Vec::new(),
+        })?;
+        let target = LockedInteropTarget {
+            target: base_receipt.intent.target.clone(),
+            toolchain: Some(CapabilityRequirement {
+                capability: "host-c-compiler".to_string(),
+                version: Some(">=1, <2".to_string()),
+            }),
+            sdk: None,
+            platform: None,
+            definitions: Vec::new(),
+            headers: vec![LockedInteropInput {
+                path: "interop/include/fixture_runtime.h".to_string(),
+                digest: digest_bytes(&fs::read(&header)?),
+            }],
+            artifacts: vec![LockedInteropArtifact {
+                name: "fixture_runtime".to_string(),
+                kind: InteropArtifactKind::Bundled,
+                input: Some(LockedInteropInput {
+                    path: format!("interop/lib/{runtime_name}"),
+                    digest: digest_bytes(&fs::read(&runtime)?),
+                }),
+                origin: Some(InteropArtifactOrigin {
+                    source: "https://example.invalid/incan-fixture-runtime".to_string(),
+                    revision: "fixture-v1".to_string(),
+                    license: "LicenseRef-IncanFixture".to_string(),
+                }),
+                capability: None,
+                runtime_name: Some(runtime_name.to_string()),
+                placement: Some("runtime".to_string()),
+                minimum_platform: Some("14.0".to_string()),
+                dependencies: Vec::new(),
+            }],
+            bindings: Vec::new(),
+            shims: vec![LockedInteropShim {
+                name: "fixture-runtime-bridge".to_string(),
+                language: crate::oven_interop::InteropShimLanguage::C,
+                sources: vec![LockedInteropInput {
+                    path: "interop/fixture_bridge.c".to_string(),
+                    digest: digest_bytes(shim_source.as_bytes()),
+                }],
+                headers: vec![LockedInteropInput {
+                    path: "interop/include/fixture_runtime.h".to_string(),
+                    digest: digest_bytes(&fs::read(&header)?),
+                }],
+                output: "fixture_bridge".to_string(),
+            }],
+        };
+        let selected_toolchain_identity = selected_interop_toolchain_identity(
+            &target,
+            Some(Path::new("/usr/bin/cc")),
+            None,
+            Some(Path::new("/usr/bin/ar")),
+        )?;
+        let execution_receipt = receipt_interop_execution(
+            &target,
+            Some(selected("host-c-compiler", "1.0.0", &selected_toolchain_identity)),
+            None,
+        )?;
+        let baked = bake_interop_native_plan(OvenInteropNativeBakeRequest {
+            store: &store,
+            project_root: project.path(),
+            target: &target,
+            base_receipt: &base_receipt,
+            execution_receipt: &execution_receipt,
+            c_compiler: Some(Path::new("/usr/bin/cc")),
+            cxx_compiler: None,
+            archiver: Some(Path::new("/usr/bin/ar")),
+            sdk_root: None,
+            sdk_identity_file: None,
+        })?;
+        assert_eq!(baked.bundle_names, ["fixture_runtime"]);
+        let direct = bake_stored_direct_rustc_run(&OvenStoredDirectRustcRunRequest {
+            store: &store,
+            plan_identity: baked.plan_identity,
+            receipt: baked.receipt,
+            rustc,
+            source: generated,
+            output: project.path().join("oven-linked-fixture-runtime"),
+            crate_name: "oven_linked_fixture_runtime".to_string(),
+            edition: "2024".to_string(),
+            source_evidence_key: "generated-root".to_string(),
+        })?;
+        assert!(!direct.cargo_process_started);
+        let status = Command::new(&direct.output)
+            .env_remove("DYLD_LIBRARY_PATH")
+            .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
+            .env_remove("LD_LIBRARY_PATH")
+            .status()?;
+        assert!(status.success());
+        Ok(())
+    }
+
+    /// Prove the official TensorFlow Lite C runtime is sealed, linked, and executed without a Cargo consumer.
+    ///
+    /// The supplied source and Bazel output roots are maintainer-selected evidence inputs. This test rejects a
+    /// substituted revision or runtime/model byte stream, copies the complete public header closure consumed by
+    /// `tensorflow/lite/c/c_api.h` into a temporary package, and records every package input in the final receipt.
+    /// The runtime remains a `bundled` deployment artifact: its one receipt-selected store copy is both linkable by
+    /// direct Rustc and available to a later Apple/Android adapter without accepting an ambient SDK location.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires explicitly supplied official TensorFlow source and TensorFlow Lite C build directories"]
+    fn tensorflow_lite_c_api_lifecycle_is_baked_linked_and_run_from_declared_artifacts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const TENSORFLOW_REVISION: &str = "72fbba3d20f4616d7312b5e2b7f79daf6e82f2fa";
+        const TFLITE_C_DYLIB_DIGEST: &str = "sha256:4a114deb76878061125c3bd3cf0751dfe495ba4a624e2571c398eee97e6029a8";
+        const ADD_MODEL_DIGEST: &str = "sha256:038f8d317c07b094e3b7d0c7aba60a3d9e441eb4188c8515920108b963c3873d";
+        let source_root = required_real_library_directory("INCAN_TEST_TFLITE_SOURCE")?;
+        let build_root = required_real_library_directory("INCAN_TEST_TFLITE_BUILD")?;
+        let revision_output = Command::new("git")
+            .arg("-C")
+            .arg(&source_root)
+            .args(["rev-parse", "HEAD"])
+            .output()?;
+        if !revision_output.status.success() {
+            return Err(format!(
+                "could not read the selected TensorFlow source revision from {}: {}",
+                source_root.display(),
+                String::from_utf8_lossy(&revision_output.stderr)
+            )
+            .into());
+        }
+        let actual_revision = String::from_utf8(revision_output.stdout)?;
+        if actual_revision.trim() != TENSORFLOW_REVISION {
+            return Err(format!(
+                "TensorFlow source revision must be {TENSORFLOW_REVISION}, found {}",
+                actual_revision.trim()
+            )
+            .into());
+        }
+        let clean_output = Command::new("git")
+            .arg("-C")
+            .arg(&source_root)
+            .args(["diff", "--quiet"])
+            .status()?;
+        if !clean_output.success() {
+            return Err(format!("TensorFlow source {} has tracked modifications", source_root.display()).into());
+        }
+
+        let project = tempfile::tempdir()?;
+        let include = project.path().join("interop/include");
+        let library_root = project.path().join("interop/lib");
+        let model_root = project.path().join("interop/models");
+        fs::create_dir_all(&include)?;
+        fs::create_dir_all(&library_root)?;
+        fs::create_dir_all(&model_root)?;
+        let declared_headers = [
+            "tensorflow/lite/c/c_api.h",
+            "tensorflow/lite/core/c/c_api.h",
+            "tensorflow/lite/builtin_ops.h",
+            "tensorflow/lite/core/async/c/types.h",
+            "tensorflow/lite/core/c/c_api_types.h",
+            "tensorflow/compiler/mlir/lite/core/c/tflite_types.h",
+            "tensorflow/lite/core/c/operator.h",
+        ];
+        let mut locked_headers = Vec::with_capacity(declared_headers.len());
+        for source_relative in declared_headers {
+            let source = source_root.join(source_relative);
+            if !source.is_file() {
+                return Err(format!("TensorFlow source has no public C API header: {}", source.display()).into());
+            }
+            let destination = include.join(source_relative);
+            let parent = destination
+                .parent()
+                .ok_or_else(|| format!("TensorFlow header destination {} has no parent", destination.display()))?;
+            fs::create_dir_all(parent)?;
+            fs::copy(&source, &destination)?;
+            locked_headers.push(LockedInteropInput {
+                path: format!("interop/include/{source_relative}"),
+                digest: digest_bytes(&fs::read(&destination)?),
+            });
+        }
+        let header_root = include.join("incan_tflite_header_root.h");
+        fs::write(&header_root, "#include \"tensorflow/lite/c/c_api.h\"\n")?;
+        locked_headers.push(LockedInteropInput {
+            path: "interop/include/incan_tflite_header_root.h".to_string(),
+            digest: digest_bytes(&fs::read(&header_root)?),
+        });
+        let runtime_source = build_root.join("tensorflow/lite/c/libtensorflowlite_c.dylib");
+        if !runtime_source.is_file() {
+            return Err(format!(
+                "TensorFlow Lite C build has no declared runtime: {}",
+                runtime_source.display()
+            )
+            .into());
+        }
+        if digest_bytes(&fs::read(&runtime_source)?) != TFLITE_C_DYLIB_DIGEST {
+            return Err("TensorFlow Lite C runtime digest does not match the pinned official build evidence".into());
+        }
+        let runtime = library_root.join("libtensorflowlite_c.dylib");
+        fs::copy(&runtime_source, &runtime)?;
+        let model_source = source_root.join("tensorflow/lite/testdata/add.bin");
+        if !model_source.is_file() {
+            return Err(format!("TensorFlow source has no add-model fixture: {}", model_source.display()).into());
+        }
+        if digest_bytes(&fs::read(&model_source)?) != ADD_MODEL_DIGEST {
+            return Err("TensorFlow Lite add-model digest does not match the pinned official source evidence".into());
+        }
+        let model = model_root.join("add.bin");
+        fs::copy(&model_source, &model)?;
+
+        let shim_source = r#"
+#include "tensorflow/lite/c/c_api.h"
+
+int incan_tflite_add_cycle(const char *model_path) {
+    TfLiteModel *model = TfLiteModelCreateFromFile(model_path);
+    TfLiteInterpreterOptions *options = NULL;
+    TfLiteInterpreter *interpreter = NULL;
+    int result = 0;
+    int input_dims[1] = {2};
+    float input[2] = {1.0f, 3.0f};
+    float output[2] = {0.0f, 0.0f};
+    if (model == NULL) goto done;
+    options = TfLiteInterpreterOptionsCreate();
+    if (options == NULL) goto done;
+    TfLiteInterpreterOptionsSetNumThreads(options, 2);
+    interpreter = TfLiteInterpreterCreate(model, options);
+    if (interpreter == NULL) goto done;
+    TfLiteInterpreterOptionsDelete(options);
+    options = NULL;
+    if (TfLiteInterpreterAllocateTensors(interpreter) != kTfLiteOk) goto done;
+    if (TfLiteInterpreterResizeInputTensor(interpreter, 0, input_dims, 1) != kTfLiteOk) goto done;
+    if (TfLiteInterpreterAllocateTensors(interpreter) != kTfLiteOk) goto done;
+    TfLiteTensor *input_tensor = TfLiteInterpreterGetInputTensor(interpreter, 0);
+    if (input_tensor == NULL) goto done;
+    if (TfLiteTensorCopyFromBuffer(input_tensor, input, sizeof(input)) != kTfLiteOk) goto done;
+    if (TfLiteInterpreterInvoke(interpreter) != kTfLiteOk) goto done;
+    const TfLiteTensor *output_tensor = TfLiteInterpreterGetOutputTensor(interpreter, 0);
+    if (output_tensor == NULL) goto done;
+    if (TfLiteTensorCopyToBuffer(output_tensor, output, sizeof(output)) != kTfLiteOk) goto done;
+    result = output[0] == 3.0f && output[1] == 9.0f;
+done:
+    if (options != NULL) TfLiteInterpreterOptionsDelete(options);
+    if (interpreter != NULL) TfLiteInterpreterDelete(interpreter);
+    if (model != NULL) TfLiteModelDelete(model);
+    return result;
+}
+"#;
+        fs::write(project.path().join("interop/tflite_bridge.c"), shim_source)?;
+        let generated = project.path().join("generated.rs");
+        fs::write(
+            &generated,
+            r#"
+use std::ffi::CString;
+
+#[link(name = "tflite_bridge", kind = "static")]
+unsafe extern "C" {
+    fn incan_tflite_add_cycle(model_path: *const std::ffi::c_char) -> i32;
+}
+#[link(name = "tensorflowlite_c", kind = "dylib")]
+unsafe extern "C" {}
+
+fn main() {
+    let Some(model_path) = std::env::args().nth(1) else {
+        std::process::exit(2);
+    };
+    let model_path = match CString::new(model_path) {
+        Ok(model_path) => model_path,
+        Err(_) => std::process::exit(3),
+    };
+    if unsafe { incan_tflite_add_cycle(model_path.as_ptr()) } != 1 {
+        std::process::exit(1);
+    }
+}
+"#,
+        )?;
+
+        let rustc = resolve_active_rustc()?;
+        let base_receipt = receipt_generated_project(
+            &OvenGeneratedProjectRequest::new(
+                project.path(),
+                "interop-tensorflow-lite-c-api",
+                "0.1.0",
+                "aarch64-apple-darwin",
+                rustc_identity(&rustc)?,
+                "debug",
+                Vec::new(),
+            )
+            .with_generated_source("generated-root", &generated)
+            .with_generated_source("tflite-add-model", &model),
+        )?;
+        let store = OvenStore::new(
+            project.path().join("oven-store"),
+            OvenStoreLimits::new(128 * 1024 * 1024, 128 * 1024 * 1024, 128 * 1024 * 1024),
+        );
+        store.publish(&OvenArtifactPublishRequest {
+            receipt: base_receipt.clone(),
+            domain: "runtime".to_string(),
+            kind: OvenArtifactKind::DirectRustcPlan,
+            payload: serde_json::to_vec(&base_plan(base_receipt.intent.clone()))?,
+            materialized_files: Vec::new(),
+        })?;
+        let target = LockedInteropTarget {
+            target: base_receipt.intent.target.clone(),
+            toolchain: Some(CapabilityRequirement {
+                capability: "apple-clang".to_string(),
+                version: Some(">=21, <22".to_string()),
+            }),
+            sdk: None,
+            platform: None,
+            definitions: Vec::new(),
+            headers: locked_headers.clone(),
+            artifacts: vec![
+                LockedInteropArtifact {
+                    name: "tensorflowlite_c".to_string(),
+                    kind: InteropArtifactKind::Bundled,
+                    input: Some(LockedInteropInput {
+                        path: "interop/lib/libtensorflowlite_c.dylib".to_string(),
+                        digest: TFLITE_C_DYLIB_DIGEST.to_string(),
+                    }),
+                    origin: Some(InteropArtifactOrigin {
+                        source: "https://github.com/tensorflow/tensorflow".to_string(),
+                        revision: TENSORFLOW_REVISION.to_string(),
+                        license: "Apache-2.0".to_string(),
+                    }),
+                    capability: None,
+                    runtime_name: Some("libtensorflowlite_c.dylib".to_string()),
+                    placement: Some("runtime".to_string()),
+                    minimum_platform: Some("14.0".to_string()),
+                    dependencies: Vec::new(),
+                },
+                LockedInteropArtifact {
+                    name: "cxx-runtime".to_string(),
+                    kind: InteropArtifactKind::System,
+                    input: None,
+                    origin: None,
+                    capability: Some("apple.library.c++".to_string()),
+                    runtime_name: None,
+                    placement: None,
+                    minimum_platform: None,
+                    dependencies: Vec::new(),
+                },
+                LockedInteropArtifact {
+                    name: "foundation".to_string(),
+                    kind: InteropArtifactKind::System,
+                    input: None,
+                    origin: None,
+                    capability: Some("apple.framework.Foundation".to_string()),
+                    runtime_name: None,
+                    placement: None,
+                    minimum_platform: None,
+                    dependencies: Vec::new(),
+                },
+                LockedInteropArtifact {
+                    name: "objc-runtime".to_string(),
+                    kind: InteropArtifactKind::System,
+                    input: None,
+                    origin: None,
+                    capability: Some("apple.library.objc".to_string()),
+                    runtime_name: None,
+                    placement: None,
+                    minimum_platform: None,
+                    dependencies: Vec::new(),
+                },
+            ],
+            bindings: Vec::new(),
+            shims: vec![LockedInteropShim {
+                name: "tflite-c-api".to_string(),
+                language: crate::oven_interop::InteropShimLanguage::C,
+                sources: vec![LockedInteropInput {
+                    path: "interop/tflite_bridge.c".to_string(),
+                    digest: digest_bytes(shim_source.as_bytes()),
+                }],
+                headers: locked_headers,
+                output: "tflite_bridge".to_string(),
+            }],
+        };
+        let selected_toolchain_identity = selected_interop_toolchain_identity(
+            &target,
+            Some(Path::new("/usr/bin/clang")),
+            None,
+            Some(Path::new("/usr/bin/ar")),
+        )?;
+        let execution_receipt = receipt_interop_execution(
+            &target,
+            Some(selected("apple-clang", "21.0.0", &selected_toolchain_identity)),
+            None,
+        )?;
+        let baked = bake_interop_native_plan(OvenInteropNativeBakeRequest {
+            store: &store,
+            project_root: project.path(),
+            target: &target,
+            base_receipt: &base_receipt,
+            execution_receipt: &execution_receipt,
+            c_compiler: Some(Path::new("/usr/bin/clang")),
+            cxx_compiler: None,
+            archiver: Some(Path::new("/usr/bin/ar")),
+            sdk_root: None,
+            sdk_identity_file: None,
+        })?;
+        assert!(!baked.reused);
+        assert_eq!(baked.bundle_names, ["tensorflowlite_c"]);
+        assert!(baked.archive_names.contains(&"tflite_bridge".to_string()));
+        let selected_plan = select_direct_rustc_plan_for_execution(&store, &baked.receipt)?
+            .ok_or("TensorFlow Lite interop bake did not publish a selected plan")?;
+        let stored_plan = serde_json::from_slice::<OvenRustcArtifactManifest>(&selected_plan.payload)?;
+        assert!(
+            stored_plan
+                .native_search_paths
+                .contains(&"interop-bundled/tensorflowlite_c".to_string())
+        );
+        let provenance = fs::read_to_string(selected_plan.artifact_root.join(OVEN_INTEROP_EXECUTION_PROVENANCE_PATH))?;
+        assert!(provenance.contains("https://github.com/tensorflow/tensorflow"));
+        assert!(provenance.contains(TENSORFLOW_REVISION));
+        let direct = bake_stored_direct_rustc_run(&OvenStoredDirectRustcRunRequest {
+            store: &store,
+            plan_identity: baked.plan_identity,
+            receipt: baked.receipt,
+            rustc,
+            source: generated,
+            output: project.path().join("oven-linked-tensorflow-lite"),
+            crate_name: "oven_linked_tensorflow_lite".to_string(),
+            edition: "2024".to_string(),
+            source_evidence_key: "generated-root".to_string(),
+        })?;
+        assert!(!direct.cargo_process_started);
+        assert!(Command::new(&direct.output).arg(&model).status()?.success());
         Ok(())
     }
 

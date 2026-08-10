@@ -521,7 +521,8 @@ struct OvenInteropBakeReport {
     final_receipt_identity: String,
     /// Static package inputs and compiled shim outputs exposed through the plan's sealed native search path.
     archives: Vec<String>,
-    /// Locked dynamic runtime files retained as digest-verified plan artifacts for a target-native packaging adapter.
+    /// Locked dynamic runtime files retained as digest-verified plan artifacts for direct execution or a target-native
+    /// packaging adapter.
     bundles: Vec<String>,
     /// Whether this command reused an existing verified interop plan without starting a native tool.
     reused: bool,
