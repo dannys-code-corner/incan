@@ -1,6 +1,6 @@
 # RFC 116: Typed C ABI interop
 
-- **Status:** In Progress
+- **Status:** Implemented
 - **Created:** 2026-07-23
 - **Author(s):** Danny Meijer (@dannymeijer)
 - **Related:**
@@ -19,9 +19,9 @@
     - RFC 117 (`Loaf.toml` and Oven's language-neutral project model)
     - RFC 118 (Incan and Oven command-line surfaces)
 - **Issue:** [#939](https://github.com/encero-systems/incan/issues/939)
-- **RFC PR:** —
+- **RFC PR:** [#998](https://github.com/encero-systems/incan/pull/998)
 - **Written against:** v0.5
-- **Shipped in:** —
+- **Shipped in:** v0.5
 
 ## Summary
 
@@ -33,8 +33,8 @@ The v0.5 RFC 116 release contract is the currently implemented `incan.toml` `[ov
 
 The release-bound implementation is deliberately distinct from later work:
 
-- **Implemented and closed v0.5 slices:** #940 provides the checked-binding and Clang-verification foundation; #942 provides declared native artifacts, shims, and normalized locked requirement facts.
-- **Remaining v0.5 completion work:** #941 owns the resource/bounded-value acceptance closure, #943 owns final inspection, editor, and documentation projection, and the user-directed #944 native-plan and virtual-device acceptance work resolves declared requirements into selected tool and SDK receipts, bakes/stages artifacts, produces adapter inputs, and gathers virtual-device evidence. It does not reopen RFC 116's source declaration or current requirement semantics. Physical-device execution and commercial mobile-readiness claims remain outside the v0.5 criterion.
+- **Delivered v0.5 implementation:** #940 provides the checked-binding and Clang-verification foundation; #941 provides the resource and bounded-value acceptance closure; #942 provides declared native artifacts, shims, and normalized locked requirement facts; and #943 projects the checked facts through diagnostics, inspection, editor support, and documentation. The user-directed #944 native-plan and virtual-device acceptance work resolves declared requirements into selected tool and SDK receipts, bakes and stages artifacts, produces adapter inputs, and gathers virtual-device evidence. It does not reopen RFC 116's source declaration or current requirement semantics. Physical-device execution and commercial mobile-readiness claims remain outside the v0.5 criterion.
+- **Release status:** RFC 116 is implemented for v0.5 in #998. It completes #939's v0.5 contract; no #941, #943, or #944 implementation work remains under this RFC.
 - **v0.6 Loaf-envelope successor:** [#1008](https://github.com/encero-systems/incan/issues/1008) moves the established requirement data from `incan.toml` to `Loaf.toml` and from the current semantic lock to `Oven.lock` after the RFC 117 cutover. It preserves the v0.5 requirement meaning, rejects legacy parsing, and does not duplicate #944.
 
 RFC 117 owns the project-model cutover; RFC 118 owns the later CLI presentation. Neither changes the C-specific source safety contract in this RFC.
@@ -799,7 +799,7 @@ compiler and SDK evidence, direct-`rustc` archive consumption, and virtual Andro
 execution, application signing, publication admission, and a general mobile application toolchain remain outside the
 release criterion.
 
-## Progress Checklist
+## Implementation log
 
 ### Spec / design
 
@@ -826,7 +826,7 @@ release criterion.
 
 - [x] Define target-specific native artifact and shim inputs, lock identity, provenance, and offline verification.
 - [x] Define the v0.5 source versus `incan.toml` responsibilities for target-specific physical configuration.
-- [ ] Complete #1008 after v0.5 to relocate the unchanged declared envelope to `Loaf.toml` and `Oven.lock`.
+- **Post-v0.5 successor:** [#1008](https://github.com/encero-systems/incan/issues/1008) relocates the unchanged declared envelope to `Loaf.toml` and `Oven.lock`.
 
 ### Tooling projection (#943)
 

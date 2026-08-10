@@ -124,7 +124,7 @@ const checked_c_binding_forms: FrozenList[str] = [
 const checked_c_binding_references: FrozenList[CapabilityReference] = [CapabilityReference(
     label="std.interop",
     path="stdlib/interop.md",
-), CapabilityReference(label="RFC 116", path="../../RFCs/116_typed_c_abi_interop.md"), CapabilityReference(
+), CapabilityReference(label="RFC 116", path="../../RFCs/closed/implemented/116_typed_c_abi_interop.md"), CapabilityReference(
     label="Release 0.5",
     path="../../release_notes/0_5.md",
 )]
@@ -158,7 +158,7 @@ const oven_interop_requirements_references: FrozenList[CapabilityReference] = [C
     path="../how-to/checked_c_bindings.md",
 ), CapabilityReference(label="std.interop", path="stdlib/interop.md"), CapabilityReference(
     label="RFC 116",
-    path="../../RFCs/116_typed_c_abi_interop.md",
+    path="../../RFCs/closed/implemented/116_typed_c_abi_interop.md",
 )]
 static oven_interop_requirements: RegistryEntry[CapabilityId, CapabilityDescriptor] = capabilities.entry(
     key=CapabilityId("OvenInteropRequirements"),
