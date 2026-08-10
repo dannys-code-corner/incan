@@ -22,6 +22,7 @@ chmod +x /tmp/incan-oven-cargo-guard/cargo
 bash scripts/bench_oven_alpha.sh \
   --incan /path/to/extracted/incan/bin/incan \
   --release-identity 'incan-VERSION-TARGET.tar.gz sha256:...' \
+  --rustc "$(rustup which --toolchain stable rustc)" \
   --checkout-revision "$(git rev-parse HEAD)" \
   --workload test \
   --source tests/fixtures/test_assert_canary.incn \
@@ -39,6 +40,8 @@ git worktree add --detach /tmp/incan-oven-benchmark-clean HEAD
 ```
 
 For build or run, set `--workload build` or `--workload run` and use a small project inside the documented release envelope; the checked sources that bake that envelope live in `src/oven/fixtures/`. A `std.testing` fixture is debug-only and is intentionally not a release-build benchmark. On Linux, use a task-specific directory below `/tmp`; the store must start empty so its first materialization is attributable. The default policy is the normal developer policy: 3 GiB aggregate physical allocation, 1 GiB physical allocation per compatibility domain, and 768 MiB logical artifact bytes per domain. Pass explicit byte overrides only when recording a different policy.
+
+Pass the exact `rustc` compatible with the shipped Loafs. The harness passes it as `RUSTC` to every measured command and records both its path and `--version` identity. This prevents an ambient Rustup default from minting an incompatible receipt and turning a toolchain mismatch into a misleading benchmark failure.
 
 ## Read the report
 

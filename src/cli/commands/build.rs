@@ -4175,26 +4175,37 @@ fn prepare_library_project(
     generator.set_dependencies(resolved.dependencies);
     generator.set_dev_dependencies(resolved.dev_dependencies);
 
+    // Keep the historical aggregate for existing consumers, while separating the stages that were previously
+    // attributed misleadingly as one `library_generate_rust` cost in Oven performance evidence.
     let codegen_start = Instant::now();
     if emitted_dep_modules.is_empty() {
+        let emit_rust_start = Instant::now();
         let rust_code = codegen
             .try_generate(&lib_module.ast)
             .map_err(|e| CliError::failure(format!("Code generation error: {e}")))?;
+        record_timing(&mut timings_ms, "library_codegen_emit_rust", emit_rust_start);
+        let write_project_start = Instant::now();
         generator
             .generate(&rust_code)
             .map_err(|e| CliError::failure(format!("Error generating project: {e}")))?;
+        record_timing(&mut timings_ms, "library_codegen_write_project", write_project_start);
     } else {
         let module_paths: Vec<Vec<String>> = emitted_dep_modules
             .iter()
             .map(|module| module.path_segments.clone())
             .collect();
+        let emit_rust_start = Instant::now();
         let (main_code, rust_modules) = codegen
             .try_generate_multi_file_nested(&lib_module.ast, &module_paths)
             .map_err(|e| CliError::failure(format!("Code generation error: {e}")))?;
+        record_timing(&mut timings_ms, "library_codegen_emit_rust", emit_rust_start);
+        let write_project_start = Instant::now();
         generator
             .generate_nested(&main_code, &rust_modules)
             .map_err(|e| CliError::failure(format!("Error generating project: {e}")))?;
+        record_timing(&mut timings_ms, "library_codegen_write_project", write_project_start);
     }
+    let synchronize_provider_dependencies_start = Instant::now();
     synchronize_projected_provider_dependencies(
         &mut library_manifest,
         &out_dir,
@@ -4202,6 +4213,12 @@ fn prepare_library_project(
             CliError::failure(format!("failed to resolve projected provider dependencies: {error}"))
         })?,
     )?;
+    record_timing(
+        &mut timings_ms,
+        "library_codegen_sync_provider_dependencies",
+        synchronize_provider_dependencies_start,
+    );
+    let oven_profiles_start = Instant::now();
     let oven = if normal_oven {
         let rustc = oven_rustc.ok_or_else(|| CliError::failure("normal Oven library build omitted rustc"))?;
         let target = oven_target.ok_or_else(|| CliError::failure("normal Oven library build omitted target"))?;
@@ -4310,9 +4327,11 @@ fn prepare_library_project(
     } else {
         None
     };
+    record_timing(&mut timings_ms, "library_oven_prepare_profiles", oven_profiles_start);
     // A normal Oven library build derives the compiler-owned vocab helper exclusively from its selected immutable
     // release plan. That selection owns its lease through all library preparation and baking. Legacy library
     // publication retains its existing explicit Cargo path.
+    let oven_vocab_context_start = Instant::now();
     let normal_oven_vocab_context = if let Some(oven) = oven.as_ref() {
         let release = oven
             .profiles
@@ -4341,6 +4360,11 @@ fn prepare_library_project(
     } else {
         None
     };
+    record_timing(
+        &mut timings_ms,
+        "library_oven_prepare_vocab_context",
+        oven_vocab_context_start,
+    );
     let mut pending_desugarer_artifact: Option<PendingDesugarerArtifact> = None;
     let vocab_start = Instant::now();
     if let Some(vocab_extraction) = collect_library_vocab_metadata(
@@ -5608,9 +5632,7 @@ headers = ["interop/include/bridge.h"]
         )?;
         let mut inputs = BTreeMap::new();
         append_oven_interop_execution_build_inputs(&mut inputs, Some(&manifest), "aarch64-apple-darwin")?;
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(inputs.get("oven-interop-execution-receipt"), Some(&receipt.identity));
-        assert_eq!(inputs.get("oven-interop-plan-schema"), Some(&"2".to_string()));
+        assert_eq!(inputs, interop_execution_build_unit_inputs(&receipt));
 
         fs::write(header, "int incan_bridge_changed(void);\n")?;
         assert!(

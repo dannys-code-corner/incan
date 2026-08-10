@@ -66,6 +66,37 @@ pub struct OvenNativeTestCaseCounts {
     pub ignored: usize,
 }
 
+/// One elapsed time reported by the libtest process that Oven already executes.
+///
+/// Case timings are diagnostic-only and are collected only when the caller opts into libtest's unstable JSON
+/// `--report-time` output. They never cause Oven to launch an additional test process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OvenNativeTestCaseTiming {
+    /// Exact test name from the verified native-test inventory.
+    pub name: String,
+    /// Elapsed wall-clock time reported by libtest, rounded to its millisecond precision.
+    pub elapsed_ms: u64,
+}
+
+/// One nested Incan command duration emitted by an explicitly instrumented integration test.
+///
+/// The native runner only parses these diagnostic records from the libtest transcript it already captured. It never
+/// wraps, schedules, or reruns the nested command itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OvenNativeTestCommandTiming {
+    /// Libtest case that started the nested command.
+    pub test_name: String,
+    /// Stable command label supplied by the integration-test helper.
+    pub command: String,
+    /// Nested command wall-clock duration in milliseconds.
+    pub elapsed_ms: u64,
+    /// Opt-in command-internal timing phases emitted by a JSON build report.
+    ///
+    /// Empty means the nested command did not produce a build report; it is not a zero-duration claim.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub phase_timings_ms: BTreeMap<String, u64>,
+}
+
 /// One verified all-in-one native libtest execution used when fixture scope requires a shared process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OvenNativeTestBatchReport {
@@ -80,9 +111,36 @@ pub struct OvenNativeTestBatchReport {
     /// A native test executable may exit before libtest can produce a summary, so absence is represented explicitly
     /// rather than fabricating green counts from its inventory.
     pub case_counts: Option<OvenNativeTestCaseCounts>,
+    /// Per-case libtest timings when `INCAN_OVEN_NATIVE_TEST_CASE_TIMINGS` enabled their collection.
+    ///
+    /// An empty vector means timing diagnostics were not requested or the libtest process did not emit a terminal
+    /// timing line for an inventory case. It does not mean that the case took zero time.
+    pub case_timings: Vec<OvenNativeTestCaseTiming>,
+    /// Opt-in nested command timings emitted by existing integration-test helpers.
+    pub command_timings: Vec<OvenNativeTestCommandTiming>,
+    /// Wall-clock timing for the two native-test subprocess phases already required by this execution.
+    ///
+    /// The values are observational only: Oven does not launch another process or rerun a test merely to populate
+    /// them. They let compiler-suite evidence distinguish a slow inventory from slow test execution.
+    pub timing: OvenNativeTestBatchTiming,
     /// Combined libtest transcript retained for per-test result mapping by the caller.
     pub output: String,
 }
+
+/// Wall-clock timings for one all-in-one native libtest batch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct OvenNativeTestBatchTiming {
+    /// Time spent obtaining the binary's exact libtest inventory.
+    pub inventory_elapsed_ms: u64,
+    /// Time spent executing the verified native libtest process.
+    pub execution_elapsed_ms: u64,
+}
+
+/// Opt into libtest's per-case elapsed-time diagnostics for one Oven invocation.
+///
+/// This is deliberately opt-in because libtest requires its unstable reporting switch. Oven retains its normal
+/// output and execution behaviour by default.
+pub const OVEN_NATIVE_TEST_CASE_TIMINGS_ENV: &str = "INCAN_OVEN_NATIVE_TEST_CASE_TIMINGS";
 
 /// Error while obtaining native test inventory or executing an exact test.
 #[derive(Debug, thiserror::Error)]
@@ -182,7 +240,9 @@ pub fn run_native_tests(request: &OvenNativeTestRequest) -> Result<OvenNativeTes
 pub fn run_native_test_batch(
     request: &OvenNativeTestRequest,
 ) -> Result<OvenNativeTestBatchReport, OvenNativeTestError> {
+    let inventory_started = Instant::now();
     let inventory = inventory_native_tests_with_environment(&request.executable, &request.environment, None, false)?;
+    let inventory_elapsed_ms = duration_millis(inventory_started.elapsed());
     let requested = normalized_exact_names(&request.exact_names)?;
     let available = inventory.names.iter().collect::<BTreeSet<_>>();
     for name in &requested {
@@ -195,7 +255,10 @@ pub fn run_native_test_batch(
     command.args(["--test-threads=1", "--nocapture"]);
     clear_inherited_cargo_environment(&mut command);
     command.envs(&request.environment);
+    add_case_timing_diagnostics(&mut command);
+    let execution_started = Instant::now();
     let (output, timed_out) = run_native_batch_child(command, &executable, request.timeout)?;
+    let execution_elapsed_ms = duration_millis(execution_started.elapsed());
     let mut transcript = combined_output(&output.stdout, &output.stderr);
     if let Some(timeout) = timed_out.then_some(request.timeout).flatten() {
         if !transcript.ends_with('\n') && !transcript.is_empty() {
@@ -206,11 +269,19 @@ pub fn run_native_test_batch(
             format_timeout(timeout)
         ));
     }
+    let case_timings = parse_libtest_case_timings_if_requested(&transcript, &inventory);
+    let command_timings = parse_native_test_command_timings(&transcript);
     Ok(OvenNativeTestBatchReport {
         inventory,
         success: output.status.success() && !timed_out,
         timed_out,
         case_counts: parse_libtest_case_counts(&transcript),
+        case_timings,
+        command_timings,
+        timing: OvenNativeTestBatchTiming {
+            inventory_elapsed_ms,
+            execution_elapsed_ms,
+        },
         output: transcript,
     })
 }
@@ -250,7 +321,9 @@ pub fn run_native_test_batch_all_in_directory_with_timeout(
     working_directory: Option<&Path>,
     timeout: Option<Duration>,
 ) -> Result<OvenNativeTestBatchReport, OvenNativeTestError> {
+    let inventory_started = Instant::now();
     let inventory = inventory_native_tests_with_environment(executable, environment, working_directory, true)?;
+    let inventory_elapsed_ms = duration_millis(inventory_started.elapsed());
     let executable = verified_executable(executable)?;
     let mut command = Command::new(&executable);
     command.arg("--nocapture");
@@ -259,7 +332,10 @@ pub fn run_native_test_batch_all_in_directory_with_timeout(
     }
     clear_inherited_cargo_environment(&mut command);
     command.envs(environment);
+    add_case_timing_diagnostics(&mut command);
+    let execution_started = Instant::now();
     let (output, timed_out) = run_native_batch_child(command, &executable, timeout)?;
+    let execution_elapsed_ms = duration_millis(execution_started.elapsed());
     let transcript = combined_output(&output.stdout, &output.stderr);
     let mut transcript = transcript;
     if timed_out {
@@ -278,13 +354,176 @@ pub fn run_native_test_batch_all_in_directory_with_timeout(
             ));
         }
     }
+    let case_timings = parse_libtest_case_timings_if_requested(&transcript, &inventory);
+    let command_timings = parse_native_test_command_timings(&transcript);
     Ok(OvenNativeTestBatchReport {
         inventory,
         success: output.status.success() && !timed_out,
         timed_out,
         case_counts: parse_libtest_case_counts(&transcript),
+        case_timings,
+        command_timings,
+        timing: OvenNativeTestBatchTiming {
+            inventory_elapsed_ms,
+            execution_elapsed_ms,
+        },
         output: transcript,
     })
+}
+
+/// Convert a measured duration to reportable milliseconds without a lossy platform-width conversion.
+fn duration_millis(duration: Duration) -> u64 {
+    duration
+        .as_secs()
+        .saturating_mul(1_000)
+        .saturating_add(u64::from(duration.subsec_millis()))
+}
+
+/// Add libtest's report-time switches only for an explicit diagnostic invocation.
+///
+/// `--report-time` and JSON output are still unstable in libtest. The opt-in marker itself is removed from the child
+/// environment so nested normal Incan commands cannot recursively opt into timing output. The bootstrap
+/// compatibility environment applies to the direct native test process and its ordinary process descendants only for
+/// this diagnostic run.
+fn add_case_timing_diagnostics(command: &mut Command) {
+    let requested = std::env::var_os(OVEN_NATIVE_TEST_CASE_TIMINGS_ENV).is_some();
+    command.env_remove(OVEN_NATIVE_TEST_CASE_TIMINGS_ENV);
+    if requested {
+        command.args(["-Z", "unstable-options", "--format", "json", "--report-time"]);
+        command.env("RUSTC_BOOTSTRAP", "1");
+    }
+}
+
+/// Parse JSON per-case libtest elapsed times for the inventory that Oven itself verified.
+///
+/// The outer diagnostic runner writes JSON only because it received the explicit `--format json` argument. Nested
+/// programs retain normal text output because the opt-in marker is removed before their parent test process starts.
+/// Restricting parsed events to the outer binary's exact inventory is a second, independent safeguard.
+fn parse_libtest_case_timings(output: &str, inventory: &OvenNativeTestInventory) -> Vec<OvenNativeTestCaseTiming> {
+    let inventory_names = inventory.names.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let mut timings = BTreeMap::new();
+    for line in output.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if event.get("type").and_then(serde_json::Value::as_str) != Some("test")
+            || !matches!(
+                event.get("event").and_then(serde_json::Value::as_str),
+                Some("ok" | "failed")
+            )
+        {
+            continue;
+        }
+        let Some(name) = event.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !inventory_names.contains(name) {
+            continue;
+        }
+        let Some(seconds) = event.get("exec_time").and_then(serde_json::Value::as_f64) else {
+            continue;
+        };
+        let elapsed_ms = seconds_to_rounded_millis(seconds);
+        let Some(elapsed_ms) = elapsed_ms else {
+            continue;
+        };
+        timings.insert(name.to_string(), elapsed_ms);
+    }
+    let mut timings = timings
+        .into_iter()
+        .map(|(name, elapsed_ms)| OvenNativeTestCaseTiming { name, elapsed_ms })
+        .collect::<Vec<_>>();
+    timings.sort_by(|left, right| {
+        right
+            .elapsed_ms
+            .cmp(&left.elapsed_ms)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    timings
+}
+
+/// Convert libtest's JSON floating-point seconds to a rounded millisecond report value.
+fn seconds_to_rounded_millis(seconds: f64) -> Option<u64> {
+    let milliseconds = seconds * 1_000.0;
+    (seconds.is_finite() && seconds >= 0.0 && milliseconds <= u64::MAX as f64).then(|| milliseconds.round() as u64)
+}
+
+/// Return no timings unless the caller explicitly asked the existing libtest invocation to report them.
+fn parse_libtest_case_timings_if_requested(
+    output: &str,
+    inventory: &OvenNativeTestInventory,
+) -> Vec<OvenNativeTestCaseTiming> {
+    if std::env::var_os(OVEN_NATIVE_TEST_CASE_TIMINGS_ENV).is_some() {
+        parse_libtest_case_timings(output, inventory)
+    } else {
+        Vec::new()
+    }
+}
+
+/// Parse explicit integration-test command timing records from an already-captured libtest transcript.
+///
+/// Records are JSON so test names and temporary paths cannot make the diagnostic format ambiguous. Malformed or
+/// unrelated diagnostic output is ignored; timing is observational and must never make a passing test fail.
+fn parse_native_test_command_timings(output: &str) -> Vec<OvenNativeTestCommandTiming> {
+    const COMMAND_PREFIX: &str = "incan-test-command-timing ";
+    const BUILD_PHASE_PREFIX: &str = "incan-test-build-phase-timing ";
+    let mut timings = Vec::new();
+    for line in output.lines() {
+        if let Some(payload) = line.strip_prefix(COMMAND_PREFIX) {
+            let Ok(record) = serde_json::from_str::<serde_json::Value>(payload) else {
+                continue;
+            };
+            let Some(test_name) = record.get("test_name").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let Some(command) = record.get("command").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let Some(elapsed_ms) = record.get("elapsed_ms").and_then(serde_json::Value::as_u64) else {
+                continue;
+            };
+            if test_name.is_empty() || command.is_empty() {
+                continue;
+            }
+            timings.push(OvenNativeTestCommandTiming {
+                test_name: test_name.to_string(),
+                command: command.to_string(),
+                elapsed_ms,
+                phase_timings_ms: BTreeMap::new(),
+            });
+            continue;
+        }
+        let Some(payload) = line.strip_prefix(BUILD_PHASE_PREFIX) else {
+            continue;
+        };
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(payload) else {
+            continue;
+        };
+        let Some(test_name) = record.get("test_name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(command) = record.get("command").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(phase_timings_ms) = record.get("phase_timings_ms").and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        let phase_timings_ms = phase_timings_ms
+            .iter()
+            .filter_map(|(phase, elapsed_ms)| elapsed_ms.as_u64().map(|elapsed_ms| (phase.clone(), elapsed_ms)))
+            .collect::<BTreeMap<_, _>>();
+        if phase_timings_ms.is_empty() {
+            continue;
+        }
+        if let Some(timing) = timings
+            .iter_mut()
+            .rev()
+            .find(|timing| timing.test_name == test_name && timing.command == command)
+        {
+            timing.phase_timings_ms = phase_timings_ms;
+        }
+    }
+    timings
 }
 
 /// Spawn one captured native libtest child and enforce an optional execution-group deadline.
@@ -479,6 +718,27 @@ fn combined_output(stdout: &[u8], stderr: &[u8]) -> String {
 /// Test bodies can run nested programs that also print libtest summaries. The outer native batch always emits its
 /// own summary last, so scan backwards and preserve `None` when a process dies before doing so.
 fn parse_libtest_case_counts(output: &str) -> Option<OvenNativeTestCaseCounts> {
+    parse_libtest_json_case_counts(output).or_else(|| parse_libtest_text_case_counts(output))
+}
+
+/// Parse libtest's terminal JSON suite event emitted by the opt-in case-timing diagnostic mode.
+fn parse_libtest_json_case_counts(output: &str) -> Option<OvenNativeTestCaseCounts> {
+    let event = output.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        (value.get("type").and_then(serde_json::Value::as_str) == Some("suite")).then_some(value)
+    })?;
+    let passed = usize::try_from(event.get("passed")?.as_u64()?).ok()?;
+    let failed = usize::try_from(event.get("failed")?.as_u64()?).ok()?;
+    let ignored = usize::try_from(event.get("ignored")?.as_u64()?).ok()?;
+    Some(OvenNativeTestCaseCounts {
+        passed,
+        failed,
+        ignored,
+    })
+}
+
+/// Parse libtest's final text `test result` line without treating diagnostic text as a result.
+fn parse_libtest_text_case_counts(output: &str) -> Option<OvenNativeTestCaseCounts> {
     let summary = output
         .lines()
         .rev()
@@ -511,9 +771,10 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        OvenNativeTestCaseCounts, OvenNativeTestError, OvenNativeTestRequest, parse_libtest_case_counts,
-        run_native_test_batch, run_native_test_batch_all, run_native_test_batch_all_in_directory_with_timeout,
-        run_native_tests,
+        OvenNativeTestCaseCounts, OvenNativeTestCommandTiming, OvenNativeTestError, OvenNativeTestInventory,
+        OvenNativeTestRequest, parse_libtest_case_counts, parse_libtest_case_timings,
+        parse_native_test_command_timings, run_native_test_batch, run_native_test_batch_all,
+        run_native_test_batch_all_in_directory_with_timeout, run_native_tests,
     };
 
     #[test]
@@ -531,6 +792,73 @@ mod tests {
             })
         );
         assert_eq!(parse_libtest_case_counts("process aborted\n"), None);
+        assert_eq!(
+            parse_libtest_case_counts(
+                "{ \"type\": \"test\", \"event\": \"ok\", \"name\": \"selected\", \"exec_time\": 0.01 }\n\
+                 { \"type\": \"suite\", \"event\": \"ok\", \"passed\": 3, \"failed\": 0, \"ignored\": 2 }\n",
+            ),
+            Some(OvenNativeTestCaseCounts {
+                passed: 3,
+                failed: 0,
+                ignored: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn case_timings_keep_only_inventory_cases_and_last_terminal_result() {
+        let inventory = OvenNativeTestInventory {
+            names: vec!["outer::fast".to_string(), "outer::slow".to_string()],
+        };
+        let timings = parse_libtest_case_timings(
+            "nested test output that is not JSON\n\
+             { \"type\": \"test\", \"name\": \"nested::slow\", \"event\": \"ok\", \"exec_time\": 98.5 }\n\
+             { \"type\": \"test\", \"name\": \"outer::slow\", \"event\": \"ok\", \"exec_time\": 0.1234 }\n\
+             { \"type\": \"test\", \"name\": \"outer::fast\", \"event\": \"ok\", \"exec_time\": 0.0005 }\n\
+             { \"type\": \"test\", \"name\": \"outer::slow\", \"event\": \"ok\", \"exec_time\": 1.234 }\n",
+            &inventory,
+        );
+
+        assert_eq!(
+            timings
+                .iter()
+                .map(|timing| (timing.name.as_str(), timing.elapsed_ms))
+                .collect::<Vec<_>>(),
+            vec![("outer::slow", 1_234), ("outer::fast", 1)]
+        );
+    }
+
+    #[test]
+    fn command_timings_preserve_valid_transcript_order_and_ignore_unrelated_output() {
+        let timings = parse_native_test_command_timings(
+            "normal output\n\
+             incan-test-command-timing {\"test_name\":\"outer::first\",\"command\":\"incan lock\",\"elapsed_ms\":12}\n\
+             incan-test-command-timing not-json\n\
+             incan-test-command-timing {\"test_name\":\"outer::second\",\"command\":\"incan build --lib\",\"elapsed_ms\":345}\n\
+             incan-test-build-phase-timing {\"test_name\":\"outer::second\",\"command\":\"incan build --lib\",\"phase_timings_ms\":{\"prepare\":100,\"oven_build\":200,\"total\":300}}\n\
+             incan-test-build-phase-timing {\"test_name\":\"unknown\",\"command\":\"incan build\",\"phase_timings_ms\":{\"total\":1}}\n",
+        );
+        assert_eq!(
+            timings,
+            vec![
+                OvenNativeTestCommandTiming {
+                    test_name: "outer::first".to_string(),
+                    command: "incan lock".to_string(),
+                    elapsed_ms: 12,
+                    phase_timings_ms: BTreeMap::new(),
+                },
+                OvenNativeTestCommandTiming {
+                    test_name: "outer::second".to_string(),
+                    command: "incan build --lib".to_string(),
+                    elapsed_ms: 345,
+                    phase_timings_ms: BTreeMap::from([
+                        ("oven_build".to_string(), 200),
+                        ("prepare".to_string(), 100),
+                        ("total".to_string(), 300),
+                    ]),
+                },
+            ]
+        );
     }
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenStoredDirectRustcTestRequest,

@@ -177,6 +177,15 @@ jobs:
       - name: Build checked-reference generators
         if: ${{ matrix.id == 'linux-stable' }}
         run: CARGO_BUILD_JOBS=2 cargo build --locked -p incan_core --bin generate_lang_reference
+      - name: Run complete Oven suite
+        if: ${{ matrix.id == 'linux-stable' }}
+        run: >-
+          CARGO_NET_OFFLINE=true
+          INCAN_TEST_COMPILER_ALREADY_BUILT=1
+          INCAN_TEST_PREWARM_TOOLCHAIN=${{ matrix.toolchain }}
+          INCAN_TEST_LOAF_TOOLCHAIN=${{ matrix.toolchain }}
+          INCAN_TEST_SUITE_TOOLCHAIN=${{ matrix.toolchain }}
+          make -s test-oven
       - uses: ./.github/actions/restore-sdk-provider-store
       - uses: ./.github/actions/install-nightly-toolchain
         with:

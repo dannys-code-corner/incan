@@ -19,6 +19,12 @@ INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT ?= $(CURDIR)/target
 # refusal tests pass explicit tiny CLI limits rather than redefining production policy here.
 INCAN_TEST_OVEN_BAKE_FORMAT ?= text
 INCAN_TEST_OVEN_BAKE_REPORT ?=
+# Optional caller-owned location for a completed compiler-suite JSON report. The default test target removes its
+# one-use caller output after success; the case-timing target retains only this small evidence file for ranking.
+INCAN_TEST_OVEN_COMPILER_SUITE_REPORT ?=
+# Optional caller-owned location for a successful `test-one` compiler-suite JSON report. The focused command keeps
+# its disposable output clean by default; a diagnostic caller can retain only the report for nested-command analysis.
+INCAN_TEST_OVEN_TEST_ONE_REPORT ?=
 # The pinned publisher Cargo supplies the unstable unit graph and the package-qualified Rust-inspection tests that
 # exercise Cargo's nightly-only metadata flags. Loaf receipts and direct-rustc suite execution use the selected
 # consumer toolchain, so stable and MSRV gates prove their advertised compiler rather than nightly. The named legacy
@@ -39,6 +45,12 @@ TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
 TEST_RUNTIME_ENV = $(TEST_ENV) \
 	INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)" \
 	INCAN_SDK_INVENTORY="$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json"
+ifneq ($(strip $(INCAN_OVEN_NATIVE_TEST_CASE_TIMINGS)),)
+TEST_RUNTIME_ENV += INCAN_OVEN_NATIVE_TEST_CASE_TIMINGS="$(INCAN_OVEN_NATIVE_TEST_CASE_TIMINGS)"
+endif
+ifneq ($(strip $(INCAN_TEST_COMMAND_TIMINGS)),)
+TEST_RUNTIME_ENV += INCAN_TEST_COMMAND_TIMINGS="$(INCAN_TEST_COMMAND_TIMINGS)"
+endif
 
 # After `make build` / `make build-fast`, symlink ~/.cargo/bin/incan → target/debug/incan so `incan` on PATH (IDE run,
 # other repos) matches this checkout. When `incan-lsp` was built (`make build` uses --features lsp), also symlink
@@ -279,7 +291,11 @@ test-oven: test-prewarm-oven-loafs
 		suite_succeeded=false; \
 		cleanup_suite_output() { \
 			rm -rf -- "$$suite_tmp"; \
-			if [ "$$suite_succeeded" = true ]; then rm -rf -- "$$suite_output"; \
+			if [ "$$suite_succeeded" = true ]; then \
+				if [ -n "$(INCAN_TEST_OVEN_COMPILER_SUITE_REPORT)" ]; then \
+					cp "$$suite_output/compiler-suite-report.json" "$(INCAN_TEST_OVEN_COMPILER_SUITE_REPORT)"; \
+				fi; \
+				rm -rf -- "$$suite_output"; \
 			else echo "Oven suite failed; retaining caller output at $$suite_output" >&2; fi; \
 		}; \
 		trap cleanup_suite_output EXIT; \
@@ -301,6 +317,11 @@ test-oven: test-prewarm-oven-loafs
 				--format text; \
 		test ! -s "$$suite_output/cargo-guard/invocations.log"; \
 		suite_succeeded=true
+
+.PHONY: test-oven-case-timings  ## test - Run the complete Oven suite once and retain its top-25 case-timing report
+test-oven-case-timings:
+	@$(MAKE) --no-print-directory test-oven INCAN_OVEN_NATIVE_TEST_CASE_TIMINGS=1 \
+		INCAN_TEST_OVEN_COMPILER_SUITE_REPORT="$(CURDIR)/target/oven-compiler-suite-case-timings.json"
 
 .PHONY: test  ## test - Run all compiler tests through bounded Oven direct-Rustc execution
 test: test-oven
@@ -571,7 +592,11 @@ test-one: test-prewarm-oven-loafs
 		root_succeeded=false; \
 		cleanup_root_output() { \
 			rm -rf -- "$$root_tmp"; \
-			if [ "$$root_succeeded" = true ]; then rm -rf -- "$$root_output"; \
+			if [ "$$root_succeeded" = true ]; then \
+				if [ -n "$(INCAN_TEST_OVEN_TEST_ONE_REPORT)" ]; then \
+					cp "$$root_output/compiler-suite-report.json" "$(INCAN_TEST_OVEN_TEST_ONE_REPORT)"; \
+				fi; \
+				rm -rf -- "$$root_output"; \
 			else echo "Oven root failed; retaining caller output at $$root_output" >&2; fi; \
 		}; \
 		trap cleanup_root_output EXIT; \

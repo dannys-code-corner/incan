@@ -13,7 +13,7 @@ usage() {
 Usage:
   bash scripts/bench_oven_alpha.sh \
     --incan PATH --release-identity TEXT --checkout-revision TEXT --workload build|run|test --source PATH \
-  --incan-home PATH --output PATH --cargo-guard-dir PATH [options]
+  --rustc PATH --incan-home PATH --output PATH --cargo-guard-dir PATH [options]
 
 The selected source must be in the documented compiler-shipped Oven Alpha envelope. The harness requires an empty
 INCAN_HOME, records the first normal command separately from unchanged warm repeats, and never invokes Cargo.
@@ -21,6 +21,7 @@ INCAN_HOME, records the first normal command separately from unchanged warm repe
 Options:
   --repetitions N                 Unchanged warm repeats after first materialization (default: 2; minimum: 1)
   --release-identity TEXT         Release archive or CI artifact identity for the selected compiler (required)
+  --rustc PATH                    Exact Rust compiler compatible with the shipped Loafs (required)
   --checkout-revision TEXT        Revision of the checkout that supplied the benchmark fixture (required)
   --clean-worktree-source PATH    Identical fixture in a clean checkout for a final reuse run
   --cargo-guard-dir PATH          Directory containing a `cargo` executable that exits exactly 97 (required)
@@ -37,6 +38,7 @@ source_path=""
 incan_home=""
 output_dir=""
 release_identity=""
+rustc=""
 checkout_revision=""
 clean_worktree_source=""
 repetitions=2
@@ -53,6 +55,7 @@ while [ "$#" -gt 0 ]; do
         --incan-home) incan_home=${2:?--incan-home requires a path}; shift 2 ;;
         --output) output_dir=${2:?--output requires a path}; shift 2 ;;
         --release-identity) release_identity=${2:?--release-identity requires text}; shift 2 ;;
+        --rustc) rustc=${2:?--rustc requires a path}; shift 2 ;;
         --checkout-revision) checkout_revision=${2:?--checkout-revision requires text}; shift 2 ;;
         --clean-worktree-source) clean_worktree_source=${2:?--clean-worktree-source requires a path}; shift 2 ;;
         --repetitions) repetitions=${2:?--repetitions requires a number}; shift 2 ;;
@@ -65,7 +68,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-for required in incan workload source_path incan_home output_dir release_identity checkout_revision cargo_guard_dir; do
+for required in incan workload source_path incan_home output_dir release_identity rustc checkout_revision cargo_guard_dir; do
     if [ -z "${!required}" ]; then
         echo "missing required --${required//_/-}" >&2
         usage >&2
@@ -87,6 +90,7 @@ if [ "$repetitions" -lt 1 ]; then
 fi
 
 [ -x "$incan" ] || { echo "--incan is not executable: $incan" >&2; exit 2; }
+[ -x "$rustc" ] || { echo "--rustc is not executable: $rustc" >&2; exit 2; }
 [ -e "$source_path" ] || { echo "--source does not exist: $source_path" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "required executable is unavailable: python3" >&2; exit 2; }
 command -v uname >/dev/null 2>&1 || { echo "required executable is unavailable: uname" >&2; exit 2; }
@@ -96,6 +100,9 @@ if [ -n "$clean_worktree_source" ] && [ ! -e "$clean_worktree_source" ]; then
     echo "--clean-worktree-source does not exist: $clean_worktree_source" >&2
     exit 2
 fi
+rustc_identity="$("$rustc" --version)" \
+    || { echo "--rustc could not report a compiler identity: $rustc" >&2; exit 2; }
+[ -n "$rustc_identity" ] || { echo "--rustc reported an empty compiler identity: $rustc" >&2; exit 2; }
 set +e
 "$cargo_guard_dir/cargo" --version >/dev/null 2>&1
 cargo_guard_probe_status=$?
@@ -180,6 +187,7 @@ run_stage() {
         -u INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT -u INCAN_INTERNAL_OVEN_LOAF_EXECUTION \
         -u INCAN_INTERNAL_OVEN_RUNTIME_ROOT \
         INCAN_HOME="$incan_home" \
+        RUSTC="$rustc" \
         "${storage_policy_env[@]}" \
         PATH="${cargo_guard_dir:+$cargo_guard_dir:}$PATH" \
         "$@" >"$output_dir/$stage.log" 2>&1
@@ -274,7 +282,7 @@ benchmark_wall_clock_ms=$((benchmark_finished_ms - benchmark_started_ms))
 python3 - "$output_dir" "$workload" "$source_path" "$store_root" "$cargo_guard_dir" "$cargo_guard_probe_status" \
     "$max_physical_bytes" "$max_domain_physical_bytes" "$max_domain_logical_bytes" "$release_identity" \
     "$checkout_revision" "$source_sha256" "$clean_worktree_source" "$clean_worktree_source_sha256" \
-    "$benchmark_wall_clock_ms" <<'PY'
+    "$benchmark_wall_clock_ms" "$rustc" "$rustc_identity" <<'PY'
 import json
 import pathlib
 import sys
@@ -314,6 +322,8 @@ report = {
     "toolchain": {
         "incan": (output / "incan-version.txt").read_text().strip(),
         "release_identity": sys.argv[10],
+        "rustc_path": sys.argv[16],
+        "rustc_identity": sys.argv[17],
     },
     "provenance": {"checkout_revision": sys.argv[11]},
     "workload": {
