@@ -8616,31 +8616,30 @@
 <li>RFC 037 (native web and HTTP stdlib redesign)</li>
 </ul>
 </li>
-<li><strong>Issue:</strong> —</li>
+<li><strong>Issue:</strong> <a href="https://github.com/encero-systems/incan/issues/558">#558</a></li>
 <li><strong>RFC PR:</strong> —</li>
 <li><strong>Written against:</strong> v0.2</li>
 <li><strong>Shipped in:</strong> —</li>
 </ul>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
-<p>This RFC defines the Incan-owned stdlib and artifact contracts needed by interactive runtime consumers: target descriptors, host capability boundaries, runtime manifests, server/client execution regions, event and state interop, diagnostics, input/accessibility hooks, asset packaging, and optional graphics/GPU capability surfaces. It does not define a product framework, UI framework, browser framework, or full runtime substrate; it defines the stdlib vocabulary that such layers need in order to consume Incan programs without reverse-engineering compiler output or generated framework glue.</p>
+<p>This RFC defines the Incan-owned stdlib and artifact contracts needed by interactive runtime consumers: target descriptors, host capability boundaries, runtime manifests, server/client execution regions, event and state interop, diagnostics, input/accessibility hooks, and asset packaging. It does not define a product framework, UI framework, browser framework, GPU contract, or full runtime substrate; it defines the stdlib vocabulary that such layers need in order to consume Incan programs without reverse-engineering compiler output or generated framework glue. Optional GPU work is deferred to <a href="https://github.com/encero-systems/incan/issues/1041">#1041</a>.</p>
 <h2 id="core-model">Core model<a class="headerlink" href="#core-model" title="Permanent link">&para;</a></h2>
 <ol>
 <li><strong>Interactive runtime consumers are downstream of Incan.</strong> They consume typed programs, stdlib declarations, emitted metadata, and packaged artifacts. They do not own Incan language semantics.</li>
 <li><strong>Runtime targets are explicit.</strong> A target describes where code may run, which host capabilities it may use, which artifacts are emitted, and which diagnostics are available.</li>
-<li><strong>Host capabilities are declared.</strong> Browser APIs, filesystem, network, GPU, timers, storage, input, and similar capabilities must be visible as typed boundaries instead of hidden imports.</li>
-<li><strong>Artifacts are inspectable.</strong> Routes, assets, target regions, generated bundles, GPU shader assets, and diagnostics must be discoverable by tooling and downstream runtime layers.</li>
-<li><strong>Graphics and GPU support are capability families.</strong> Incan may expose stdlib contracts for buffers, textures, pipelines, surfaces, shaders, and render passes without deciding that every interactive target is graphics-heavy or WASM-first.</li>
+<li><strong>Host capabilities are declared.</strong> Browser APIs, filesystem, network, timers, storage, input, and similar capabilities must be visible as typed boundaries instead of hidden imports.</li>
+<li><strong>Artifacts are inspectable.</strong> Routes, assets, target regions, generated bundles, and diagnostics must be discoverable by tooling and downstream runtime layers.</li>
 </ol>
 <h2 id="motivation">Motivation<a class="headerlink" href="#motivation" title="Permanent link">&para;</a></h2>
-<p>RFC 003 tried to cover frontend support, WebAssembly, browser UI, packaging, and future graphics/runtime expansion in one document. That made the RFC too broad for an Incan-owned design record. Incan should not encode a whole downstream product framework into the compiler, but it does need stable stdlib contracts for interactive runtime consumers to build on.</p>
-<p>The immediate need is practical. Browser product surfaces need typed routes, assets, server/client boundaries, and packaging metadata. Future richer targets may need GPU-backed rendering, native-class surfaces, remote UI protocols, or embedded interaction. If those needs are handled as framework-specific glue, Incan loses inspectability, reproducibility, and a clean boundary between language contracts and runtime consumers.</p>
+<p>RFC 003 tried to cover frontend support, WebAssembly, browser UI, packaging, and future runtime expansion in one document. That made the RFC too broad for an Incan-owned design record. Incan should not encode a whole downstream product framework into the compiler, but it does need stable stdlib contracts for interactive runtime consumers to build on.</p>
+<p>The immediate need is practical. Browser product surfaces need typed routes, assets, server/client boundaries, and packaging metadata. Future runtime consumers may need native-class surfaces, remote UI protocols, or embedded interaction. If those needs are handled as framework-specific glue, Incan loses inspectability, reproducibility, and a clean boundary between language contracts and runtime consumers.</p>
 <p>This RFC narrows the problem: Incan owns the contracts that make interactive runtime consumption possible. Downstream layers can decide product semantics, rendering strategy, deployment policy, and experience model.</p>
 <h2 id="goals">Goals<a class="headerlink" href="#goals" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Define a stdlib-level vocabulary for interactive runtime targets without defining a complete runtime framework.</li>
 <li>Define runtime target manifests that describe emitted artifacts, host capabilities, execution regions, assets, and diagnostics.</li>
 <li>Define how server-only, client-only, and shared execution regions are declared or represented.</li>
-<li>Define typed capability surfaces for host APIs needed by interactive runtimes, including browser, input, accessibility, timers, storage, and optional GPU/graphics capabilities.</li>
+<li>Define typed capability surfaces for host APIs needed by interactive runtimes, including browser, input, accessibility, timers, and storage.</li>
 <li>Keep RFC 037 responsible for HTTP route, handler, serialization, and request/response semantics while allowing runtime manifests to reference those surfaces.</li>
 <li>Preserve reproducible build and library-layout compatibility with RFC 020 and RFC 031.</li>
 </ul>
@@ -8649,14 +8648,14 @@
 <li>Defining a downstream product framework, governed experience layer, dashboard layer, assistant surface, or UI framework.</li>
 <li>Making WASM the default runtime posture. WASM may be one target capability, not the definition of interactive runtime support.</li>
 <li>Defining native JSX, <code>html()</code> parsing, a component DSL, or a browser router in this RFC.</li>
-<li>Defining GPU algorithms, shader language semantics, scene-graph APIs, physics engines, or rendering engines.</li>
+<li>Defining GPU target, capability, resource, artifact, diagnostic, or rendering contracts. That work is deferred to #1041.</li>
 <li>Defining no-std/freestanding targets, kernel support, unsafe/layout controls, panic strategy, or allocator strategy. Runtime target manifests may inform that later work, but this RFC is not the freestanding/kernel RFC.</li>
 <li>Replacing RFC 037 handler semantics.</li>
-<li>Committing to a specific Rust web framework, JS framework, graphics crate, or bundler as the public contract.</li>
+<li>Committing to a specific Rust web framework, JS framework, or bundler as the public contract.</li>
 </ul>
 <h2 id="guide-level-explanation">Guide-level explanation<a class="headerlink" href="#guide-level-explanation" title="Permanent link">&para;</a></h2>
-<p>Authors should be able to write Incan programs that expose typed HTTP handlers, state-changing operations, assets, and optional interactive regions. The project should then emit enough metadata for a runtime consumer to understand what exists: which routes are present, which assets must ship, which code is server-only or client-capable, which host capabilities are required, which diagnostics are available, and which optional graphics/GPU assets belong to a target.</p>
-<p>For example, a browser product surface might need server-authoritative mutations, browser-enhanced UI, static assets, client-side event hooks, and accessibility/input metadata. A richer graphics target might additionally need GPU buffers, shader module assets, textures, render surfaces, and frame diagnostics. In both cases, Incan should expose typed stdlib contracts and manifests. The downstream runtime decides how to render and orchestrate the experience.</p>
+<p>Authors should be able to write Incan programs that expose typed HTTP handlers, state-changing operations, assets, and optional interactive regions. The project should then emit enough metadata for a runtime consumer to understand what exists: which routes are present, which assets must ship, which code is server-only or client-capable, which host capabilities are required, and which diagnostics are available.</p>
+<p>For example, a browser product surface might need server-authoritative mutations, browser-enhanced UI, static assets, client-side event hooks, and accessibility/input metadata. Incan should expose typed stdlib contracts and manifests. The downstream runtime decides how to render and orchestrate the experience.</p>
 <p>A future author-facing API might look like this, with exact names left to this RFC's unresolved questions:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">std.runtime.host</span><span class="w"> </span><span class="kn">import</span> <span class="n">capability</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">std.runtime.region</span><span class="w"> </span><span class="kn">import</span> <span class="n">client_region</span><span class="p">,</span> <span class="n">server_region</span>
@@ -8697,12 +8696,10 @@
 <li>declared server-only, client-only, and shared execution regions where applicable</li>
 <li>host capabilities required by the target</li>
 <li>diagnostics available for generated boundaries</li>
-<li>optional graphics/GPU artifacts required by the target</li>
 </ul>
-<p>The stdlib <strong>must</strong> provide typed representations for runtime target identity, host capability declarations, artifact references, execution region identity, runtime diagnostics, input/accessibility hooks, and optional graphics/GPU resources.</p>
+<p>The stdlib <strong>must</strong> provide typed representations for runtime target identity, host capability declarations, artifact references, execution region identity, runtime diagnostics, and input/accessibility hooks.</p>
 <p>Runtime target declarations <strong>must not</strong> imply permission to use a host capability. Capability use <strong>must</strong> be explicit enough for tooling to inspect and reject unsupported or undeclared host access.</p>
 <p>Runtime target manifests <strong>must not</strong> redefine HTTP semantics. When a manifest references routes, handlers, actions, or response contracts, those semantics remain governed by RFC 037 and the web/HTTP stdlib.</p>
-<p>Graphics/GPU stdlib contracts <strong>may</strong> expose typed handles for adapters, devices, queues, surfaces, buffers, textures, samplers, shader modules, bind groups, pipelines, render passes, and command submission. They <strong>must</strong> be capability-checked and target-aware. They <strong>must not</strong> require every interactive runtime target to support GPU access.</p>
 <h2 id="design-details">Design details<a class="headerlink" href="#design-details" title="Permanent link">&para;</a></h2>
 <p>The exact module names are provisional, but the public shape should remain split by responsibility.</p>
 <table>
@@ -8737,10 +8734,6 @@
 <td><code>std.runtime.diagnostics</code></td>
 <td>generated-boundary spans, runtime events, host crossings, asset provenance</td>
 </tr>
-<tr>
-<td><code>std.gpu</code> or <code>std.graphics.gpu</code></td>
-<td>optional GPU adapters, devices, queues, surfaces, buffers, textures, shaders, pipelines, and passes</td>
-</tr>
 </tbody>
 </table>
 <p>A minimal manifest could look like this conceptually:</p>
@@ -8762,25 +8755,12 @@ diagnostics:
   - generated_boundary_spans
   - route_asset_links
 </code></pre></div>
-<p>GPU-capable targets extend the same model instead of creating a separate build world:</p>
-<div class="language-text highlight"><pre><span></span><code>target: gpu-surface
-capabilities:
-  - gpu.adapter
-  - gpu.device
-  - gpu.surface
-gpu_artifacts:
-  - shader: shaders/main.wgsl
-  - texture: assets/albedo.png
-diagnostics:
-  - gpu_pipeline_creation
-  - frame_timing
-</code></pre></div>
 <p>The examples above are illustrative, not normative syntax. The normative requirement is that the target data exists in an inspectable machine-readable form and that stdlib contracts expose the same concepts to authored Incan code where appropriate.</p>
 <h2 id="alternatives-considered">Alternatives considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Keep RFC 003 active and broaden it further</strong> — Rejected because a single RFC would continue mixing browser UI, WASM, graphics, packaging, and downstream framework direction.</li>
 <li><strong>Define the downstream runtime framework inside Incan</strong> — Rejected because Incan should own typed contracts and emitted artifacts, not product-framework semantics.</li>
-<li><strong>Make GPU support a separate unrelated RFC immediately</strong> — Rejected for now because graphics/GPU support needs the same capability, artifact, target, and diagnostics model as other interactive runtime targets. A future GPU-specific RFC may refine the stdlib surface once this foundation is accepted.</li>
+<li><strong>Include GPU support in this RFC</strong> — Rejected. GPU work is not required for the v0.6 interactive-runtime foundation and needs a concrete consumer before its public contract is designed; it is tracked by #1041.</li>
 <li><strong>Treat manifests as build-tool internals</strong> — Rejected because downstream runtime consumers and docs need stable inspectability.</li>
 </ul>
 <h2 id="drawbacks">Drawbacks<a class="headerlink" href="#drawbacks" title="Permanent link">&para;</a></h2>
@@ -8788,18 +8768,16 @@ diagnostics:
 <li>The RFC creates another abstraction boundary before a full interactive runtime exists.</li>
 <li>The stdlib contracts may feel abstract until at least one browser target and one richer capability target exercise them.</li>
 <li>Capability declarations add ceremony to small examples.</li>
-<li>GPU contracts can prematurely constrain future graphics work if accepted before enough spikes validate the shape.</li>
 </ul>
 <h2 id="implementation-architecture">Implementation architecture<a class="headerlink" href="#implementation-architecture" title="Permanent link">&para;</a></h2>
 <p>The recommended internal architecture is to keep the runtime manifest separate from generated Rust implementation details. Compiler output, build tooling, docs, and downstream runtime consumers should all read the same manifest concepts rather than each inferring routes, assets, regions, and capabilities independently.</p>
-<p>Graphics/GPU support should start as capability and artifact metadata before exposing broad author-facing APIs. Early spikes should prove that shader assets, surface/device requirements, generated diagnostics, and target compatibility can be represented without forcing all interactive runtimes into a graphics-first model.</p>
 <h2 id="layers-affected">Layers affected<a class="headerlink" href="#layers-affected" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Parser / AST</strong>: may need future syntax for execution regions or target declarations if library-only declarations are insufficient.</li>
 <li><strong>Typechecker / Symbol resolution</strong>: validates capability declarations, target references, and server/client/host-boundary constraints.</li>
 <li><strong>IR Lowering</strong>: preserves target, region, capability, and artifact metadata through lowering.</li>
-<li><strong>Emission</strong>: emits runtime manifests, artifact metadata, diagnostics metadata, and optional GPU asset references.</li>
-<li><strong>Stdlib / Runtime (<code>incan_stdlib</code>)</strong>: provides runtime target, artifact, host, input/accessibility, diagnostics, and optional graphics/GPU contracts.</li>
+<li><strong>Emission</strong>: emits runtime manifests, artifact metadata, and diagnostics metadata.</li>
+<li><strong>Stdlib / Runtime (<code>incan_stdlib</code>)</strong>: provides runtime target, artifact, host, input/accessibility, and diagnostics contracts.</li>
 <li><strong>LSP / Tooling</strong>: surfaces target/capability diagnostics, generated-boundary spans, asset references, and unsupported-host warnings.</li>
 </ul>
 <h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
@@ -8807,7 +8785,6 @@ diagnostics:
 <li>Are runtime target declarations library calls, project metadata, decorators, or a dedicated syntax form?</li>
 <li>What is the minimum manifest format that is stable enough for downstream consumers while still allowing compiler internals to evolve?</li>
 <li>Which host capabilities belong in the first browser target, and which remain target-specific extensions?</li>
-<li>Should GPU stdlib contracts begin as low-level resource handles, higher-level drawing primitives, or metadata-only capability declarations?</li>
 <li>How should capability denial be reported: compile-time error, build-time target mismatch, runtime diagnostic, or a mix based on target?</li>
 <li>How much server/client region information must be explicit in source versus derived from imports, handlers, and target configuration?</li>
 </ul>
