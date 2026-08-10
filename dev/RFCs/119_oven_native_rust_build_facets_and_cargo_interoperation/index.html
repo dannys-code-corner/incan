@@ -8490,14 +8490,14 @@
 <p>Oven consumes crates.io and registered Cargo-compatible sources through the typed <code>crate</code> provider contract. It does not publish Loaves or <code>*.loaf</code> assets to crates.io. <code>Loaf.toml</code> remains the sole authored project manifest, <code>Oven.lock</code> remains the resolved graph, and a bake emits immutable target-bound <code>*.loaf</code> assets plus receipts. Cargo remains runnable only through explicit Cargo-compatibility mode; an existing Cargo project must explicitly opt into Loaf adoption and is never silently merged into an Oven project.</p>
 <h2 id="core-model">Core model<a class="headerlink" href="#core-model" title="Permanent link">&para;</a></h2>
 <ol>
-<li><strong>A Rust facet is a Loaf facet:</strong> a Rust-bearing Loaf declares the crate facts Oven needs to plan and invoke <code>rustc</code>; a neighbouring <code>Cargo.toml</code> never supplies ordinary Loaf authority.</li>
+<li><strong>A Rust facet is a built-in Loaf facet:</strong> a conventional Rust-only Loaf uses the ordinary <code>src/</code> layout. A mixed or nonstandard Rust root declares <code>[rust.source]</code>; compact Rust-specific exceptions live beneath <code>rust.*</code>. In every case Oven, not a neighbouring <code>Cargo.toml</code>, supplies the crate facts needed to plan and invoke <code>rustc</code>.</li>
 <li><strong>Oven owns the graph:</strong> dependency selection, feature resolution, target/host partitioning, toolchain choice, lock identity, execution plan, cache reuse, artifacts, and receipts belong to Oven.</li>
 <li><strong>Crates.io is consumption-only:</strong> typed <code>crate</code> dependencies default to crates.io and may use registered compatible sources. Publishing remains in Incan's registry ecosystem.</li>
 <li><strong>Cargo manifests are provider metadata only when explicitly selected:</strong> a registry crate's <code>Cargo.toml</code> can be parsed by the selected crate provider as constrained source metadata. It cannot define a Loaf workspace, lock, registry trust, lifecycle action, project target policy, or publication identity.</li>
-<li><strong>Build-time code is typed work:</strong> build scripts and procedural macros are host-side providers with declared authority, inputs, outputs, toolchain identity, target/host role, policy decision, and receipt facts. Their existence never grants execution authority.</li>
+<li><strong>Build-time code has explicit host semantics:</strong> a discovered <code>build.rs</code> is a generic host-provider candidate and never self-authorizes execution. A selected procedural-macro crate is compiled for the build host and executed by the selected <code>rustc</code> through its normal proc-macro ABI, as in Cargo; Oven does not replace that expansion mechanism. Both paths have explicit toolchain, host/target, policy, and receipt facts.</li>
 <li><strong>Host and target are different build domains:</strong> build scripts, procedural macros, and compiler plugins execute for the build host; libraries, binaries, test subjects, and carriers are compiled for the selected target. Oven plans and locks both domains separately.</li>
-<li><strong>Rust test work is first-class:</strong> unit tests, integration tests, doctests, examples, and benchmarks are explicit build/run roles, not side effects of a generic <code>rustc</code> invocation.</li>
-<li><strong>IDE projection is derived:</strong> Oven may emit a Rust-analyzer-compatible project projection from the selected plan. It does not create or require a synthetic authoritative <code>Cargo.toml</code>.</li>
+<li><strong>Rust test work is first-class:</strong> unit tests, integration tests, doctests, examples, and benchmarks are explicit build/run roles, not side effects of a generic <code>rustc</code> invocation. They use RFC 117's named environments: <code>test</code> by default for test roles and <code>docs</code> by default for documentation roles.</li>
+<li><strong>IDE projection is derived and warm-reusing:</strong> Oven materializes a Rust-analyzer-compatible project projection from one explicit inspection selection. It first reuses every receipt-compatible pre-warmed <code>*.loaf</code> asset and provider/artifact closure, including across equivalent clean worktrees or implementation slices; the lightweight local projection then describes that selected graph. Switching an editor selection never implies rebuilding every target, dependency, or provider, and the projection does not create or require a synthetic authoritative <code>Cargo.toml</code>.</li>
 <li><strong>Cargo is an explicit interoperation boundary:</strong> <code>oven cargo ...</code> invokes Cargo as Cargo-authoritative compatibility mode. Explicit adoption may import selected facts into a new <code>Loaf.toml</code>, but no directory with both manifests receives mixed semantics.</li>
 <li><strong>The Rust core remains narrow but real:</strong> as decided by RFC 118, Oven's operational core/API owns planning, resolution, policy, stores, leases, provider execution, and crash-safe publication in Rust. Its public API is language-neutral and does not leak Rust borrows.</li>
 <li><strong>Incan-first authoring remains policy:</strong> a Rust facet makes Rust projects and explicitly justified mixed work supportable. It does not authorize new Rust in Incan products without a demonstrated limitation and tracked removal path.</li>
@@ -8536,28 +8536,24 @@
 <span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;telemetry-engine&quot;</span>
 <span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.8.0&quot;</span>
 
-<span class="k">[[rust.crates]]</span>
-<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;telemetry_engine&quot;</span>
-<span class="n">root</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;src/lib.rs&quot;</span>
-<span class="n">edition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2024&quot;</span>
-<span class="n">crate-types</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;rlib&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;cdylib&quot;</span><span class="p">]</span>
-
-<span class="k">[[rust.binaries]]</span>
-<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;telemetry&quot;</span>
-<span class="n">root</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;src/bin/telemetry.rs&quot;</span>
-<span class="n">edition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2024&quot;</span>
-<span class="n">requires-features</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;cli&quot;</span><span class="p">]</span>
-
 <span class="k">[dependencies]</span>
 <span class="n">serde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">crate</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;serde&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;derive&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 <span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">crate</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;tokio&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;rt-multi-thread&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;macros&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<p>This syntax is illustrative of the RFC's intended information model. The essential contract is that Oven can identify every compiled crate, its root, edition, crate types, entry point, enabled features, and dependency/linkage closure without reading a project <code>Cargo.toml</code>. A simple single-library project may use RFC 119's conventional defaults; multiple roots or any nondefault identity must be explicit.</p>
+<p>With <code>src/lib.rs</code>, <code>src/main.rs</code>, or <code>src/bin/telemetry.rs</code> in the conventional locations, this project needs no Rust table. The essential contract is that Oven can identify every compiled crate, its root, edition, crate types, entry point, enabled features, and dependency/linkage closure without reading a project <code>Cargo.toml</code>. The Rust facet remains convention-first: <code>src/lib.rs</code>, <code>src/bin/</code>, <code>tests/</code>, <code>examples/</code>, <code>benches/</code>, and documentation tests require no restatement in the manifest. Authors declare only meaningful deviations, such as an additional crate, a nonstandard root or crate type, a feature-gated target, a locally authored proc macro, or build-provider intent. The expanded host/target unit graph is derived inspection state in <code>oven plan</code> and <code>Oven.lock</code>, not normal authoring burden.</p>
+<p>A project that mixes Incan and Rust names both roots explicitly:</p>
+<div class="language-toml highlight"><pre><span></span><code><span class="k">[incan.source]</span>
+<span class="n">root</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;sources/incan&quot;</span>
+
+<span class="k">[rust.source]</span>
+<span class="n">root</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;sources/rust&quot;</span>
+</code></pre></div>
+<p>The roots must not overlap. The exact compact shape for a genuine Rust exception belongs beneath <code>rust.*</code>; for example, a future settled grammar may name a non-conventional proc-macro crate as <code>[rust.crates.incan_derive]</code>. This RFC deliberately does not use an anonymous <code>[[sources]]</code> list or require an author to reproduce Cargo's whole manifest surface.</p>
 <p>The <code>crate</code> dependencies are ordinary Rust ecosystem inputs. They default to crates.io, but Oven records their canonical source, checksum, signatures or trust facts where available, selected feature closure, and host/target use in <code>Oven.lock</code>. The project's publication identity remains an Incan registry identity; <code>oven publish</code> does not mean <code>cargo publish</code>.</p>
 <h3 id="build-time-work-is-visible-before-it-runs">Build-time work is visible before it runs<a class="headerlink" href="#build-time-work-is-visible-before-it-runs" title="Permanent link">&para;</a></h3>
-<p>Suppose <code>native-sys</code> requires code generation and native linking. Its <code>build.rs</code> does not execute simply because the file exists. Oven's selected crate provider declares a build-time provider and exposes a plan like:</p>
-<div class="language-text highlight"><pre><span></span><code>host provider: native-sys build script
-  inputs: native-sys source digest, declared headers, selected compiler, allowed environment keys
+<p>Suppose <code>native-sys</code> requires code generation and native linking. Its <code>build.rs</code> does not execute simply because the file exists. The selected crate metadata reports a provider candidate; Oven's generic build-script provider exposes a plan like:</p>
+<div class="language-text highlight"><pre><span></span><code>host provider: native-sys build script via rust.build-script
+  inputs: native-sys permitted source tree, selected features, build host/target, selected toolchain, allowed environment keys
   outputs: generated bindings, link search paths, link libraries, cfg facts
   effects: execute host helper, read declared inputs, write provider staging area
 
@@ -8565,8 +8561,8 @@ target Rust crate: native-sys
   target: aarch64-linux-android
   consumes: locked generated bindings and normalized link facts
 </code></pre></div>
-<p>The provider's host executable, argument vector, allowed environment, observed directives, generated-output digests, and policy result enter the receipt. Unsupported or undeclared behavior fails with a provider diagnostic; Oven does not silently retry through Cargo.</p>
-<p>Procedural macros follow the same split. Oven compiles and loads the macro for the build host, records its source/toolchain/feature identity, and uses its expansion only in the locked build unit that requested it. The target crate never treats the host macro binary as a target artifact.</p>
+<p>The provider's host executable, argument vector, allowed environment, observed directives, generated-output digests, and policy result enter the receipt. Unsupported directives fail with a provider diagnostic; observe mode records an admitted provider's actual effects, while governed mode denies an ungranted effect class. Oven does not silently retry through Cargo.</p>
+<p>Procedural macros follow the same host/target split, but not a new Oven expansion protocol. Oven compiles the macro for the build host, then invokes the selected <code>rustc</code> with the normal proc-macro artifact so that <code>rustc</code> loads and expands it through its native ABI, as it would in a Cargo build. The target crate never treats the host macro binary as a target artifact. Oven records the macro artifact and host toolchain as facts of the consuming compile unit; it does not cache individual macro expansions or route a bake through a separate macro server.</p>
 <h3 id="rust-testing-documentation-and-ides">Rust testing, documentation, and IDEs<a class="headerlink" href="#rust-testing-documentation-and-ides" title="Permanent link">&para;</a></h3>
 <p>Rust work has explicit roles:</p>
 <div class="language-text highlight"><pre><span></span><code>oven test --rust unit
@@ -8621,11 +8617,14 @@ oven bake
 </ol>
 <h3 id="build-scripts-procedural-macros-and-generated-inputs">Build scripts, procedural macros, and generated inputs<a class="headerlink" href="#build-scripts-procedural-macros-and-generated-inputs" title="Permanent link">&para;</a></h3>
 <ol>
-<li><code>build.rs</code> is never automatically executed in a Loaf. A build-script provider must declare its source identity, build host, executable/toolchain requirements, allowed environment keys, declared input classes, output schema, capability/effect policy, and expected directive vocabulary.</li>
-<li>Oven runs an approved build-script provider in an isolated staging area. It captures its arguments, allowed environment values or redacted identities, outputs, normalized directives, generated-input digests, filesystem/network/process effects, and exit status in a provider receipt.</li>
-<li>The initial supported directive vocabulary must be explicit. It includes only directives Oven can normalize into plan facts—such as rerun inputs, generated source locations, cfg facts, link search paths, link libraries, link arguments, and controlled environment outputs. Unknown directives are errors, not opaque passthroughs.</li>
-<li>A procedural macro is a host compiler-time provider. Oven locks its host crate closure, compiler identity, dynamic-loading policy, expansion inputs, and diagnostics identity separately from target artifacts.</li>
-<li>Providers may not smuggle arbitrary network, filesystem, compiler, linker, or environment discovery into the target bake. Any expanded authority must be declared, policy-approved, and receipt-visible.</li>
+<li>A <code>build.rs</code> discovered from selected crate metadata is a provider candidate, not permission to execute. Oven supplies the generic <code>rust.build-script</code> host-provider role; Cargo metadata may report the role and its source facts, but cannot select or authorize it.</li>
+<li>Oven runs an admitted <code>rust.build-script</code> provider in isolated staging. Its conservative base input identity contains the permitted package input tree, selected features, build host, target, provider and toolchain identities, and approved environment values or redacted identities. Its receipt captures arguments, outputs, normalized directives, generated-input digests, filesystem/network/process effects, and exit status.</li>
+<li>The initial directive vocabulary is explicit: rerun source and environment inputs, cfg and check-cfg facts, controlled environment outputs, generated-input locations and digests, warnings and diagnostics, and native link search paths, libraries, and arguments. Unknown directives are errors, not opaque passthroughs.</li>
+<li>A procedural-macro crate is a host Rust unit. Oven locks its host crate closure, compiler identity, macro artifact digest, and diagnostics identity. The selected <code>rustc</code> loads and invokes that artifact through its normal proc-macro ABI; Oven must not insert a custom expansion bridge or standalone macro server into a bake. The target crate never treats the host macro binary as a target artifact.</li>
+<li>Observe mode preserves Cargo-equivalent host execution for a selected procedural macro while recording macro artifact, compiler invocation, observable inputs/effects, and diagnostics at the consuming compile-unit boundary. Oven does not claim an independently controlled receipt for every macro call. A backend that cannot observe an input needed for cache correctness must mark the result uncacheable rather than reuse it falsely.</li>
+<li>In governed mode, any containment applies around the compiler process that hosts macro execution. It must be explicit and receipt-visible; if the host cannot enforce the selected policy without changing behavior, Oven denies the governed operation rather than silently weakening policy. Permissive mode remains an explicit escape hatch. There is no implicit Cargo fallback.</li>
+<li>Native compilation/linking, system probing, and named external tools remain separate effect classes for a build-script provider, such as <code>native.cc</code>, <code>native.pkg-config</code>, <code>tool.cmake</code>, <code>tool.protoc</code>, and <code>tool.git</code>. A package can report a needed effect class but cannot grant it.</li>
+<li>Rerun directives refine inspection and later invalidation but are not assumed to capture every dynamic read on a first execution; the conservative base input identity remains part of cache correctness.</li>
 <li>A generated source participates only through an identified provider output. A change to its producing receipt or digest invalidates the dependent unit; a cache hit must identify the provider receipt it reused.</li>
 </ol>
 <h3 id="native-linkage-carriers-and-cross-compilation">Native linkage, carriers, and cross compilation<a class="headerlink" href="#native-linkage-carriers-and-cross-compilation" title="Permanent link">&para;</a></h3>
@@ -8638,9 +8637,13 @@ oven bake
 <h3 id="rust-test-documentation-and-ide-projections">Rust test, documentation, and IDE projections<a class="headerlink" href="#rust-test-documentation-and-ide-projections" title="Permanent link">&para;</a></h3>
 <ol>
 <li>Unit tests compile with their owning crate. Integration tests, examples, doctests, and benchmarks are distinct named units with declared source origins and dependency roles.</li>
-<li>Test execution uses Oven's scheduler, selected environment, capability policy, target selection, output retention, and receipt model. It must not silently dispatch to <code>cargo test</code> in Loaf mode.</li>
+<li>Test execution uses Oven's scheduler, selected environment, capability policy, target selection, output retention, and receipt model. Test roles select the standard <code>test</code> environment unless an explicit compatible environment is selected; documentation roles select <code>docs</code> by default. Environment-only dependencies do not enter an ordinary release bake unless the selected role requires them. Test execution must not silently dispatch to <code>cargo test</code> in Loaf mode.</li>
 <li>A doctest extraction or documentation generator must record its source spans, generated test inputs, compiler/provider facts, and diagnostics mapping. Generated Rust remains inspectable but is not the public source of truth.</li>
-<li>A Rust-analyzer-compatible projection is derived from the selected Oven graph and may be invalidated with the same receipt-bound facts. It must not require a Cargo workspace or invent a Cargo lock as editor authority.</li>
+<li>A Rust-analyzer-compatible projection is derived from one explicit Oven inspection selection and may be invalidated with the same receipt-bound facts. Its standard project descriptor contains only the selected crate roots, editions, exact dependency aliases, first-party membership, resolved cfg/target facts, selected sysroot, and non-sensitive compile environment or identified generated-output paths needed for analysis. An Oven sidecar identifies the selection's plan and receipt, freshness state, policy state, and diagnostics mapping; that sidecar, not the descriptor, retains Oven provenance.</li>
+<li>The active inspection selection defaults to the <code>dev</code> environment and the Loaf-selected target, or the host-native target if no project target is selected. Target switching is explicit and visible; Oven must not prepare every target merely because an editor is open.</li>
+<li>Before materializing a selection, Oven must look up the receipt-compatible pre-warmed <code>*.loaf</code> asset and provider/artifact closure. It must reuse that closure across equivalent clean worktrees and implementation slices, then materialize only the small workspace-local projection needed for the current source paths. A miss invalidates and rebuilds only the affected selection and units.</li>
+<li>An Oven-owned inspection session may enable editor-side procedural-macro expansion under explicit observe, governed, or permissive policy. That session records the selected macro artifact, toolchain, policy result, and expansion status without treating editor expansion as a bake or affecting a bake cache. A general compatibility export cannot claim to govern or receipt macro execution performed by an independent editor process.</li>
+<li>Editor diagnostics and runnable actions must delegate through the selected Oven plan and emit the required Rust diagnostics; they must not dispatch to Cargo. Projection data must not disclose sensitive environment values or duplicate dependency trees merely for inspection.</li>
 </ol>
 <h3 id="cargo-compatibility-and-explicit-adoption">Cargo compatibility and explicit adoption<a class="headerlink" href="#cargo-compatibility-and-explicit-adoption" title="Permanent link">&para;</a></h3>
 <ol>
@@ -8674,7 +8677,11 @@ oven bake
 </tr>
 <tr>
 <td>Proc macro and build provider</td>
-<td>distinct host unit, declared authority, generated-input invalidation, cross-target target consumer</td>
+<td>Cargo-equivalent direct-<code>rustc</code> macro expansion, host artifact/compile-unit receipt, observe/governed policy behavior, directive diagnostics, generated-input invalidation, cross-target target consumer</td>
+</tr>
+<tr>
+<td>Rust IDE selection</td>
+<td>selected-plan projection and provenance sidecar, cfg/target/generated-input analysis, Oven-only diagnostics actions, explicit editor macro policy, and pre-warmed closure reuse across equivalent slices</td>
 </tr>
 <tr>
 <td>Native-link crate</td>
@@ -8698,7 +8705,7 @@ oven bake
 <h2 id="design-details">Design details<a class="headerlink" href="#design-details" title="Permanent link">&para;</a></h2>
 <h3 id="relationship-to-rfc-117">Relationship to RFC 117<a class="headerlink" href="#relationship-to-rfc-117" title="Permanent link">&para;</a></h3>
 <p>RFC 117 owns one manifest authority, one typed dependency graph, target policy, registry trust, <code>Oven.lock</code>, <code>*.loaf</code> identity, and the rule that a discovered Cargo file is ignored in Loaf mode. This RFC supplies the detailed Rust planner and provider contract that RFC 117 intentionally leaves open. It does not create a second Rust manifest or make a Rust facet an exception to workspace authority.</p>
-<p>The illustrative <code>[rust]</code> tables in this RFC are source-facet data within <code>Loaf.toml</code>, not a return to one manifest per implementation language. Incan and foreign sources remain convention-first or use their own explicit facets where required.</p>
+<p>The illustrative <code>rust.*</code> tables in this RFC are source-facet data within <code>Loaf.toml</code>, not a return to one manifest per implementation language. <code>[rust.source]</code> names a mixed or nonstandard Rust root, and other <code>rust.*</code> tables carry compact Rust-specific exceptions. No <code>[oven.rust]</code> prefix is needed: <code>Loaf.toml</code> is already the Oven-managed project document. Incan uses the parallel built-in <code>[incan.source]</code> root; C remains behind <code>[interop.c]</code> rather than becoming a peer top-level source namespace.</p>
 <h3 id="relationship-to-rfc-118">Relationship to RFC 118<a class="headerlink" href="#relationship-to-rfc-118" title="Permanent link">&para;</a></h3>
 <p>RFC 118 owns command ownership. This RFC defines what the Rust-oriented project operations mean once selected:</p>
 <ul>
@@ -8726,7 +8733,7 @@ oven bake
 <ul>
 <li>The Rust facet and direct compiler planner are substantial engineering work; Cargo currently hides much of this complexity.</li>
 <li>Provider-mediated build scripts and procedural macros need sandboxing, receipt storage, and a practical support policy.</li>
-<li>A bounded compatibility matrix will reject some ordinary Cargo packages until their behavior gains an explicit provider model.</li>
+<li>A bounded compatibility matrix will require explicit effect grants or Cargo compatibility for ordinary Cargo packages whose host behavior lacks a supported, inspectable provider path.</li>
 <li>Maintaining a Rust-analyzer projection and source-mapped diagnostics is additional tooling work.</li>
 <li>A different publication authority means Cargo-native consumption of an Oven package remains an explicit interoperability problem, not a default workflow.</li>
 </ul>
@@ -8735,7 +8742,7 @@ oven bake
 <li><strong>Loaf manifest and validation</strong> — must validate Rust facet identities, roles, crate roots, editions, crate types, feature mappings, target predicates, and adoption proposals.</li>
 <li><strong>Resolver and registries</strong> — must resolve crate providers, constrained provider metadata, deterministic feature closures, trust/integrity facts, and host/target partitions into <code>Oven.lock</code>.</li>
 <li><strong>Rust operational core/API</strong> — must plan direct <code>rustc</code> units, toolchains, sysroots, linkers, provider execution, artifacts, receipts, stores, leases, and recovery without Cargo in native mode.</li>
-<li><strong>Provider and policy engine</strong> — must declare, approve, execute, cache, invalidate, and inspect build scripts, procedural macros, generated inputs, native-link facts, and effect receipts.</li>
+<li><strong>Provider and policy engine</strong> — must declare, approve, execute, cache, invalidate, and inspect build scripts, generated inputs, native-link facts, and effect receipts; it must apply governed containment around compiler processes that host proc macros without substituting a new expansion mechanism.</li>
 <li><strong>Compiler service API and diagnostics</strong> — must expose Rust/compiled-source diagnostics and source maps without making Oven invoke the Incan CLI or generated Rust the public contract.</li>
 <li><strong>Test, docs, and IDE tooling</strong> — must model Rust test/documentation roles, scheduler facts, outputs, and derived Rust-analyzer-compatible project metadata.</li>
 <li><strong>CLI and project mutation</strong> — must expose canonical Oven operations and explicit Cargo/adoption modes according to RFCs 076 and 118.</li>
@@ -8744,10 +8751,10 @@ oven bake
 <h2 id="inspectability-and-tooling-surface">Inspectability and tooling surface<a class="headerlink" href="#inspectability-and-tooling-surface" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Manifest and lock:</strong> inspection reports the selected Rust facet, crate roles, conventional defaults or explicit declarations, provider origins, feature closure, host/target partition, and normalized toolchain/linker facts.</li>
-<li><strong>Plan:</strong> before execution, Oven shows every Rust compile unit, build-time provider, declared/allowed effect, selected target/carrier/profile, and expected <code>*.loaf</code> asset/receipt.</li>
+<li><strong>Plan:</strong> before execution, Oven shows every Rust compile unit, host macro artifacts, build-script providers, policy mode, expected effect classes, selected target/carrier/profile, and expected <code>*.loaf</code> asset/receipt.</li>
 <li><strong>Artifacts and receipts:</strong> each <code>*.loaf</code> asset exposes its facet, graph digest, payload digest, target, carrier, profile, provider receipts, and final bake receipt.</li>
 <li><strong>Diagnostics:</strong> invalid roots, unsupported provider metadata, build-script directives, proc-macro behavior, feature conflicts, source/target incompatibility, Cargo coexistence, and failed adoption name the affected source/dependency and the relevant explicit alternative.</li>
-<li><strong>IDE:</strong> the derived Rust project projection identifies the Oven plan and receipt from which it was created; it is not edited as authority.</li>
+<li><strong>IDE:</strong> the derived Rust project projection and Oven provenance sidecar identify the selected plan and receipt from which they were created, whether a receipt-compatible pre-warmed closure was reused, and whether the projection is fresh; neither is edited as authority.</li>
 <li><strong>Not implicit:</strong> no Cargo project discovery, Cargo lock reuse, build-script execution, proc-macro execution, native linker search path, registry registration, or crates.io publication occurs merely because a file or dependency exists.</li>
 </ul>
 <h2 id="implementation-plan">Implementation plan<a class="headerlink" href="#implementation-plan" title="Permanent link">&para;</a></h2>
@@ -8764,13 +8771,14 @@ oven bake
 </ul>
 <h3 id="phase-3-controlled-build-time-providers">Phase 3: Controlled build-time providers<a class="headerlink" href="#phase-3-controlled-build-time-providers" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Implement the initial build-script directive vocabulary, provider isolation, policy gate, output capture, and invalidation rules.</li>
-<li>Add procedural-macro host providers and source-mapped diagnostics.</li>
+<li>Implement the generic build-script directive vocabulary, provider isolation, observe/governed effect policy, output capture, and conservative invalidation rules.</li>
+<li>Add Cargo-equivalent direct-<code>rustc</code> procedural-macro support, source-mapped diagnostics, and observe/governed host-process conformance proofs.</li>
 <li>Extend the conformance corpus with generated-input, native-link, and cross-target cases.</li>
 </ul>
 <h3 id="phase-4-ide-and-cargo-interoperation">Phase 4: IDE and Cargo interoperation<a class="headerlink" href="#phase-4-ide-and-cargo-interoperation" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Materialize the derived Rust-analyzer project projection.</li>
+<li>Materialize the derived Rust-analyzer project projection and Oven provenance sidecar from explicit inspection selections, reusing receipt-compatible pre-warmed Loaf closures across equivalent worktrees and slices.</li>
+<li>Prove target switching, generated-input analysis, Oven-only diagnostics actions, and explicit editor macro policy without rebuilding an unchanged dependency/provider closure.</li>
 <li>Implement explicit Cargo compatibility receipts and policy-gated adoption proposals.</li>
 <li>Prove that normal Loaf execution never falls back to Cargo.</li>
 </ul>
@@ -8779,12 +8787,18 @@ oven bake
 <li>Publish the supported native-Rust conformance envelope and run it as a release gate.</li>
 <li>Keep unsupported behavior diagnostic and route only explicit compatibility invocations through Cargo.</li>
 </ul>
+<h2 id="design-decisions">Design decisions<a class="headerlink" href="#design-decisions" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Convention-first Rust authoring:</strong> Rust is a direct built-in semantic facet. A conventional Rust source layout must not be restated merely to adopt Loaf. <code>[rust.source]</code> is used only for a mixed or nonstandard root, and compact Rust-specific deviations remain beneath <code>rust.*</code>; the complete compilation graph remains plan and lock state.</li>
+<li><strong>Named environment use:</strong> RFC 117 supplies the standard <code>dev</code>, <code>test</code>, <code>lint</code>, and <code>docs</code> environments. Rust test roles select <code>test</code> by default and documentation roles select <code>docs</code> by default. A bake is not an environment: its target, carrier, profile, and feature closure remain explicit plan selections.</li>
+<li><strong>Proc-macro compatibility:</strong> a proc macro is a foreign Rust compiler feature. Oven compiles it for the build host and lets the selected <code>rustc</code> load and invoke it through the normal ABI, matching Cargo behavior. Oven improves graph/artifact reuse without caching individual expansions or changing macro execution semantics; stricter containment is governed-policy behavior only.</li>
+<li><strong>IDE selection, provenance, and warm reuse:</strong> an editor uses one visible Oven inspection selection, defaulting to <code>dev</code> and the Loaf-selected or host-native target. Oven first reuses receipt-compatible pre-warmed Loaf/provider/artifact closures across equivalent clean worktrees and implementation slices, then derives a small local standard Rust project descriptor plus an Oven provenance sidecar. The descriptor is a compatibility export, not authority; it neither triggers every target build nor duplicates dependency output.</li>
+<li><strong>Editor-side macro execution:</strong> an Oven-owned inspection session may expand procedural macros only under explicit observe, governed, or permissive policy and records session-level macro/toolchain/policy status separately from bake receipts. A third-party editor that consumes the compatibility descriptor is never presented as governed Oven execution.</li>
+</ul>
 <h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
 <ol>
-<li>What exact <code>Loaf.toml</code> grammar best expresses multiple Rust crates, test/documentation roles, crate types, feature mappings, and target predicates without reproducing Cargo's manifest surface wholesale?</li>
-<li>Which build-script directive vocabulary is sufficient for the first native envelope, and which directives require a dedicated typed provider rather than controlled execution?</li>
-<li>What dynamic-loading/process isolation model is required for procedural macros across supported build hosts?</li>
-<li>Which Rust-analyzer project-projection fields are necessary for a useful editor experience without depending on Cargo workspace metadata?</li>
+<li>Which compact exception declarations are needed for nonconventional Rust crates, feature-gated targets, and target predicates without turning the convention-first facet into a restatement of Cargo's manifest surface?</li>
+<li>Which governed compiler-process containment backends meet the policy/receipt contract on supported build hosts without changing the Cargo-equivalent observe-mode behavior?</li>
 <li>What evidence should promote a crate/provider class from Cargo-only compatibility to Oven-native support?</li>
 <li>If a public “Bakery” registry endpoint is introduced, should it be an alias of the current Incan registry identity or a separately registered registry kind?</li>
 </ol>
