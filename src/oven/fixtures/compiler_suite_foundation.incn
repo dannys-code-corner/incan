@@ -29,8 +29,10 @@ from std.web.request import Query
 from std.web.routing import GET, route
 import std.async
 from rust::bitflags import bitflags
+from rust::rand import Rng, thread_rng
 from rust::semver import Version
 from rust::serde_json import Value
+from rust::uuid import Uuid
 
 
 @route("/oven-loaf", methods=[GET])
@@ -44,3 +46,8 @@ def main() -> None:
     assert_true(Path(".").exists())
     version = Version.new(1, 2, 3).to_string()
     assert_true(version == "1.2.3")
+    identifier = Uuid.new_v4().to_string()
+    assert_true(len(identifier) > 0)
+    mut generator = thread_rng()
+    roll = generator.gen_range(1..2)
+    assert_true(roll == 1)

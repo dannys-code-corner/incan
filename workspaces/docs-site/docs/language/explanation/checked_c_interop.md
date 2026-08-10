@@ -28,8 +28,8 @@ The declaration projection deliberately does not absorb facts with different lif
 | --- | --- |
 | Binding inspection | What ABI, ownership, output, enum, and layout contract did the compiler accept from this source graph? |
 | `[oven.interop]` and `incan.lock` | What target requirements and package-owned physical inputs did the author declare and lock? |
-| Future Oven receipt and store | Which concrete toolchain, SDK, artifacts, commands, and shim outputs satisfied those requirements? |
-| Future editor and codegraph projections | Where are raw declarations, private bridges, and public façades related in source? |
+| Oven receipt and store | Which explicitly selected toolchain and SDK, verified package artifacts, and shim outputs satisfied those requirements? |
+| Codegraph and LSP projections | Which checked declarations and explicit unsafe calls occur at these source spans? |
 
 Keeping these projections separate prevents a source inspection from being mistaken for evidence that an artifact was resolved, a shim was built, or a mobile package is ready. They can still share stable binding identities as the tooling vertical grows.
 
@@ -37,7 +37,7 @@ Keeping these projections separate prevents a source inspection from being mista
 
 C is an ABI, not a complete ownership model. A header can expose an integer function accurately while saying little about which pointer owns a resource, when a callback expires, or how a caller must size an output buffer. Pretending that a foreign declaration is already a safe Incan API would hide those decisions at exactly the wrong boundary.
 
-The current surface adds one narrow ownership model without widening into general pointers. A binding may declare an opaque resource, one matching release operation, and whether each call consumes, shares, or mutably borrows that resource. It may also declare scalar and owned-resource output positions. These are compiler-owned call facts: the source does not expose raw addresses, and generated Rust does not infer ownership from its own requirements. The façade above the binding remains responsible for input validation, native status interpretation, error models, retries, and cancellation.
+The current surface adds one narrow ownership model without widening into general pointers. A binding may declare an opaque resource, one matching release operation, and whether each call consumes, shares, or mutably borrows that resource. It may also declare scalar and owned-resource output positions. For text, `c.cstr(value)?` supplies one compiler-owned NUL-terminated input and a returned `const char *` can only be copied immediately through `copy_utf8(max_bytes=...)`. These are compiler-owned call facts: the source does not expose raw addresses, and generated Rust does not infer ownership from its own requirements. The façade above the binding remains responsible for input validation, native status interpretation, error models, retries, and cancellation.
 
 ## C interop and Rust interop solve different problems
 
@@ -53,7 +53,7 @@ The language in which a library happens to be implemented is not decisive. A C++
 
 ## What is deliberately not claimed yet
 
-The checked boundary does not resolve interop artifacts, compile C/C++ shims, provision Android or Apple targets, or hand application assemblies to Gradle and Xcode. It also does not make `c.system_library("name")` a portable library-discovery mechanism. Those jobs need target-specific artifact identity and packaging facts, which are distinct from the source ABI declaration.
+The checked boundary itself does not discover interop artifacts, provision Android or Apple targets, or hand an application assembly to Gradle or Xcode. It also does not make `c.system_library("name")` a portable library-discovery mechanism. Those jobs need target-specific artifact identity and packaging facts, which are distinct from the source ABI declaration.
 
 A package can declare target-specific, package-relative headers, static or bundled artifacts, system capabilities, C/C++ shim sources, compatible toolchain or SDK capabilities, and an Android API level or iOS deployment target under `[oven.interop]` in `incan.toml`; `incan lock` then records those normalized requirements and the content-derived identities of package-owned files. The declaration is intentionally binding-kind-neutral, so a future JNI, Python-extension, or other interop entry point can consume the same package-level evidence without replacing the language binding as ABI authority.
 
@@ -61,8 +61,8 @@ A package can declare target-specific, package-relative headers, static or bundl
 
 `incan inspect interop-plan --target <triple>` then projects the current locked requirements into one deterministic, versioned handoff. It preserves portable input receipts, include roots, definitions, dependency-ordered static links, bundled placements and runtime names, explicit system capabilities, shim inputs and logical outputs, and platform constraints without hard-coding a Gradle or Xcode command protocol.
 
-That remains an Oven requirement, verification, and planning boundary, not a claim that a build has selected or produced anything. This slice does not perform host discovery, download inputs, compile a shim, select a concrete compiler or SDK, cross-compile generated Rust, choose a final Android/iOS application layout, or interpret publication signing and licence policy. Oven will own managed resolution, verification, baking, caching, staging, and its concrete build receipt; Gradle and Xcode remain final application assembly and signing consumers. The exact adapter protocol remains an associated RFC concern rather than a promise frozen into this experimental surface.
+#944 completes the v0.5 Oven handoff: the explicit baker turns the locked target, supplied compiler/SDK evidence, and declared package files into a receipt-bound native plan, and the stager emits a narrow Android/iOS consumer layout. It does not reinterpret package declarations, discover libraries from the host, invoke Cargo, or make Gradle/Xcode application assembly and signing compiler authority. Virtual-device consumers verify the handoff; physical-device deployment remains outside the release criterion.
 
-The same restraint still applies to views and general pointers. C strings, spans, caller-owned buffers, scoped foreign views, arbitrary pointer operations, and context-manager syntax need additional lifetime and bounds contracts. The current guarantee is deliberately smaller: opaque resources and output storage remain private compiler-managed carriers, while public APIs use ordinary Incan values.
+The same restraint still applies to general pointers. The v0.5 foundation supports NUL-terminated text input, an immediately copied bounded UTF-8 `const char *` result, and two caller-owned bounded span forms: bytes and `f32` elements. A declaration must pair the span's compiler-owned pointer with its length or capacity, and a mutable span is returned only after the native write count has been validated against that capacity. These forms do not expose raw addresses or allow a view to escape. Arbitrary pointer operations, other element representations, callbacks, variadics, and context-manager syntax need separate lifetime and bounds contracts. Opaque resources and output storage remain private compiler-managed carriers, while public APIs use ordinary Incan values.
 
 For a working first binding, start with the [tutorial](../tutorials/checked_c_binding.md). For declaration recipes and diagnostics, use the [binding how-to](../how-to/checked_c_bindings.md). To review what the compiler accepted, use the [inspection how-to](../../tooling/how-to/inspect_checked_c_bindings.md). The [`std.interop` reference](../reference/stdlib/interop.md) is the exact syntax and capability contract.

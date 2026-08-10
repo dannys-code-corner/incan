@@ -13,6 +13,11 @@ set -euo pipefail
 # Configuration:
 #   INCAN_BIN               path to the incan binary (default: ./target/release/incan if present, else `incan`)
 #   INCAN_EXAMPLES_TIMEOUT  per-example timeout in seconds for `incan run` (default: 30)
+#   INCAN_EXAMPLES_ONLY     colon-separated repository-relative example paths to run (default: every example)
+#   INCAN_EXAMPLES_TIMEOUT_MODE
+#                           `skip` records timed-out runnable examples as skipped (default); `fail` makes one fail
+#   INCAN_EXAMPLES_REQUIRE_CARGO_FREE
+#                           `1` installs an exit-97 Cargo tripwire for this runner and fails on any invocation
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -30,8 +35,32 @@ if [[ "$INCAN_BIN" == ./* ]]; then
 fi
 
 TIMEOUT_SECS="${INCAN_EXAMPLES_TIMEOUT:-30}"
+ONLY_EXAMPLES="${INCAN_EXAMPLES_ONLY:-}"
+TIMEOUT_MODE="${INCAN_EXAMPLES_TIMEOUT_MODE:-skip}"
+REQUIRE_CARGO_FREE="${INCAN_EXAMPLES_REQUIRE_CARGO_FREE:-0}"
 LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/incan-example-logs.XXXXXX")"
 trap 'rm -rf "$LOG_DIR"' EXIT
+
+if [[ "$TIMEOUT_MODE" != "skip" && "$TIMEOUT_MODE" != "fail" ]]; then
+  echo "INCAN_EXAMPLES_TIMEOUT_MODE must be 'skip' or 'fail', got: $TIMEOUT_MODE" >&2
+  exit 2
+fi
+
+CARGO_GUARD_LOG=""
+if [[ "$REQUIRE_CARGO_FREE" == "1" ]]; then
+  guard_dir="$LOG_DIR/cargo-guard"
+  mkdir -p "$guard_dir"
+  CARGO_GUARD_LOG="$guard_dir/invocations.log"
+  cat > "$guard_dir/cargo" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${INCAN_OVEN_CARGO_GUARD_LOG:?missing INCAN_OVEN_CARGO_GUARD_LOG}"
+exit 97
+EOF
+  chmod +x "$guard_dir/cargo"
+  : > "$CARGO_GUARD_LOG"
+  export PATH="$guard_dir:$PATH"
+  export INCAN_OVEN_CARGO_GUARD_LOG="$CARGO_GUARD_LOG"
+fi
 
 echo "Incan examples runner"
 echo "  incan:    $INCAN_BIN"
@@ -51,6 +80,44 @@ print_log() {
   if [[ -s "$log_file" ]]; then
     sed 's/^/  | /' "$log_file"
   fi
+}
+
+is_selected_example() {
+  local file="$1"
+  if [[ -z "$ONLY_EXAMPLES" ]]; then
+    return 0
+  fi
+  local old_ifs="$IFS"
+  local candidate
+  IFS=':'
+  for candidate in $ONLY_EXAMPLES; do
+    if [[ "$file" == "$candidate" ]]; then
+      IFS="$old_ifs"
+      return 0
+    fi
+  done
+  IFS="$old_ifs"
+  return 1
+}
+
+selection_requires_project() {
+  local project_dir="$1"
+  if [[ -z "$ONLY_EXAMPLES" ]]; then
+    return 0
+  fi
+  local old_ifs="$IFS"
+  local candidate
+  IFS=':'
+  for candidate in $ONLY_EXAMPLES; do
+    case "$candidate" in
+      "$project_dir"/*)
+        IFS="$old_ifs"
+        return 0
+        ;;
+    esac
+  done
+  IFS="$old_ifs"
+  return 1
 }
 
 python_run_with_timeout() {
@@ -91,6 +158,9 @@ prebuild_example_libraries() {
     if [[ ! -f "$project_dir/src/lib.incn" && ! -f "$project_dir/src/lib.incan" ]]; then
       continue
     fi
+    if ! selection_requires_project "$project_dir"; then
+      continue
+    fi
 
     echo "==> build-lib: $project_dir"
     local log_file
@@ -124,6 +194,9 @@ prebuild_example_libraries
 # Note: macOS ships Bash 3.2 by default; avoid `mapfile` (Bash 4+).
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
+  if ! is_selected_example "$f"; then
+    continue
+  fi
   found_any=1
   if is_runnable_entrypoint "$f" && ! should_skip_run "$f"; then
     # For runnable entrypoints, `incan run` already performs compile-time validation,
@@ -139,9 +212,16 @@ while IFS= read -r f; do
       checked=$((checked + 1))
       ran=$((ran + 1))
     elif [[ "$rc" -eq 124 ]]; then
-      echo "==> skip:  $f (timeout after ${TIMEOUT_SECS}s)"
-      print_log "$log_file"
-      timed_out=$((timed_out + 1))
+      if [[ "$TIMEOUT_MODE" == "fail" ]]; then
+        echo "FAILED: run $f (timeout after ${TIMEOUT_SECS}s)"
+        print_log "$log_file"
+        failed_items+=("run $f (timeout after ${TIMEOUT_SECS}s)")
+        failed=$((failed + 1))
+      else
+        echo "==> skip:  $f (timeout after ${TIMEOUT_SECS}s)"
+        print_log "$log_file"
+        timed_out=$((timed_out + 1))
+      fi
     else
       echo "FAILED: run $f (exit $rc)"
       print_log "$log_file"
@@ -190,5 +270,12 @@ if [[ "$failed" -ne 0 ]]; then
   for item in "${failed_items[@]}"; do
     echo "  - $item"
   done
+  exit 1
+fi
+
+if [[ "$REQUIRE_CARGO_FREE" == "1" && -s "$CARGO_GUARD_LOG" ]]; then
+  echo ""
+  echo "Cargo was invoked during a Cargo-free examples run:" >&2
+  sed 's/^/  | /' "$CARGO_GUARD_LOG" >&2
   exit 1
 fi

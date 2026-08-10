@@ -57,7 +57,7 @@ Oven changes who owns that contract. Rust source, crates, target triples, and `r
 | --- | --- | --- |
 | Project authority | Incan emits a generated Cargo project, then Cargo decides the build graph and manages target state. | Incan checks the project; Oven selects an explicit compatibility identity and verified build plan. |
 | Unit of reuse | A mutable local target tree whose fingerprints are Cargo implementation state, not a portable Incan artifact contract. | An immutable Loaf with declared inputs, artifacts, direct-`rustc` plan, digests, provenance, and accounting. |
-| When expensive work happens | The first consumer command pays unless a compatible local Cargo target happens to be warm. | Preparation is an explicit publisher operation; ordinary commands consume an already compatible Loaf or explain the miss. |
+| When expensive work happens | The first consumer command pays unless a compatible local Cargo target happens to be warm. | The hidden publisher performs compatibility compilation once. `incan oven bake` explicitly materializes a shipped sealed Loaf into a local bounded store; an ordinary command may perform that same bounded copy, but never re-resolves or invokes Cargo. |
 | Why reuse is valid | Cargo can explain compilation activity, but Incan has no single receipt spanning source, SDK, compiler, dependency closure, selection, and storage. | The same evidence selects the Loaf, drives execution, and records why work was reused or invalidated. |
 | Storage and liveness | Cargo target directories are useful build state, but their lifecycle is not an Incan-owned, lease-protected storage policy. | Oven admits against aggregate and domain bounds, separates logical and physical use, and will not prune active work. |
 | Local and CI semantics | Each surrounding tool can arrange Cargo differently and inherit different cache and process state. | Normal commands and the repository suite use the same stored plans, Cargo guard, compatibility rules, and reports. |
@@ -115,13 +115,23 @@ incan test
 
 Each command selects a receipt-compatible Loaf and stored direct-`rustc` plan. A changed compiler, target, SDK, feature selection, lock, or relevant source changes the identity. An unchanged clean checkout can select the same Loaf because Git status and shell-script revisions are not compatibility inputs.
 
-If no compatible Loaf exists, the command stops without invoking Cargo. The diagnostic tells users to install or reinstall an Oven-enabled toolchain for the target, or to remove caller-owned Rust dependencies outside the documented Alpha envelope. It names `bake-loafs` only as the maintainer path for preparing a toolchain; the failed normal command never runs that baker automatically.
+For a dependency-free Incan library, an explicit preparation step makes first-use store materialization visible before a build:
+
+```bash
+incan oven bake --project . --format json
+incan build --lib
+```
+
+`oven bake` records debug and release receipts, then reports `materialized` or `reused` for each selected plan. It only copies a receipt-compatible Loaf already shipped by the active toolchain through Oven's bounded, atomic, lease-aware store; it does not compile a final `rlib`, resolve a Rust graph, or launch Cargo. Generated Rust remains project-owned. Normal `build`, `run`, and `test` may also perform this controlled first materialization for a shipped compatible Loaf, but never an uncontrolled cold compatibility bake.
+
+If no compatible Loaf exists, the command stops without invoking Cargo. For a library, first try `incan oven bake --project <library-root>`; if the active toolchain has no compatible shipped Loaf, install or reinstall an Oven-enabled toolchain for the target, or remove caller-owned Rust dependencies outside the documented Alpha envelope. `bake-loafs` remains only the maintainer path for preparing a toolchain; neither normal commands nor `oven bake` run that baker automatically.
 
 Low-level `incan oven` commands remain available for inspection and verification. For example:
 
 ```bash
 incan oven store inspect --format json
 incan oven store prune --dry-run --format json
+incan oven bake --project . --format json
 ```
 
 The hidden baker is a maintainer interface, not a developer fallback:

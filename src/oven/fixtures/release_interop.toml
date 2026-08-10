@@ -1,0 +1,6 @@
+[project]
+name = "oven_release_interop"
+version = "0.1.0"
+
+[sdk]
+profile = "minimal"

@@ -1945,11 +1945,13 @@ fn write_staged_entry(
     sync_directory(root.to_path_buf())
 }
 
-/// Return whether a verified materialized source belongs to this store's private, publisher-owned staging tree.
+/// Return whether a verified materialized source is already immutable and owned by this store.
 ///
 /// `root` is always `<store>/staging/<identity>-...`; its grandparent is the only store root we trust for the
-/// hard-link optimization. A canonical source path must remain below the separately named legacy publisher tree so
-/// a caller cannot turn arbitrary mutable input into a store-owned inode by choosing a convenient path.
+/// hard-link optimization. A canonical source path may be below the named legacy publisher staging tree or below
+/// one immutable entry's `artifacts/` root. The latter supports receipt-held composition of a sealed runtime plan
+/// with a native interop extension without doubling its physical disk allocation. A caller cannot turn arbitrary
+/// mutable input into a store-owned inode by choosing a convenient path.
 fn is_private_publisher_materialized_source(root: &Path, source: &Path) -> Result<bool, OvenStoreError> {
     let store_root = root
         .parent()
@@ -1958,22 +1960,38 @@ fn is_private_publisher_materialized_source(root: &Path, source: &Path) -> Resul
             field: "store staging root",
             message: format!("{} has no store-root ancestor", root.display()),
         })?;
-    let publisher_root = store_root.join("legacy-cargo-staging");
-    let publisher_root = match fs::canonicalize(&publisher_root) {
-        Ok(path) => path,
-        Err(source_error) if source_error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(source_error) => {
-            return Err(OvenStoreError::Io {
-                path: publisher_root,
-                source: source_error,
-            });
-        }
-    };
     let source = fs::canonicalize(source).map_err(|source_error| OvenStoreError::Io {
         path: source.to_path_buf(),
         source: source_error,
     })?;
-    Ok(source.starts_with(publisher_root))
+    let publisher_root = store_root.join(LEGACY_CARGO_STAGING_DIRECTORY);
+    if let Ok(publisher_root) = fs::canonicalize(&publisher_root)
+        && source.starts_with(publisher_root)
+    {
+        return Ok(true);
+    }
+    let entries_root = store_root.join(ENTRIES_DIRECTORY);
+    let entries_root = match fs::canonicalize(&entries_root) {
+        Ok(path) => path,
+        Err(source_error) if source_error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(source_error) => {
+            return Err(OvenStoreError::Io {
+                path: entries_root,
+                source: source_error,
+            });
+        }
+    };
+    let Ok(relative) = source.strip_prefix(entries_root) else {
+        return Ok(false);
+    };
+    let mut components = relative.components();
+    let Some(Component::Normal(_entry_identity)) = components.next() else {
+        return Ok(false);
+    };
+    let Some(Component::Normal(directory)) = components.next() else {
+        return Ok(false);
+    };
+    Ok(directory == std::ffi::OsStr::new(MATERIALIZED_DIRECTORY) && components.next().is_some())
 }
 
 /// Verify one published immutable entry and calculate both its logical and physical accounting.

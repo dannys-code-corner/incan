@@ -2908,6 +2908,7 @@ pub(crate) fn run_trusted_rustdoc_test(
     for path in &plan.native_search_paths {
         command.arg("-L").arg(format!("native={}", path.display()));
     }
+    append_native_runtime_rpaths(&mut command, &request.receipt.intent.target, &plan.native_search_paths);
     for (crate_name, path) in &plan.externs {
         command.arg("--extern").arg(format!("{crate_name}={}", path.display()));
     }
@@ -3417,6 +3418,7 @@ fn bake_direct_rustc(
     for path in &plan.native_search_paths {
         command.arg("-L").arg(format!("native={}", path.display()));
     }
+    append_native_runtime_rpaths(&mut command, &receipt.intent.target, &plan.native_search_paths);
     for (crate_name, path) in &plan.externs {
         command.arg("--extern").arg(format!("{crate_name}={}", path.display()));
     }
@@ -3440,6 +3442,34 @@ fn bake_direct_rustc(
         reused: false,
         lease: None,
     })
+}
+
+/// Embed the exact receipt-selected native directories required by a host-native Unix dynamic runtime.
+///
+/// Immutable Oven store identities contain a colon (`sha256:`), so they cannot safely be passed through a Unix
+/// colon-separated loader environment. The linker records these already materialized, digest-verified native search
+/// directories directly in the caller-owned binary instead. Static-only directories are harmless rpath entries;
+/// retaining all selected native directories keeps this transport independent of a filename heuristic and never
+/// admits an ambient package or host search path. Cross-target Android/iOS artifacts are staged by their explicit
+/// adapter rather than receiving a meaningless path to this host's Oven store.
+fn append_native_runtime_rpaths(command: &mut Command, target: &str, native_search_paths: &[PathBuf]) {
+    if !is_host_native_unix_target(target) {
+        return;
+    }
+    for path in native_search_paths {
+        command.arg("-C").arg("link-arg=-Wl,-rpath");
+        command.arg("-C").arg(format!("link-arg={}", path.display()));
+    }
+}
+
+/// Return whether a target produces an executable that can resolve this host's selected native-store directories.
+fn is_host_native_unix_target(target: &str) -> bool {
+    let host_architecture = std::env::consts::ARCH;
+    (cfg!(target_os = "macos") && target == format!("{host_architecture}-apple-darwin"))
+        || (cfg!(all(target_os = "linux", target_env = "gnu"))
+            && target == format!("{host_architecture}-unknown-linux-gnu"))
+        || (cfg!(all(target_os = "linux", target_env = "musl"))
+            && target == format!("{host_architecture}-unknown-linux-musl"))
 }
 
 /// Return the caller-owned sidecar path without accepting an output that lacks a safe file name.
@@ -4339,7 +4369,7 @@ mod tests {
         apply_oven_profile, attach_caller_owned_rustc_libraries, bake_direct_rustc_test, bake_stored_direct_rustc_run,
         bake_stored_direct_rustc_test, bake_trusted_direct_rustc_dylib, bake_trusted_direct_rustc_library,
         bake_trusted_direct_rustc_proc_macro, bake_trusted_direct_rustc_run, bake_trusted_direct_rustc_test,
-        combined_process_output, materialize_declared_rust_libraries,
+        combined_process_output, is_host_native_unix_target, materialize_declared_rust_libraries,
         materialize_declared_rust_libraries_with_selected_path_authority, resolve_sealed_registry_leaf,
         run_trusted_rustdoc_test, rustc_dynamic_library_environment, rustc_host_target,
         select_direct_rustc_plan_identity,
@@ -4375,6 +4405,47 @@ mod tests {
             report.to_string(),
             "direct rustc invocation: \"rustc\" \"--crate-name\" \"closure_probe\""
         );
+    }
+
+    #[test]
+    fn native_runtime_rpaths_apply_only_to_the_host_native_target() {
+        let host_architecture = std::env::consts::ARCH;
+
+        #[cfg(target_os = "macos")]
+        {
+            assert!(is_host_native_unix_target(&format!("{host_architecture}-apple-darwin")));
+            assert!(!is_host_native_unix_target(&format!("{host_architecture}-apple-ios")));
+            assert!(!is_host_native_unix_target("aarch64-linux-android"));
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let host_target = if cfg!(target_env = "gnu") {
+                format!("{host_architecture}-unknown-linux-gnu")
+            } else if cfg!(target_env = "musl") {
+                format!("{host_architecture}-unknown-linux-musl")
+            } else {
+                String::new()
+            };
+            if !host_target.is_empty() {
+                assert!(is_host_native_unix_target(&host_target));
+            }
+            assert!(!is_host_native_unix_target(&format!(
+                "{host_architecture}-apple-darwin"
+            )));
+            assert!(
+                !is_host_native_unix_target(&format!("{host_architecture}-unknown-linux-musl"))
+                    || cfg!(target_env = "musl")
+            );
+            assert!(!is_host_native_unix_target("aarch64-linux-android"));
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            assert!(!is_host_native_unix_target(&format!(
+                "{host_architecture}-unknown-linux-gnu"
+            )));
+        }
     }
 
     #[test]

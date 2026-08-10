@@ -2,6 +2,8 @@
 
 `incan inspect interop-plan` projects one declared and locked Oven interop target into a deterministic handoff for Gradle, Xcode, or another platform adapter. The report is binding-kind-neutral: it describes physical target inputs and actions without treating C headers, C ownership, or one platform command protocol as universal package metadata.
 
+> **Availability:** v0.5 ships this locked inspection handoff and the explicit `incan oven interop bake` and `stage` commands. Baking selects only supplied toolchain/SDK evidence, verifies the current lock, and seals declared native inputs into a direct-`rustc` plan. Staging copies digest-verified bundled runtime files into fixed Android or iOS consumer layouts. Neither command invokes Cargo, Gradle, Xcode, platform discovery, signing, or a physical device.
+
 ## Command
 
 ```text
@@ -22,13 +24,27 @@ Use JSON when an Oven, Gradle, or Xcode adapter needs the versioned handoff:
 incan inspect interop-plan --target aarch64-apple-ios --format json
 ```
 
-The JSON report uses `schema_version: 1`. It contains only logical identities and package-relative paths, so moving the locked package does not change the report.
+The JSON report uses `schema_version: 3`. It contains only logical identities and package-relative paths, so moving the locked package does not change the report. Its `locked_target_identity` is the portable digest shared with Oven execution receipts and checked binding-use receipts for the exact same locked target.
+
+After an explicit bake, stage a selected plan without repeating package discovery:
+
+```text
+incan oven interop stage \
+  --project . \
+  --target aarch64-apple-ios-sim \
+  --base-receipt .incan/oven/receipt.json \
+  --adapter ios \
+  --output target/interop-stage
+```
+
+`stage` reads the lock-fresh target and project-owned selected-execution receipt, reconstructs the final immutable plan receipt, holds that plan's lease, and atomically creates the requested new output directory. Android maps bundles to `jniLibs/arm64-v8a`; iOS device and simulator targets map them to `Frameworks`. Its `incan-interop-adapter.json` manifest contains target and receipt/plan identities, declared placement, digest, and output-relative paths only. It never invokes Cargo, Gradle, Xcode, a signing tool, or platform discovery, and never replaces an existing caller-owned output directory.
 
 ## Top-level fields
 
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Compatibility version of the Oven interop deployment-plan shape. |
+| `locked_target_identity` | Content-derived identity of the canonical locked target requirements; it is a join key, not a local toolchain selection. |
 | `target` | Exact compilation and deployment target triple. |
 | `toolchain` | Compatible toolchain requirement retained by the lock; it is not a local selection. |
 | `sdk` | Compatible SDK requirement when the target requires one; it is not a local selection. |
@@ -37,6 +53,7 @@ The JSON report uses `schema_version: 1`. It contains only logical identities an
 | `include_roots` | Deterministic package-relative include roots derived from locked public and shim headers. |
 | `definitions` | Explicit preprocessor definitions shared by verification and future shim compilation. |
 | `artifacts` | Dependency-ordered static, bundled, and system actions. |
+| `bindings` | Explicit compiler-nameable checked-binding to artifact-name correspondences authored for this target. |
 | `shims` | Locked authored shim sources, headers, language, and logical output. |
 
 ## Artifact actions
@@ -49,12 +66,16 @@ Every artifact has a stable `name`, a sorted `dependencies` list, and one `deplo
 
 `system` carries one explicit toolchain or SDK capability such as `android.library.log` or `apple.framework.Accelerate`. It never searches the host for a similarly named library.
 
+## Binding-artifact correspondences
+
+Each `bindings` item preserves the authored `module`, binding `name`, and declared target-artifact `artifacts`. It is a logical join: `module` and `name` identify the compiler-checked descriptor, while the artifact names select entries in this plan's `artifacts` array. The lock validates module/name uniqueness and artifact membership, but no header, library name, generated Rust string, or physical path is used to infer a relation. A binding-use receipt validates that its selected compilation really produced every declared mapping before reporting the artifact names.
+
 ## Shim actions
 
-A shim entry identifies locked C or C++ source files, the headers for its bounded C contract, and its logical output. The report does not claim that the shim has already been compiled. A future Oven bake must add a compiler- and target-keyed build receipt before the resulting Loaf can present that output as ready for final platform assembly.
+A shim entry identifies locked C or C++ source files, the headers for its bounded C contract, and its logical output. The inspection report alone does not claim that the shim has already been compiled. `incan oven interop bake` is the separate explicit publisher: it selects supplied compiler and SDK evidence, verifies the lock, compiles the shim, and seals its archive into the selected native plan.
 
 ## Boundary and exclusions
 
-The report is a directionally useful interop deployment handoff, not proof of a completed mobile build. It derives only from package-declared and lock-verified requirements; it is not an Oven resolution receipt. This command does not provision a toolchain, download or build artifacts, compile shims, cross-compile generated Rust, stage files into an application, resolve link symbols, invoke Gradle or Xcode, sign an application, accept a license, or decide whether an artifact may be published.
+The report is a directionally useful interop deployment handoff, not proof of a completed mobile build. It derives only from package-declared and lock-verified requirements; it is not an Oven resolution receipt. This inspection command does not provision a toolchain, download or build artifacts, compile shims, cross-compile generated Rust, stage files into an application, resolve link symbols, invoke Gradle or Xcode, sign an application, accept a license, or decide whether an artifact may be published. Those selected build and stage actions are deliberately separate `oven interop` commands.
 
-Gradle and Xcode adapters should consume the structured target, link, bundle, capability, and placement facts rather than asking users to duplicate include roots, dependency order, ABI directories, framework capabilities, or runtime names manually. Their exact task and command protocols remain adapter concerns.
+Gradle and Xcode consumers can consume the staged manifest and the structured target, link, bundle, capability, and placement facts rather than asking users to duplicate include roots, dependency order, ABI directories, framework capabilities, or runtime names manually. Their final application-assembly, signing, and command protocols remain adapter concerns.

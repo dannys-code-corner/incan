@@ -1,6 +1,6 @@
 # RFC 116: Typed C ABI interop
 
-- **Status:** In Progress
+- **Status:** Implemented
 - **Created:** 2026-07-23
 - **Author(s):** Danny Meijer (@dannymeijer)
 - **Related:**
@@ -19,9 +19,9 @@
     - RFC 117 (`Loaf.toml` and Oven's language-neutral project model)
     - RFC 118 (Incan and Oven command-line surfaces)
 - **Issue:** [#939](https://github.com/encero-systems/incan/issues/939)
-- **RFC PR:** —
+- **RFC PR:** [#998](https://github.com/encero-systems/incan/pull/998)
 - **Written against:** v0.5
-- **Shipped in:** —
+- **Shipped in:** v0.5
 
 ## Summary
 
@@ -33,9 +33,8 @@ The v0.5 RFC 116 release contract is the currently implemented `incan.toml` `[ov
 
 The release-bound implementation is deliberately distinct from later work:
 
-- **Implemented and closed v0.5 slices:** #940 provides the checked-binding and Clang-verification foundation; #942 provides declared native artifacts, shims, and normalized locked requirement facts.
-- **Remaining v0.5 completion work:** #941 owns the resource/bounded-value acceptance closure and #943 owns final inspection, editor, and documentation projection. Their issue state—not a source branch or this RFC prose—determines when RFC 116 can close.
-- **v0.6 execution and evidence:** #944 resolves the declared requirements into selected tool and SDK receipts, bakes/stages artifacts, produces adapter inputs, and gathers virtual-device evidence. It does not reopen RFC 116's source declaration or current requirement semantics.
+- **Delivered v0.5 implementation:** #940 provides the checked-binding and Clang-verification foundation; #941 provides the resource and bounded-value acceptance closure; #942 provides declared native artifacts, shims, and normalized locked requirement facts; and #943 projects the checked facts through diagnostics, inspection, editor support, and documentation. The user-directed #944 native-plan and virtual-device acceptance work resolves declared requirements into selected tool and SDK receipts, bakes and stages artifacts, produces adapter inputs, and gathers virtual-device evidence. It does not reopen RFC 116's source declaration or current requirement semantics. Physical-device execution and commercial mobile-readiness claims remain outside the v0.5 criterion.
+- **Release status:** RFC 116 is implemented for v0.5 in #998. It completes #939's v0.5 contract; no #941, #943, or #944 implementation work remains under this RFC.
 - **v0.6 Loaf-envelope successor:** [#1008](https://github.com/encero-systems/incan/issues/1008) moves the established requirement data from `incan.toml` to `Loaf.toml` and from the current semantic lock to `Oven.lock` after the RFC 117 cutover. It preserves the v0.5 requirement meaning, rejects legacy parsing, and does not duplicate #944.
 
 RFC 117 owns the project-model cutover; RFC 118 owns the later CLI presentation. Neither changes the C-specific source safety contract in this RFC.
@@ -434,13 +433,15 @@ The compiler-known `c` vocabulary must provide these target-checked scalar categ
 | `c.i16` / `c.u16` | exact-width 16-bit signed / unsigned integer |
 | `c.i32` / `c.u32` | exact-width 32-bit signed / unsigned integer |
 | `c.i64` / `c.u64` | exact-width 64-bit signed / unsigned integer |
+| `c.i128` / `c.u128` | target-verified `__int128` signed / unsigned extension; not portable C |
+| `c.f32` / `c.f64` | exact-width 32-bit / 64-bit binary floating point |
 | `c.c_char` | target C `char` category without assumed signedness |
 | `c.c_int` | target C `int` category |
 | `c.Size` | target `size_t` category |
 
 <!-- markdownlint-enable MD060 -->
 
-Exact-width types must be rejected on a target where the corresponding width is unavailable. Target-width types must retain their C identity even when their current representation matches an Incan numeric type.
+Exact-width types must be rejected on a target where the corresponding width is unavailable. Fixed-width integer and binary-float categories carry the corresponding exact Incan numeric type, and `c.Size` carries `usize`; none silently widens through `int`. `c.i128` and `c.u128` are admitted only when the selected Clang target accepts `__int128`. Target-width aliases retain their C identity even when their current representation matches an Incan numeric type.
 
 Incan `int` must not implicitly stand for a C integer category. Numeric conversion must be checked for range and sign loss. A raw binding signature must not use semantic Incan numerics in place of exact C parameter types.
 
@@ -780,7 +781,7 @@ Deliver the import-activated `std.interop` vocabulary, exact scalar declarations
 
 ### Phase 2: Owned resources and bounded bridge values (#941)
 
-Add resource release associations, inferred call-scoped borrowing, `Out` / `InOut` initialization rules, bounded strings and spans, scoped copies, and a SQLite proof.
+The v0.5 foundation adds resource release associations, inferred call-scoped borrowing, `Out` / `InOut` initialization rules, bounded NUL-terminated strings, immediately copied scoped text, and a SQLite proof. It also adds bounded byte and `f32` caller-owned spans: declarations pair one span pointer with its length or capacity, and mutable spans validate the native-written count before returning the original allocation. General pointers, arbitrary element representations, and escaping or zero-copy foreign views remain follow-up work.
 
 ### Phase 3: Governed artifacts and shims (#942, v0.5)
 
@@ -788,13 +789,17 @@ Extend the v0.5 package and lock graph with `[oven.interop]` target requirements
 
 ### Phase 4: Tooling projection (#943)
 
-Project checked binding facts, bridge and façade edges, diagnostics, inspection, editor support, generated references, and compatibility documentation from the same descriptor.
+Project checked binding declarations and explicit unsafe calls through diagnostics, inspection, codegraph, LSP, and user documentation from the same descriptor. The v0.5 projection classifies only a compiler-proven direct same-module public façade → private bridge → raw-call relation, emits a redacted receipt for that relation, and keys compatibility on exact descriptor and target identities. It does not infer re-exports, transitive calls, or complete application safety from a spelling match.
 
-### Phase 5: Mobile inference proof (#944, v0.6 follow-up)
+### Phase 5: Native-plan and virtual-device proof (#944, v0.5)
 
-Verify Android and iOS target paths with a real native inference binding and define the directional handoff from a Loaf to Gradle or Xcode without freezing their command protocol.
+v0.5 completes the explicit native-plan baker and fixed Android/iOS staging handoff without reopening this RFC's
+declaration, ownership, or source-configuration contract. It covers locked artifact/header/shim inputs, selected
+compiler and SDK evidence, direct-`rustc` archive consumption, and virtual Android/iOS consumers. Physical-device
+execution, application signing, publication admission, and a general mobile application toolchain remain outside the
+release criterion.
 
-## Progress Checklist
+## Implementation log
 
 ### Spec / design
 
@@ -812,24 +817,26 @@ Verify Android and iOS target paths with a real native inference binding and def
 
 ### Owned resources and bounded bridge values (#941)
 
-- [ ] Define opaque resources, release associations, call-scoped borrows, and close semantics.
-- [ ] Implement `Out` / `InOut` slot construction, initialization conditions, and `take()` checks.
-- [ ] Add bounded string, span, and scoped-view bridge operations with SQLite acceptance evidence.
+- [x] Define opaque resources, release associations, call-scoped borrows, and close semantics.
+- [x] Implement `Out` / `InOut` slot construction, initialization conditions, and `take()` checks.
+- [x] Add bounded C-string input and immediately copied scoped UTF-8 text with SQLite acceptance evidence.
+- [x] Define bounded byte and `f32` spans and caller-owned buffers without opening a general pointer API.
 
 ### Governed artifacts and shims (#942, v0.5)
 
 - [x] Define target-specific native artifact and shim inputs, lock identity, provenance, and offline verification.
 - [x] Define the v0.5 source versus `incan.toml` responsibilities for target-specific physical configuration.
-- [ ] Complete #1008 after v0.5 to relocate the unchanged declared envelope to `Loaf.toml` and `Oven.lock`.
+- **Post-v0.5 successor:** [#1008](https://github.com/encero-systems/incan/issues/1008) relocates the unchanged declared envelope to `Loaf.toml` and `Oven.lock`.
 
 ### Tooling projection (#943)
 
-- [ ] Expose checked binding, verification, bridge, and façade facts through diagnostics, inspection, editor, and generated documentation.
+- [x] Expose checked binding and explicit unsafe-call facts through diagnostics, inspection, codegraph, LSP, and documentation.
+- [x] Project the bounded compiler-proven façade/bridge relation, redacted receipt, and exact descriptor/target compatibility identity without creating a tooling-owned metadata model.
 
-### Mobile inference proof (#944)
+### Native-plan and virtual-device proof (#944, v0.5)
 
-- [ ] Verify Android arm64 and iOS arm64 native inference paths.
-- [ ] Produce a directionally useful Loaf handoff to Gradle and Xcode while leaving final assembly and signing to those tools.
+- [x] Bake and execute declared static artifacts and governed C/C++ shims through a receipt-bound direct-`rustc` plan without Cargo.
+- [x] Stage digest-verified bundled runtime files into fixed Android and iOS consumer layouts and verify virtual-device consumers, while leaving final assembly, signing, and physical-device proof outside the slice.
 
 ## Design Decisions
 

@@ -382,6 +382,28 @@ test-oven-release-smoke: test-prewarm-oven-release-loafs
 			> "$$smoke_root/cargo-guard/cargo"; \
 		chmod +x "$$smoke_root/cargo-guard/cargo"; \
 		: > "$$smoke_root/cargo-guard/invocations.log"; \
+		library_project="$$smoke_root/oven-project-bake"; \
+		cp -R "$(CURDIR)/tests/fixtures/oven_project_bake" "$$library_project"; \
+		PATH="$$smoke_root/cargo-guard:$$PATH" \
+			INCAN_OVEN_CARGO_GUARD_LOG="$$smoke_root/cargo-guard/invocations.log" \
+			INCAN_HOME="$$smoke_root/incan-home" INCAN_NO_BANNER=1 \
+			INCAN_SOURCE_ROOT="$(CURDIR)" \
+			INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
+			INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
+			INCAN_TOOLCHAIN_CRATES_DIR="$(CURDIR)/crates" \
+			RUSTUP_TOOLCHAIN="$(INCAN_TEST_LOAF_TOOLCHAIN)" \
+			"$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan" oven bake --project "$$library_project" --format json > "$$smoke_root/oven-bake-first.json"; \
+		test "$$(grep -Fc '"action": "materialized"' "$$smoke_root/oven-bake-first.json")" -eq 2; \
+		PATH="$$smoke_root/cargo-guard:$$PATH" \
+			INCAN_OVEN_CARGO_GUARD_LOG="$$smoke_root/cargo-guard/invocations.log" \
+			INCAN_HOME="$$smoke_root/incan-home" INCAN_NO_BANNER=1 \
+			INCAN_SOURCE_ROOT="$(CURDIR)" \
+			INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
+			INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
+			INCAN_TOOLCHAIN_CRATES_DIR="$(CURDIR)/crates" \
+			RUSTUP_TOOLCHAIN="$(INCAN_TEST_LOAF_TOOLCHAIN)" \
+			"$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan" oven bake --project "$$library_project" --format json > "$$smoke_root/oven-bake-second.json"; \
+		test "$$(grep -Fc '"action": "reused"' "$$smoke_root/oven-bake-second.json")" -eq 2; \
 		for command in build run test; do \
 			source="$(CURDIR)/src/oven/fixtures/release_core.incn"; \
 			if [ "$$command" = test ]; then source="$(CURDIR)/src/oven/fixtures/test_release_core.incn"; fi; \
@@ -391,6 +413,17 @@ test-oven-release-smoke: test-prewarm-oven-release-loafs
 				RUSTUP_TOOLCHAIN="$(INCAN_TEST_LOAF_TOOLCHAIN)" \
 				"$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan" "$$command" "$$source" >/dev/null; \
 		done; \
+		(cd "$$library_project" && PATH="$$smoke_root/cargo-guard:$$PATH" \
+			INCAN_OVEN_CARGO_GUARD_LOG="$$smoke_root/cargo-guard/invocations.log" \
+			INCAN_HOME="$$smoke_root/incan-home" INCAN_NO_BANNER=1 \
+			INCAN_SOURCE_ROOT="$(CURDIR)" \
+			INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
+			INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
+			INCAN_TOOLCHAIN_CRATES_DIR="$(CURDIR)/crates" \
+			RUSTUP_TOOLCHAIN="$(INCAN_TEST_LOAF_TOOLCHAIN)" \
+			"$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan" build --lib >/dev/null); \
+		test -f "$$library_project/target/lib/oven/debug/liboven_project_bake.rlib"; \
+		test -f "$$library_project/target/lib/oven/release/liboven_project_bake.rlib"; \
 		test ! -s "$$smoke_root/cargo-guard/invocations.log"
 
 .PHONY: test-rust-inspect  ## test - Run focused rust-inspect regression tests
@@ -470,6 +503,15 @@ smoke-test-examples:
 	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
 		INCAN_EXAMPLES_TIMEOUT=$${INCAN_EXAMPLES_TIMEOUT:-30} bash scripts/run_examples.sh
 
+.PHONY: smoke-test-rust-interop-examples
+smoke-test-rust-interop-examples: test-prewarm-oven-loafs
+	@$(MAKE) -s smoke-test-require-release-bin
+	@echo "\033[1mRunning receipt-compatible Rust-interop smoke examples...\033[0m"
+	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
+		INCAN_EXAMPLES_ONLY="examples/advanced/using_rust_crates.incn:examples/pro/rust_interop_pro.incn" \
+		INCAN_EXAMPLES_TIMEOUT=30 INCAN_EXAMPLES_TIMEOUT_MODE=fail INCAN_EXAMPLES_REQUIRE_CARGO_FREE=1 \
+		bash scripts/run_examples.sh
+
 .PHONY: smoke-test-benchmarks-incan
 smoke-test-benchmarks-incan:
 	@$(MAKE) -s smoke-test-require-release-bin
@@ -483,6 +525,7 @@ smoke-test-core: test-prewarm-oven-loafs
 	@$(MAKE) smoke-test-canary
 	@$(MAKE) smoke-test-web-example
 	@$(MAKE) smoke-test-nested-project-example
+	@$(MAKE) smoke-test-rust-interop-examples
 	@$(MAKE) smoke-test-examples
 	@$(MAKE) smoke-test-benchmarks-incan
 

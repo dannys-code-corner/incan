@@ -7,6 +7,28 @@ use crate::frontend::symbols::{CallableParam, ResolvedType};
 use crate::frontend::typechecker::FixedUnpackPlan;
 use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty};
 use incan_core::lang::types::collections::CollectionTypeId;
+use incan_core::lang::types::numerics::{self, NumericFamily};
+
+/// Select the narrow numeric bridge accepted while validating one call surface.
+///
+/// Ordinary Incan callables retain the global lossless-numeric rule. Checked C calls additionally admit the
+/// ordinary `int` carrier for an exact integer ABI parameter; generated wrappers perform the corresponding
+/// fallible conversion before crossing the foreign boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallArgumentCompatibility {
+    Ordinary,
+    CheckedCIntegerBridge,
+}
+
+/// Call-wide facts shared by each argument binding under one compatibility rule.
+///
+/// Keeping these facts together makes the selected compatibility rule explicit without widening the internal
+/// validator's argument list as new checked call surfaces are added.
+struct CallArgumentValidationContext<'a> {
+    callee: &'a str,
+    call_span: Span,
+    compatibility: CallArgumentCompatibility,
+}
 
 impl TypeChecker {
     /// Return the expression carried by a call argument.
@@ -221,6 +243,56 @@ impl TypeChecker {
         type_bindings: &mut std::collections::HashMap<String, ResolvedType>,
         call_span: Span,
     ) {
+        self.validate_callable_arg_bindings_with_compatibility(
+            params,
+            args,
+            arg_types,
+            type_bindings,
+            CallArgumentValidationContext {
+                callee,
+                call_span,
+                compatibility: CallArgumentCompatibility::Ordinary,
+            },
+        );
+    }
+
+    /// Validate a checked C call while admitting the bounded ordinary-integer bridge for exact ABI integers.
+    pub(in crate::frontend::typechecker::check_expr) fn validate_checked_c_callable_arg_bindings(
+        &mut self,
+        callee: &str,
+        params: &[CallableParam],
+        args: &[CallArg],
+        arg_types: &[ResolvedType],
+        type_bindings: &mut std::collections::HashMap<String, ResolvedType>,
+        call_span: Span,
+    ) {
+        self.validate_callable_arg_bindings_with_compatibility(
+            params,
+            args,
+            arg_types,
+            type_bindings,
+            CallArgumentValidationContext {
+                callee,
+                call_span,
+                compatibility: CallArgumentCompatibility::CheckedCIntegerBridge,
+            },
+        );
+    }
+
+    /// Validate call arguments against callable parameters under one explicitly selected compatibility rule.
+    fn validate_callable_arg_bindings_with_compatibility(
+        &mut self,
+        params: &[CallableParam],
+        args: &[CallArg],
+        arg_types: &[ResolvedType],
+        type_bindings: &mut std::collections::HashMap<String, ResolvedType>,
+        context: CallArgumentValidationContext<'_>,
+    ) {
+        let CallArgumentValidationContext {
+            callee,
+            call_span,
+            compatibility,
+        } = context;
         let normal_params: Vec<(usize, &CallableParam)> = params
             .iter()
             .enumerate()
@@ -241,11 +313,25 @@ impl TypeChecker {
                     if let Some((_, param)) = normal_params.get(positional_index) {
                         normal_bound_spans[positional_index] = Some(arg_span);
                         self.infer_type_param_bindings(&param.ty, arg_ty, type_bindings);
-                        self.emit_arg_type_mismatch_if_needed(callee, param.name(), &param.ty, arg_ty, arg_span);
+                        self.emit_arg_type_mismatch_if_needed(
+                            callee,
+                            param.name(),
+                            &param.ty,
+                            arg_ty,
+                            arg_span,
+                            compatibility,
+                        );
                         positional_index += 1;
                     } else if let Some(param) = rest_positional {
                         self.infer_type_param_bindings(&param.ty, arg_ty, type_bindings);
-                        self.emit_arg_type_mismatch_if_needed(callee, param.name(), &param.ty, arg_ty, arg_span);
+                        self.emit_arg_type_mismatch_if_needed(
+                            callee,
+                            param.name(),
+                            &param.ty,
+                            arg_ty,
+                            arg_span,
+                            compatibility,
+                        );
                     } else {
                         unexpected_positional += 1;
                     }
@@ -273,6 +359,7 @@ impl TypeChecker {
                                     &param.ty,
                                     item_ty,
                                     item_span,
+                                    compatibility,
                                 );
                                 positional_index += 1;
                             } else if let Some(param) = rest_positional {
@@ -283,6 +370,7 @@ impl TypeChecker {
                                     &param.ty,
                                     item_ty,
                                     item_span,
+                                    compatibility,
                                 );
                             } else {
                                 unexpected_positional += 1;
@@ -300,6 +388,7 @@ impl TypeChecker {
                                     &param.ty,
                                     item_ty,
                                     arg_span,
+                                    compatibility,
                                 );
                                 positional_index += 1;
                             } else if let Some(param) = rest_positional {
@@ -310,6 +399,7 @@ impl TypeChecker {
                                     &param.ty,
                                     item_ty,
                                     arg_span,
+                                    compatibility,
                                 );
                             } else {
                                 unexpected_positional += 1;
@@ -318,7 +408,14 @@ impl TypeChecker {
                     } else if let Some(param) = rest_positional {
                         let expected = list_ty(param.ty.clone());
                         self.infer_type_param_bindings(&expected, arg_ty, type_bindings);
-                        self.emit_arg_type_mismatch_if_needed(callee, param.name(), &expected, arg_ty, arg_span);
+                        self.emit_arg_type_mismatch_if_needed(
+                            callee,
+                            param.name(),
+                            &expected,
+                            arg_ty,
+                            arg_span,
+                            compatibility,
+                        );
                     } else {
                         self.errors
                             .push(errors::call_unpack_without_rest(callee, "*", arg_span));
@@ -342,10 +439,24 @@ impl TypeChecker {
                         }
                         normal_bound_spans[normal_idx] = Some(arg_span);
                         self.infer_type_param_bindings(&param.ty, arg_ty, type_bindings);
-                        self.emit_arg_type_mismatch_if_needed(callee, param.name(), &param.ty, arg_ty, arg_span);
+                        self.emit_arg_type_mismatch_if_needed(
+                            callee,
+                            param.name(),
+                            &param.ty,
+                            arg_ty,
+                            arg_span,
+                            compatibility,
+                        );
                     } else if let Some(param) = rest_keyword {
                         self.infer_type_param_bindings(&param.ty, arg_ty, type_bindings);
-                        self.emit_arg_type_mismatch_if_needed(callee, param.name(), &param.ty, arg_ty, arg_span);
+                        self.emit_arg_type_mismatch_if_needed(
+                            callee,
+                            param.name(),
+                            &param.ty,
+                            arg_ty,
+                            arg_span,
+                            compatibility,
+                        );
                     } else {
                         self.errors
                             .push(errors::unknown_keyword_argument(callee, name, arg_span));
@@ -398,6 +509,7 @@ impl TypeChecker {
                                         &param.ty,
                                         value_ty,
                                         value.span,
+                                        compatibility,
                                     );
                                 } else if let Some(param) = rest_keyword {
                                     self.infer_type_param_bindings(&param.ty, value_ty, type_bindings);
@@ -407,6 +519,7 @@ impl TypeChecker {
                                         &param.ty,
                                         value_ty,
                                         value.span,
+                                        compatibility,
                                     );
                                 } else {
                                     self.errors
@@ -420,6 +533,7 @@ impl TypeChecker {
                                     &param.ty,
                                     value_ty,
                                     value.span,
+                                    compatibility,
                                 );
                             } else {
                                 self.errors
@@ -429,7 +543,14 @@ impl TypeChecker {
                     } else if let Some(param) = rest_keyword {
                         let expected = dict_ty(ResolvedType::Str, param.ty.clone());
                         self.infer_type_param_bindings(&expected, arg_ty, type_bindings);
-                        self.emit_arg_type_mismatch_if_needed(callee, param.name(), &expected, arg_ty, arg_span);
+                        self.emit_arg_type_mismatch_if_needed(
+                            callee,
+                            param.name(),
+                            &expected,
+                            arg_ty,
+                            arg_span,
+                            compatibility,
+                        );
                     } else {
                         self.errors
                             .push(errors::call_unpack_without_rest(callee, "**", arg_span));
@@ -466,8 +587,12 @@ impl TypeChecker {
         expected: &ResolvedType,
         actual: &ResolvedType,
         span: Span,
+        compatibility: CallArgumentCompatibility,
     ) {
-        if !self.types_compatible(actual, expected) {
+        if !self.types_compatible(actual, expected)
+            && !(compatibility == CallArgumentCompatibility::CheckedCIntegerBridge
+                && Self::checked_c_integer_bridge_compatible(actual, expected))
+        {
             if self.record_validated_newtype_coercion_if_possible(actual, expected, span) {
                 return;
             }
@@ -479,5 +604,20 @@ impl TypeChecker {
                 span,
             ));
         }
+    }
+
+    /// Return whether an ordinary Incan integer may cross one checked C integer boundary.
+    ///
+    /// This deliberately does not make numeric narrowing generally compatible. The checked C emitter owns the only
+    /// conversion and uses `TryInto`, so a negative or out-of-range value fails before the foreign call begins.
+    pub(in crate::frontend::typechecker::check_expr) fn checked_c_integer_bridge_compatible(
+        actual: &ResolvedType,
+        expected: &ResolvedType,
+    ) -> bool {
+        matches!(actual, ResolvedType::Int)
+            && matches!(expected, ResolvedType::Numeric(id) if matches!(
+                numerics::info_for(*id).family,
+                NumericFamily::SignedInteger | NumericFamily::UnsignedInteger
+            ))
     }
 }

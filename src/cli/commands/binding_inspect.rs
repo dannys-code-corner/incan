@@ -4,23 +4,35 @@
 //! analysis runs the ordinary host-target C verifier, but this report is not a reusable verification receipt and does
 //! not resolve native artifacts or infer bridge and facade roles from source layout.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
-use incan_core::lang::c_abi::scalar_type_as_str;
+use incan_core::lang::c_abi::{link_capability_as_str, scalar_type_as_str};
 use serde::Serialize;
 
+use crate::cli::commands::interop_plan::locked_interop_plan_target;
 use crate::cli::prelude::ParsedModule;
 use crate::cli::{CliError, CliResult, ExitCode};
-use crate::frontend::ast::Span;
-use crate::frontend::typechecker::{CBindingDescriptor, CBindingOutcome, CBindingType, COutputMode, CResourceAccess};
+use crate::frontend::ast::{Span, Visibility};
+use crate::frontend::typechecker::{
+    CBindingBuffer, CBindingDescriptor, CBindingOutcome, CBindingType, COutputMode, CResourceAccess,
+    c_binding_descriptor_identity,
+};
+use crate::oven::interop::{
+    default_interop_execution_receipt_path, load_interop_execution_receipt, validate_interop_execution_receipt,
+};
+use crate::oven_interop::locked_interop_target_identity;
 use crate::provider::FeatureSelection;
 
 use super::common::{CompilationAnalysis, CompilationSession, collect_modules_detailed_with_session};
 
 /// Compatibility version for the checked C binding inspection report.
-const BINDING_INSPECTION_SCHEMA_VERSION: u32 = 1;
+const BINDING_INSPECTION_SCHEMA_VERSION: u32 = 2;
+
+/// Compatibility version for the redaction-safe checked binding-use receipt.
+const BINDING_USAGE_RECEIPT_SCHEMA_VERSION: u32 = 2;
 
 /// Output format for `incan inspect bindings`.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +41,8 @@ pub enum BindingInspectionFormat {
     Text,
     /// Deterministic structured declaration facts for tools.
     Json,
+    /// Redaction-safe receipt of checked binding and raw-call usage, optionally joined to a locked Oven target.
+    Receipt,
 }
 
 /// Stable checked C binding declaration report.
@@ -42,9 +56,12 @@ struct BindingInspectionReport {
 #[derive(Debug, Serialize)]
 struct BindingReport {
     module: Vec<String>,
+    /// Relocation-stable compiler identity for the complete checked descriptor contract.
+    identity: String,
     name: String,
     header: String,
     system_library: String,
+    link_capability: String,
     source: BindingSourceSpan,
     resources: Vec<ResourceReport>,
     symbols: Vec<SymbolReport>,
@@ -67,6 +84,7 @@ struct SymbolReport {
     native: String,
     parameters: Vec<ParameterReport>,
     return_type: BindingTypeReport,
+    buffers: Vec<BufferReport>,
     outcomes: Vec<OutcomeReport>,
 }
 
@@ -76,6 +94,14 @@ struct ParameterReport {
     name: String,
     #[serde(rename = "type")]
     ty: BindingTypeReport,
+}
+
+/// One descriptor-owned checked pointer-to-length association for a bounded span.
+#[derive(Debug, Serialize)]
+struct BufferReport {
+    pointer_parameter: String,
+    length_parameter: String,
+    element: String,
 }
 
 /// One declared result path and its output-slot state transitions.
@@ -175,6 +201,83 @@ struct BindingSourceSpan {
     end_column: usize,
 }
 
+/// Portable receipt containing only checked C binding usage facts safe to retain outside a source checkout.
+#[derive(Debug, Serialize)]
+struct BindingUsageReceipt {
+    schema_version: u32,
+    compatibility: BindingUsageCompatibility,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<BindingUsageTarget>,
+    bindings: Vec<BindingUsageBinding>,
+    calls: Vec<BindingUsageCall>,
+    facades: Vec<BindingUsageFacade>,
+}
+
+/// Explicit v0.5 comparison policy for retained checked C binding provenance.
+///
+/// The initial policy is intentionally exact: a different descriptor or locked target identity is a changed ABI,
+/// ownership, target, or artifact contract until a later compiler-owned compatibility rule can prove otherwise.
+#[derive(Debug, Serialize)]
+struct BindingUsageCompatibility {
+    binding_contract: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_contract: Option<&'static str>,
+}
+
+/// Target selection identity joined to a checked binding-use receipt without serializing a local package path.
+#[derive(Debug, Serialize)]
+struct BindingUsageTarget {
+    target: String,
+    locked_target_identity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_execution_identity: Option<String>,
+    /// Explicit target-artifact correspondence keyed by the checked binding declaration identity in source terms.
+    #[serde(skip)]
+    binding_artifacts: BTreeMap<(Vec<String>, String), Vec<String>>,
+}
+
+/// One compiler-owned checked descriptor identity used by the receipt.
+#[derive(Debug, Serialize)]
+struct BindingUsageBinding {
+    module: Vec<String>,
+    name: String,
+    identity: String,
+    /// Package-authored target-artifact names retained only when the selected target declares this exact binding.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    target_artifacts: Vec<String>,
+}
+
+/// One checked direct native symbol use without source offsets, values, paths, or process-local addresses.
+#[derive(Debug, Serialize)]
+struct BindingUsageCall {
+    binding_identity: String,
+    symbol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<BindingUsageOwner>,
+}
+
+/// Stable callable identity associated with a checked raw call.
+#[derive(Debug, Serialize)]
+struct BindingUsageOwner {
+    name: String,
+    visibility: String,
+}
+
+/// One compiler-proven public facade and private raw bridge, without source locations or local paths.
+#[derive(Debug, Serialize)]
+struct BindingUsageFacade {
+    facade: BindingUsageOwner,
+    bridge: BindingUsageOwner,
+    calls: Vec<BindingUsageFacadeCall>,
+}
+
+/// One direct raw C call that the facade's bridge owns.
+#[derive(Debug, Serialize)]
+struct BindingUsageFacadeCall {
+    binding_identity: String,
+    symbol: String,
+}
+
 /// Inspect checked C binding declarations for one source file or project root.
 ///
 /// The command runs the ordinary compiler collection and typecheck path exactly once, including host-target C
@@ -185,10 +288,16 @@ pub fn inspect_bindings(
     format: BindingInspectionFormat,
     feature_selection: &FeatureSelection,
     sdk_profile_override: Option<&str>,
+    target: Option<&str>,
 ) -> CliResult<ExitCode> {
+    if target.is_some() && format != BindingInspectionFormat::Receipt {
+        return Err(CliError::failure(
+            "`incan inspect bindings --target` requires `--format receipt`",
+        ));
+    }
     let entry_path = resolve_binding_entry_path(path)?;
     let session = CompilationSession::discover_with_selections(&entry_path, feature_selection, sdk_profile_override)?;
-    let modules = collect_modules_detailed_with_session(entry_path, &session)
+    let modules = collect_modules_detailed_with_session(entry_path.clone(), &session)
         .map_err(|failure| CliError::failure(failure.render_human()))?;
     let analysis = session
         .analyze_modules(
@@ -197,8 +306,209 @@ pub fn inspect_bindings(
             None,
         )
         .map_err(|failure| CliError::failure(failure.render_human()))?;
+    if format == BindingInspectionFormat::Receipt {
+        let target = target
+            .map(|target| binding_usage_target(&entry_path, target))
+            .transpose()?;
+        let receipt = binding_usage_receipt(&modules, &analysis, target)?;
+        return render_binding_usage_receipt(&receipt);
+    }
     let report = binding_inspection_report(&modules, &analysis)?;
     render_binding_inspection_report(&report, format)
+}
+
+/// Join an optional lock-fresh Oven target to a binding-use receipt without retaining project-local paths.
+fn binding_usage_target(entry_path: &Path, target: &str) -> CliResult<BindingUsageTarget> {
+    let locked = locked_interop_plan_target(entry_path, target)?;
+    let receipt_path = default_interop_execution_receipt_path(&locked.project_root, &locked.target.target);
+    let selected_execution_identity = if receipt_path.is_file() {
+        let receipt = load_interop_execution_receipt(&receipt_path).map_err(CliError::failure)?;
+        validate_interop_execution_receipt(&locked.target, &receipt).map_err(CliError::failure)?;
+        Some(receipt.identity)
+    } else {
+        None
+    };
+    Ok(BindingUsageTarget {
+        target: locked.target.target.clone(),
+        locked_target_identity: locked_interop_target_identity(&locked.target).map_err(CliError::failure)?,
+        selected_execution_identity,
+        binding_artifacts: locked
+            .target
+            .bindings
+            .iter()
+            .map(|binding| {
+                (
+                    (binding.module.clone(), binding.name.clone()),
+                    binding.artifacts.clone(),
+                )
+            })
+            .collect(),
+    })
+}
+
+/// Project checked descriptors and raw calls into a deliberately redacted, deterministic receipt.
+fn binding_usage_receipt(
+    modules: &[ParsedModule],
+    analysis: &CompilationAnalysis,
+    target: Option<BindingUsageTarget>,
+) -> CliResult<BindingUsageReceipt> {
+    let mut bindings = Vec::new();
+    let mut identities_by_module_and_name = BTreeMap::new();
+    let target_binding_artifacts = target
+        .as_ref()
+        .map(|target| target.binding_artifacts.clone())
+        .unwrap_or_default();
+    for module in modules {
+        let type_info = analysis
+            .type_info_for_module_path(&module.path_segments)
+            .ok_or_else(|| CliError::failure(format!("missing session analysis for {}", module.file_path.display())))?;
+        for descriptor in type_info.c_abi.bindings.values() {
+            let identity = c_binding_descriptor_identity(&module.path_segments, descriptor);
+            let key = (module.path_segments.clone(), descriptor.class_name.clone());
+            if let Some(existing) = identities_by_module_and_name.insert(key.clone(), identity.clone())
+                && existing != identity
+            {
+                return Err(CliError::failure(format!(
+                    "checked C binding `{}` has conflicting descriptor identities in module `{}`",
+                    descriptor.class_name,
+                    module.path_segments.join("::")
+                )));
+            }
+            bindings.push(BindingUsageBinding {
+                module: module.path_segments.clone(),
+                name: descriptor.class_name.clone(),
+                identity,
+                target_artifacts: target_binding_artifacts.get(&key).cloned().unwrap_or_default(),
+            });
+        }
+    }
+    for (module, name) in target_binding_artifacts.keys() {
+        if !identities_by_module_and_name.contains_key(&(module.clone(), name.clone())) {
+            return Err(CliError::failure(format!(
+                "locked Oven interop target declares binding-artifact correspondence for `{}::{name}` but compilation did not produce that checked binding",
+                module.join("::")
+            )));
+        }
+    }
+    let mut calls = Vec::new();
+    let mut facades = Vec::new();
+    for module in modules {
+        let type_info = analysis
+            .type_info_for_module_path(&module.path_segments)
+            .ok_or_else(|| CliError::failure(format!("missing session analysis for {}", module.file_path.display())))?;
+        for raw_call in &type_info.c_abi.raw_calls {
+            let identity = identities_by_module_and_name
+                .get(&(module.path_segments.clone(), raw_call.binding.clone()))
+                .ok_or_else(|| {
+                    CliError::failure(format!(
+                        "checked C raw call `{}.{}` has no descriptor identity in module `{}`",
+                        raw_call.binding,
+                        raw_call.symbol,
+                        module.path_segments.join("::")
+                    ))
+                })?;
+            calls.push(BindingUsageCall {
+                binding_identity: identity.clone(),
+                symbol: raw_call.symbol.clone(),
+                owner: raw_call.owner.as_ref().map(binding_usage_owner),
+            });
+        }
+        for facade in &type_info.c_abi.facades {
+            let mut facade_calls = Vec::new();
+            for raw_call in type_info
+                .c_abi
+                .raw_calls
+                .iter()
+                .filter(|raw_call| raw_call.owner.as_ref() == Some(&facade.bridge))
+            {
+                let identity = identities_by_module_and_name
+                    .get(&(module.path_segments.clone(), raw_call.binding.clone()))
+                    .ok_or_else(|| {
+                        CliError::failure(format!(
+                            "checked C facade bridge `{}.{}` has no descriptor identity in module `{}`",
+                            raw_call.binding,
+                            raw_call.symbol,
+                            module.path_segments.join("::")
+                        ))
+                    })?;
+                facade_calls.push(BindingUsageFacadeCall {
+                    binding_identity: identity.clone(),
+                    symbol: raw_call.symbol.clone(),
+                });
+            }
+            facade_calls.sort_by(|left, right| {
+                left.binding_identity
+                    .cmp(&right.binding_identity)
+                    .then_with(|| left.symbol.cmp(&right.symbol))
+            });
+            facade_calls
+                .dedup_by(|left, right| left.binding_identity == right.binding_identity && left.symbol == right.symbol);
+            if facade_calls.is_empty() {
+                continue;
+            }
+            facades.push(BindingUsageFacade {
+                facade: binding_usage_owner(&facade.facade),
+                bridge: binding_usage_owner(&facade.bridge),
+                calls: facade_calls,
+            });
+        }
+    }
+    bindings.sort_by(|left, right| left.module.cmp(&right.module).then_with(|| left.name.cmp(&right.name)));
+    calls.sort_by(|left, right| {
+        left.binding_identity
+            .cmp(&right.binding_identity)
+            .then_with(|| left.symbol.cmp(&right.symbol))
+            .then_with(|| {
+                left.owner
+                    .as_ref()
+                    .map(|owner| &owner.name)
+                    .cmp(&right.owner.as_ref().map(|owner| &owner.name))
+            })
+    });
+    facades.sort_by(|left, right| {
+        left.facade
+            .name
+            .cmp(&right.facade.name)
+            .then_with(|| left.bridge.name.cmp(&right.bridge.name))
+            .then_with(|| left.calls.len().cmp(&right.calls.len()))
+    });
+    Ok(BindingUsageReceipt {
+        schema_version: BINDING_USAGE_RECEIPT_SCHEMA_VERSION,
+        compatibility: BindingUsageCompatibility {
+            binding_contract: "exact_descriptor_identity",
+            target_contract: target.as_ref().map(|_| "exact_locked_target_identity"),
+        },
+        target,
+        bindings,
+        calls,
+        facades,
+    })
+}
+
+/// Serialize the redaction-safe receipt without adding a second text contract for provenance tooling.
+fn render_binding_usage_receipt(receipt: &BindingUsageReceipt) -> CliResult<ExitCode> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(receipt)
+            .map_err(|error| CliError::failure(format!("failed to serialize binding usage receipt: {error}")))?
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Render one source-visibility fact without requiring receipt consumers to parse compiler syntax.
+fn binding_owner_visibility(visibility: Visibility) -> &'static str {
+    match visibility {
+        Visibility::Private => "private",
+        Visibility::Public => "public",
+    }
+}
+
+/// Project a compiler-owned raw-call owner without retaining its source location.
+fn binding_usage_owner(owner: &crate::frontend::typechecker::CBindingRawCallOwner) -> BindingUsageOwner {
+    BindingUsageOwner {
+        name: owner.name.clone(),
+        visibility: binding_owner_visibility(owner.visibility).to_string(),
+    }
 }
 
 /// Resolve either an explicit Incan file or the ordinary package entrypoint used for binding inspection.
@@ -260,9 +570,11 @@ fn binding_inspection_report(
 fn binding_report(module: &ParsedModule, descriptor: &CBindingDescriptor) -> BindingReport {
     BindingReport {
         module: module.path_segments.clone(),
+        identity: c_binding_descriptor_identity(&module.path_segments, descriptor),
         name: descriptor.class_name.clone(),
         header: descriptor.header.clone(),
         system_library: descriptor.system_library.clone(),
+        link_capability: link_capability_as_str(descriptor.link_capability).to_string(),
         source: binding_source_span(&module.file_path, &module.source, descriptor.span),
         resources: descriptor
             .resources
@@ -288,6 +600,7 @@ fn binding_report(module: &ParsedModule, descriptor: &CBindingDescriptor) -> Bin
                     })
                     .collect(),
                 return_type: binding_type_report(&symbol.return_type),
+                buffers: symbol.buffers.iter().map(buffer_report).collect(),
                 outcomes: symbol.outcomes.iter().map(outcome_report).collect(),
             })
             .collect(),
@@ -323,6 +636,15 @@ fn binding_report(module: &ParsedModule, descriptor: &CBindingDescriptor) -> Bin
                     .collect(),
             })
             .collect(),
+    }
+}
+
+/// Project one compiler-owned pointer-to-length association without inferring it from names or generated Rust.
+fn buffer_report(buffer: &CBindingBuffer) -> BufferReport {
+    BufferReport {
+        pointer_parameter: buffer.pointer_parameter.clone(),
+        length_parameter: buffer.length_parameter.clone(),
+        element: scalar_type_as_str(buffer.element).to_string(),
     }
 }
 
@@ -391,6 +713,11 @@ fn render_binding_inspection_report(
                 .map_err(|error| CliError::failure(format!("failed to serialize binding inspection: {error}")))?
         ),
         BindingInspectionFormat::Text => render_binding_inspection_text(report),
+        BindingInspectionFormat::Receipt => {
+            return Err(CliError::failure(
+                "binding usage receipts must be rendered before declaration reports",
+            ));
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -403,8 +730,9 @@ fn render_binding_inspection_text(report: &BindingInspectionReport) {
     }
     for binding in &report.bindings {
         println!("Binding {} ({})", binding.name, binding.module.join("::"));
+        println!("  identity: {}", binding.identity);
         println!("  header: {}", binding.header);
-        println!("  link: c.system_library(\"{}\")", binding.system_library);
+        println!("  link: c.{}(\"{}\")", binding.link_capability, binding.system_library);
         println!(
             "  source: {}:{}:{}",
             binding.source.file, binding.source.start_line, binding.source.start_column
@@ -428,6 +756,12 @@ fn render_binding_inspection_text(report: &BindingInspectionReport) {
                 format_binding_type(&symbol.return_type),
                 symbol.native
             );
+            for buffer in &symbol.buffers {
+                println!(
+                    "    bounds {} -> {} [element: {}]",
+                    buffer.pointer_parameter, buffer.length_parameter, buffer.element
+                );
+            }
             for outcome in &symbol.outcomes {
                 println!(
                     "    outcome {} [initializes: {}, updates: {}, invalidates: {}]",

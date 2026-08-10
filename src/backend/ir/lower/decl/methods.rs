@@ -1319,12 +1319,14 @@ impl AstLowering {
 
         let return_type = self.lower_callable_return_type(&m.return_type.node, Some(&combined_type_param_names));
         self.push_callable_param_scope(&params);
+        self.push_callable_return_type(&return_type);
         let body_result = if let Some(ref body_stmts) = m.body {
             self.lower_statements(body_stmts)
         } else {
             Ok(vec![])
         };
         self.pop_callable_param_scope();
+        self.pop_callable_return_type();
         let body = match body_result {
             Ok(body) => body,
             Err(error) => {
@@ -1568,6 +1570,7 @@ impl AstLowering {
             self.current_classmethod_constructor = Some(type_name);
         }
         self.push_callable_param_scope(&params);
+        self.push_callable_return_type(&return_type);
         let body_result = if let Some(ref body_stmts) = m.body {
             self.lower_statements(body_stmts)
         } else {
@@ -1586,6 +1589,7 @@ impl AstLowering {
             }
         }
         self.pop_callable_param_scope();
+        self.pop_callable_return_type();
         let body = match body_result {
             Ok(body) => body,
             Err(err) => {
@@ -1639,6 +1643,7 @@ impl AstLowering {
         self.define_local_binding("self".to_string(), IrType::Unknown, false);
 
         let return_type = self.lower_callable_return_type(&property.return_type.node, type_param_names);
+        self.push_callable_return_type(&return_type);
         let body_result = match mode {
             PropertyLoweringMode::TraitDecl => Ok(Vec::new()),
             PropertyLoweringMode::Inherent | PropertyLoweringMode::TraitImpl => {
@@ -1649,6 +1654,7 @@ impl AstLowering {
                 }
             }
         };
+        self.pop_callable_return_type();
         self.pop_scope();
         let body = body_result?;
 

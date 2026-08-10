@@ -57,6 +57,7 @@ use incan_core::lang::stdlib;
 use incan_core::lang::trait_capabilities;
 use incan_core::lang::traits::{self as core_traits, TraitId};
 use incan_core::lang::types::collections::{self, CollectionTypeId};
+use incan_core::lang::types::numerics::NumericTypeId;
 
 // Re-export error types
 pub use errors::{LoweringError, LoweringErrors};
@@ -188,6 +189,11 @@ pub struct AstLowering {
     pub(super) rust_import_aliases: HashMap<String, Vec<String>>,
     /// Function-typed parameters for the currently lowered callable body.
     pub(super) callable_param_scopes: Vec<HashSet<String>>,
+    /// Declared return types for callable bodies currently being lowered.
+    ///
+    /// Return statements need this source-owned context to widen a checked-C scalar result only when the
+    /// typechecker has already accepted a lossless conversion to an ordinary Incan numeric type.
+    pub(super) callable_return_types: Vec<IrType>,
     /// Module-level symbol aliases mapped from alias name to canonical target name.
     pub(super) symbol_aliases: HashMap<String, String>,
     /// Imported overload bindings that must be reexported because a public alias projects them.
@@ -215,6 +221,54 @@ pub struct AstLowering {
 }
 
 impl AstLowering {
+    /// Enter one callable body with its declared return type available to statement lowering.
+    pub(super) fn push_callable_return_type(&mut self, return_type: &IrType) {
+        self.callable_return_types.push(return_type.clone());
+    }
+
+    /// Leave the callable return context entered by [`Self::push_callable_return_type`].
+    pub(super) fn pop_callable_return_type(&mut self) {
+        let _ = self.callable_return_types.pop();
+    }
+
+    /// Widen a direct checked-C scalar return only when its enclosing Incan callable declares the compatible
+    /// ordinary numeric type.
+    ///
+    /// Checked C wrappers deliberately preserve the exact foreign carrier (`c.i32` remains Rust `i32`). The
+    /// typechecker separately permits lossless widening into source `int`/`float`; this is the one lowering point
+    /// that makes that approved conversion explicit in generated Rust.
+    pub(super) fn coerce_checked_c_return_value(
+        &self,
+        source: &ast::Spanned<ast::Expr>,
+        value: TypedExpr,
+    ) -> TypedExpr {
+        if self.checked_c_function_for_call(source.span).is_none() {
+            return value;
+        }
+        let Some(target) = self.callable_return_types.last() else {
+            return value;
+        };
+        let (IrType::Numeric(actual), target_id) = (&value.ty, target) else {
+            return value;
+        };
+        let expected = match target_id {
+            IrType::Int => NumericTypeId::I64,
+            IrType::Float => NumericTypeId::F64,
+            _ => return value,
+        };
+        if !crate::frontend::typechecker::numeric_type_losslessly_widens_to(*actual, expected) {
+            return value;
+        }
+        TypedExpr::new(
+            IrExprKind::NumericResize {
+                expr: Box::new(value),
+                policy: super::expr::NumericResizePolicy::Lossless,
+                to_type: target.clone(),
+            },
+            target.clone(),
+        )
+    }
+
     /// Return the compiler-owned C function selected for one checked source call.
     ///
     /// Raw-call entries are recorded only after the typechecker has validated the binding member, its signature,
@@ -245,6 +299,7 @@ impl AstLowering {
                     release_native_symbol: release.native.clone(),
                     release_return_type: Self::checked_c_ir_type(&release.return_type)?,
                     system_library: descriptor.system_library.clone(),
+                    link_capability: descriptor.link_capability,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -253,6 +308,7 @@ impl AstLowering {
             symbol: symbol.name.clone(),
             native_symbol: symbol.native.clone(),
             system_library: descriptor.system_library.clone(),
+            link_capability: descriptor.link_capability,
             parameters,
             parameter_names: symbol
                 .parameters
@@ -268,6 +324,10 @@ impl AstLowering {
     pub(super) fn checked_c_ir_type(ty: &CBindingType) -> Option<IrCheckedCType> {
         match ty {
             CBindingType::Scalar(scalar) => Some(IrCheckedCType::Scalar(*scalar)),
+            CBindingType::Pointer { mutable, pointee } => Some(IrCheckedCType::Pointer {
+                mutable: *mutable,
+                pointee: Box::new(Self::checked_c_ir_type(pointee)?),
+            }),
             CBindingType::Void => Some(IrCheckedCType::Void),
             CBindingType::Resource { access, resource } => Some(IrCheckedCType::Resource {
                 access: *access,
@@ -278,7 +338,7 @@ impl AstLowering {
                 value: Box::new(Self::checked_c_ir_type(value)?),
             }),
             CBindingType::Nullable(value) => Some(IrCheckedCType::Nullable(Box::new(Self::checked_c_ir_type(value)?))),
-            CBindingType::Pointer { .. } | CBindingType::Struct(_) => None,
+            CBindingType::Struct(_) => None,
         }
     }
 
@@ -387,6 +447,7 @@ impl AstLowering {
             import_aliases: HashMap::new(),
             rust_import_aliases: HashMap::new(),
             callable_param_scopes: Vec::new(),
+            callable_return_types: Vec::new(),
             symbol_aliases: HashMap::new(),
             overload_alias_reexport_targets: HashSet::new(),
             source_type_alias_targets: HashMap::new(),
@@ -2289,6 +2350,18 @@ impl AstLowering {
                 && left.system_library == right.system_library
         });
         ir_program.checked_c_functions = checked_c_functions;
+        ir_program.uses_checked_c_strings = self
+            .type_info
+            .as_ref()
+            .is_some_and(|info| info.c_abi.uses_checked_c_strings);
+        ir_program.uses_scoped_c_string_views = self
+            .type_info
+            .as_ref()
+            .is_some_and(|info| info.c_abi.uses_scoped_c_string_views);
+        ir_program.uses_checked_c_span_buffers = self
+            .type_info
+            .as_ref()
+            .is_some_and(|info| info.c_abi.uses_checked_c_span_buffers);
 
         if errors.is_empty() {
             Ok(ir_program)

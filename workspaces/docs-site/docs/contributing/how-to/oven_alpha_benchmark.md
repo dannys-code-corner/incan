@@ -8,7 +8,7 @@ The harness is deliberately strict. It starts with an empty `INCAN_HOME`, record
 
 Run the same supported workload on one documented macOS machine and one documented Linux machine. Record the checkout revision, release archive/artifact identity, `incan --version`, OS/architecture, exact source fixture and digest, profile, storage limits, and whether the store started empty. Keep the generated `report.json` and per-phase logs with the release evidence. The harness requires an archive or CI-artifact identity rather than silently treating an arbitrary local binary as a comparable measurement.
 
-The documented Alpha envelope is intentionally finite. At present the release archive ships exactly two Loafs: a release core closure and a debug foundation closure for `std.testing`, `std.fs`, and `std.json` (which may satisfy a narrower compatible debug-core request). An unsupported provider/dependency closure must fail explicitly; do not turn the benchmark into a manual `legacy_cargo` publication to make it pass.
+The documented Alpha envelope is intentionally finite. At present the release archive ships four Loafs: a release core closure; a debug foundation closure for `std.testing`, `std.fs`, and `std.json` (which may satisfy a narrower compatible debug-core request); and debug and release closures for the checked `std.interop` capability. An unsupported provider/dependency closure must fail explicitly; do not turn the benchmark into a manual `legacy_cargo` publication to make it pass.
 
 ## Run a guarded test workload
 

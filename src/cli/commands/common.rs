@@ -36,8 +36,8 @@ use crate::frontend::module::{
 use crate::frontend::testing_markers::{
     TestingMarkerSemantics, load_testing_marker_semantics, testing_marker_semantics_from_manifest,
 };
-use crate::frontend::typechecker::TypeCheckInfo;
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
+use crate::frontend::typechecker::{CBindingDescriptor, TypeCheckInfo};
 use crate::frontend::{ast_walk, diagnostics, lexer, parser, typechecker, vocab_desugar_pass};
 use crate::library_manifest::{
     LibraryManifest, ProviderCargoDependency, ProviderCargoDependencySource, ProviderModuleClaim,
@@ -4457,7 +4457,7 @@ fn typecheck_modules_with_import_graph_artifacts(
     }
 
     if diagnostics_out.is_empty() {
-        verify_checked_c_bindings(modules, &mut type_infos, c_abi_plan, &mut diagnostics_out);
+        verify_checked_c_bindings(modules, manifest, &mut type_infos, c_abi_plan, &mut diagnostics_out);
     }
 
     if diagnostics_out.is_empty() {
@@ -4478,6 +4478,7 @@ fn typecheck_modules_with_import_graph_artifacts(
 /// the declared header for the target; it neither imports arbitrary headers nor performs library discovery.
 fn verify_checked_c_bindings(
     modules: &[ParsedModule],
+    manifest: Option<&ProjectManifest>,
     type_infos: &mut [TypeCheckInfo],
     selected_plan: Option<&CAbiVerificationPlan>,
     diagnostics_out: &mut Vec<CliDiagnostic>,
@@ -4525,7 +4526,8 @@ fn verify_checked_c_bindings(
         }
     };
     for (module_index, module, binding) in bindings {
-        match verify_checked_c_binding(&toolchain, &plan, &binding) {
+        let verification_binding = resolve_package_owned_c_binding_header(manifest, &binding);
+        match verify_checked_c_binding(&toolchain, &plan, &verification_binding) {
             Ok(receipt) => {
                 let enum_values = &mut type_infos[module_index].c_abi.enum_values;
                 for ((enumeration, variant), value) in receipt.enum_values() {
@@ -4547,6 +4549,43 @@ fn verify_checked_c_bindings(
     }
 }
 
+/// Resolve a manifest-declared package header before passing its spelling to Clang.
+///
+/// Checked bindings keep the authored, package-relative header spelling in their public descriptor and lock identity.
+/// The verifier alone needs a concrete file location. Restricting this translation to a header declared under
+/// `[oven.interop]` prevents an arbitrary relative binding path from becoming an ambient include-directory search.
+fn resolve_package_owned_c_binding_header(
+    manifest: Option<&ProjectManifest>,
+    binding: &CBindingDescriptor,
+) -> CBindingDescriptor {
+    let Some(manifest) = manifest else {
+        return binding.clone();
+    };
+    if Path::new(&binding.header).is_absolute() {
+        return binding.clone();
+    }
+    let declared = manifest.oven_interop().is_some_and(|interop| {
+        interop.targets.iter().any(|target| {
+            target.headers.iter().any(|header| header == &binding.header)
+                || target
+                    .shims
+                    .iter()
+                    .flat_map(|shim| &shim.headers)
+                    .any(|header| header == &binding.header)
+        })
+    });
+    if !declared {
+        return binding.clone();
+    }
+    let mut resolved = binding.clone();
+    resolved.header = manifest
+        .project_root()
+        .join(&binding.header)
+        .to_string_lossy()
+        .into_owned();
+    resolved
+}
+
 /// Classify diagnostics that are still emitted by the typechecker but originate from an import declaration span.
 fn typecheck_diagnostic_phase(module: &ParsedModule, span: Span) -> diagnostics::DiagnosticPhase {
     diagnostics::phase_for_typecheck_span(&module.ast, span)
@@ -4561,6 +4600,7 @@ mod tests {
     use super::*;
     use crate::frontend::typechecker::{self, IdentKind};
     use crate::library_manifest::{LibraryManifest, ProviderFeatureMetadata, ProviderModuleClaim, VocabExports};
+    use incan_core::lang::c_abi::LinkCapabilityId;
     use std::path::Path;
 
     fn parsed_module_for_test(source: &str) -> Result<ParsedModule, Box<dyn std::error::Error>> {
@@ -4573,6 +4613,31 @@ mod tests {
             source: source.to_string(),
             ast,
         })
+    }
+
+    #[test]
+    fn package_declared_c_header_is_resolved_only_for_verification() -> Result<(), Box<dyn std::error::Error>> {
+        let manifest = ProjectManifest::from_str(
+            "[project]\nname = \"c_header_fixture\"\n\n[oven.interop]\nschema = 1\n\n[[oven.interop.targets]]\ntarget = \"aarch64-apple-darwin\"\nheaders = [\"interop/include/bridge.h\"]\n",
+            Path::new("/workspace/c_header_fixture/incan.toml"),
+        )?;
+        let binding = CBindingDescriptor {
+            span: Span::new(0, 0),
+            class_name: "Bridge".to_string(),
+            header: "interop/include/bridge.h".to_string(),
+            system_library: "bridge".to_string(),
+            link_capability: LinkCapabilityId::SystemLibrary,
+            resources: Vec::new(),
+            symbols: Vec::new(),
+            enums: Vec::new(),
+            structs: Vec::new(),
+        };
+
+        let resolved = resolve_package_owned_c_binding_header(Some(&manifest), &binding);
+
+        assert_eq!(binding.header, "interop/include/bridge.h");
+        assert_eq!(resolved.header, "/workspace/c_header_fixture/interop/include/bridge.h");
+        Ok(())
     }
 
     #[test]

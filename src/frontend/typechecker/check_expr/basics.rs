@@ -57,6 +57,29 @@ impl TypeChecker {
             self.errors.push(errors::unknown_symbol(name, span));
             return ResolvedType::Unknown;
         };
+        if let Some(span_carrier) = self.c_abi_span_bindings.get(name).copied() {
+            if let Some(consumed_at) = self
+                .consumed_c_abi_span_bindings
+                .get(&(span_carrier.binding_span.start, span_carrier.binding_span.end))
+                .copied()
+            {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "checked mutable C span `{name}` was already consumed at byte range {}..{}; it cannot be used again",
+                        consumed_at.start, consumed_at.end
+                    ),
+                    span,
+                ));
+            } else {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "checked C span `{name}` has no ordinary value surface; use its closed bridge methods only in the declared checked C call"
+                    ),
+                    span,
+                ));
+            }
+            return ResolvedType::Unknown;
+        }
         let source_target = self.source_target_for_symbol(name, &sym.kind);
 
         let (kind, ty) = match &sym.kind {

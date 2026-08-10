@@ -1436,7 +1436,7 @@ dependencies = [
 
 [[package]]
 name = "incan"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "blake2",
  "blake3",
@@ -1465,6 +1465,7 @@ dependencies = [
  "rand 0.8.6",
  "regex",
  "rust_inspect",
+ "rustix 1.1.4",
  "semver",
  "serde",
  "serde_json",
@@ -1481,6 +1482,7 @@ dependencies = [
  "tower-lsp",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wasmtime",
  "wasmtime-wasi",
  "wat",
@@ -1491,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "incan_codegraph"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "serde",
  "serde_json",
@@ -1499,14 +1501,14 @@ dependencies = [
 
 [[package]]
 name = "incan_core"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "incan_derive"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1515,14 +1517,14 @@ dependencies = [
 
 [[package]]
 name = "incan_semantics_core"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "incan_core",
 ]
 
 [[package]]
 name = "incan_semantics_stdlib"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "incan_core",
  "incan_semantics_core",
@@ -1530,7 +1532,7 @@ dependencies = [
 
 [[package]]
 name = "incan_stdlib"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "axum",
  "incan_core",
@@ -1544,7 +1546,7 @@ dependencies = [
 
 [[package]]
 name = "incan_syntax"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "incan_core",
  "incan_semantics_core",
@@ -1566,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "incan_web_macros"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "axum",
  "incan_stdlib",
@@ -3134,7 +3136,7 @@ dependencies = [
 
 [[package]]
 name = "rust_inspect"
-version = "0.5.0-dev.41"
+version = "0.5.0-dev.42"
 dependencies = [
  "hex",
  "incan_core",
@@ -4104,6 +4106,18 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
+
+[[package]]
+name = "uuid"
+version = "1.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
+dependencies = [
+ "getrandom 0.4.2",
+ "js-sys",
+ "serde_core",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "valuable"

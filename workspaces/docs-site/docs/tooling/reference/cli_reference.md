@@ -34,7 +34,7 @@ Commands:
 
 ## Semantic inspection surfaces
 
-Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use `incan check --format json` for the stable diagnostic plane, `incan build --report json` for successful build and artifact metadata, `incan inspect rust --format json` for current generated Rust output, `incan inspect codegraph --format jsonl` for source-structure graph facts, `incan inspect providers --format json` for SDK component and provider participation, `incan inspect features --format json` for the additive package-feature graph, `incan inspect bindings --format json` for checked C declaration facts, and `incan inspect interop-plan --format json` for one locked Oven interop platform handoff.
+Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use `incan check --format json` for the stable diagnostic plane, `incan build --report json` for successful build and artifact metadata, `incan inspect rust --format json` for current generated Rust output, `incan inspect codegraph --format jsonl` for source-structure graph facts, `incan inspect providers --format json` for SDK component and provider participation, `incan inspect features --format json` for the additive package-feature graph, `incan inspect bindings --format json` for checked C declaration facts, `incan inspect bindings --format receipt` for redacted checked binding use, and `incan inspect interop-plan --format json` for one locked Oven interop platform handoff.
 
 These commands are intentionally not a single full semantic database. They are stable public surfaces that tools can join without scraping terminal prose, generated Rust, or source text independently. When a fact appears in more than one surface, consumers should prefer compiler-owned identity fields, source paths, schema versions, and explicit degraded-state or diagnostic records over human output.
 
@@ -214,6 +214,7 @@ incan cache prune --identity SHA256 [--identity SHA256 ...] [--dry-run] [--forma
 Usage:
 
 ```text
+incan oven bake [--project PATH] [--format text|json]
 incan oven import --target TRIPLE --toolchain IDENTITY [--project PATH] [--profile PROFILE]
                   [--feature NAME ...] [--source NAME=PATH ...] [--output PATH] [--format text|json]
 incan oven plan publish --receipt PATH --manifest PATH --artifact-root PATH --domain NAME
@@ -243,7 +244,7 @@ incan oven legacy-cargo bake-loafs --compiler-root PATH --output PATH
                [--format text|json]
 ```
 
-Oven is the Alpha normal consumer backend for `incan build`, `incan test`, and `incan run`; the `incan oven` commands expose its receipt and maintenance boundary. `import` reads frozen Cargo declarations only as compatibility evidence and does not run Cargo. The explicitly named, hidden `legacy-cargo` baker is the sole Cargo-backed compatibility publisher for supported Oven Alpha envelopes, never a normal-command fallback. `bake-loafs` creates or exactly reuses a typed release or compiler-suite envelope of content-addressed `<identity>.loaf/` directories. With `--suite-store`, the compiler-suite bake also prepares or reuses the bounded receipt-compatible suite store in the same invocation. Each `loaf.json` binds the direct-`rustc` plan, declared artifacts, compatibility, provenance, digests, and byte accounting. The explicit publisher Cargo may differ from the consumer `rustc`; the latter defines the Loaf toolchain identity. `plan publish` validates a publisher-provided direct-rustc manifest and copies its declared regular-file closure into one immutable policy-bounded entry. `test` selects that stored plan and closure with an active lease, inventories the produced native libtest binary, and rejects every `--exact` name absent from that inventory before test execution. `run` compiles and executes one caller-owned binary from the same stored closure, retains the entry lease through process completion, and forwards arguments only after `--` to that binary.
+Oven is the Alpha normal consumer backend for `incan build`, `incan test`, and `incan run`; the `incan oven` commands expose its receipt and maintenance boundary. `bake` is the project-facing preparation command for a dependency-free Incan library: it records debug and release receipts, then atomically materializes or reuses only receipt-compatible Loafs already shipped by the active toolchain. It reports the per-profile `materialized` or `reused` decision and never compiles a final library, resolves dependencies, or invokes Cargo. `import` reads frozen Cargo declarations only as compatibility evidence and does not run Cargo. The explicitly named, hidden `legacy-cargo` baker is the sole Cargo-backed compatibility publisher for supported Oven Alpha envelopes, never a normal-command fallback. `bake-loafs` creates or exactly reuses a typed release or compiler-suite envelope of content-addressed `<identity>.loaf/` directories. With `--suite-store`, the compiler-suite bake also prepares or reuses the bounded receipt-compatible suite store in the same invocation. Each `loaf.json` binds the direct-`rustc` plan, declared artifacts, compatibility, provenance, digests, and byte accounting. The explicit publisher Cargo may differ from the consumer `rustc`; the latter defines the Loaf toolchain identity. `plan publish` validates a publisher-provided direct-rustc manifest and copies its declared regular-file closure into one immutable policy-bounded entry. `test` selects that stored plan and closure with an active lease, inventories the produced native libtest binary, and rejects every `--exact` name absent from that inventory before test execution. `run` compiles and executes one caller-owned binary from the same stored closure, retains the entry lease through process completion, and forwards arguments only after `--` to that binary. `interop bake` and `interop stage` are the separate v0.5 C-ABI publisher and handoff commands: they consume a current package lock, explicit compiler/SDK evidence, a sealed base plan, and declared package files to bake native archives or stage digest-verified bundled runtime files. They never invoke Cargo, Gradle, Xcode, signing, or physical devices.
 
 The default Oven store is `$INCAN_HOME/oven/store/v1`, or `~/.incan/oven/store/v1` when `INCAN_HOME` is unset. Its everyday-developer policy retains at most 3 GiB of aggregate physical allocation, with a 1 GiB physical and 768 MiB logical allowance per compatibility domain. The aggregate allowance includes the previous committed Loaf generation while a replacement is staged, so an interrupted update does not require deleting the last valid generation. Physical allocation and logical artifact bytes—plan bytes plus copied manifest-declared files—are distinct report fields. `incan oven store inspect` also reports reclaimable and lease-protected physical allocation; `incan inspect oven --receipt PATH` adds the receipt/build-unit identity plus a `hit`, `miss`, or `ambiguous` selection reason. Environment overrides use whole-byte values: `INCAN_OVEN_MAX_PHYSICAL_BYTES`, `INCAN_OVEN_MAX_DOMAIN_PHYSICAL_BYTES`, and `INCAN_OVEN_MAX_DOMAIN_LOGICAL_BYTES`. Publication is fail-closed when a single domain exceeds its allowance or active leases prevent safe reclamation. Larger compiler-suite or publisher budgets must be explicit rather than silently expanding the normal store. See [Oven Alpha](../explanation/oven_alpha.md) for the compatibility envelope, artifact-plan schema boundary, and exclusions.
 
@@ -374,18 +375,19 @@ See [SDK components and package features](sdk_components_and_package_features.md
 Usage:
 
 ```text
-incan inspect bindings [PATH] [OPTIONS]
+incan inspect bindings [PATH] [--format text|json|receipt] [--target <TRIPLE>] [OPTIONS]
 ```
 
-Reports compiler-checked C binding declaration facts for a source file or project directory. The JSON report is deterministic and source-anchored: it includes bindings, headers, logical system-library capabilities, symbols, exact C type contracts, enum constants, and plain structures. `PATH` defaults to the current project.
+Reports compiler-checked C binding declaration facts for a source file or project directory. The JSON report is deterministic and source-anchored: it includes bindings, headers, logical system-library capabilities, symbols, exact C type contracts, enum constants, and plain structures. `--format receipt` instead emits a redaction-safe binding-use receipt, optionally joined to one locked Oven target. `PATH` defaults to the current project.
 
 Options:
 
 - `--format text|json`: Output a concise terminal summary or the schema-versioned JSON report (default: `text`).
 - `--features`, `--no-default-features`, `--all-features`: Select which feature-conditioned declarations are checked and projected.
 - `--sdk-profile <PROFILE>`: Select the SDK profile used to resolve the checked source graph.
+- `--target <TRIPLE>`: With `--format receipt`, validate and join one current locked Oven interop target; it is rejected with the declaration-report formats.
 
-The command is strict: it emits ordinary compiler diagnostics rather than partial data when the source graph is not valid. Its checked compilation path runs the normal host-target C probe, but the report remains a declaration projection rather than a reusable verification receipt. It does not resolve native artifacts, compile shims, read native lock receipts, classify a bridge or façade, or expose LSP data. Use the [inspection how-to](../how-to/inspect_checked_c_bindings.md) for the review workflow and the [binding inspection JSON schema](binding_inspection_schema.md) for the machine contract.
+The command is strict: it emits ordinary compiler diagnostics rather than partial data when the source graph is not valid. Its checked compilation path runs the normal host-target C probe. The declaration formats remain declaration projections; receipt mode can join compiler-checked use to one locked target and an already-selected execution receipt, and can retain an explicit target-declared binding-to-artifact-name relation only after compilation produces that exact binding. It does not resolve native artifacts, compile shims, emit a linker invocation, classify a complete bridge/façade design, or expose LSP data. Use the [inspection how-to](../how-to/inspect_checked_c_bindings.md) for the review workflow and the [binding inspection JSON schema](binding_inspection_schema.md) for the machine contract.
 
 Examples:
 
@@ -393,6 +395,7 @@ Examples:
 incan inspect bindings
 incan inspect bindings src/main.incn --format json
 incan inspect bindings . --format json --features sqlite --sdk-profile minimal
+incan inspect bindings . --format receipt --target aarch64-apple-darwin
 ```
 
 ### `incan run`

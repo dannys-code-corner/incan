@@ -2478,14 +2478,26 @@ fn run_file_tests_batch_oven(
         Ok(rustc) => rustc,
         Err(error) => return failure(error.to_string()),
     };
+    let rustc_target = match rustc_host_target(&rustc) {
+        Ok(target) => target,
+        Err(error) => return failure(error.to_string()),
+    };
+    let mut build_unit_inputs = match oven_test_build_unit_inputs(&provider_plan, &requirements, &resolved) {
+        Ok(inputs) => inputs,
+        Err(error) => return failure(error),
+    };
+    if let Err(error) = crate::cli::commands::build::append_oven_interop_execution_build_inputs(
+        &mut build_unit_inputs,
+        manifest.as_ref(),
+        &rustc_target,
+    ) {
+        return failure(error.message);
+    }
     let mut receipt_request = OvenGeneratedProjectRequest::new(
         &project_root,
         &runner_crate_name,
         "0.1.0",
-        match rustc_host_target(&rustc) {
-            Ok(target) => target,
-            Err(error) => return failure(error.to_string()),
-        },
+        rustc_target,
         match rustc_identity(&rustc) {
             Ok(identity) => identity,
             Err(error) => return failure(error.to_string()),
@@ -2495,10 +2507,6 @@ fn run_file_tests_batch_oven(
     )
     .with_generated_source("generated-root", generator.crate_root_path())
     .with_generated_source_tree("generated-source-tree", generator.output_dir().join("src"));
-    let build_unit_inputs = match oven_test_build_unit_inputs(&provider_plan, &requirements, &resolved) {
-        Ok(inputs) => inputs,
-        Err(error) => return failure(error),
-    };
     for (name, value) in build_unit_inputs {
         receipt_request = receipt_request.with_build_unit_input(name, value);
     }

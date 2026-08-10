@@ -18,7 +18,7 @@ use crate::manifest::ProjectManifest;
 pub const OVEN_INTEROP_SCHEMA_VERSION: u32 = 1;
 
 /// Current compatibility format for the locked Oven interop deployment-plan projection.
-pub(crate) const OVEN_INTEROP_DEPLOYMENT_PLAN_SCHEMA_VERSION: u32 = 1;
+pub(crate) const OVEN_INTEROP_DEPLOYMENT_PLAN_SCHEMA_VERSION: u32 = 3;
 
 /// Oven-owned manifest settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +88,10 @@ impl OvenInteropSection {
             for artifact in &target.artifacts {
                 validate_artifact_dependencies(artifact, &target.target, &artifact_names)?;
             }
+            let mut binding_names = BTreeSet::new();
+            for binding in &target.bindings {
+                validate_binding_artifacts(binding, &target.target, &artifact_names, &mut binding_names)?;
+            }
             ordered_artifact_names(
                 &target.target,
                 target
@@ -115,10 +119,30 @@ impl OvenInteropSection {
                 if shim.output.trim().is_empty() {
                     return Err(format!("interop shim `{}` requires a logical output name", shim.name));
                 }
+                if !is_interop_native_library_name(&shim.output) {
+                    return Err(format!(
+                        "interop shim `{}` output `{}` must be an ASCII native library name",
+                        shim.name, shim.output
+                    ));
+                }
+            }
+            if !target.shims.is_empty() && target.toolchain.is_none() {
+                return Err(format!(
+                    "Oven interop target `{}` declares native shims but no toolchain capability",
+                    target.target
+                ));
             }
         }
         Ok(())
     }
+}
+
+/// Return whether one package-declared shim output safely maps to `lib<name>.a` below an Oven-owned directory.
+pub(crate) fn is_interop_native_library_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 /// A compiler or SDK capability accepted by one package target.
@@ -187,6 +211,9 @@ pub struct OvenInteropTarget {
     /// Package-owned artifacts or system capabilities required by this target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<InteropArtifact>,
+    /// Explicit checked-binding to target-artifact correspondences for this target.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<InteropBindingArtifact>,
     /// Authored C or C++ shim source inputs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shims: Vec<InteropShim>,
@@ -211,6 +238,43 @@ pub enum InteropTargetPlatform {
     },
 }
 
+/// Canonical device-versus-simulator interpretation for the supported iOS target vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IosTargetKind {
+    /// Arm64 binary linked against the physical-device iPhoneOS SDK.
+    Device,
+    /// Arm64 binary linked against the iPhoneSimulator SDK.
+    Simulator,
+}
+
+impl IosTargetKind {
+    /// Return the one SDK capability that can satisfy this target kind.
+    pub(crate) fn sdk_capability(self) -> &'static str {
+        match self {
+            Self::Device => "iphoneos",
+            Self::Simulator => "iphonesimulator",
+        }
+    }
+
+    /// Return the target portion used by a selected Clang-family compiler.
+    pub(crate) fn clang_target(self) -> &'static str {
+        match self {
+            Self::Device => "arm64-apple-ios",
+            Self::Simulator => "arm64-apple-ios-simulator",
+        }
+    }
+}
+
+/// Classify the supported Rust target spellings without consulting a host SDK or toolchain.
+#[must_use]
+pub(crate) fn ios_target_kind(target: &str) -> Option<IosTargetKind> {
+    match target {
+        "aarch64-apple-ios" => Some(IosTargetKind::Device),
+        "aarch64-apple-ios-sim" => Some(IosTargetKind::Simulator),
+        _ => None,
+    }
+}
+
 /// Validate the target triple, platform version, and compatible SDK capability required by one mobile profile.
 fn validate_target_platform(platform: &InteropTargetPlatform, target: &OvenInteropTarget) -> Result<(), String> {
     match platform {
@@ -230,19 +294,19 @@ fn validate_target_platform(platform: &InteropTargetPlatform, target: &OvenInter
             validate_sdk_capability(target.sdk.as_ref(), "android", "Android", &target.target)
         }
         InteropTargetPlatform::Ios { deployment_target } => {
-            if target.target != "aarch64-apple-ios" {
+            let Some(kind) = ios_target_kind(&target.target) else {
                 return Err(format!(
-                    "iOS platform facts require the `aarch64-apple-ios` target, found `{}`",
+                    "iOS platform facts require `aarch64-apple-ios` or `aarch64-apple-ios-sim`, found `{}`",
                     target.target
                 ));
-            }
+            };
             if !is_deployment_target_version(deployment_target) {
                 return Err(format!(
                     "iOS deployment target `{deployment_target}` for `{}` must be a numeric `major.minor` version",
                     target.target
                 ));
             }
-            validate_sdk_capability(target.sdk.as_ref(), "iphoneos", "iOS", &target.target)
+            validate_sdk_capability(target.sdk.as_ref(), kind.sdk_capability(), "iOS", &target.target)
         }
     }
 }
@@ -296,6 +360,13 @@ pub struct InteropArtifact {
     /// Package-relative file for static and bundled artifacts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Optional immutable upstream identity for a third-party package-provided artifact.
+    ///
+    /// The locked package-file digest remains the integrity authority for the bytes consumed by Oven. This record
+    /// supplies the separately declared human/audit provenance for those bytes; it never causes a download or an
+    /// ambient lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<InteropArtifactOrigin>,
     /// Toolchain or SDK capability for a system-provided artifact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability: Option<String>,
@@ -313,13 +384,69 @@ pub struct InteropArtifact {
     pub dependencies: Vec<String>,
 }
 
+/// Declared upstream provenance for one package-provided native artifact.
+///
+/// A source URL, immutable revision, and license are recorded next to the package-relative artifact digest so an
+/// Oven receipt can explain where a third-party binary came from without exposing a local path or fetching it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct InteropArtifactOrigin {
+    /// Canonical HTTPS URL for the upstream release, source archive, or repository.
+    pub source: String,
+    /// Upstream immutable revision, release tag, or artifact version selected by the package.
+    pub revision: String,
+    /// SPDX expression or upstream license identifier supplied by the package author.
+    pub license: String,
+}
+
+impl InteropArtifactOrigin {
+    /// Validate a portable external origin without performing an ambient network request.
+    fn validate(&self, label: &str) -> Result<(), String> {
+        if !self.source.starts_with("https://") || self.source.chars().any(char::is_whitespace) {
+            return Err(format!("{label} origin source must be one whitespace-free HTTPS URL"));
+        }
+        if self.revision.trim().is_empty() || self.revision.chars().any(char::is_control) {
+            return Err(format!("{label} origin revision must be non-empty"));
+        }
+        if self.license.trim().is_empty() || self.license.chars().any(char::is_control) {
+            return Err(format!("{label} origin license must be non-empty"));
+        }
+        Ok(())
+    }
+
+    /// Normalize presentation-only surrounding whitespace before the value participates in a lock identity.
+    fn normalized(&self) -> Self {
+        Self {
+            source: self.source.trim().to_string(),
+            revision: self.revision.trim().to_string(),
+            license: self.license.trim().to_string(),
+        }
+    }
+}
+
+/// One package-authored correspondence between a checked C binding and declared target artifacts.
+///
+/// The declaration never derives a relation from header spelling, library name, generated Rust, or artifact path.
+/// The selected compiler analysis verifies that this logical module/name pair exists before a binding-use receipt
+/// reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct InteropBindingArtifact {
+    /// Logical Incan module path that declares the checked binding.
+    pub module: Vec<String>,
+    /// Source-visible checked binding declaration name in that module.
+    pub name: String,
+    /// Target-artifact names explicitly required by this binding.
+    pub artifacts: Vec<String>,
+}
+
 /// Deployment class for a declared interop artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InteropArtifactKind {
     /// An archive linked directly into the generated product.
     Static,
-    /// A dynamic library or framework staged for a platform packager.
+    /// A dynamic library or framework sealed for receipt-bound execution and platform packaging.
     Bundled,
     /// A library or framework supplied by the resolved SDK or toolchain capability.
     System,
@@ -385,6 +512,9 @@ pub struct LockedInteropTarget {
     /// Declared static, bundled, or system artifact identities.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<LockedInteropArtifact>,
+    /// Explicit checked-binding to target-artifact correspondences.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<LockedInteropBindingArtifact>,
     /// Authored shim source and header identities.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shims: Vec<LockedInteropShim>,
@@ -409,6 +539,9 @@ pub struct LockedInteropArtifact {
     /// File input identity when the package provides artifact bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<LockedInteropInput>,
+    /// Declared upstream origin retained beside an immutable package-file input digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<InteropArtifactOrigin>,
     /// Toolchain capability when the selected artifact is system-provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability: Option<String>,
@@ -424,6 +557,17 @@ pub struct LockedInteropArtifact {
     /// Transitive interop dependencies in deterministic order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<String>,
+}
+
+/// One target-locked checked-binding correspondence with deterministic artifact ordering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LockedInteropBindingArtifact {
+    /// Logical Incan module path that declares the checked binding.
+    pub module: Vec<String>,
+    /// Source-visible checked binding declaration name in that module.
+    pub name: String,
+    /// Target-artifact names explicitly selected for this binding.
+    pub artifacts: Vec<String>,
 }
 
 /// One authored shim's immutable sources and intended logical output.
@@ -451,6 +595,8 @@ pub struct LockedInteropShim {
 pub(crate) struct InteropDeploymentPlan {
     /// Compatibility version for this deployment-plan shape.
     pub(crate) schema_version: u32,
+    /// Content-derived identity of the exact locked target requirements behind this handoff.
+    pub(crate) locked_target_identity: String,
     /// Exact compilation and deployment target triple.
     pub(crate) target: String,
     /// Compatible toolchain requirement retained from the canonical lock.
@@ -477,6 +623,9 @@ pub(crate) struct InteropDeploymentPlan {
     /// than treating this planning sequence as a raw command line.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) artifacts: Vec<InteropDeploymentArtifact>,
+    /// Explicit checked-binding to target-artifact correspondences retained for tooling joins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) bindings: Vec<InteropDeploymentBindingArtifact>,
     /// Authored shim build inputs and logical outputs required before final platform assembly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) shims: Vec<InteropShimBuildPlan>,
@@ -493,6 +642,17 @@ pub(crate) struct InteropDeploymentArtifact {
     /// Structured platform-neutral action for the declared deployment class.
     #[serde(flatten)]
     pub(crate) action: InteropDeploymentAction,
+}
+
+/// One portable checked-binding to target-artifact correspondence in the deployment handoff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct InteropDeploymentBindingArtifact {
+    /// Logical Incan module path that declares the checked binding.
+    pub(crate) module: Vec<String>,
+    /// Source-visible checked binding declaration name in that module.
+    pub(crate) name: String,
+    /// Explicit target-artifact names required by this binding.
+    pub(crate) artifacts: Vec<String>,
 }
 
 /// Mobile platform facts projected into the JSON handoff independently from manifest field spelling.
@@ -596,6 +756,15 @@ pub(crate) fn interop_deployment_plan(target: &LockedInteropTarget) -> Result<In
             deployment_artifact(artifact, &target.target)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let bindings = target
+        .bindings
+        .iter()
+        .map(|binding| InteropDeploymentBindingArtifact {
+            module: binding.module.clone(),
+            name: binding.name.clone(),
+            artifacts: binding.artifacts.clone(),
+        })
+        .collect();
 
     // ---- Project authored shim inputs ----
     let shims = target
@@ -612,6 +781,7 @@ pub(crate) fn interop_deployment_plan(target: &LockedInteropTarget) -> Result<In
 
     Ok(InteropDeploymentPlan {
         schema_version: OVEN_INTEROP_DEPLOYMENT_PLAN_SCHEMA_VERSION,
+        locked_target_identity: locked_interop_target_identity(target)?,
         target: target.target.clone(),
         toolchain: target.toolchain.clone(),
         sdk: target.sdk.clone(),
@@ -620,8 +790,19 @@ pub(crate) fn interop_deployment_plan(target: &LockedInteropTarget) -> Result<In
         include_roots: interop_include_roots(target),
         definitions: target.definitions.clone(),
         artifacts,
+        bindings,
         shims,
     })
+}
+
+/// Return the portable content identity shared by target handoff and checked binding-use receipts.
+///
+/// The identity is derived solely from canonical lock data. It neither inspects a local toolchain nor serializes a
+/// package root, so a relocated package with the same locked interop inputs keeps the same join key.
+pub(crate) fn locked_interop_target_identity(target: &LockedInteropTarget) -> Result<String, String> {
+    serde_json::to_vec(target)
+        .map(|bytes| format!("sha256:{}", hex::encode(Sha256::digest(bytes))))
+        .map_err(|error| format!("failed to serialize locked Oven interop target identity: {error}"))
 }
 
 /// Convert one locked artifact into the exact action required by its declared deployment class.
@@ -757,8 +938,17 @@ fn validate_artifact(
             "Oven interop target `{target}` artifact names must be unique and non-empty"
         ));
     }
+    if let Some(origin) = &artifact.origin {
+        origin.validate(&format!("interop artifact `{}`", artifact.name))?;
+    }
     match artifact.kind {
         InteropArtifactKind::Static => {
+            if !is_interop_native_library_name(&artifact.name) {
+                return Err(format!(
+                    "static interop artifact `{}` on target `{target}` must use an ASCII native library name",
+                    artifact.name
+                ));
+            }
             validate_required_path(
                 artifact.path.as_deref(),
                 &format!("static interop artifact `{}`", artifact.name),
@@ -811,6 +1001,12 @@ fn validate_artifact(
                     artifact.name
                 ));
             }
+            if artifact.origin.is_some() {
+                return Err(format!(
+                    "system interop artifact `{}` cannot declare a package-artifact origin",
+                    artifact.name
+                ));
+            }
             if artifact.runtime_name.is_some() || artifact.placement.is_some() || artifact.minimum_platform.is_some() {
                 return Err(format!(
                     "system interop artifact `{}` cannot declare bundled deployment fields",
@@ -841,6 +1037,42 @@ fn validate_artifact_dependencies(
             return Err(format!(
                 "interop artifact `{}` on target `{target}` must depend on distinct declared sibling artifacts",
                 artifact.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate that one checked-binding correspondence names a unique logical binding and declared target artifacts.
+fn validate_binding_artifacts(
+    binding: &InteropBindingArtifact,
+    target: &str,
+    artifact_names: &BTreeSet<String>,
+    binding_names: &mut BTreeSet<(Vec<String>, String)>,
+) -> Result<(), String> {
+    if binding.module.is_empty()
+        || binding.module.iter().any(|segment| segment.trim().is_empty())
+        || binding.name.trim().is_empty()
+        || !binding_names.insert((binding.module.clone(), binding.name.clone()))
+    {
+        return Err(format!(
+            "interop binding correspondences on target `{target}` require one unique non-empty module path and binding name"
+        ));
+    }
+    if binding.artifacts.is_empty() {
+        return Err(format!(
+            "interop binding `{}::{}` on target `{target}` requires at least one declared artifact",
+            binding.module.join("::"),
+            binding.name
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for artifact in &binding.artifacts {
+        if artifact.trim().is_empty() || !artifact_names.contains(artifact) || !names.insert(artifact.clone()) {
+            return Err(format!(
+                "interop binding `{}::{}` on target `{target}` must reference distinct declared artifacts",
+                binding.module.join("::"),
+                binding.name
             ));
         }
     }
@@ -987,6 +1219,21 @@ fn lock_interop_target(root: &Path, target: &OvenInteropTarget) -> Result<Locked
         .map(|artifact| lock_artifact(root, artifact))
         .collect::<Result<Vec<_>, _>>()?;
     artifacts.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut bindings = target
+        .bindings
+        .iter()
+        .map(|binding| {
+            let mut artifacts = binding.artifacts.clone();
+            artifacts.sort();
+            artifacts.dedup();
+            LockedInteropBindingArtifact {
+                module: binding.module.clone(),
+                name: binding.name.clone(),
+                artifacts,
+            }
+        })
+        .collect::<Vec<_>>();
+    bindings.sort_by(|left, right| left.module.cmp(&right.module).then_with(|| left.name.cmp(&right.name)));
     let mut shims = target
         .shims
         .iter()
@@ -1013,6 +1260,7 @@ fn lock_interop_target(root: &Path, target: &OvenInteropTarget) -> Result<Locked
         definitions,
         headers,
         artifacts,
+        bindings,
         shims,
     })
 }
@@ -1027,10 +1275,17 @@ fn lock_artifact(root: &Path, artifact: &InteropArtifact) -> Result<LockedIntero
     let mut dependencies = artifact.dependencies.clone();
     dependencies.sort();
     dependencies.dedup();
+    let origin = if let Some(origin) = &artifact.origin {
+        origin.validate(&format!("interop artifact `{}`", artifact.name))?;
+        Some(origin.normalized())
+    } else {
+        None
+    };
     Ok(LockedInteropArtifact {
         name: artifact.name.clone(),
         kind: artifact.kind,
         input,
+        origin,
         capability: artifact.capability.clone(),
         runtime_name: artifact.runtime_name.clone(),
         placement: artifact.placement.clone(),
@@ -1112,12 +1367,18 @@ deployment-target = "13.0"
 name = "fixture"
 kind = "static"
 path = "interop/lib/libfixture.a"
+origin = { source = "https://example.invalid/fixture", revision = "v1.0.0", license = "LicenseRef-Fixture" }
 dependencies = ["foundation"]
 
 [[oven.interop.targets.artifacts]]
 name = "foundation"
 kind = "system"
 capability = "apple.framework.Foundation"
+
+[[oven.interop.targets.bindings]]
+module = ["fixture"]
+name = "Fixture"
+artifacts = ["fixture"]
 
 [[oven.interop.targets.shims]]
 name = "fixture_bridge"
@@ -1149,10 +1410,20 @@ output = "fixture_bridge"
             first[0].artifacts[0].input.as_ref().map(|input| input.path.as_str()),
             Some("interop/lib/libfixture.a")
         );
+        let origin = first[0].artifacts[0]
+            .origin
+            .as_ref()
+            .ok_or("locked static interop artifact lost its declared origin")?;
+        assert_eq!(origin.source, "https://example.invalid/fixture");
+        assert_eq!(origin.revision, "v1.0.0");
+        assert_eq!(origin.license, "LicenseRef-Fixture");
         assert_eq!(
             first[0].artifacts[1].capability.as_deref(),
             Some("apple.framework.Foundation")
         );
+        assert_eq!(first[0].bindings[0].module, ["fixture"]);
+        assert_eq!(first[0].bindings[0].name, "Fixture");
+        assert_eq!(first[0].bindings[0].artifacts, ["fixture"]);
         assert_eq!(first[0].shims[0].sources[0].path, "interop/src/bridge.c");
 
         fs::write(
@@ -1205,6 +1476,9 @@ output = "fixture_bridge"
                     && input.digest.starts_with("sha256:")
         ));
         assert_eq!(plan.artifacts[1].dependencies, ["foundation"]);
+        assert_eq!(plan.bindings[0].module, ["fixture"]);
+        assert_eq!(plan.bindings[0].name, "Fixture");
+        assert_eq!(plan.bindings[0].artifacts, ["fixture"]);
         assert_eq!(plan.shims[0].output, "fixture_bridge");
         let serialized = serde_json::to_string(&plan)?;
         assert!(!serialized.contains(&workspace.path().to_string_lossy().to_string()));
@@ -1233,12 +1507,14 @@ output = "fixture_bridge"
                     path: "interop/android/arm64-v8a/libtensorflowlite_c.so".to_string(),
                     digest: "sha256:fixture".to_string(),
                 }),
+                origin: None,
                 capability: None,
                 runtime_name: Some("libtensorflowlite_c.so".to_string()),
                 placement: Some("jniLibs/arm64-v8a".to_string()),
                 minimum_platform: Some("21".to_string()),
                 dependencies: Vec::new(),
             }],
+            bindings: Vec::new(),
             shims: Vec::new(),
         })?;
 
@@ -1277,6 +1553,7 @@ output = "fixture_bridge"
                     name: "model".to_string(),
                     kind: InteropArtifactKind::Static,
                     path: Some("interop/lib/model.a".to_string()),
+                    origin: None,
                     capability: None,
                     runtime_name: None,
                     placement: None,
@@ -1287,6 +1564,7 @@ output = "fixture_bridge"
                     name: "runtime".to_string(),
                     kind: InteropArtifactKind::Static,
                     path: Some("interop/lib/runtime.a".to_string()),
+                    origin: None,
                     capability: None,
                     runtime_name: None,
                     placement: None,
@@ -1294,6 +1572,7 @@ output = "fixture_bridge"
                     dependencies: vec!["model".to_string()],
                 },
             ],
+            bindings: Vec::new(),
             shims: Vec::new(),
         };
         let interop = OvenInteropSection {
@@ -1304,6 +1583,18 @@ output = "fixture_bridge"
             interop
                 .validate()
                 .is_err_and(|error| error.contains("dependency graph contains a cycle"))
+        );
+
+        let mut dangling_binding = interop.clone();
+        dangling_binding.targets[0].bindings = vec![InteropBindingArtifact {
+            module: vec!["fixture".to_string()],
+            name: "Fixture".to_string(),
+            artifacts: vec!["missing".to_string()],
+        }];
+        assert!(
+            dangling_binding
+                .validate()
+                .is_err_and(|error| error.contains("must reference distinct declared artifacts"))
         );
     }
 
@@ -1322,6 +1613,7 @@ output = "fixture_bridge"
                 headers: Vec::new(),
                 definitions: Vec::new(),
                 artifacts: Vec::new(),
+                bindings: Vec::new(),
                 shims: Vec::new(),
             }],
         };
@@ -1340,6 +1632,7 @@ output = "fixture_bridge"
                 headers: vec!["/usr/include/fixture.h".to_string()],
                 definitions: Vec::new(),
                 artifacts: Vec::new(),
+                bindings: Vec::new(),
                 shims: Vec::new(),
             }],
         };
@@ -1361,12 +1654,14 @@ output = "fixture_bridge"
                     name: "fixture".to_string(),
                     kind: InteropArtifactKind::Bundled,
                     path: Some("interop/lib/libfixture.dylib".to_string()),
+                    origin: None,
                     capability: None,
                     runtime_name: None,
                     placement: None,
                     minimum_platform: None,
                     dependencies: Vec::new(),
                 }],
+                bindings: Vec::new(),
                 shims: Vec::new(),
             }],
         };
@@ -1385,16 +1680,78 @@ output = "fixture_bridge"
                     name: "fixture".to_string(),
                     kind: InteropArtifactKind::Static,
                     path: Some("interop/lib/libfixture.a".to_string()),
+                    origin: None,
                     capability: None,
                     runtime_name: None,
                     placement: None,
                     minimum_platform: None,
                     dependencies: vec!["missing".to_string()],
                 }],
+                bindings: Vec::new(),
                 shims: Vec::new(),
             }],
         };
         assert!(invalid_dependency.validate().is_err());
+
+        let invalid_origin = OvenInteropSection {
+            schema: OVEN_INTEROP_SCHEMA_VERSION,
+            targets: vec![OvenInteropTarget {
+                target: "x86_64-unknown-linux-gnu".to_string(),
+                toolchain: None,
+                sdk: None,
+                platform: None,
+                headers: Vec::new(),
+                definitions: Vec::new(),
+                artifacts: vec![InteropArtifact {
+                    name: "fixture".to_string(),
+                    kind: InteropArtifactKind::Static,
+                    path: Some("interop/lib/libfixture.a".to_string()),
+                    origin: Some(InteropArtifactOrigin {
+                        source: "file:///private/fixture".to_string(),
+                        revision: "v1".to_string(),
+                        license: "MIT".to_string(),
+                    }),
+                    capability: None,
+                    runtime_name: None,
+                    placement: None,
+                    minimum_platform: None,
+                    dependencies: Vec::new(),
+                }],
+                bindings: Vec::new(),
+                shims: Vec::new(),
+            }],
+        };
+        assert!(
+            invalid_origin
+                .validate()
+                .is_err_and(|error| error.contains("origin source"))
+        );
+
+        let unsafe_shim_output = OvenInteropSection {
+            schema: OVEN_INTEROP_SCHEMA_VERSION,
+            targets: vec![OvenInteropTarget {
+                target: "x86_64-unknown-linux-gnu".to_string(),
+                toolchain: None,
+                sdk: None,
+                platform: None,
+                headers: Vec::new(),
+                definitions: Vec::new(),
+                artifacts: Vec::new(),
+                bindings: Vec::new(),
+                shims: vec![InteropShim {
+                    name: "fixture".to_string(),
+                    language: InteropShimLanguage::C,
+                    sources: vec!["interop/src/fixture.c".to_string()],
+                    headers: Vec::new(),
+                    output: "../escape".to_string(),
+                }],
+            }],
+        };
+        assert!(
+            unsafe_shim_output
+                .validate()
+                .is_err_and(|error| error.contains("native library name"))
+        );
     }
 
     #[test]
@@ -1415,6 +1772,7 @@ output = "fixture_bridge"
                 headers: Vec::new(),
                 definitions: Vec::new(),
                 artifacts: Vec::new(),
+                bindings: Vec::new(),
                 shims: Vec::new(),
             }],
         };
@@ -1438,10 +1796,19 @@ output = "fixture_bridge"
                 headers: Vec::new(),
                 definitions: Vec::new(),
                 artifacts: Vec::new(),
+                bindings: Vec::new(),
                 shims: Vec::new(),
             }],
         };
         assert!(apple.validate().is_ok());
+
+        let mut apple_simulator = apple.clone();
+        apple_simulator.targets[0].target = "aarch64-apple-ios-sim".to_string();
+        apple_simulator.targets[0].sdk = Some(CapabilityRequirement {
+            capability: "iphonesimulator".to_string(),
+            version: Some(">=18, <19".to_string()),
+        });
+        assert!(apple_simulator.validate().is_ok());
 
         let mut unsupported_android_api = android.clone();
         unsupported_android_api.targets[0].platform = Some(InteropTargetPlatform::Android { api_level: 20 });
@@ -1468,6 +1835,17 @@ output = "fixture_bridge"
             incompatible_apple_target
                 .validate()
                 .is_err_and(|error| error.contains("aarch64-apple-ios"))
+        );
+
+        let mut wrong_simulator_sdk = apple_simulator;
+        wrong_simulator_sdk.targets[0].sdk = Some(CapabilityRequirement {
+            capability: "iphoneos".to_string(),
+            version: Some(">=18, <19".to_string()),
+        });
+        assert!(
+            wrong_simulator_sdk
+                .validate()
+                .is_err_and(|error| error.contains("`iphonesimulator` SDK capability"))
         );
 
         let mut malformed_apple_version = apple;

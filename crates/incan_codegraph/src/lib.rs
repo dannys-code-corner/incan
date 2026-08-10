@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current codegraph JSONL schema version.
-pub const CODEGRAPH_SCHEMA_VERSION: u32 = 3;
+pub const CODEGRAPH_SCHEMA_VERSION: u32 = 6;
 
 /// Package identity attached to a codegraph export when an `incan.toml` manifest is available.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -580,10 +580,23 @@ pub struct CodegraphCBindingRecord {
     pub declaration_id: String,
     /// Binding class name visible to Incan source.
     pub name: String,
+    /// Relocation-stable compiler identity for the complete checked binding descriptor.
+    ///
+    /// This is the portable join key for inspection, codegraph, and target-handoff tooling. It excludes source spans
+    /// and source-file locations but changes for every ABI-affecting checked descriptor field, including the declared
+    /// header spelling.
+    #[serde(default)]
+    pub binding_identity: String,
     /// Header spelling declared by the binding.
     pub header: String,
     /// Logical system-library capability selected by the binding.
     pub system_library: String,
+    /// Source-level native-link capability kind: `system_library` or `framework`.
+    ///
+    /// Older graph exports did not distinguish the link kind, so deserialization preserves their explicit
+    /// `system_library` interpretation.
+    #[serde(default = "default_c_binding_link_capability")]
+    pub link_capability: String,
     /// Opaque resource declarations and their release associations.
     pub resources: Vec<CodegraphCBindingResource>,
     /// Raw native symbol contracts in declaration order.
@@ -622,8 +635,27 @@ pub struct CodegraphCBindingSymbol {
     pub parameters: Vec<CodegraphCBindingParameter>,
     /// Return contract.
     pub return_type: CodegraphCBindingType,
+    /// Compiler-checked pointer-to-length associations for bounded spans.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buffers: Vec<CodegraphCBindingBuffer>,
     /// Output-slot state transitions declared for selected results.
     pub outcomes: Vec<CodegraphCBindingOutcome>,
+}
+
+/// One descriptor-owned checked pointer-to-length association for a bounded span.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingBuffer {
+    /// Pointer parameter that starts the caller-owned span.
+    pub pointer_parameter: String,
+    /// Length parameter that bounds the caller-owned span.
+    pub length_parameter: String,
+    /// Exact scalar element spelling retained by the compiler descriptor.
+    pub element: String,
+}
+
+/// Preserve the interpretation of graph exports produced before framework linkage was represented.
+fn default_c_binding_link_capability() -> String {
+    "system_library".to_string()
 }
 
 /// One named raw C parameter contract.
@@ -747,6 +779,18 @@ pub struct CodegraphCBindingCallRecord {
     pub call_id: Option<String>,
     /// Checked binding declaration selected by the call.
     pub binding_id: String,
+    /// Portable compiler identity of the checked binding declaration selected by the call.
+    #[serde(default)]
+    pub binding_identity: String,
+    /// Owning Incan callable declaration for this direct native call, when it occurs in a named function.
+    ///
+    /// This lets tooling traverse a public caller to its private bridge and then the raw declaration without
+    /// inferring the relationship from generated Rust or a naming convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_declaration_id: Option<String>,
+    /// Visibility recorded by the typechecker for the owning callable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_visibility: Option<String>,
     /// Binding class name visible to Incan source.
     pub binding: String,
     /// Binding-local native symbol name.
@@ -758,6 +802,31 @@ pub struct CodegraphCBindingCallRecord {
     /// Fact provenance.
     pub provenance: CodegraphProvenance,
     /// Raw-call records are emitted only for successful checked modules.
+    pub degraded: bool,
+}
+
+/// One compiler-proven public facade to private checked-C bridge relation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodegraphCBindingFacadeRecord {
+    /// Stable id unique within the export.
+    pub id: String,
+    /// Source language for this graph fact.
+    pub language: CodegraphLanguage,
+    /// Module that owns both the facade and its private bridge.
+    pub module_id: String,
+    /// Public callable declaration that directly calls the bridge.
+    pub facade_declaration_id: String,
+    /// Private callable declaration that owns the checked raw C calls.
+    pub bridge_declaration_id: String,
+    /// Generic source-level call record for the proven facade-to-bridge call, when present.
+    pub call_id: Option<String>,
+    /// Checked raw C call records owned by the bridge.
+    pub raw_call_ids: Vec<String>,
+    /// Source span for the facade-to-bridge call expression.
+    pub span: CodegraphSourceSpan,
+    /// Fact provenance.
+    pub provenance: CodegraphProvenance,
+    /// Facade records are emitted only for successful checked modules.
     pub degraded: bool,
 }
 
@@ -800,6 +869,8 @@ pub enum CodegraphRecord {
     CBinding(CodegraphCBindingRecord),
     /// Direct C binding call admitted by explicit `unsafe:` source.
     CBindingCall(CodegraphCBindingCallRecord),
+    /// Compiler-proven public facade to private checked-C bridge relation.
+    CBindingFacade(CodegraphCBindingFacadeRecord),
 }
 
 /// Serialize records as newline-delimited JSON, preserving caller-provided deterministic ordering.

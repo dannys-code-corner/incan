@@ -10,7 +10,8 @@ use crate::frontend::symbols::{
     CallableParam, FieldInfo, FunctionInfo, FunctionOverloadInfo, ResolvedType, SymbolKind, TypeInfo,
 };
 use crate::frontend::typechecker::type_info::{
-    CAbiOutputSlot, CBindingRawCall, CBindingSymbol, CBindingType, COutputMode, CResourceAccess,
+    CAbiOutputSlot, CAbiSpan, CAbiSpanAccess, CAbiSpanAccessKind, CAbiSpanKind, CBindingRawCall, CBindingSymbol,
+    CBindingType, COutputMode, CResourceAccess,
 };
 use crate::frontend::typechecker::{
     CAbiRawCallResult, IdentKind, PendingCAbiOutputSlot, canonical_public_library_type_name,
@@ -83,6 +84,16 @@ impl TypeChecker {
         span: Span,
         expected_return_ty: Option<&ResolvedType>,
     ) -> ResolvedType {
+        if let Expr::Field(base, member) = &callee.node
+            && let Some(result) = self.check_c_abi_c_string_constructor(base, member, type_args, args, span)
+        {
+            return result;
+        }
+        if let Expr::Field(base, member) = &callee.node
+            && let Some(result) = self.check_c_abi_span_constructor(base, member, type_args, args, span)
+        {
+            return result;
+        }
         if let Expr::Field(base, member) = &callee.node
             && let Some(result) = self.check_c_abi_output_slot_constructor(base, member, type_args, args, span)
         {
@@ -403,7 +414,13 @@ impl TypeChecker {
                                 target.name.clone(),
                                 target.kind.clone(),
                             );
-                            self.record_source_target(span, target.module_path, target.name, target.kind);
+                            self.record_source_target(
+                                span,
+                                target.module_path.clone(),
+                                target.name.clone(),
+                                target.kind.clone(),
+                            );
+                            self.record_c_abi_function_call_target(span, target);
                         }
                         return self.validate_function_call(
                             name,
@@ -424,7 +441,13 @@ impl TypeChecker {
                                 target.name.clone(),
                                 target.kind.clone(),
                             );
-                            self.record_source_target(span, target.module_path, target.name, target.kind);
+                            self.record_source_target(
+                                span,
+                                target.module_path.clone(),
+                                target.name.clone(),
+                                target.kind.clone(),
+                            );
+                            self.record_c_abi_function_call_target(span, target);
                         }
                         return self.validate_function_overload_call(
                             name,
@@ -665,8 +688,9 @@ impl TypeChecker {
     /// Resolve an ordinary `Binding.symbol(...)` expression through a checked C binding descriptor.
     ///
     /// This is deliberately an expression-level semantic hook: parser and class syntax remain ordinary Incan. The
-    /// initial executable subset admits scalar parameters/results and `void`; pointer, structure, and ownership
-    /// contracts remain declaration-checked until their runtime carriers are introduced by later slices.
+    /// executable subset admits scalar and resource contracts, compiler-managed output positions, and a checked
+    /// C string temporary for an exact `const char *` parameter. General pointers and structures remain
+    /// declaration-checked until later slices provide their own bounded runtime carriers.
     pub(in crate::frontend::typechecker::check_expr) fn check_c_binding_symbol_member_call(
         &mut self,
         base: &Spanned<Expr>,
@@ -715,7 +739,6 @@ impl TypeChecker {
             return Some(ResolvedType::Unknown);
         }
 
-        let output_slots = self.validate_c_raw_output_slots(&binding, &symbol, &descriptor.resources, args);
         let parameters = symbol
             .parameters
             .iter()
@@ -729,16 +752,42 @@ impl TypeChecker {
             .collect::<Vec<_>>();
         let arg_types = self.check_call_arg_types_for_params(args, &parameters);
         let mut type_bindings = std::collections::HashMap::new();
-        self.validate_callable_arg_bindings(&callable, &parameters, args, &arg_types, &mut type_bindings, span);
+        self.validate_checked_c_callable_arg_bindings(
+            &callable,
+            &parameters,
+            args,
+            &arg_types,
+            &mut type_bindings,
+            span,
+        );
+        if !self.validate_c_raw_span_arguments(&symbol, args, span) {
+            return Some(ResolvedType::Unknown);
+        }
+        let output_slots = self.validate_c_raw_output_slots(&binding, &symbol, &descriptor.resources, args);
         self.validate_c_raw_mutable_resource_borrows(&symbol, args);
         self.record_c_raw_owned_resource_transfers(&symbol, args);
         self.type_info.record_call_site_callable_params(span, &parameters);
-        let return_type = Self::c_raw_call_type(&binding, &symbol.return_type);
+        let return_type = Self::c_raw_call_return_type(&binding, &symbol.return_type);
         self.type_info.c_abi.raw_calls.push(CBindingRawCall {
             span,
+            owner: self.current_c_abi_raw_call_owner.clone(),
             binding: binding.clone(),
             symbol: member.to_string(),
         });
+        if let Some(owner) = self.current_c_abi_raw_call_owner.as_ref()
+            && owner.visibility == crate::frontend::ast::Visibility::Public
+            && self.warned_public_c_abi_raw_call_owners.insert((
+                owner.name.clone(),
+                owner.declaration_span.start,
+                owner.declaration_span.end,
+            ))
+        {
+            self.warnings
+                .push(errors::public_checked_c_call_requires_private_bridge(
+                    &owner.name,
+                    owner.declaration_span,
+                ));
+        }
         if !output_slots.is_empty() {
             self.unbound_c_abi_raw_call_results.insert(
                 (span.start, span.end),
@@ -760,18 +809,40 @@ impl TypeChecker {
             matches!(parameter.ty, CBindingType::Scalar(_) | CBindingType::Resource { .. })
                 || matches!(
                     &parameter.ty,
+                    CBindingType::Pointer {
+                        mutable: false,
+                        pointee,
+                    } if matches!(pointee.as_ref(), CBindingType::Scalar(c_abi::ScalarTypeId::CChar))
+                )
+                || matches!(
+                    &parameter.ty,
+                    CBindingType::Pointer { pointee, .. }
+                        if matches!(pointee.as_ref(), CBindingType::Scalar(c_abi::ScalarTypeId::U8 | c_abi::ScalarTypeId::F32))
+                            && symbol.buffers.iter().any(|buffer| {
+                                buffer.pointer_parameter == parameter.name
+                                    && matches!(pointee.as_ref(), CBindingType::Scalar(element) if *element == buffer.element)
+                            })
+                )
+                || matches!(
+                    &parameter.ty,
                     CBindingType::Output { value, .. }
                         if matches!(value.as_ref(), CBindingType::Scalar(_)
                             | CBindingType::Resource { access: CResourceAccess::Owned, .. })
                 )
         }) && (matches!(
-            symbol.return_type,
+            &symbol.return_type,
             CBindingType::Scalar(_)
                 | CBindingType::Void
                 | CBindingType::Resource {
                     access: CResourceAccess::Owned,
                     ..
                 }
+        ) || matches!(
+            &symbol.return_type,
+            CBindingType::Pointer {
+                mutable: false,
+                pointee,
+            } if matches!(pointee.as_ref(), CBindingType::Scalar(c_abi::ScalarTypeId::CChar))
         ) || matches!(
             &symbol.return_type,
             CBindingType::Nullable(value)
@@ -782,13 +853,169 @@ impl TypeChecker {
         ))
     }
 
+    /// Require every declared typed pointer to be passed with the exact count view from the same opaque span.
+    ///
+    /// Nominal pointer types alone cannot encode this relation: two independent spans would otherwise have the same
+    /// pointer type. The checked declaration owns the parameter pairing and this source-level check preserves it
+    /// before lowering sees raw arguments.
+    fn validate_c_raw_span_arguments(&mut self, symbol: &CBindingSymbol, args: &[CallArg], span: Span) -> bool {
+        for buffer in &symbol.buffers {
+            let Some(pointer_parameter) = symbol
+                .parameters
+                .iter()
+                .find(|parameter| parameter.name == buffer.pointer_parameter)
+            else {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C binding symbol `{}` has a missing checked span-pointer parameter `{}`",
+                        symbol.name, buffer.pointer_parameter
+                    ),
+                    span,
+                ));
+                return false;
+            };
+            let CBindingType::Pointer { mutable, ref pointee } = pointer_parameter.ty else {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C binding symbol `{}` has an invalid checked span-pointer parameter `{}`",
+                        symbol.name, buffer.pointer_parameter
+                    ),
+                    span,
+                ));
+                return false;
+            };
+            if !matches!(pointee.as_ref(), CBindingType::Scalar(element) if *element == buffer.element) {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C binding symbol `{}` has a checked span-pointer `{}` whose element contract drifted",
+                        symbol.name, buffer.pointer_parameter
+                    ),
+                    span,
+                ));
+                return false;
+            }
+            let (Some(pointer), Some(length)) = (
+                Self::c_raw_call_argument(symbol, args, &buffer.pointer_parameter),
+                Self::c_raw_call_argument(symbol, args, &buffer.length_parameter),
+            ) else {
+                // Ordinary argument binding reports omitted or duplicated parameters. Do not replace that diagnostic.
+                continue;
+            };
+            if !Self::c_checked_span_pair_matches(pointer, length, mutable, buffer.element) {
+                let (pointer_method, length_method, span_kind) = match (mutable, buffer.element) {
+                    (true, c_abi::ScalarTypeId::U8) => {
+                        ("as_mut_ptr", "byte_capacity", "mutable caller-owned byte buffer")
+                    }
+                    (false, c_abi::ScalarTypeId::U8) => ("as_const_ptr", "byte_length", "immutable byte span"),
+                    (true, c_abi::ScalarTypeId::F32) => {
+                        ("as_mut_ptr", "element_capacity", "mutable caller-owned f32 span")
+                    }
+                    (false, c_abi::ScalarTypeId::F32) => ("as_const_ptr", "element_count", "immutable f32 span"),
+                    _ => ("as_const_ptr", "element_count", "checked C span"),
+                };
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "C binding symbol `{}` requires `{}` and `{}` to come from the same checked {} via `{}()` and `{}()`",
+                        symbol.name,
+                        buffer.pointer_parameter,
+                        buffer.length_parameter,
+                        span_kind,
+                        pointer_method,
+                        length_method,
+                    ),
+                    span,
+                ));
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Resolve one C parameter to its bound positional or named source argument without accepting unpacking.
+    fn c_raw_call_argument<'a>(
+        symbol: &CBindingSymbol,
+        args: &'a [CallArg],
+        parameter_name: &str,
+    ) -> Option<&'a Spanned<Expr>> {
+        if let Some(value) = args.iter().find_map(|argument| match argument {
+            CallArg::Named(name, value) if name == parameter_name => Some(value),
+            _ => None,
+        }) {
+            return Some(value);
+        }
+        let position = symbol
+            .parameters
+            .iter()
+            .position(|parameter| parameter.name == parameter_name)?;
+        args.iter()
+            .filter_map(|argument| match argument {
+                CallArg::Positional(value) => Some(value),
+                CallArg::Named(_, _) | CallArg::PositionalUnpack(_) | CallArg::KeywordUnpack(_) => None,
+            })
+            .nth(position)
+    }
+
+    /// Recognize the only source spelling that may provide one raw typed pointer and its paired checked bound.
+    fn c_checked_span_pair_matches(
+        pointer: &Spanned<Expr>,
+        length: &Spanned<Expr>,
+        mutable: bool,
+        element: c_abi::ScalarTypeId,
+    ) -> bool {
+        let (pointer_receiver, pointer_method, pointer_type_args, pointer_args) = match &pointer.node {
+            Expr::MethodCall(receiver, method, type_args, arguments) => (
+                receiver.as_ref(),
+                method.as_str(),
+                type_args.as_slice(),
+                arguments.as_slice(),
+            ),
+            _ => return false,
+        };
+        let (length_receiver, length_method, length_type_args, length_args) = match &length.node {
+            Expr::MethodCall(receiver, method, type_args, arguments) => (
+                receiver.as_ref(),
+                method.as_str(),
+                type_args.as_slice(),
+                arguments.as_slice(),
+            ),
+            _ => return false,
+        };
+        let (expected_pointer_method, expected_length_method) = match (mutable, element) {
+            (true, c_abi::ScalarTypeId::U8) => ("as_mut_ptr", "byte_capacity"),
+            (false, c_abi::ScalarTypeId::U8) => ("as_const_ptr", "byte_length"),
+            (true, c_abi::ScalarTypeId::F32) => ("as_mut_ptr", "element_capacity"),
+            (false, c_abi::ScalarTypeId::F32) => ("as_const_ptr", "element_count"),
+            _ => return false,
+        };
+        pointer_method == expected_pointer_method
+            && length_method == expected_length_method
+            && pointer_type_args.is_empty()
+            && length_type_args.is_empty()
+            && pointer_args.is_empty()
+            && length_args.is_empty()
+            && Self::c_checked_span_local_name(pointer_receiver)
+                .zip(Self::c_checked_span_local_name(length_receiver))
+                .is_some_and(|(pointer_local, length_local)| pointer_local == length_local)
+    }
+
+    /// Return the local owner of one transparent checked-span receiver expression.
+    fn c_checked_span_local_name(expr: &Spanned<Expr>) -> Option<&str> {
+        match &expr.node {
+            Expr::Ident(name) => Some(name),
+            Expr::Paren(inner) => Self::c_checked_span_local_name(inner),
+            _ => None,
+        }
+    }
+
     /// Map the contained C call surface to the semantic carrier used for argument checking and local values.
     pub(in crate::frontend::typechecker::check_expr) fn c_raw_call_type(
         binding: &str,
         ty: &CBindingType,
     ) -> ResolvedType {
         match ty {
-            CBindingType::Scalar(_) => ResolvedType::Int,
+            CBindingType::Scalar(scalar) => c_abi::scalar_numeric_type(*scalar)
+                .map(ResolvedType::Numeric)
+                .unwrap_or(ResolvedType::Int),
             CBindingType::Void => ResolvedType::Unit,
             CBindingType::Resource { resource, .. } => {
                 ResolvedType::Named(Self::c_resource_type_identity(binding, resource))
@@ -796,15 +1023,457 @@ impl TypeChecker {
             CBindingType::Nullable(value) => {
                 ResolvedType::Generic("Option".to_string(), vec![Self::c_raw_call_type(binding, value)])
             }
-            CBindingType::Pointer { .. } | CBindingType::Struct(_) | CBindingType::Output { .. } => {
-                ResolvedType::Unknown
+            CBindingType::Pointer { mutable, pointee } => Self::c_pointer_type_identity(*mutable, pointee)
+                .map(ResolvedType::Named)
+                .unwrap_or(ResolvedType::Unknown),
+            CBindingType::Struct(_) | CBindingType::Output { .. } => ResolvedType::Unknown,
+        }
+    }
+
+    /// Map a raw C result to its source-visible checked carrier.
+    ///
+    /// Returned text pointers are scoped views, not reusable raw input pointers. The distinction keeps them out of
+    /// arbitrary later C calls and admits only the bounded owning conversion supplied below.
+    fn c_raw_call_return_type(binding: &str, ty: &CBindingType) -> ResolvedType {
+        match ty {
+            CBindingType::Pointer {
+                mutable: false,
+                pointee,
+            } if matches!(pointee.as_ref(), CBindingType::Scalar(c_abi::ScalarTypeId::CChar)) => {
+                ResolvedType::Named(c_abi::SCOPED_C_STRING_VIEW_TYPE_ID.to_string())
             }
+            _ => Self::c_raw_call_type(binding, ty),
         }
     }
 
     /// Return one compiler-internal nominal identity for a resource scoped by its binding declaration.
     fn c_resource_type_identity(binding: &str, resource: &str) -> String {
         format!("__incan_c_resource::{binding}::{resource}")
+    }
+
+    /// Return the compiler-owned nominal identity for a pointer supported by the direct checked-C bridge.
+    fn c_pointer_type_identity(mutable: bool, pointee: &CBindingType) -> Option<String> {
+        let CBindingType::Scalar(scalar) = pointee else {
+            return None;
+        };
+        Some(c_abi::pointer_type_identity(
+            mutable,
+            c_abi::scalar_type_as_str(*scalar),
+        ))
+    }
+
+    /// Recognize `c.cstr(value)` as the explicit conversion from Incan text to temporary NUL-terminated storage.
+    ///
+    /// It returns a private compiler-known carrier rather than a raw pointer. The only admitted extraction is
+    /// `as_const_ptr()` inside an `unsafe:` region, so the temporary's storage remains live through the raw call.
+    pub(super) fn check_c_abi_c_string_constructor(
+        &mut self,
+        base: &Spanned<Expr>,
+        member: &str,
+        type_args: &[Spanned<Type>],
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<ResolvedType> {
+        if member != "cstr" {
+            return None;
+        }
+        let Expr::Ident(namespace) = &base.node else {
+            return None;
+        };
+        if !self
+            .import_aliases
+            .get(namespace)
+            .is_some_and(|segments| c_abi::is_interop_namespace_path(segments.iter().map(String::as_str)))
+        {
+            return None;
+        }
+        if !type_args.is_empty() || args.len() != 1 || !matches!(args.first(), Some(CallArg::Positional(_))) {
+            self.errors.push(CompileError::type_error(
+                "c.cstr(value) requires exactly one positional str argument and no type arguments".to_string(),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        let actual = self
+            .check_call_arg_types(args)
+            .into_iter()
+            .next()
+            .unwrap_or(ResolvedType::Unknown);
+        if !self.types_compatible(&actual, &ResolvedType::Str) {
+            self.errors.push(CompileError::type_error(
+                format!("c.cstr(value) requires str, found {actual}"),
+                span,
+            ));
+            return Some(ResolvedType::Unknown);
+        }
+        self.type_info.c_abi.uses_checked_c_strings = true;
+        Some(ResolvedType::Generic(
+            "Result".to_string(),
+            vec![
+                ResolvedType::Named(c_abi::C_STRING_TYPE_ID.to_string()),
+                ResolvedType::Str,
+            ],
+        ))
+    }
+
+    /// Recognize compiler-owned typed carriers used for bounded C span calls.
+    ///
+    /// Each constructor moves one owned source allocation into a private carrier. The carrier has no ordinary pointer,
+    /// indexing, return, or storage surface: only the methods checked below can reach a declared raw C call.
+    pub(super) fn check_c_abi_span_constructor(
+        &mut self,
+        base: &Spanned<Expr>,
+        member: &str,
+        type_args: &[Spanned<Type>],
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<ResolvedType> {
+        let (identity, kind, value_type, value_label) = match member {
+            "bytes_span" => (
+                c_abi::C_BYTES_SPAN_TYPE_ID,
+                CAbiSpanKind {
+                    element: c_abi::ScalarTypeId::U8,
+                    mutable: false,
+                },
+                ResolvedType::Bytes,
+                "bytes",
+            ),
+            "mutable_bytes_span" => (
+                c_abi::C_MUTABLE_BYTES_SPAN_TYPE_ID,
+                CAbiSpanKind {
+                    element: c_abi::ScalarTypeId::U8,
+                    mutable: true,
+                },
+                ResolvedType::Bytes,
+                "bytes",
+            ),
+            "f32_span" => (
+                c_abi::C_F32_SPAN_TYPE_ID,
+                CAbiSpanKind {
+                    element: c_abi::ScalarTypeId::F32,
+                    mutable: false,
+                },
+                Self::c_abi_span_storage_type(c_abi::ScalarTypeId::F32),
+                "list[f32]",
+            ),
+            "mutable_f32_span" => (
+                c_abi::C_MUTABLE_F32_SPAN_TYPE_ID,
+                CAbiSpanKind {
+                    element: c_abi::ScalarTypeId::F32,
+                    mutable: true,
+                },
+                Self::c_abi_span_storage_type(c_abi::ScalarTypeId::F32),
+                "list[f32]",
+            ),
+            _ => return None,
+        };
+        let Expr::Ident(namespace) = &base.node else {
+            return None;
+        };
+        if !self
+            .import_aliases
+            .get(namespace)
+            .is_some_and(|segments| c_abi::is_interop_namespace_path(segments.iter().map(String::as_str)))
+        {
+            return None;
+        }
+        let [CallArg::Positional(value)] = args else {
+            self.errors.push(CompileError::type_error(
+                format!(
+                    "c.{member}(value) requires exactly one positional {value_label} argument and no type arguments"
+                ),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        };
+        if !type_args.is_empty() {
+            self.errors.push(CompileError::type_error(
+                format!(
+                    "c.{member}(value) requires exactly one positional {value_label} argument and no type arguments"
+                ),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        let actual = self.check_expr_with_expected(value, Some(&value_type));
+        if !self.types_compatible(&actual, &value_type) {
+            self.errors.push(CompileError::type_error(
+                format!("c.{member}(value) requires {value_label}, found {actual}"),
+                span,
+            ));
+            return Some(ResolvedType::Unknown);
+        }
+        if !self
+            .type_info
+            .c_abi
+            .spans
+            .iter()
+            .any(|existing| existing.constructor_span == span)
+        {
+            self.type_info.c_abi.spans.push(CAbiSpan {
+                constructor_span: span,
+                kind,
+            });
+        }
+        self.unbound_c_abi_span_constructors
+            .entry((span.start, span.end))
+            .or_insert(kind);
+        Some(ResolvedType::Named(identity.to_string()))
+    }
+
+    /// Type-check the closed typed-span bridge surface without admitting a general pointer API.
+    pub(super) fn check_c_abi_span_method(
+        &mut self,
+        base: &Spanned<Expr>,
+        method: &str,
+        type_args: &[Spanned<Type>],
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<ResolvedType> {
+        let local_name = Self::c_checked_span_local_name(base)?;
+        let local = self.c_abi_span_bindings.get(local_name).copied()?;
+        if let Some(consumed_at) = self
+            .consumed_c_abi_span_bindings
+            .get(&(local.binding_span.start, local.binding_span.end))
+            .copied()
+        {
+            self.errors.push(CompileError::type_error(
+                format!(
+                    "checked mutable C span `{local_name}` was already consumed at byte range {}..{}; it cannot be used again",
+                    consumed_at.start, consumed_at.end
+                ),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        let mutable = local.kind.mutable;
+        let immutable = !mutable;
+        let (length_method, capacity_method, finish_method) = match local.kind.element {
+            c_abi::ScalarTypeId::U8 => ("byte_length", "byte_capacity", "into_bytes"),
+            c_abi::ScalarTypeId::F32 => ("element_count", "element_capacity", "into_f32s"),
+            _ => return None,
+        };
+        let requires_unsafe = matches!(method, "as_const_ptr" | "as_mut_ptr")
+            || method == length_method
+            || method == capacity_method
+            || method == finish_method;
+        if requires_unsafe && self.unsafe_depth == 0 {
+            self.errors.push(CompileError::type_error(
+                "checked C span bridge operations require an enclosing `unsafe:` acknowledgement".to_string(),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        let (expected_method, access, return_type) = match (immutable, mutable, method) {
+            (true, false, "as_const_ptr") => (
+                "as_const_ptr",
+                CAbiSpanAccessKind::ConstPointer,
+                ResolvedType::Named(c_abi::pointer_type_identity(
+                    false,
+                    c_abi::scalar_type_as_str(local.kind.element),
+                )),
+            ),
+            (true, false, _) if method == length_method => (
+                length_method,
+                CAbiSpanAccessKind::ElementCount,
+                ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::USize),
+            ),
+            (false, true, "as_mut_ptr") => {
+                if let Some(local) = Self::c_checked_span_local_name(base)
+                    && !self.mutable_bindings.contains(local)
+                {
+                    self.errors.push(errors::mutable_c_borrow_requires_mut(local, span));
+                    self.check_call_args(args);
+                    return Some(ResolvedType::Unknown);
+                }
+                (
+                    "as_mut_ptr",
+                    CAbiSpanAccessKind::MutPointer,
+                    ResolvedType::Named(c_abi::pointer_type_identity(
+                        true,
+                        c_abi::scalar_type_as_str(local.kind.element),
+                    )),
+                )
+            }
+            (false, true, _) if method == capacity_method => (
+                capacity_method,
+                CAbiSpanAccessKind::ElementCapacity,
+                ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::USize),
+            ),
+            (false, true, _) if method == finish_method => {
+                if !type_args.is_empty() || args.len() != 1 || !matches!(args.first(), Some(CallArg::Positional(_))) {
+                    self.errors.push(CompileError::type_error(
+                        format!("a checked mutable C span requires {finish_method}(written) with one positional usize"),
+                        span,
+                    ));
+                    self.check_call_args(args);
+                    return Some(ResolvedType::Unknown);
+                }
+                let actual = self
+                    .check_call_arg_types(args)
+                    .into_iter()
+                    .next()
+                    .unwrap_or(ResolvedType::Unknown);
+                let count_type = ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::USize);
+                if !self.types_compatible(&actual, &count_type)
+                    && !Self::checked_c_integer_bridge_compatible(&actual, &count_type)
+                {
+                    self.errors.push(CompileError::type_error(
+                        format!("{finish_method}(written) requires an integer count, found {actual}"),
+                        span,
+                    ));
+                    return Some(ResolvedType::Unknown);
+                }
+                self.type_info.c_abi.uses_checked_c_span_buffers = true;
+                self.record_c_abi_span_access(span, local.kind, CAbiSpanAccessKind::Finish);
+                self.consumed_c_abi_span_bindings
+                    .insert((local.binding_span.start, local.binding_span.end), span);
+                return Some(ResolvedType::Generic(
+                    "Result".to_string(),
+                    vec![Self::c_abi_span_storage_type(local.kind.element), ResolvedType::Str],
+                ));
+            }
+            _ => return None,
+        };
+        if method != expected_method || !type_args.is_empty() || !args.is_empty() {
+            self.errors.push(CompileError::type_error(
+                format!("a checked C span does not support `{method}` with type or value arguments"),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        self.record_c_abi_span_access(span, local.kind, access);
+        Some(return_type)
+    }
+
+    /// Retain one authorized span-carrier operation exactly once so lowering need not rediscover it from source text.
+    fn record_c_abi_span_access(&mut self, span: Span, span_kind: CAbiSpanKind, access: CAbiSpanAccessKind) {
+        if self
+            .type_info
+            .c_abi
+            .span_accesses
+            .iter()
+            .any(|existing| existing.span == span && existing.access == access)
+        {
+            return;
+        }
+        self.type_info.c_abi.span_accesses.push(CAbiSpanAccess {
+            span,
+            span_kind,
+            access,
+        });
+    }
+
+    /// Return the ordinary source storage moved into one exact checked C span representation.
+    fn c_abi_span_storage_type(element: c_abi::ScalarTypeId) -> ResolvedType {
+        match element {
+            c_abi::ScalarTypeId::U8 => ResolvedType::Bytes,
+            c_abi::ScalarTypeId::F32 => ResolvedType::Generic(
+                "List".to_string(),
+                vec![ResolvedType::Numeric(
+                    incan_core::lang::types::numerics::NumericTypeId::F32,
+                )],
+            ),
+            _ => ResolvedType::Unknown,
+        }
+    }
+
+    /// Type-check the sole raw extraction admitted for a validated temporary C string.
+    pub(super) fn check_c_abi_c_string_pointer(
+        &mut self,
+        base: &Spanned<Expr>,
+        method: &str,
+        type_args: &[Spanned<Type>],
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<ResolvedType> {
+        if method != "as_const_ptr"
+            || !matches!(self.check_expr(base), ResolvedType::Named(identity) if identity == c_abi::C_STRING_TYPE_ID)
+        {
+            return None;
+        }
+        if !type_args.is_empty() || !args.is_empty() {
+            self.errors.push(CompileError::type_error(
+                "a checked C string pointer takes no type or value arguments".to_string(),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        if self.unsafe_depth == 0 {
+            self.errors.push(CompileError::type_error(
+                "extracting a checked C string pointer requires an enclosing `unsafe:` acknowledgement".to_string(),
+                span,
+            ));
+            return Some(ResolvedType::Unknown);
+        }
+        Some(ResolvedType::Named(c_abi::pointer_type_identity(false, "c.c_char")))
+    }
+
+    /// Type-check the only owning conversion admitted for one returned scoped C string view.
+    ///
+    /// A caller must name a positive upper bound because a foreign terminator scan has no safe unbounded form. The
+    /// helper validates UTF-8 and copies before the raw view can escape the unsafe bridge.
+    pub(super) fn check_c_abi_scoped_c_string_copy(
+        &mut self,
+        base: &Spanned<Expr>,
+        method: &str,
+        type_args: &[Spanned<Type>],
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<ResolvedType> {
+        if method != "copy_utf8"
+            || !matches!(self.check_expr(base), ResolvedType::Named(identity) if identity == c_abi::SCOPED_C_STRING_VIEW_TYPE_ID)
+        {
+            return None;
+        }
+        let [CallArg::Named(name, _)] = args else {
+            self.errors.push(CompileError::type_error(
+                "a scoped C string view requires copy_utf8(max_bytes=<positive int>)".to_string(),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        };
+        if !type_args.is_empty() || name != "max_bytes" {
+            self.errors.push(CompileError::type_error(
+                "a scoped C string view requires copy_utf8(max_bytes=<positive int>)".to_string(),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        if self.unsafe_depth == 0 {
+            self.errors.push(CompileError::type_error(
+                "copying a scoped C string view requires an enclosing `unsafe:` acknowledgement".to_string(),
+                span,
+            ));
+            self.check_call_args(args);
+            return Some(ResolvedType::Unknown);
+        }
+        let actual = self
+            .check_call_arg_types(args)
+            .into_iter()
+            .next()
+            .unwrap_or(ResolvedType::Unknown);
+        if !self.types_compatible(&actual, &ResolvedType::Int) {
+            self.errors.push(CompileError::type_error(
+                format!("copy_utf8(max_bytes=...) requires int, found {actual}"),
+                span,
+            ));
+            return Some(ResolvedType::Unknown);
+        }
+        self.type_info.c_abi.uses_scoped_c_string_views = true;
+        Some(ResolvedType::Generic(
+            "Result".to_string(),
+            vec![ResolvedType::Str, ResolvedType::Str],
+        ))
     }
 
     /// Recognize ordinary `c.out[...]()` and `c.inout(...)` calls without adding parser grammar.
