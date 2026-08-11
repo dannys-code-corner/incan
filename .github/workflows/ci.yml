@@ -171,12 +171,6 @@ jobs:
           make fetch-oven-loaf-sources
       - name: Build the compiler
         run: CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
-      - name: Run bounded Oven process-containment regressions
-        if: ${{ matrix.id == 'linux-stable' }}
-        run: make test-oven-pr-regressions
-      - name: Build checked-reference generators
-        if: ${{ matrix.id == 'linux-stable' }}
-        run: CARGO_BUILD_JOBS=2 cargo build --locked -p incan_core --bin generate_lang_reference
       - name: Run complete Oven suite
         run: >-
           CARGO_NET_OFFLINE=true
@@ -198,8 +192,37 @@ jobs:
           INCAN_TEST_PREWARM_TOOLCHAIN=${{ matrix.toolchain }}
           INCAN_TEST_LOAF_TOOLCHAIN=${{ matrix.toolchain }}
           make -s test-oven-release-smoke
-      - name: Upload Linux compiler and reference generators
-        if: ${{ matrix.id == 'linux-stable' }}
+
+  linux-reference-handoff:
+    name: Linux reference artifact handoff
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Restore Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
+          restore-keys: |
+            incan-oven-pr-sources-v1-stable-Linux-X64-
+      - name: Fetch locked compiler and Loaf publisher sources
+        run: |
+          make fetch-locked-cargo-sources
+          make fetch-oven-loaf-sources
+      - name: Build Linux compiler and reference generators
+        run: |
+          CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
+          CARGO_BUILD_JOBS=2 cargo build --locked -p incan_core --bin generate_lang_reference
+      - name: Run bounded Oven process-containment regressions
+        run: make test-oven-pr-regressions
+      - name: Prewarm Linux SDK providers for checked references
+        run: INCAN_TEST_COMPILER_ALREADY_BUILT=1 make test-prewarm-sdk
+      - name: Upload compiler and reference generators
         uses: actions/upload-artifact@v6
         with:
           name: test-linux-tools
@@ -209,8 +232,7 @@ jobs:
             target/debug/generate_feature_inventory
           if-no-files-found: error
           retention-days: 1
-      - name: Upload Linux SDK provider store
-        if: ${{ matrix.id == 'linux-stable' }}
+      - name: Upload SDK provider store
         uses: actions/upload-artifact@v6
         with:
           name: test-linux-sdk-provider-store
@@ -385,6 +407,7 @@ jobs:
     needs:
       - changes
       - oven-pr
+      - linux-reference-handoff
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
