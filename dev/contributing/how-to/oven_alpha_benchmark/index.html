@@ -8624,6 +8624,7 @@ chmod<span class="w"> </span>+x<span class="w"> </span>/tmp/incan-oven-cargo-gua
 bash<span class="w"> </span>scripts/bench_oven_alpha.sh<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--incan<span class="w"> </span>/path/to/extracted/incan/bin/incan<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--release-identity<span class="w"> </span><span class="s1">&#39;incan-VERSION-TARGET.tar.gz sha256:...&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rustc<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>rustup<span class="w"> </span>which<span class="w"> </span>--toolchain<span class="w"> </span>stable<span class="w"> </span>rustc<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--checkout-revision<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--workload<span class="w"> </span><span class="nb">test</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--source<span class="w"> </span>tests/fixtures/test_assert_canary.incn<span class="w"> </span><span class="se">\</span>
@@ -8637,6 +8638,7 @@ bash<span class="w"> </span>scripts/bench_oven_alpha.sh<span class="w"> </span><
 <span class="c1"># Add --clean-worktree-source /tmp/incan-oven-benchmark-clean/tests/fixtures/test_assert_canary.incn</span>
 </code></pre></div>
 <p>For build or run, set <code>--workload build</code> or <code>--workload run</code> and use a small project inside the documented release envelope; the checked sources that bake that envelope live in <code>src/oven/fixtures/</code>. A <code>std.testing</code> fixture is debug-only and is intentionally not a release-build benchmark. On Linux, use a task-specific directory below <code>/tmp</code>; the store must start empty so its first materialization is attributable. The default policy is the normal developer policy: 3 GiB aggregate physical allocation, 1 GiB physical allocation per compatibility domain, and 768 MiB logical artifact bytes per domain. Pass explicit byte overrides only when recording a different policy.</p>
+<p>Pass the exact <code>rustc</code> compatible with the shipped Loafs. The harness passes it as <code>RUSTC</code> to every measured command and records both its path and <code>--version</code> identity. This prevents an ambient Rustup default from minting an incompatible receipt and turning a toolchain mismatch into a misleading benchmark failure.</p>
 <h2 id="read-the-report">Read the report<a class="headerlink" href="#read-the-report" title="Permanent link">&para;</a></h2>
 <p><code>report.json</code> contains:</p>
 <ul>
