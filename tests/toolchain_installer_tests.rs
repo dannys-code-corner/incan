@@ -1061,8 +1061,9 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.contains("make -s test-oven")
             && workflow.contains("make test-oven-pr-regressions")
             && workflow.contains("linux-reference-handoff")
+            && workflow.matches("Install WASI target for vocab desugarers").count() == 2
             && !workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs, execute the full Oven suite on every platform, and retain Linux process-containment coverage"
+        "pull-request CI must cancel superseded runs, install the vocab target in both Linux paths, execute the full Oven suite on every platform, and retain Linux process-containment coverage"
     );
     assert!(
         evidence_workflow.contains("uses: ./.github/actions/run-oven-compiler-suite"),
