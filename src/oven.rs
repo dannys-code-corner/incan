@@ -80,7 +80,10 @@ pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES: u64 = 16 * 1024 * 1024
 /// Physical allowance for the compiler-suite compatibility domain.
 pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 /// Logical artifact-byte allowance for the compiler-suite compatibility domain.
-pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+///
+/// The complete LSP closure measures 3,271,283,026 logical bytes on Linux;
+/// 4 GiB leaves practical policy headroom without relaxing its physical bound.
+pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Explicit, portable build facts for one frozen-project import.
 #[derive(Debug, Clone, PartialEq, Eq)]

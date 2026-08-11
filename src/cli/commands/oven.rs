@@ -5998,7 +5998,7 @@ mod tests {
             limits.max_domain_logical_bytes,
             DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES
         );
-        assert_eq!(limits.max_domain_logical_bytes, 3 * 1024 * 1024 * 1024);
+        assert_eq!(limits.max_domain_logical_bytes, 4 * 1024 * 1024 * 1024);
     }
 
     #[test]
