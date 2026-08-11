@@ -178,7 +178,6 @@ jobs:
         if: ${{ matrix.id == 'linux-stable' }}
         run: CARGO_BUILD_JOBS=2 cargo build --locked -p incan_core --bin generate_lang_reference
       - name: Run complete Oven suite
-        if: ${{ matrix.id == 'linux-stable' }}
         run: >-
           CARGO_NET_OFFLINE=true
           INCAN_TEST_COMPILER_ALREADY_BUILT=1
