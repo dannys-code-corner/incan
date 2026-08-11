@@ -1058,11 +1058,11 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
     }
     assert!(
         workflow.contains("cancel-in-progress: true")
-            && workflow.contains("make -s test-oven-release-smoke")
+            && workflow.contains("make -s test-oven")
             && workflow.contains("make test-oven-pr-regressions")
-            && workflow.contains("matrix.id == 'linux-stable'")
+            && workflow.contains("linux-reference-handoff")
             && !workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs and retain bounded normal-command and process-containment gates"
+        "pull-request CI must cancel superseded runs, execute the full Oven suite on every platform, and retain Linux process-containment coverage"
     );
     assert!(
         evidence_workflow.contains("uses: ./.github/actions/run-oven-compiler-suite"),

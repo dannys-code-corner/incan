@@ -1169,7 +1169,7 @@ pub(crate) fn selected_interop_toolchain_identity(
     validate_regular_executable(Some(c_compiler), "selected C compiler")?;
     let mut identities = BTreeMap::from([(
         "c-compiler".to_string(),
-        digest_regular_file(c_compiler, "selected C compiler")?,
+        digest_regular_executable(c_compiler, "selected C compiler")?,
     )]);
     let has_cxx_shim = target
         .shims
@@ -1185,7 +1185,7 @@ pub(crate) fn selected_interop_toolchain_identity(
         validate_regular_executable(Some(cxx_compiler), "selected C++ compiler")?;
         identities.insert(
             "cxx-compiler".to_string(),
-            digest_regular_file(cxx_compiler, "selected C++ compiler")?,
+            digest_regular_executable(cxx_compiler, "selected C++ compiler")?,
         );
     }
     let has_shim = target
@@ -1202,7 +1202,7 @@ pub(crate) fn selected_interop_toolchain_identity(
         validate_regular_executable(Some(archiver), "selected native archiver")?;
         identities.insert(
             "archiver".to_string(),
-            digest_regular_file(archiver, "selected native archiver")?,
+            digest_regular_executable(archiver, "selected native archiver")?,
         );
     }
     digest_serialized(&identities, "selected Oven interop toolchain executables")
@@ -1211,10 +1211,25 @@ pub(crate) fn selected_interop_toolchain_identity(
 /// Require an explicitly selected regular executable before it can start a compiler-owned native process.
 fn validate_regular_executable(path: Option<&Path>, label: &str) -> Result<(), String> {
     let path = path.ok_or_else(|| format!("Oven interop bake requires {label}"))?;
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| format!("could not inspect {label} {}: {error}", path.display()))?;
-    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err(format!("{label} must be a regular executable file: {}", path.display()));
+    let _ = canonical_regular_executable(path, label)?;
+    Ok(())
+}
+
+/// Resolve one selected executable and verify that the resolved target is a regular executable file.
+///
+/// System compiler entry points commonly use a stable symlink such as `/usr/bin/cc`. The resolved target—not the
+/// mutable symlink path—is what Oven digests and authorizes for this one bake.
+fn canonical_regular_executable(path: &Path, label: &str) -> Result<PathBuf, String> {
+    let resolved = path
+        .canonicalize()
+        .map_err(|error| format!("could not resolve {label} {}: {error}", path.display()))?;
+    let metadata = fs::metadata(&resolved)
+        .map_err(|error| format!("could not inspect resolved {label} {}: {error}", resolved.display()))?;
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "{label} must resolve to a regular executable file: {}",
+            path.display()
+        ));
     }
     #[cfg(unix)]
     {
@@ -1224,7 +1239,13 @@ fn validate_regular_executable(path: Option<&Path>, label: &str) -> Result<(), S
             return Err(format!("{label} is not executable: {}", path.display()));
         }
     }
-    Ok(())
+    Ok(resolved)
+}
+
+/// Digest the resolved regular executable that an Oven interop bake is allowed to launch.
+fn digest_regular_executable(path: &Path, label: &str) -> Result<String, String> {
+    let resolved = canonical_regular_executable(path, label)?;
+    digest_regular_file(&resolved, label)
 }
 
 /// Copy every package-declared static archive after rechecking its locked path and digest.
@@ -1400,6 +1421,11 @@ fn compile_locked_interop_shims(
             InteropShimLanguage::Cxx => request.cxx_compiler,
         }
         .ok_or_else(|| format!("locked interop shim `{}` has no selected compiler", shim.name))?;
+        let compiler_label = match shim.language {
+            InteropShimLanguage::C => "selected C compiler",
+            InteropShimLanguage::Cxx => "selected C++ compiler",
+        };
+        let compiler = canonical_regular_executable(compiler, compiler_label)?;
         if !is_interop_native_library_name(&shim.output) {
             return Err(format!("locked interop shim `{}` has an unsafe output name", shim.name));
         }
@@ -1414,13 +1440,13 @@ fn compile_locked_interop_shims(
         for (index, source) in shim.sources.iter().enumerate() {
             let source = verified_locked_input(request.project_root, source, "interop shim source")?;
             let object = object_root.join(format!("{index:04}.o"));
-            let mut command = Command::new(compiler);
+            let mut command = Command::new(&compiler);
             if shim.language == InteropShimLanguage::Cxx {
                 command.args(["-x", "c++"]);
             }
             command.arg("-c").arg(&source).arg("-o").arg(&object);
             append_locked_compile_arguments(&mut command, request, &include_roots);
-            run_interop_tool(command, compiler, &format!("compile interop shim `{}`", shim.name))?;
+            run_interop_tool(command, &compiler, &format!("compile interop shim `{}`", shim.name))?;
             let _ = digest_regular_file(&object, "compiled interop shim object")?;
             objects.push(object);
         }
@@ -1428,9 +1454,10 @@ fn compile_locked_interop_shims(
         let archiver = request
             .archiver
             .ok_or_else(|| format!("locked interop shim `{}` has no selected archiver", shim.name))?;
-        let mut command = Command::new(archiver);
+        let archiver = canonical_regular_executable(archiver, "selected native archiver")?;
+        let mut command = Command::new(&archiver);
         command.arg("crs").arg(&archive).args(&objects);
-        run_interop_tool(command, archiver, &format!("archive interop shim `{}`", shim.name))?;
+        run_interop_tool(command, &archiver, &format!("archive interop shim `{}`", shim.name))?;
         archives.push(OvenInteropBakedArchive {
             name: shim.output.clone(),
             relative_path: format!("{OVEN_INTEROP_NATIVE_DIRECTORY}/lib{}.a", shim.output),
