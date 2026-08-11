@@ -39,7 +39,10 @@ pub(crate) const OVEN_INTEROP_EXECUTION_PROVENANCE_SCHEMA_VERSION: u32 = 3;
 /// receipt-compatible entry as reusable. Normal commands reconstruct this same input from the selected receipt.
 pub(crate) const OVEN_INTEROP_PLAN_SCHEMA_INPUT: &str = "oven-interop-plan-schema";
 /// Current immutable final-plan materialization contract.
-const OVEN_INTEROP_PLAN_SCHEMA: &str = "3";
+///
+/// Version 4 records the selected host compiler's own target semantics rather than unconditionally appending the
+/// Clang-only `-target` argument. A plan baked under an older invocation contract must not be reused.
+const OVEN_INTEROP_PLAN_SCHEMA: &str = "4";
 /// Receipt input key that binds a normal consumer to one selected native-execution contract.
 pub(crate) const OVEN_INTEROP_EXECUTION_RECEIPT_INPUT: &str = "oven-interop-execution-receipt";
 /// Store-owned directory containing static archives baked from declared interop shims or artifacts.
@@ -1491,9 +1494,11 @@ fn append_locked_compile_arguments(
     request: &OvenInteropNativeBakeRequest<'_>,
     include_roots: &[PathBuf],
 ) {
-    command
-        .arg("-target")
-        .arg(clang_target_for_rust_target(&request.target.target));
+    if interop_compiler_uses_clang_target_flag(request.target) {
+        command
+            .arg("-target")
+            .arg(clang_target_for_rust_target(&request.target.target));
+    }
     if let Some(sdk_root) = request.sdk_root {
         command.arg("-isysroot").arg(sdk_root);
     }
@@ -1503,6 +1508,18 @@ fn append_locked_compile_arguments(
     for root in include_roots {
         command.arg("-I").arg(root);
     }
+}
+
+/// Return whether this locked compiler capability accepts Clang's explicit target flag.
+///
+/// A `host-c-compiler` is a native compiler selected by the maintainer for the host target. Its driver is allowed
+/// to be GCC-compatible, where `-target` is not valid. Target-aware capabilities remain responsible for accepting
+/// the explicit Clang spelling generated below; cross-target toolchains therefore do not inherit a host default.
+fn interop_compiler_uses_clang_target_flag(target: &LockedInteropTarget) -> bool {
+    target
+        .toolchain
+        .as_ref()
+        .is_none_or(|toolchain| toolchain.capability != "host-c-compiler")
 }
 
 /// Translate the Rust target vocabulary into the corresponding Clang target spelling without ambient detection.
@@ -1762,8 +1779,9 @@ mod tests {
         OvenInteropAdapter, OvenInteropAdapterStageRequest, OvenInteropBakedArchive, OvenInteropBakedBundle,
         OvenInteropCapabilitySelection, OvenInteropNativeBakeRequest, bake_interop_native_plan,
         bind_interop_native_archives, default_interop_execution_receipt_path, interop_adapter_bundle_path,
-        interop_execution_build_unit_inputs, load_interop_execution_receipt, receipt_interop_execution,
-        stage_interop_adapter, validate_interop_execution_receipt, write_interop_execution_receipt,
+        interop_compiler_uses_clang_target_flag, interop_execution_build_unit_inputs, load_interop_execution_receipt,
+        receipt_interop_execution, stage_interop_adapter, validate_interop_execution_receipt,
+        write_interop_execution_receipt,
     };
     #[cfg(target_os = "macos")]
     use crate::oven::rustc::select_direct_rustc_plan_for_execution;
@@ -1846,6 +1864,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn host_c_compiler_uses_its_native_driver_target_while_clang_capabilities_are_explicit() {
+        let mut host_target = locked_target();
+        host_target.target = "x86_64-unknown-linux-gnu".to_string();
+        host_target.sdk = None;
+        host_target.platform = None;
+        host_target.toolchain = Some(CapabilityRequirement {
+            capability: "host-c-compiler".to_string(),
+            version: Some(">=1, <2".to_string()),
+        });
+
+        assert!(!interop_compiler_uses_clang_target_flag(&host_target));
+        assert!(interop_compiler_uses_clang_target_flag(&locked_target()));
+    }
+
     fn static_bake_request<'a>(
         store: &'a OvenStore,
         project_root: &'a Path,
@@ -1883,7 +1916,7 @@ mod tests {
         let inputs = interop_execution_build_unit_inputs(&receipt);
         assert_eq!(inputs.len(), 2);
         assert_eq!(inputs.get("oven-interop-execution-receipt"), Some(&receipt.identity));
-        assert_eq!(inputs.get("oven-interop-plan-schema"), Some(&"3".to_string()));
+        assert_eq!(inputs.get("oven-interop-plan-schema"), Some(&"4".to_string()));
 
         let mut changed = target;
         changed.shims[0].sources[0].digest = "sha256:changed-source".to_string();

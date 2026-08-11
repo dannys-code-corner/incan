@@ -4622,18 +4622,28 @@ fn write_native_test_failure_transcript(output: &Path, transcript: &str) -> CliR
 /// The complete caller-owned transcript is retained beside the direct-rustc test binary on failure.
 fn native_test_failure_summary(output: &str) -> String {
     const MAX_CHARS: usize = 12_000;
-    let relevant = output
-        .lines()
-        .filter(|line| {
-            line.contains("FAILED")
-                || line.contains("panicked")
-                || line.contains("Error:")
-                || line.starts_with("error:")
-                || line.contains("test result:")
-        })
-        .take(96)
-        .collect::<Vec<_>>()
-        .join("\n");
+    const PANIC_CONTEXT_LINES: usize = 12;
+    let mut relevant = Vec::new();
+    let mut panic_context_remaining = 0;
+    for line in output.lines() {
+        let is_relevant = line.contains("FAILED")
+            || line.contains("panicked")
+            || line.contains("Error:")
+            || line.starts_with("error:")
+            || line.contains("test result:");
+        if is_relevant || panic_context_remaining > 0 {
+            relevant.push(line);
+        }
+        if line.contains("panicked") {
+            panic_context_remaining = PANIC_CONTEXT_LINES;
+        } else {
+            panic_context_remaining = panic_context_remaining.saturating_sub(1);
+        }
+        if relevant.len() == 96 {
+            break;
+        }
+    }
+    let relevant = relevant.join("\n");
     let summary = if relevant.is_empty() { output } else { &relevant };
     let mut bounded = summary.chars().take(MAX_CHARS).collect::<String>();
     if summary.chars().count() > MAX_CHARS {
@@ -5192,9 +5202,9 @@ mod tests {
         compiler_suite_directory, compiler_suite_environment, compiler_suite_environment_path, compiler_suite_file,
         compiler_suite_remove_generated_rust_closure, compiler_suite_selected_shard_references,
         compiler_suite_workspace_library_dependency_closure, default_rustup_home, default_store_root,
-        loaf_envelope_default_limits, loaf_envelope_evidence, oven_import, oven_legacy_cargo_bake_loafs,
-        oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path, prepare_compiler_suite_child,
-        resolve_limits_with_environment_and_defaults, reuse_complete_loaf_envelope,
+        loaf_envelope_default_limits, loaf_envelope_evidence, native_test_failure_summary, oven_import,
+        oven_legacy_cargo_bake_loafs, oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path,
+        prepare_compiler_suite_child, resolve_limits_with_environment_and_defaults, reuse_complete_loaf_envelope,
         run_compiler_suite_children_with_leases_retained, run_prepared_compiler_suite_children,
         select_compiler_suite_shards, write_compiler_suite_report, write_native_test_failure_transcript,
     };
@@ -5708,6 +5718,17 @@ mod tests {
         assert_eq!(transcript, output.with_extension("libtest-output.txt"));
         assert_eq!(fs::read_to_string(transcript)?, "one failing libtest\n");
         Ok(())
+    }
+
+    #[test]
+    fn native_test_failure_summary_keeps_panic_diagnostics() {
+        let summary = native_test_failure_summary(
+            "test fixture ... FAILED\nthread 'fixture' panicked at src/fixture.rs:12:3:\nbenchmark fixture failed\nstdout: missing Loaf\nstderr: no Cargo fallback\ntest result: FAILED\n",
+        );
+
+        assert!(summary.contains("benchmark fixture failed"));
+        assert!(summary.contains("stdout: missing Loaf"));
+        assert!(summary.contains("stderr: no Cargo fallback"));
     }
 
     #[test]
