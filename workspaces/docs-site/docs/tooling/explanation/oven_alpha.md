@@ -169,7 +169,7 @@ See the [Oven Alpha benchmark guide](../../contributing/how-to/oven_alpha_benchm
 
 ## Bounded storage, not cache archaeology
 
-The default developer store is `$INCAN_HOME/oven/store/v1`, or `~/.incan/oven/store/v1` when `INCAN_HOME` is unset. Its defaults are 3 GiB aggregate physical allocation, 1 GiB physical allocation per compatibility domain, and 768 MiB logical artifact bytes per domain. Compiler-suite and release baking may use explicit allowances calibrated from their measured valid closures.
+The default developer store is `$INCAN_HOME/oven/store/v2`, or `~/.incan/oven/store/v2` when `INCAN_HOME` is unset. Its filesystem encoding is safe to embed in a Unix native-runtime search path. Its defaults are 3 GiB aggregate physical allocation, 1 GiB physical allocation per compatibility domain, and 768 MiB logical artifact bytes per domain. Compiler-suite and release baking may use explicit allowances calibrated from their measured valid closures.
 
 Oven enforces those bounds during admission. It can reclaim least-recently-used inactive entries, but never an active lease. A single domain that cannot fit its allowance is refused deterministically; an operator-supplied limit is never silently expanded. Production defaults are practical policy, not aspirational guesses: a healthy measured closure receives sensible headroom, while duplication, leaked intermediates, and unbounded growth remain defects.
 

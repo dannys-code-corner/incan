@@ -868,6 +868,8 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
             fixture_inspection
         ),
     )?;
+    let rustc = tmp.path().join("fixture-rustc");
+    write_executable(&rustc, "#!/usr/bin/env sh\nprintf 'rustc fixture 1.95.0\\n'\n")?;
     let guard_dir = tmp.path().join("cargo-guard");
     fs::create_dir_all(&guard_dir)?;
     write_executable(&guard_dir.join("cargo"), "#!/usr/bin/env sh\nexit 97\n")?;
@@ -880,6 +882,8 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
             incan.to_str().ok_or("fixture incan path is not UTF-8")?,
             "--release-identity",
             "fixture-release-artifact",
+            "--rustc",
+            rustc.to_str().ok_or("fixture rustc path is not UTF-8")?,
             "--checkout-revision",
             "fixture-revision",
             "--workload",
@@ -912,6 +916,10 @@ fn oven_alpha_benchmark_records_a_verified_cargo_guard_verdict() -> Result<(), B
     );
     let report: serde_json::Value = serde_json::from_str(&fs::read_to_string(output_dir.join("report.json"))?)?;
     assert_eq!(report["cargo_guard"]["required"], serde_json::json!(true));
+    assert_eq!(
+        report["toolchain"]["rustc_identity"],
+        serde_json::json!("rustc fixture 1.95.0")
+    );
     assert_eq!(report["cargo_guard"]["probe_exit_code"], serde_json::json!(97));
     assert_eq!(
         report["cargo_guard"]["verdict"],
@@ -1050,11 +1058,12 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
     }
     assert!(
         workflow.contains("cancel-in-progress: true")
-            && workflow.contains("make -s test-oven-release-smoke")
+            && workflow.contains("make -s test-oven")
             && workflow.contains("make test-oven-pr-regressions")
-            && workflow.contains("matrix.id == 'linux-stable'")
+            && workflow.contains("linux-reference-handoff")
+            && workflow.matches("Install WASI target for vocab desugarers").count() == 2
             && !workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs and retain bounded normal-command and process-containment gates"
+        "pull-request CI must cancel superseded runs, install the vocab target in both Linux paths, execute the full Oven suite on every platform, and retain Linux process-containment coverage"
     );
     assert!(
         evidence_workflow.contains("uses: ./.github/actions/run-oven-compiler-suite"),
@@ -1214,7 +1223,36 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result
     assert!(dist.join("install.sh").exists());
     assert!(dist.join("toolchain-manifest.schema.v1.json").exists());
     let formula = fs::read_to_string(dist.join("incan.rb"))?;
+    let version = env!("CARGO_PKG_VERSION");
+    let release = format!("v{version}");
+    let archive = dist.join(format!("incan-v{version}-x86_64-unknown-linux-gnu.tar.gz"));
+    let archive_name = archive
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("toolchain archive name was not valid UTF-8")?;
+    let checksum = fs::read_to_string(sha256_sidecar_path(&archive))?.trim().to_string();
+    assert!(formula.contains(&format!(r#"version "{version}""#)));
+    assert!(formula.contains("npm and Homebrew install prebuilt Incan commands"));
+    assert!(formula.contains(&format!(
+        r#"url "https://github.com/encero-systems/incan/releases/download/{release}/{archive_name}""#
+    )));
+    assert!(formula.contains(&format!(r#"sha256 "{checksum}""#)));
+    assert!(formula.contains("def staged_files"));
+    assert!(formula.contains(r##"(Dir["#{buildpath}/**/*"] + Dir["**/*"]).uniq"##));
     assert!(formula.contains("def staged_binary(name)"));
+    assert!(formula.contains("path = staged_files.find do |candidate|"));
+    assert!(formula.contains("File.basename(candidate) == name && File.basename(File.dirname(candidate)) == \"bin\""));
+    assert!(formula.contains("path.nil? ? nil : Pathname.new(path)"));
+    assert!(formula.contains("def staged_file_sample"));
+    assert!(formula.contains("incan_bin = staged_binary(\"incan\")"));
+    assert!(formula.contains("incan_lsp_bin = staged_binary(\"incan-lsp\")"));
+    assert!(formula.contains("sdk_inventory = Pathname.new(\"share/incan/sdk/sdk-inventory.json\")"));
+    assert!(formula.contains(
+        r#"odie "could not find incan binary in archive; staged files: #{staged_file_sample}" if incan_bin.nil?"#
+    ));
+    assert!(formula.contains(
+        r#"odie "could not find SDK provider inventory in archive; staged files: #{staged_file_sample}" unless sdk_inventory.exist?"#
+    ));
     assert!(formula.contains("could not find SDK provider inventory in archive"));
     assert!(formula.contains("libexec.install Dir[\"*\"]"));
     assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan\""));
@@ -1636,64 +1674,6 @@ chmod +x "$HOME/.cargo/bin/rustup" "$HOME/.cargo/bin/cargo" "$HOME/.cargo/bin/ru
         "expected bootstrapped rustup to add manifest Rust target, got:\n{rustup_log}"
     );
     assert_toolchain_install(&incan_home, &bin_dir);
-    Ok(())
-}
-
-#[test]
-fn homebrew_formula_is_rendered_from_the_toolchain_manifest() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = ToolchainTestStaging::new()?;
-    let dist = tmp.path().join("toolchain");
-    let (incan, incan_lsp) = write_fixture_toolchain_commands(tmp.path())?;
-
-    for target in [
-        "x86_64-unknown-linux-gnu",
-        "x86_64-apple-darwin",
-        "aarch64-apple-darwin",
-    ] {
-        package_fixture_archive(&dist, target, &incan, &incan_lsp)?;
-    }
-
-    let output = prepare_toolchain_assets(&dist, "2026-06-06T00:00:00Z", false)?;
-
-    assert!(
-        output.status.success(),
-        "formula rendering failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let version = env!("CARGO_PKG_VERSION");
-    let target = "x86_64-unknown-linux-gnu";
-    let release = format!("v{version}");
-    let archive_name = format!("incan-v{version}-{target}.tar.gz");
-    let checksum = fs::read_to_string(dist.join(format!("{archive_name}.sha256")))?
-        .trim()
-        .to_string();
-    let formula = fs::read_to_string(dist.join("incan.rb"))?;
-    assert!(formula.contains(&format!(r#"version "{version}""#)));
-    assert!(formula.contains("npm and Homebrew install prebuilt Incan commands"));
-    assert!(formula.contains(&format!(
-        r#"url "https://github.com/encero-systems/incan/releases/download/{release}/{archive_name}""#
-    )));
-    assert!(formula.contains(&format!(r#"sha256 "{checksum}""#)));
-    assert!(formula.contains("def staged_files"));
-    assert!(formula.contains(r##"(Dir["#{buildpath}/**/*"] + Dir["**/*"]).uniq"##));
-    assert!(formula.contains("def staged_binary(name)"));
-    assert!(formula.contains("path = staged_files.find do |candidate|"));
-    assert!(formula.contains("File.basename(candidate) == name && File.basename(File.dirname(candidate)) == \"bin\""));
-    assert!(formula.contains("path.nil? ? nil : Pathname.new(path)"));
-    assert!(formula.contains("def staged_file_sample"));
-    assert!(formula.contains("incan_bin = staged_binary(\"incan\")"));
-    assert!(formula.contains("incan_lsp_bin = staged_binary(\"incan-lsp\")"));
-    assert!(formula.contains("sdk_inventory = Pathname.new(\"share/incan/sdk/sdk-inventory.json\")"));
-    assert!(formula.contains(
-        r#"odie "could not find incan binary in archive; staged files: #{staged_file_sample}" if incan_bin.nil?"#
-    ));
-    assert!(formula.contains(
-        r#"odie "could not find SDK provider inventory in archive; staged files: #{staged_file_sample}" unless sdk_inventory.exist?"#
-    ));
-    assert!(formula.contains("libexec.install Dir[\"*\"]"));
-    assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan\""));
-    assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan-lsp\""));
     Ok(())
 }
 

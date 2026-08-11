@@ -52,8 +52,8 @@ use crate::oven::loaf::{
     prepare_loaf_from_generated_project, retire_unreferenced_loaf_generations, validate_stored_loaf_for_reuse,
 };
 use crate::oven::native_test::{
-    OvenNativeTestCaseCounts, OvenNativeTestRequest, run_native_test_batch_all_in_directory_with_timeout,
-    run_native_tests,
+    OvenNativeTestCaseCounts, OvenNativeTestCaseTiming, OvenNativeTestCommandTiming, OvenNativeTestRequest,
+    run_native_test_batch_all_in_directory_with_timeout, run_native_tests,
 };
 use crate::oven::rustc::{
     OvenCallerOwnedRustcLibrary, OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenStoredDirectRustcRunRequest,
@@ -1649,6 +1649,7 @@ fn print_loaf_bake_report(report: &OvenLoafBakeReport, format: OvenOutputFormat)
 /// a normal test workflow. An explicit test-only Cargo proxy is restricted to package-qualified interoperability
 /// roots and is not available to normal Incan commands.
 pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions) -> CliResult<ExitCode> {
+    let suite_started = Instant::now();
     let rustc = options.rustc.unwrap_or(resolve_active_rustc().map_err(oven_error)?);
     let compiler_data_root = crate::toolchain_layout::compiler_owned_oven_data_root().ok_or_else(|| {
         CliError::failure(
@@ -1808,6 +1809,8 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             output_directory.display()
         ))
     })?;
+    let receipt_and_selection_elapsed_ms = suite_started.elapsed().as_millis();
+    let shared_setup_started = Instant::now();
     let fixture_cargo = options
         .fixture_cargo
         .as_deref()
@@ -1943,7 +1946,8 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
         "CARGO_BIN_EXE_incan".to_string(),
         compiler_suite_environment_path(&cli_bake.output)?.display().to_string(),
     );
-    let run_children = || -> CliResult<(CompilerSuiteChildrenReport, usize, usize)> {
+    let shared_setup_elapsed_ms = shared_setup_started.elapsed().as_millis();
+    let run_children = || -> CliResult<(CompilerSuiteChildrenReport, usize, usize, CompilerSuiteChildPhaseTimings)> {
         if suite.schema_version == 8 {
             let test_artifact_closure = suite.test_artifact_closure.as_ref().ok_or_else(|| {
                 CliError::failure("stored compiler-suite payload has no direct-rustc test closure".to_string())
@@ -1964,6 +1968,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
                 None,
                 &mut binary_cache,
             )?;
+            let root_execution_started = Instant::now();
             let suite_report = run_planned_compiler_suite_children(
                 &suite.test_targets,
                 test_artifact_closure,
@@ -1981,8 +1986,17 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
                 None,
                 fixture_cargo.as_ref(),
             )?;
-            Ok((suite_report, suite.test_targets.len(), suite.binary_targets.len()))
+            Ok((
+                suite_report,
+                suite.test_targets.len(),
+                suite.binary_targets.len(),
+                CompilerSuiteChildPhaseTimings {
+                    target_preparation_elapsed_ms: 0,
+                    root_execution_elapsed_ms: root_execution_started.elapsed().as_millis(),
+                },
+            ))
         } else {
+            let target_preparation_started = Instant::now();
             let mut prepared_children = Vec::with_capacity(shard_executions.len());
             let mut planned_binary_count = 0;
             for (index, shard) in shard_executions.iter().enumerate() {
@@ -2057,11 +2071,21 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
                 )?);
                 planned_binary_count += shard.payload.binary_targets.len();
             }
+            let target_preparation_elapsed_ms = target_preparation_started.elapsed().as_millis();
+            let root_execution_started = Instant::now();
             let suite_report = run_prepared_compiler_suite_children(prepared_children, &receipt, &rustc)?;
-            Ok((suite_report, shard_executions.len(), planned_binary_count))
+            Ok((
+                suite_report,
+                shard_executions.len(),
+                planned_binary_count,
+                CompilerSuiteChildPhaseTimings {
+                    target_preparation_elapsed_ms,
+                    root_execution_elapsed_ms: root_execution_started.elapsed().as_millis(),
+                },
+            ))
         }
     };
-    let (mut suite_report, planned_target_count, planned_binary_count) =
+    let (mut suite_report, planned_target_count, planned_binary_count, child_phase_timings) =
         run_compiler_suite_children_with_leases_retained(
             &suite_lease,
             &shard_executions,
@@ -2072,6 +2096,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     let completion_failures = compiler_suite_completion_failures(&suite_report, planned_target_count);
     suite_report.failed.extend(completion_failures);
     let native_test_case_totals = suite_report.native_test_case_totals();
+    let slowest_native_test_cases = suite_report.slowest_native_test_cases(25);
     let fixture_cargo_invocations = fixture_cargo
         .as_ref()
         .map(CompilerSuiteFixtureCargoProxy::invocation_count)
@@ -2098,6 +2123,13 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     let success = suite_report.failed.is_empty()
         && native_test_case_totals.unreported_roots == 0
         && native_test_case_totals.reported_roots + suite_report.doctest_targets == planned_target_count;
+    let timing = CompilerSuiteTimingReport {
+        receipt_and_selection_elapsed_ms,
+        shared_setup_elapsed_ms,
+        target_preparation_elapsed_ms: child_phase_timings.target_preparation_elapsed_ms,
+        root_execution_elapsed_ms: child_phase_timings.root_execution_elapsed_ms,
+        total_elapsed_ms: suite_started.elapsed().as_millis(),
+    };
     let store_inspection = store.inspect().map_err(oven_error)?;
     let report_path = output_directory.join("compiler-suite-report.json");
     let report = serde_json::json!({
@@ -2107,6 +2139,8 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
         "native_test_count": suite_report.native_test_count,
         "native_test_case_totals": native_test_case_totals.clone(),
         "native_test_roots": suite_report.native_test_roots.clone(),
+        "slowest_native_test_cases": slowest_native_test_cases,
+        "rustdoc_test_roots": suite_report.rustdoc_test_roots.clone(),
         "doctest_targets": suite_report.doctest_targets,
         "test_targets": planned_target_count,
         "binary_targets": planned_binary_count,
@@ -2119,6 +2153,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             "invocations": fixture_cargo_invocations,
             "roots": fixture_cargo_roots,
         },
+        "timing": timing,
         "store": store_inspection,
         "failures": suite_report.failed.clone(),
     });
@@ -2402,6 +2437,44 @@ fn compiler_suite_cli_output(output_directory: &Path) -> PathBuf {
     output_directory.join("compiler-cli/incan")
 }
 
+/// Select one workspace library and only the declared workspace libraries it transitively requires.
+///
+/// A compiler-suite shard can contain the full workspace DAG needed by its test root, while a generated-code warning
+/// check consumes only `incan_stdlib`. Rebuilding unrelated compiler, LSP, or inspection crates merely to obtain
+/// that one checked input repeats expensive work without strengthening the warning-check contract.
+fn compiler_suite_workspace_library_dependency_closure(
+    libraries: &[OvenCompilerWorkspaceLibrary],
+    root: &OvenCompilerWorkspaceLibraryKey,
+) -> CliResult<Vec<OvenCompilerWorkspaceLibrary>> {
+    let mut declared = BTreeMap::new();
+    for library in libraries {
+        if declared.insert(library.key.clone(), library).is_some() {
+            return Err(CliError::failure(format!(
+                "stored compiler-suite workspace library `{}` is declared more than once",
+                library.key.crate_name
+            )));
+        }
+    }
+    let mut selected = BTreeSet::new();
+    let mut pending = vec![root.clone()];
+    while let Some(key) = pending.pop() {
+        if !selected.insert(key.clone()) {
+            continue;
+        }
+        let library = declared.get(&key).ok_or_else(|| {
+            CliError::failure(format!(
+                "stored compiler-suite workspace library closure is missing `{}`",
+                key.crate_name
+            ))
+        })?;
+        pending.extend(library.dependencies.iter().cloned());
+    }
+    Ok(declared
+        .into_iter()
+        .filter_map(|(key, library)| selected.contains(&key).then(|| library.clone()))
+        .collect())
+}
+
 /// Rebuild the generated-code warning check's `incan_stdlib` input from a receipt-bound workspace-library shard.
 ///
 /// Schema 12 replaces the former second Cargo target with this caller-owned direct-Rustc bake. The selected shard
@@ -2442,8 +2515,10 @@ fn bake_compiler_suite_warning_check_artifacts(
             "schema-12 compiler suite has no receipt-bound `incan_stdlib` workspace library for generated-code checks",
         )
     })?;
+    let warning_check_libraries =
+        compiler_suite_workspace_library_dependency_closure(&shard.payload.workspace_libraries, &library.key)?;
     let workspace_outputs = bake_planned_compiler_suite_workspace_libraries(
-        &shard.payload.workspace_libraries,
+        &warning_check_libraries,
         &shard.payload.artifact_closure,
         &shard.stored.manifest.intent,
         receipt,
@@ -2943,6 +3018,7 @@ fn run_prepared_compiler_suite_child(
     )?;
     match child.target.runner.as_str() {
         "rustc-test" => {
+            let bake_started = Instant::now();
             let bake = bake_trusted_direct_rustc_test(&OvenTrustedDirectRustcTargetRequest {
                 receipt,
                 artifacts: &artifacts,
@@ -2958,6 +3034,7 @@ fn run_prepared_compiler_suite_child(
                 prefer_dynamic: child.prefer_dynamic,
             })
             .map_err(oven_error)?;
+            let direct_rustc_bake_elapsed_ms = bake_started.elapsed().as_millis();
             let working_directory =
                 compiler_suite_target_working_directory(child.compiler_root, &child.source, child.target)?;
             let report = run_native_test_batch_all_in_directory_with_timeout(
@@ -2991,11 +3068,18 @@ fn run_prepared_compiler_suite_child(
                     inventory_count: report.inventory.names.len(),
                     success: report.success,
                     case_counts: report.case_counts,
+                    case_timings: report.case_timings,
+                    command_timings: report.command_timings,
+                    direct_rustc_bake_elapsed_ms,
+                    libtest_inventory_elapsed_ms: report.timing.inventory_elapsed_ms,
+                    libtest_execution_elapsed_ms: report.timing.execution_elapsed_ms,
                 }],
+                rustdoc_test_roots: Vec::new(),
             })
         }
         "rustdoc-test" => {
             let temporary_directory = child.output.with_extension("rustdoc-tmp");
+            let rustdoc_started = Instant::now();
             run_trusted_rustdoc_test(&OvenTrustedRustdocTestRequest {
                 receipt,
                 artifacts: &artifacts,
@@ -3018,6 +3102,13 @@ fn run_prepared_compiler_suite_child(
                 doctest_targets: 1,
                 failed: Vec::new(),
                 native_test_roots: Vec::new(),
+                rustdoc_test_roots: vec![CompilerSuiteRustdocTestRootReport {
+                    package_name: child.target.package_name.clone(),
+                    target_kind: child.target.target_kind.clone(),
+                    target_name: child.target.target_name.clone(),
+                    source_relative_path: child.target.source_relative_path.clone(),
+                    execution_elapsed_ms: rustdoc_started.elapsed().as_millis(),
+                }],
             })
         }
         runner => Err(CliError::failure(format!(
@@ -3055,6 +3146,10 @@ fn compiler_suite_parallel_jobs(child_count: usize) -> usize {
         .max(1)
 }
 
+/// Split the host budget between bounded root workers and the libtest threads inside each root.
+///
+/// A root can launch nested normal Incan commands, so reserving one outer-worker share prevents the scheduler from
+/// recreating the unbounded `outer roots × default libtest threads` fan-out that delays capacity and timeout guards.
 /// Compile/inventory/execute every receipt-bound Rustc or Rustdoc workspace test target while the suite lease is
 /// still held by the caller. No Cargo-linked test executable is copied or run from the immutable entry.
 #[allow(clippy::too_many_arguments)]
@@ -3116,6 +3211,7 @@ fn run_planned_compiler_suite_children(
         )?;
         match target.runner.as_str() {
             "rustc-test" => {
+                let bake_started = Instant::now();
                 let bake = bake_trusted_direct_rustc_test(&OvenTrustedDirectRustcTargetRequest {
                     receipt,
                     artifacts: &artifacts,
@@ -3131,6 +3227,7 @@ fn run_planned_compiler_suite_children(
                     prefer_dynamic,
                 })
                 .map_err(oven_error)?;
+                let direct_rustc_bake_elapsed_ms = bake_started.elapsed().as_millis();
                 let working_directory = compiler_suite_target_working_directory(compiler_root, &source, target)?;
                 let report = run_native_test_batch_all_in_directory_with_timeout(
                     &bake.output,
@@ -3148,6 +3245,11 @@ fn run_planned_compiler_suite_children(
                     inventory_count: report.inventory.names.len(),
                     success: report.success,
                     case_counts: report.case_counts.clone(),
+                    case_timings: report.case_timings.clone(),
+                    command_timings: report.command_timings.clone(),
+                    direct_rustc_bake_elapsed_ms,
+                    libtest_inventory_elapsed_ms: report.timing.inventory_elapsed_ms,
+                    libtest_execution_elapsed_ms: report.timing.execution_elapsed_ms,
                 });
                 if !report.success {
                     let transcript = write_native_test_failure_transcript(&output, &report.output)?;
@@ -3162,6 +3264,7 @@ fn run_planned_compiler_suite_children(
             }
             "rustdoc-test" => {
                 let temporary_directory = output.with_extension("rustdoc-tmp");
+                let rustdoc_started = Instant::now();
                 let _report = run_trusted_rustdoc_test(&OvenTrustedRustdocTestRequest {
                     receipt,
                     artifacts: &artifacts,
@@ -3180,6 +3283,15 @@ fn run_planned_compiler_suite_children(
                 })
                 .map_err(oven_error)?;
                 suite_report.doctest_targets += 1;
+                suite_report
+                    .rustdoc_test_roots
+                    .push(CompilerSuiteRustdocTestRootReport {
+                        package_name: target.package_name.clone(),
+                        target_kind: target.target_kind.clone(),
+                        target_name: target.target_name.clone(),
+                        source_relative_path: target.source_relative_path.clone(),
+                        execution_elapsed_ms: rustdoc_started.elapsed().as_millis(),
+                    });
             }
             runner => {
                 return Err(CliError::failure(format!(
@@ -3410,6 +3522,61 @@ struct CompilerSuiteNativeTestRootReport {
     /// Whether this root reached a successful terminal libtest result.
     success: bool,
     case_counts: Option<OvenNativeTestCaseCounts>,
+    /// Opt-in case timings emitted by this root's already-executed libtest process.
+    case_timings: Vec<OvenNativeTestCaseTiming>,
+    /// Opt-in nested Incan command timings parsed from this root's captured libtest transcript.
+    command_timings: Vec<OvenNativeTestCommandTiming>,
+    /// Time spent compiling this caller-owned libtest binary through direct Rustc.
+    direct_rustc_bake_elapsed_ms: u128,
+    /// Time spent obtaining the binary's libtest inventory before execution.
+    libtest_inventory_elapsed_ms: u64,
+    /// Time spent executing this root's verified libtest process.
+    libtest_execution_elapsed_ms: u64,
+}
+
+/// One receipt-bound Rustdoc root's timing result.
+#[derive(Debug, Clone, Serialize)]
+struct CompilerSuiteRustdocTestRootReport {
+    package_name: String,
+    target_kind: String,
+    target_name: String,
+    source_relative_path: String,
+    /// Time spent running Rustdoc and the doctests it owns for this source root.
+    execution_elapsed_ms: u128,
+}
+
+/// One slow native libtest case across the compiler suite.
+///
+/// This is a flattened top-25 view of root-local timing diagnostics. The source root stays attached so a test name
+/// alone cannot obscure which package or integration suite owns the cost.
+#[derive(Debug, Clone, Serialize)]
+struct CompilerSuiteSlowNativeTestCaseReport {
+    package_name: String,
+    target_kind: String,
+    target_name: String,
+    source_relative_path: String,
+    test_name: String,
+    elapsed_ms: u64,
+}
+
+/// Phase timings collected from work the compiler-suite command already performs.
+///
+/// These are measured in-process rather than inferred from shell logs, so release evidence can identify a shared
+/// setup bottleneck separately from a direct-Rustc compile or one native test root.
+#[derive(Debug, Clone, Default, Serialize)]
+struct CompilerSuiteTimingReport {
+    receipt_and_selection_elapsed_ms: u128,
+    shared_setup_elapsed_ms: u128,
+    target_preparation_elapsed_ms: u128,
+    root_execution_elapsed_ms: u128,
+    total_elapsed_ms: u128,
+}
+
+/// Internal split returned by the schema-specific child planner.
+#[derive(Debug, Clone, Default)]
+struct CompilerSuiteChildPhaseTimings {
+    target_preparation_elapsed_ms: u128,
+    root_execution_elapsed_ms: u128,
 }
 
 /// Complete native-test coverage for one compiler-suite invocation.
@@ -3419,6 +3586,7 @@ struct CompilerSuiteChildrenReport {
     doctest_targets: usize,
     failed: Vec<String>,
     native_test_roots: Vec<CompilerSuiteNativeTestRootReport>,
+    rustdoc_test_roots: Vec<CompilerSuiteRustdocTestRootReport>,
 }
 
 /// Aggregate case counts from libtest summaries already captured by the worker processes.
@@ -3440,6 +3608,7 @@ impl CompilerSuiteChildrenReport {
         self.doctest_targets += other.doctest_targets;
         self.failed.extend(other.failed);
         self.native_test_roots.extend(other.native_test_roots);
+        self.rustdoc_test_roots.extend(other.rustdoc_test_roots);
     }
 
     /// Summarize libtest cases and root outcomes without a second execution or caller-output scan.
@@ -3461,6 +3630,35 @@ impl CompilerSuiteChildrenReport {
             }
         }
         totals
+    }
+
+    /// Return the requested slowest observed cases without another test run or transcript scan.
+    fn slowest_native_test_cases(&self, limit: usize) -> Vec<CompilerSuiteSlowNativeTestCaseReport> {
+        let mut cases = self
+            .native_test_roots
+            .iter()
+            .flat_map(|root| {
+                root.case_timings
+                    .iter()
+                    .map(move |timing| CompilerSuiteSlowNativeTestCaseReport {
+                        package_name: root.package_name.clone(),
+                        target_kind: root.target_kind.clone(),
+                        target_name: root.target_name.clone(),
+                        source_relative_path: root.source_relative_path.clone(),
+                        test_name: timing.name.clone(),
+                        elapsed_ms: timing.elapsed_ms,
+                    })
+            })
+            .collect::<Vec<_>>();
+        cases.sort_by(|left, right| {
+            right
+                .elapsed_ms
+                .cmp(&left.elapsed_ms)
+                .then_with(|| left.source_relative_path.cmp(&right.source_relative_path))
+                .then_with(|| left.test_name.cmp(&right.test_name))
+        });
+        cases.truncate(limit);
+        cases
     }
 }
 
@@ -4424,18 +4622,28 @@ fn write_native_test_failure_transcript(output: &Path, transcript: &str) -> CliR
 /// The complete caller-owned transcript is retained beside the direct-rustc test binary on failure.
 fn native_test_failure_summary(output: &str) -> String {
     const MAX_CHARS: usize = 12_000;
-    let relevant = output
-        .lines()
-        .filter(|line| {
-            line.contains("FAILED")
-                || line.contains("panicked")
-                || line.contains("Error:")
-                || line.starts_with("error:")
-                || line.contains("test result:")
-        })
-        .take(96)
-        .collect::<Vec<_>>()
-        .join("\n");
+    const PANIC_CONTEXT_LINES: usize = 12;
+    let mut relevant = Vec::new();
+    let mut panic_context_remaining = 0;
+    for line in output.lines() {
+        let is_relevant = line.contains("FAILED")
+            || line.contains("panicked")
+            || line.contains("Error:")
+            || line.starts_with("error:")
+            || line.contains("test result:");
+        if is_relevant || panic_context_remaining > 0 {
+            relevant.push(line);
+        }
+        if line.contains("panicked") {
+            panic_context_remaining = PANIC_CONTEXT_LINES;
+        } else {
+            panic_context_remaining = panic_context_remaining.saturating_sub(1);
+        }
+        if relevant.len() == 96 {
+            break;
+        }
+    }
+    let relevant = relevant.join("\n");
     let summary = if relevant.is_empty() { output } else { &relevant };
     let mut bounded = summary.chars().take(MAX_CHARS).collect::<String>();
     if summary.chars().count() > MAX_CHARS {
@@ -4874,7 +5082,7 @@ fn default_store_root(incan_home: Option<OsString>, home: Option<OsString>) -> O
             home.filter(|path| !path.is_empty())
                 .map(|path| PathBuf::from(path).join(".incan"))
         })
-        .map(|root| root.join("oven").join("store").join("v1"))
+        .map(|root| root.join("oven").join("store").join("v2"))
 }
 
 /// Return the platform home environment used by installed Incan binaries.
@@ -4982,6 +5190,7 @@ fn oven_error(error: impl std::fmt::Display) -> CliError {
 mod tests {
     use super::{
         CompilerSuiteChildrenReport, CompilerSuiteFixtureCargoProxy, CompilerSuiteNativeTestRootReport,
+        CompilerSuiteRustdocTestRootReport, CompilerSuiteTimingReport,
         DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES, DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES,
         DEFAULT_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES, DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES,
         DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES, DEFAULT_OVEN_MAX_PHYSICAL_BYTES, OvenCompilerSuiteTargetCapabilities,
@@ -4991,8 +5200,9 @@ mod tests {
         bake_planned_compiler_suite_workspace_libraries, compiler_suite_auto_parallel_jobs,
         compiler_suite_child_state_root, compiler_suite_cli_output, compiler_suite_completion_failures,
         compiler_suite_directory, compiler_suite_environment, compiler_suite_environment_path, compiler_suite_file,
-        compiler_suite_remove_generated_rust_closure, compiler_suite_selected_shard_references, default_rustup_home,
-        default_store_root, loaf_envelope_default_limits, loaf_envelope_evidence, oven_import,
+        compiler_suite_remove_generated_rust_closure, compiler_suite_selected_shard_references,
+        compiler_suite_workspace_library_dependency_closure, default_rustup_home, default_store_root,
+        loaf_envelope_default_limits, loaf_envelope_evidence, native_test_failure_summary, oven_import,
         oven_legacy_cargo_bake_loafs, oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path,
         prepare_compiler_suite_child, resolve_limits_with_environment_and_defaults, reuse_complete_loaf_envelope,
         run_compiler_suite_children_with_leases_retained, run_prepared_compiler_suite_children,
@@ -5010,7 +5220,7 @@ mod tests {
         OvenLoafEnvelopeManifest, OvenLoafEnvelopeMember, acquire_exclusive_loaf_generation_lock,
     };
     use crate::oven::loaf::{commit_loaf_generation, retire_unreferenced_loaf_generations};
-    use crate::oven::native_test::OvenNativeTestCaseCounts;
+    use crate::oven::native_test::{OvenNativeTestCaseCounts, OvenNativeTestCaseTiming};
     use crate::oven::rustc::{
         OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
         OvenTrustedDirectRustcTargetRequest, bake_trusted_direct_rustc_run, resolve_active_rustc,
@@ -5511,6 +5721,17 @@ mod tests {
     }
 
     #[test]
+    fn native_test_failure_summary_keeps_panic_diagnostics() {
+        let summary = native_test_failure_summary(
+            "test fixture ... FAILED\nthread 'fixture' panicked at src/fixture.rs:12:3:\nbenchmark fixture failed\nstdout: missing Loaf\nstderr: no Cargo fallback\ntest result: FAILED\n",
+        );
+
+        assert!(summary.contains("benchmark fixture failed"));
+        assert!(summary.contains("stdout: missing Loaf"));
+        assert!(summary.contains("stderr: no Cargo fallback"));
+    }
+
+    #[test]
     fn compiler_suite_aggregate_is_persisted_beside_caller_outputs() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let report_path = directory.path().join("caller-output/compiler-suite-report.json");
@@ -5525,6 +5746,52 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&fs::read(&report_path)?)?,
             report
         );
+        Ok(())
+    }
+
+    #[test]
+    fn compiler_suite_timing_report_keeps_shared_and_root_measurements_distinct()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let report = serde_json::json!({
+            "timing": CompilerSuiteTimingReport {
+                receipt_and_selection_elapsed_ms: 10,
+                shared_setup_elapsed_ms: 20,
+                target_preparation_elapsed_ms: 30,
+                root_execution_elapsed_ms: 40,
+                total_elapsed_ms: 100,
+            },
+            "native_test_roots": [CompilerSuiteNativeTestRootReport {
+                package_name: "fixture".to_string(),
+                target_kind: "test".to_string(),
+                target_name: "fixture_root".to_string(),
+                source_relative_path: "tests/fixture.rs".to_string(),
+                inventory_count: 1,
+                success: true,
+                case_counts: Some(OvenNativeTestCaseCounts {
+                    passed: 1,
+                    failed: 0,
+                    ignored: 0,
+                }),
+                case_timings: Vec::new(),
+                command_timings: Vec::new(),
+                direct_rustc_bake_elapsed_ms: 50,
+                libtest_inventory_elapsed_ms: 6,
+                libtest_execution_elapsed_ms: 7,
+            }],
+            "rustdoc_test_roots": [CompilerSuiteRustdocTestRootReport {
+                package_name: "fixture".to_string(),
+                target_kind: "lib".to_string(),
+                target_name: "fixture_docs".to_string(),
+                source_relative_path: "src/lib.rs".to_string(),
+                execution_elapsed_ms: 8,
+            }],
+        });
+
+        assert_eq!(report["timing"]["shared_setup_elapsed_ms"], 20);
+        assert_eq!(report["native_test_roots"][0]["direct_rustc_bake_elapsed_ms"], 50);
+        assert_eq!(report["native_test_roots"][0]["libtest_inventory_elapsed_ms"], 6);
+        assert_eq!(report["native_test_roots"][0]["libtest_execution_elapsed_ms"], 7);
+        assert_eq!(report["rustdoc_test_roots"][0]["execution_elapsed_ms"], 8);
         Ok(())
     }
 
@@ -5547,6 +5814,20 @@ mod tests {
                         failed: 0,
                         ignored: 1,
                     }),
+                    case_timings: vec![
+                        OvenNativeTestCaseTiming {
+                            name: "fast".to_string(),
+                            elapsed_ms: 15,
+                        },
+                        OvenNativeTestCaseTiming {
+                            name: "slow".to_string(),
+                            elapsed_ms: 120,
+                        },
+                    ],
+                    command_timings: Vec::new(),
+                    direct_rustc_bake_elapsed_ms: 10,
+                    libtest_inventory_elapsed_ms: 1,
+                    libtest_execution_elapsed_ms: 2,
                 },
                 CompilerSuiteNativeTestRootReport {
                     package_name: "failed".to_string(),
@@ -5560,6 +5841,14 @@ mod tests {
                         failed: 1,
                         ignored: 0,
                     }),
+                    case_timings: vec![OvenNativeTestCaseTiming {
+                        name: "also_slow".to_string(),
+                        elapsed_ms: 120,
+                    }],
+                    command_timings: Vec::new(),
+                    direct_rustc_bake_elapsed_ms: 11,
+                    libtest_inventory_elapsed_ms: 1,
+                    libtest_execution_elapsed_ms: 3,
                 },
                 CompilerSuiteNativeTestRootReport {
                     package_name: "unreported".to_string(),
@@ -5569,8 +5858,14 @@ mod tests {
                     inventory_count: 0,
                     success: false,
                     case_counts: None,
+                    case_timings: Vec::new(),
+                    command_timings: Vec::new(),
+                    direct_rustc_bake_elapsed_ms: 12,
+                    libtest_inventory_elapsed_ms: 1,
+                    libtest_execution_elapsed_ms: 4,
                 },
             ],
+            rustdoc_test_roots: Vec::new(),
         };
 
         let totals = report.native_test_case_totals();
@@ -5590,17 +5885,26 @@ mod tests {
                 .any(|failure| failure.contains("terminal libtest summary"))
         );
         assert!(failures.iter().any(|failure| failure.contains("planned 4 root")));
+
+        let slowest = report.slowest_native_test_cases(2);
+        assert_eq!(slowest.len(), 2);
+        assert_eq!(slowest[0].elapsed_ms, 120);
+        assert_eq!(slowest[0].source_relative_path, "tests/failed.rs");
+        assert_eq!(slowest[0].test_name, "also_slow");
+        assert_eq!(slowest[1].elapsed_ms, 120);
+        assert_eq!(slowest[1].source_relative_path, "tests/green.rs");
+        assert_eq!(slowest[1].test_name, "slow");
     }
 
     #[test]
     fn default_store_root_prefers_incan_home() {
         assert_eq!(
             default_store_root(Some(OsString::from("/incan")), Some(OsString::from("/user"))),
-            Some(PathBuf::from("/incan/oven/store/v1"))
+            Some(PathBuf::from("/incan/oven/store/v2"))
         );
         assert_eq!(
             default_store_root(None, Some(OsString::from("/user"))),
-            Some(PathBuf::from("/user/.incan/oven/store/v1"))
+            Some(PathBuf::from("/user/.incan/oven/store/v2"))
         );
     }
 
@@ -5715,7 +6019,7 @@ mod tests {
             limits.max_domain_logical_bytes,
             DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES
         );
-        assert_eq!(limits.max_domain_logical_bytes, 3 * 1024 * 1024 * 1024);
+        assert_eq!(limits.max_domain_logical_bytes, 4 * 1024 * 1024 * 1024);
     }
 
     #[test]
@@ -5830,6 +6134,70 @@ mod tests {
         drop(selected);
         drop(suite_lease);
         assert_eq!(store.inspect()?.active_lease_physical_bytes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn warning_check_workspace_library_closure_omits_unrelated_shard_nodes() -> Result<(), Box<dyn std::error::Error>> {
+        fn workspace_library(
+            key: OvenCompilerWorkspaceLibraryKey,
+            dependencies: Vec<OvenCompilerWorkspaceLibraryKey>,
+        ) -> OvenCompilerWorkspaceLibrary {
+            OvenCompilerWorkspaceLibrary {
+                source_evidence_key: format!("compiler-suite-source:{}", key.source_relative_path),
+                key,
+                edition: "2024".to_string(),
+                compile_environment: BTreeMap::new(),
+                externs: Vec::new(),
+                dependencies,
+            }
+        }
+
+        let core = OvenCompilerWorkspaceLibraryKey {
+            package_name: "incan_core".to_string(),
+            crate_name: "incan_core".to_string(),
+            target_kind: "lib".to_string(),
+            source_relative_path: "crates/incan_core/src/lib.rs".to_string(),
+            features: Vec::new(),
+        };
+        let derive = OvenCompilerWorkspaceLibraryKey {
+            package_name: "incan_derive".to_string(),
+            crate_name: "incan_derive".to_string(),
+            target_kind: "proc-macro".to_string(),
+            source_relative_path: "crates/incan_derive/src/lib.rs".to_string(),
+            features: Vec::new(),
+        };
+        let stdlib = OvenCompilerWorkspaceLibraryKey {
+            package_name: "incan_stdlib".to_string(),
+            crate_name: "incan_stdlib".to_string(),
+            target_kind: "lib".to_string(),
+            source_relative_path: "crates/incan_stdlib/src/lib.rs".to_string(),
+            features: Vec::new(),
+        };
+        let unrelated = OvenCompilerWorkspaceLibraryKey {
+            package_name: "incan".to_string(),
+            crate_name: "incan".to_string(),
+            target_kind: "lib".to_string(),
+            source_relative_path: "src/lib.rs".to_string(),
+            features: Vec::new(),
+        };
+        let selected = compiler_suite_workspace_library_dependency_closure(
+            &[
+                workspace_library(unrelated, Vec::new()),
+                workspace_library(stdlib.clone(), vec![core.clone(), derive.clone()]),
+                workspace_library(core.clone(), Vec::new()),
+                workspace_library(derive.clone(), Vec::new()),
+            ],
+            &stdlib,
+        )?;
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|library| library.key.crate_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["incan_core", "incan_derive", "incan_stdlib"]
+        );
         Ok(())
     }
 

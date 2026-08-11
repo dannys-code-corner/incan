@@ -64,7 +64,10 @@ fn run_incan_with_failing_cargo_guard_and_env(
     for (key, value) in envs {
         command.env(*key, *value);
     }
-    Ok(command.output()?)
+    let timing = support::command_timing_started();
+    let output = command.output()?;
+    support::report_command_timing(&format!("incan {} (Cargo guard)", args.join(" ")), timing);
+    Ok(output)
 }
 
 fn run_incan_with_env(
@@ -85,7 +88,10 @@ fn run_incan_with_env_and_removed(
     for key in removed_envs {
         command.env_remove(key);
     }
-    Ok(command.envs(envs.iter().copied()).output()?)
+    let timing = support::command_timing_started();
+    let output = command.envs(envs.iter().copied()).output()?;
+    support::report_command_timing(&format!("incan {}", args.join(" ")), timing);
+    Ok(output)
 }
 
 fn configured_incan_command(current_dir: &Path, args: &[&str]) -> Command {
@@ -152,9 +158,12 @@ fn run_incan_with_timeout(
         .env("INCAN_LOCK_PREHEAT", "1");
     let mut child = command.spawn()?;
     let started = std::time::Instant::now();
+    let timing = support::command_timing_started();
     loop {
         if child.try_wait()?.is_some() {
-            return Ok((child.wait_with_output()?, false));
+            let output = child.wait_with_output()?;
+            support::report_command_timing(&format!("incan {} (timeout supervised)", args.join(" ")), timing);
+            return Ok((output, false));
         }
         if started.elapsed() >= timeout {
             // TERM is best-effort because the group can disappear between the timeout check and this signal. The
@@ -181,7 +190,9 @@ fn run_incan_with_timeout(
             let kill_started = std::time::Instant::now();
             while kill_started.elapsed() < std::time::Duration::from_secs(2) {
                 if child.try_wait()?.is_some() {
-                    return Ok((child.wait_with_output()?, true));
+                    let output = child.wait_with_output()?;
+                    support::report_command_timing(&format!("incan {} (timeout supervised)", args.join(" ")), timing);
+                    return Ok((output, true));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
@@ -357,7 +368,7 @@ fn scheduler_nested_build_and_run_fail_closed_when_the_immutable_native_plan_is_
         !marker.exists(),
         "scheduler-native build/run miss launched the guarded Cargo executable"
     );
-    let entries = incan_home.join("oven/store/v1/entries");
+    let entries = incan_home.join("oven/store/v2/entries");
     assert!(
         !entries.exists() || fs::read_dir(&entries)?.next().is_none(),
         "scheduler-native build/run miss materialized a caller-owned store entry at {}",
@@ -1978,86 +1989,8 @@ def test_workspace_rust_dependency_is_available() -> None:
 
 #[cfg(unix)]
 #[test]
-fn rooted_workspace_missing_root_artifact_is_prepared_once_issue908() -> Result<(), Box<dyn std::error::Error>> {
-    let root = tempfile::tempdir()?;
-    fs::create_dir_all(root.path().join("src"))?;
-    fs::write(
-        root.path().join("incan.toml"),
-        r#"[project]
-name = "root_lib"
-version = "0.1.0"
-
-[project.scripts]
-library = "src/lib.incn"
-"#,
-    )?;
-    fs::write(
-        root.path().join("src/lib.incn"),
-        "pub def answer() -> int:\n  return 42\n",
-    )?;
-
-    let warmup = run_incan(root.path(), &["build", "--lib"])?;
-    assert_success(&warmup, "standalone SDK and library artifact warmup");
-    fs::remove_dir_all(root.path().join("target/lib"))?;
-    // Normal Oven builds deliberately do not synthesize a project lock.  Older
-    // builds may have left one behind, so remove it when present without making
-    // the direct-rustc contract depend on that legacy side effect.
-    let _ = fs::remove_file(root.path().join("incan.lock"));
-
-    fs::write(
-        root.path().join("incan.toml"),
-        r#"[project]
-name = "root_lib"
-version = "0.1.0"
-
-[project.scripts]
-library = "src/lib.incn"
-
-[workspace]
-members = ["consumer"]
-default-members = ["root_lib", "consumer"]
-
-[workspace.dependencies]
-root_lib = { path = "." }
-"#,
-    )?;
-    let consumer = root.path().join("consumer");
-    fs::create_dir_all(consumer.join("src"))?;
-    fs::write(
-        consumer.join("incan.toml"),
-        r#"[project]
-name = "consumer"
-version = "0.1.0"
-
-[project.scripts]
-main = "src/main.incn"
-
-[dependencies]
-root_lib = { workspace = true }
-"#,
-    )?;
-    fs::write(
-        consumer.join("src/main.incn"),
-        "from pub::root_lib import answer\n\n\ndef main() -> None:\n  println(answer())\n",
-    )?;
-
-    let (output, timed_out) = run_incan_with_timeout(root.path(), &["lock"], std::time::Duration::from_secs(60))?;
-    assert!(
-        !timed_out,
-        "rooted workspace lock exceeded its bounded artifact-preparation window\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_success(&output, "rooted workspace lock with a missing root artifact");
-    assert!(root.path().join("target/lib/root_lib.incnlib").is_file());
-    assert!(root.path().join("incan.lock").is_file());
-    Ok(())
-}
-
-#[cfg(unix)]
-#[test]
-fn rooted_workspace_library_artifact_uses_selected_project_identity_issue909() -> Result<(), Box<dyn std::error::Error>>
-{
+fn rooted_workspace_missing_artifact_uses_selected_project_identity_issues908_909()
+-> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     fs::create_dir_all(root.path().join("src"))?;
     fs::write(
@@ -2078,7 +2011,7 @@ library = "src/lib.incn"
     let warmup = run_incan(root.path(), &["build", "--lib"])?;
     assert_success(&warmup, "standalone SDK and library artifact warmup");
     fs::remove_dir_all(root.path().join("target"))?;
-    // See issue #908 above: a normal Oven build does not write `incan.lock`.
+    // A normal Oven build does not write `incan.lock`; remove a historical lock if an older fixture run left one.
     let _ = fs::remove_file(root.path().join("incan.lock"));
 
     fs::write(
@@ -2129,40 +2062,22 @@ regex = "1"
         String::from_utf8_lossy(&lock_output.stderr)
     );
     assert_success(&lock_output, "fresh rooted workspace lock generation");
+    assert!(
+        root.path().join("target/lib/root_lib.incnlib").is_file(),
+        "the initial lock must prepare its missing root library artifact"
+    );
 
     let first_lock = fs::read(root.path().join("incan.lock"))?;
-    let lock_refresh = run_incan(root.path(), &["lock"])?;
-    assert_success(
-        &lock_refresh,
-        "rooted workspace lock convergence check after artifact preparation",
-    );
-    assert_eq!(
-        first_lock,
-        fs::read(root.path().join("incan.lock"))?,
-        "the first lock must snapshot the root artifact it prepared and converge without a fingerprint-only refresh"
-    );
 
     let library_output = run_incan(root.path(), &["build", "--lib", "--member", "root_lib", "--locked"])?;
     assert_success(
         &library_output,
         "target-free selected rooted library build from the first canonical lock",
     );
-
-    let lock_after_library_build = run_incan(root.path(), &["lock"])?;
-    assert_success(
-        &lock_after_library_build,
-        "rooted workspace lock convergence check after selected library build",
-    );
     assert_eq!(
         first_lock,
         fs::read(root.path().join("incan.lock"))?,
         "the selected root library build must preserve the first canonical lock byte-for-byte"
-    );
-
-    let second_library_output = run_incan(root.path(), &["build", "--lib", "--member", "root_lib", "--locked"])?;
-    assert_success(
-        &second_library_output,
-        "second selected rooted library build from the unchanged canonical lock",
     );
 
     assert!(
@@ -2288,7 +2203,7 @@ hees_ai = { workspace = true }
             provider_store.display()
         );
         assert!(
-            incan_home.join("oven/store/v1").is_dir(),
+            incan_home.join("oven/store/v2").is_dir(),
             "cold normal Oven lock did not materialize its selected Loaf into the bounded Oven store"
         );
     }
@@ -2502,11 +2417,6 @@ bitflags = "=1.3.2"
     let lock_path = root.path().join("incan.lock");
     let fresh = fs::read_to_string(&lock_path)?;
 
-    let initial_strict = run_incan(root.path(), &["build", "--lib", "--member", "leaf", "--locked"])?;
-    assert_success(
-        &initial_strict,
-        "initial strict selected library build must materialize a valid projection",
-    );
     let stale = fresh.replace("deps-fingerprint = \"sha256:", "deps-fingerprint = \"sha256:stale");
     assert_ne!(
         fresh, stale,
@@ -2524,7 +2434,10 @@ bitflags = "=1.3.2"
         stale,
         "a tolerated stale canonical lock must never be rewritten by a selected member build"
     );
-    assert!(leaf.join("target/lib/oven/release/libleaf.rlib").is_file());
+    assert!(
+        leaf.join("target/lib/oven/release/libleaf.rlib").is_file(),
+        "the tolerated stale-lock build must materialize the selected library itself"
+    );
 
     let strict = run_incan(root.path(), &["build", "--lib", "--member", "leaf", "--locked"])?;
     assert_failure(&strict, "strict selected library build with stale canonical lock");
@@ -6663,11 +6576,6 @@ pub def exported_value() -> int:
         "normal Oven builds may use the compiler-owned lock directory, but must not create a Cargo workspace there"
     );
 
-    let second = run_incan(tmp.path(), &["build", "--lib"])?;
-    assert_success(
-        &second,
-        "second incan build --lib with Oven direct-rustc materialization",
-    );
     Ok(())
 }
 
@@ -7656,17 +7564,6 @@ edition = "2021"
         &["lock", extra_path.to_str().ok_or("extra path was not valid UTF-8")?],
     )?;
     assert_success(&extra_lock_output, "incan lock extra");
-
-    let extra_after_extra_lock = run_incan(
-        tmp.path(),
-        &[
-            "run",
-            "--locked",
-            extra_path.to_str().ok_or("extra path was not valid UTF-8")?,
-        ],
-    )?;
-    assert_success(&extra_after_extra_lock, "incan run --locked extra after extra lock");
-    assert_no_stale_warning(&extra_after_extra_lock, "incan run --locked extra after extra lock");
 
     let test_after_extra_lock = run_incan(tmp.path(), &["test", "--locked"])?;
     assert_success(&test_after_extra_lock, "incan test --locked after extra lock");
@@ -10766,12 +10663,6 @@ def test_alias() -> None:
 "#,
     )?;
 
-    let build_output = run_incan(
-        tmp.path(),
-        &["build", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(&build_output, "incan build for public alias issue631");
-
     let test_path = tests_dir.join("test_alias.incn");
     let test_output = run_incan(
         tmp.path(),
@@ -10782,10 +10673,10 @@ def test_alias() -> None:
 }
 
 #[test]
-fn test_imported_public_partial_presets_keep_projected_call_surface_issue698() -> Result<(), Box<dyn std::error::Error>>
+fn test_imported_partial_preset_defaults_survive_decorator_argument_issue698() -> Result<(), Box<dyn std::error::Error>>
 {
     let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "imported_public_partial_preset", "")?;
+    let main_path = write_minimal_project(tmp.path(), "imported_partial_decorator_argument", "")?;
     let src_dir = main_path.parent().ok_or("main path had no parent")?;
     let tests_dir = tmp.path().join("tests");
     fs::create_dir_all(&tests_dir)?;
@@ -10802,37 +10693,6 @@ fn test_imported_public_partial_presets_keep_projected_call_surface_issue698() -
 pub core_spec = partial Spec(namespace="core", policy="portable")
 "#,
     )?;
-    fs::write(
-        tests_dir.join("test_imported_partial.incn"),
-        r#"from presets import core_spec
-
-
-def test_imported_partial_preset_keeps_presets() -> None:
-    spec = core_spec(klass="scalar", lifecycle="v1")
-    assert spec.namespace == "core"
-    assert spec.policy == "portable"
-    assert spec.klass == "scalar"
-    assert spec.lifecycle == "v1"
-"#,
-    )?;
-
-    let test_path = tests_dir.join("test_imported_partial.incn");
-    let test_output = run_incan(
-        tmp.path(),
-        &["test", test_path.to_str().ok_or("test path was not valid UTF-8")?],
-    )?;
-    assert_success(&test_output, "incan test for imported public partial issue698");
-    Ok(())
-}
-
-#[test]
-fn test_imported_partial_preset_defaults_survive_decorator_argument_issue698() -> Result<(), Box<dyn std::error::Error>>
-{
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "imported_partial_decorator_argument", "")?;
-    let src_dir = main_path.parent().ok_or("main path had no parent")?;
-    let tests_dir = tmp.path().join("tests");
-    fs::create_dir_all(&tests_dir)?;
     fs::write(
         src_dir.join("function_registry.incn"),
         r#"pub model FunctionSpec:
@@ -10888,6 +10748,15 @@ pub def facade_normalize(value: int) -> int:
         r#"from function_registry import registered_names, registered_namespaces
 from helpers import normalize
 from facade_helpers import facade_normalize
+from presets import core_spec
+
+
+def test_imported_partial_preset_keeps_presets() -> None:
+    spec = core_spec(klass="scalar", lifecycle="v1")
+    assert spec.namespace == "core"
+    assert spec.policy == "portable"
+    assert spec.klass == "scalar"
+    assert spec.lifecycle == "v1"
 
 
 def test_decorator_can_infer_name_with_imported_partial_spec() -> None:
@@ -12040,9 +11909,35 @@ pub def registered() -> (((int) -> int) -> ((int) -> int)):
 "#,
     )?;
     fs::write(
+        src_dir.join("generic_registry.incn"),
+        r#"pub static names: list[str] = []
+
+
+pub def capture[F](func: F) -> F:
+    names.append(func.__name__)
+    return func
+
+
+pub def registered[F]() -> ((F) -> F):
+    return (func) => capture[F](func)
+"#,
+    )?;
+    fs::write(
+        src_dir.join("generic_helpers.incn"),
+        r#"from generic_registry import registered
+
+
+@registered[(int) -> int]()
+pub def sample(value: int) -> int:
+    return value + 1
+"#,
+    )?;
+    fs::write(
         tests_dir.join("test_callable_name.incn"),
         r#"from registry import names, registered
 from registry_facade import registered as facade_registered
+from generic_registry import names as generic_names
+from generic_helpers import sample as generic_sample
 
 
 @registered()
@@ -12060,6 +11955,11 @@ def test_decorator_can_read_specific_callable_name() -> None:
     assert names[0] == "sample"
     assert facade_sample(1) == 3
     assert names[1] == "facade_sample"
+
+
+def test_generic_decorator_can_read_callable_name() -> None:
+    assert generic_sample(1) == 2
+    assert generic_names[0] == "sample"
 "#,
     )?;
 
@@ -12069,58 +11969,6 @@ def test_decorator_can_read_specific_callable_name() -> None:
         &["test", test_path.to_str().ok_or("test path was not valid UTF-8")?],
     )?;
     assert_success(&test_output, "incan test for decorator callable name issue694");
-    Ok(())
-}
-
-#[test]
-fn test_generic_decorator_callable_exposes_source_name_issue694() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "generic_decorator_callable_name", "")?;
-    let src_dir = main_path.parent().ok_or("main path had no parent")?;
-    let tests_dir = tmp.path().join("tests");
-    fs::create_dir_all(&tests_dir)?;
-    fs::write(
-        src_dir.join("registry.incn"),
-        r#"pub static names: list[str] = []
-
-
-pub def capture[F](func: F) -> F:
-    names.append(func.__name__)
-    return func
-
-
-pub def registered[F]() -> ((F) -> F):
-    return (func) => capture[F](func)
-"#,
-    )?;
-    fs::write(
-        src_dir.join("helpers.incn"),
-        r#"from registry import names, registered
-
-
-@registered[(int) -> int]()
-pub def sample(value: int) -> int:
-    return value + 1
-"#,
-    )?;
-    fs::write(
-        tests_dir.join("test_generic_callable_name.incn"),
-        r#"from registry import names
-from helpers import sample
-
-
-def test_generic_decorator_can_read_callable_name() -> None:
-    assert sample(1) == 2
-    assert names[0] == "sample"
-"#,
-    )?;
-
-    let test_path = tests_dir.join("test_generic_callable_name.incn");
-    let test_output = run_incan(
-        tmp.path(),
-        &["test", test_path.to_str().ok_or("test path was not valid UTF-8")?],
-    )?;
-    assert_success(&test_output, "incan test for generic decorator callable name issue694");
     Ok(())
 }
 

@@ -1,4 +1,69 @@
 use std::path::{Path, PathBuf};
+use std::process::Output;
+use std::time::Instant;
+
+/// Start one opt-in nested Incan-command measurement for an integration-test diagnostic run.
+///
+/// Normal test execution neither reads a clock nor emits timing output. The caller supplies a stable command label,
+/// while the current libtest thread identifies the regression that started it.
+#[allow(dead_code)]
+pub(crate) fn command_timing_started() -> Option<Instant> {
+    std::env::var_os("INCAN_TEST_COMMAND_TIMINGS")
+        .filter(|value| !value.is_empty())
+        .map(|_| Instant::now())
+}
+
+/// Emit one machine-searchable nested command duration for an explicit diagnostic run.
+#[allow(dead_code)]
+pub(crate) fn report_command_timing(label: &str, started: Option<Instant>) {
+    let Some(started) = started else {
+        return;
+    };
+    let thread = std::thread::current();
+    let test_name = thread.name().map_or("unnamed", |name| name);
+    eprintln!(
+        "incan-test-command-timing {}",
+        serde_json::json!({
+            "test_name": test_name,
+            "command": label,
+            "elapsed_ms": started.elapsed().as_millis(),
+        })
+    );
+}
+
+/// Emit the phase breakdown from an opt-in JSON build report already produced by a nested command.
+///
+/// A malformed or non-build response is ignored because this is only diagnostic evidence. The command's own status
+/// and its regression assertions remain authoritative.
+#[allow(dead_code)]
+pub(crate) fn report_build_phase_timing(label: &str, output: &Output) {
+    if std::env::var_os("INCAN_TEST_COMMAND_TIMINGS").is_none() {
+        return;
+    }
+    let Ok(report) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return;
+    };
+    let Some(timings) = report.get("timings_ms").and_then(serde_json::Value::as_object) else {
+        return;
+    };
+    let phase_timings_ms = timings
+        .iter()
+        .filter_map(|(phase, elapsed_ms)| elapsed_ms.as_u64().map(|elapsed_ms| (phase, elapsed_ms)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if phase_timings_ms.is_empty() {
+        return;
+    }
+    let thread = std::thread::current();
+    let test_name = thread.name().map_or("unnamed", |name| name);
+    eprintln!(
+        "incan-test-build-phase-timing {}",
+        serde_json::json!({
+            "test_name": test_name,
+            "command": label,
+            "phase_timings_ms": phase_timings_ms,
+        })
+    );
+}
 
 /// Return the Incan CLI built alongside the current integration-test executable.
 ///

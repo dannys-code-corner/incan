@@ -8759,10 +8759,11 @@ checksum = "selected"
         let descendant_pid = fixture.path().join("cargo-descendant-pid");
         fs::create_dir_all(retained_output.parent().ok_or("retained output parent missing")?)?;
         fs::write(&manifest, "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n")?;
+        // Zero-filled files can remain sparse or compressed on APFS, which does not exercise the physical-byte limit.
         fs::write(
             &cargo,
             format!(
-                "#!/bin/sh\nsleep 30 &\nprintf '%s\\n' \"$!\" > \"{}\"\ndd if=/dev/zero of=\"{}\" bs=131072 count=1 2>/dev/null\nwait\n",
+                "#!/bin/sh\nsleep 30 &\nprintf '%s\\n' \"$!\" > \"{}\"\ndd if=/dev/urandom of=\"{}\" bs=131072 count=1 2>/dev/null\nwait\n",
                 descendant_pid.display(),
                 retained_output.display(),
             ),

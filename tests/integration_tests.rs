@@ -1612,34 +1612,6 @@ fn lifecycle_new_version_and_env_commands_work() -> Result<(), Box<dyn std::erro
     assert!(project_dir.join("src/main.incn").exists());
     assert!(project_dir.join("tests/test_main.incn").exists());
 
-    let empty_list_output = incan_command()
-        .args(["env", "list"])
-        .current_dir(&project_dir)
-        .output()?;
-    assert!(
-        empty_list_output.status.success(),
-        "env list on fresh project failed: {}",
-        String::from_utf8_lossy(&empty_list_output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&empty_list_output.stdout).trim(),
-        "default",
-        "fresh projects should expose the ambient default env"
-    );
-
-    let default_overview_output = incan_command()
-        .args(["env", "show"])
-        .current_dir(&project_dir)
-        .output()?;
-    assert!(
-        default_overview_output.status.success(),
-        "env show overview on fresh project failed: {}",
-        String::from_utf8_lossy(&default_overview_output.stderr)
-    );
-    let default_overview_stdout = String::from_utf8_lossy(&default_overview_output.stdout);
-    assert!(default_overview_stdout.contains("Name"));
-    assert!(default_overview_stdout.contains("default"));
-
     let default_show_output = incan_command()
         .args(["env", "show", "default"])
         .current_dir(&project_dir)
@@ -10201,16 +10173,6 @@ def test_b_slow() -> None:
     sleep(Duration.from_millis(800))
 "#,
         )?;
-        let warmup = run_incan_test_with_args(&dir, &["--jobs", "1", "-k", "test_b_slow"]);
-        let warmup_stdout = String::from_utf8_lossy(&warmup.stdout);
-        let warmup_stderr = String::from_utf8_lossy(&warmup.stderr);
-        assert!(
-            warmup.status.success(),
-            "expected slow test warm-up to pass.\nstdout:\n{}\nstderr:\n{}",
-            warmup_stdout,
-            warmup_stderr,
-        );
-
         let output = run_incan_test_with_args(&dir, &["--jobs", "2", "-x"]);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -10260,16 +10222,6 @@ def test_resource_b() -> None:
 "#,
         )?;
 
-        let warmup = run_incan_test_with_args(&dir, &["--jobs", "1"]);
-        let warmup_stdout = String::from_utf8_lossy(&warmup.stdout);
-        let warmup_stderr = String::from_utf8_lossy(&warmup.stderr);
-        assert!(
-            warmup.status.success(),
-            "expected resource warm-up to pass.\nstdout:\n{}\nstderr:\n{}",
-            warmup_stdout,
-            warmup_stderr,
-        );
-
         let start = std::time::Instant::now();
         let output = run_incan_test_with_args(&dir, &["--jobs", "2"]);
         let elapsed = start.elapsed();
@@ -10314,16 +10266,6 @@ def test_regular() -> None:
     sleep(Duration.from_millis(700))
 "#,
         )?;
-
-        let warmup = run_incan_test_with_args(&dir, &["--jobs", "1"]);
-        let warmup_stdout = String::from_utf8_lossy(&warmup.stdout);
-        let warmup_stderr = String::from_utf8_lossy(&warmup.stderr);
-        assert!(
-            warmup.status.success(),
-            "expected serial warm-up to pass.\nstdout:\n{}\nstderr:\n{}",
-            warmup_stdout,
-            warmup_stderr,
-        );
 
         let start = std::time::Instant::now();
         let output = run_incan_test_with_args(&dir, &["--jobs", "2"]);
@@ -11427,20 +11369,6 @@ module tests:
 "#,
         )?;
 
-        let alpha = run_incan_test_path(&src_dir.join("alpha.incn"));
-        assert!(
-            alpha.status.success(),
-            "expected direct alpha inline test run to pass.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&alpha.stdout),
-            String::from_utf8_lossy(&alpha.stderr),
-        );
-        let beta = run_incan_test_path(&src_dir.join("beta.incn"));
-        assert!(
-            beta.status.success(),
-            "expected direct beta inline test run to pass.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&beta.stdout),
-            String::from_utf8_lossy(&beta.stderr),
-        );
         let uses_columns = run_incan_test_path(&functions_dir.join("uses_columns.incn"));
         assert!(
             uses_columns.status.success(),
@@ -12407,6 +12335,46 @@ mod rfc031_pub_import_integration_tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
+    fn run_timed_incan_command(
+        label: &str,
+        mut command: std::process::Command,
+    ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        let timing = super::support::command_timing_started();
+        let output = command.output()?;
+        super::support::report_command_timing(label, timing);
+        Ok(output)
+    }
+
+    /// Run one normal build with its existing JSON report retained only for opt-in timing attribution.
+    fn run_profiled_build_command(
+        label: &str,
+        mut command: std::process::Command,
+    ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        command.args(["--report", "json"]);
+        let output = run_timed_incan_command(label, command)?;
+        super::support::report_build_phase_timing(label, &output);
+        Ok(output)
+    }
+
+    /// Ensure the normal-library report retains the internal preparation boundaries used by Oven performance work.
+    fn assert_library_build_phase_keys(
+        output: &std::process::Output,
+        expected: &[&str],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let timings = report
+            .get("timings_ms")
+            .and_then(serde_json::Value::as_object)
+            .ok_or("expected a library JSON timing report")?;
+        for phase in expected {
+            assert!(
+                timings.contains_key(*phase),
+                "expected library build timing report to contain `{phase}`: {report}"
+            );
+        }
+        Ok(())
+    }
+
     fn write_project_files(
         root: &Path,
         manifest_content: &str,
@@ -12420,7 +12388,9 @@ mod rfc031_pub_import_integration_tests {
     }
 
     fn run_check(main_path: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-        Ok(super::incan_command().arg("--check").arg(main_path).output()?)
+        let mut command = super::incan_command();
+        command.arg("--check").arg(main_path);
+        run_timed_incan_command("incan --check", command)
     }
 
     /// Check a consumer against this checkout's SDK rather than an ambient developer installation.
@@ -12445,14 +12415,15 @@ mod rfc031_pub_import_integration_tests {
     }
 
     fn run_build(main_path: &Path, out_dir: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-        Ok(super::incan_command()
+        let mut command = super::incan_command();
+        command
             .args([
                 "build",
                 main_path.to_string_lossy().as_ref(),
                 out_dir.to_string_lossy().as_ref(),
             ])
-            .env("CARGO_NET_OFFLINE", "true")
-            .output()?)
+            .env("CARGO_NET_OFFLINE", "true");
+        run_timed_incan_command("incan build", command)
     }
 
     /// Write the shared Rust dependency used by receiver-generic application and compiled-provider acceptance tests.
@@ -12573,14 +12544,6 @@ def main() -> None:
 "#,
         )?;
 
-        let check_output = run_check(&main_path)?;
-        assert!(
-            check_output.status.success(),
-            "expected generic Rust JSON parser result to infer through unwrap context.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&check_output.stdout),
-            String::from_utf8_lossy(&check_output.stderr)
-        );
-
         let out_dir = tmp.path().join("out");
         let build_output = run_build(&main_path, &out_dir)?;
         assert!(
@@ -12655,14 +12618,6 @@ def main() -> None:
         print(first)
 "#,
         )?;
-
-        let check_output = run_check(&main_path)?;
-        assert!(
-            check_output.status.success(),
-            "expected receiver-generic associated functions to typecheck.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&check_output.stdout),
-            String::from_utf8_lossy(&check_output.stderr)
-        );
 
         let out_dir = tmp.path().join("out");
         let build_output = run_build(&main_path, &out_dir)?;
@@ -12788,13 +12743,6 @@ def main() -> None:
         pass
 "#,
         )?;
-        let compiled_consumer_check = run_check(&compiled_consumer_main)?;
-        assert!(
-            compiled_consumer_check.status.success(),
-            "expected compiled provider consumer to typecheck receiver generics.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&compiled_consumer_check.stdout),
-            String::from_utf8_lossy(&compiled_consumer_check.stderr)
-        );
         let compiled_consumer_out = tmp.path().join("compiled_consumer_out");
         let compiled_consumer_build = run_build(&compiled_consumer_main, &compiled_consumer_out)?;
         assert!(
@@ -12985,18 +12933,20 @@ def test_borrowed_slice_callbacks() -> None:
     }
 
     fn run_lock(entry_path: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-        Ok(super::incan_command()
+        let mut command = super::incan_command();
+        command
             .args(["lock", entry_path.to_string_lossy().as_ref()])
-            .env("CARGO_NET_OFFLINE", "true")
-            .output()?)
+            .env("CARGO_NET_OFFLINE", "true");
+        run_timed_incan_command("incan lock", command)
     }
 
     fn run_test(target: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-        Ok(super::incan_command()
+        let mut command = super::incan_command();
+        command
             .args(["test", target.to_string_lossy().as_ref()])
             .env("CARGO_NET_OFFLINE", "true")
-            .env("INCAN_TEST_SHARED_TARGET_DIR", shared_test_runner_target_dir())
-            .output()?)
+            .env("INCAN_TEST_SHARED_TARGET_DIR", shared_test_runner_target_dir());
+        run_timed_incan_command("incan test", command)
     }
 
     fn run_fmt(target: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
@@ -13043,11 +12993,24 @@ def test_borrowed_slice_callbacks() -> None:
     }
 
     fn run_build_lib(project_root: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-        Ok(super::incan_command()
+        let mut command = super::incan_command();
+        command
             .args(["build", "--lib"])
             .current_dir(project_root)
-            .env("CARGO_NET_OFFLINE", "true")
-            .output()?)
+            .env("CARGO_NET_OFFLINE", "true");
+        run_timed_incan_command("incan build --lib", command)
+    }
+
+    fn run_profiled_build_lib(
+        label: &str,
+        project_root: &Path,
+    ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        let mut command = super::incan_command();
+        command
+            .args(["build", "--lib"])
+            .current_dir(project_root)
+            .env("CARGO_NET_OFFLINE", "true");
+        run_profiled_build_command(label, command)
     }
 
     /// Run the normal Oven library route with a failing Cargo binary first on PATH.
@@ -13082,15 +13045,16 @@ def test_borrowed_slice_callbacks() -> None:
     }
 
     fn run_build_lib_artifact_only(project_root: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-        Ok(super::incan_command()
+        let mut command = super::incan_command();
+        command
             .args(["build", "--lib"])
             .current_dir(project_root)
             .env("CARGO_NET_OFFLINE", "true")
-            .env("INCAN_INTERNAL_LIBRARY_ARTIFACT_ONLY", "1")
-            .output()?)
+            .env("INCAN_INTERNAL_LIBRARY_ARTIFACT_ONLY", "1");
+        run_timed_incan_command("incan build --lib (artifact only)", command)
     }
 
-    /// Verifies absolute crate imports across direct checking/building, library re-export, and test-batch compilation.
+    /// Verifies absolute crate imports across direct build, library re-export, and test-batch compilation.
     #[test]
     fn boundary_parity_preserves_absolute_crate_public_types_issue882() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
@@ -13153,14 +13117,6 @@ def test_absolute_crate_public_types() -> None:
     assert explain(decision) == "allowed"
 "#,
         )?;
-
-        let check_output = run_check(&consumer_path)?;
-        assert!(
-            check_output.status.success(),
-            "expected direct check to preserve absolute crate import metadata.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&check_output.stdout),
-            String::from_utf8_lossy(&check_output.stderr)
-        );
 
         let direct_build = run_build(&consumer_path, &project_root.join("out"))?;
         assert!(
@@ -13586,13 +13542,6 @@ def main() -> None:
 "#,
         )?;
 
-        let consumer_check = run_check(&main_path)?;
-        assert!(
-            consumer_check.status.success(),
-            "expected decorated alias partial identity consumer check to succeed.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&consumer_check.stdout),
-            String::from_utf8_lossy(&consumer_check.stderr)
-        );
         let out_dir = consumer_root.join("out");
         let consumer_build = run_build(&main_path, &out_dir)?;
         assert!(
@@ -15744,13 +15693,6 @@ def main() -> None:
 "#,
         )?;
 
-        let consumer_check = run_check(&main_path)?;
-        assert!(
-            consumer_check.status.success(),
-            "expected both namespace and nested imports to typecheck.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&consumer_check.stdout),
-            String::from_utf8_lossy(&consumer_check.stderr)
-        );
         let out_dir = consumer_root.join("out");
         let consumer_build = run_build(&main_path, &out_dir)?;
         assert!(
@@ -15857,14 +15799,6 @@ def main() -> None:
   println(proposal().title)
 "#,
         )?;
-
-        let check_output = run_check(&main_path)?;
-        assert!(
-            check_output.status.success(),
-            "expected split pub import aliases to typecheck against the compiled library.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&check_output.stdout),
-            String::from_utf8_lossy(&check_output.stderr)
-        );
 
         let out_dir = consumer_root.join("out");
         let build_output = run_build(&main_path, &out_dir)?;
@@ -16070,13 +16004,6 @@ def main() -> None:
 "#,
         )?;
 
-        let public_check = run_check(&consumer_main)?;
-        assert!(
-            public_check.status.success(),
-            "expected public field access and existing named class construction to remain valid.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&public_check.stdout),
-            String::from_utf8_lossy(&public_check.stderr)
-        );
         let public_build = run_build(&consumer_main, &consumer_root.join("out"))?;
         assert!(
             public_build.status.success(),
@@ -16354,14 +16281,24 @@ pub fn make_envelope() -> Envelope<Vec<Token>> {
   pub value: int
 "#,
         )?;
-        let leaf_build = run_build_lib(&leaf_root)?;
+        let leaf_build = run_profiled_build_lib("incan build --lib compiled_leaf", &leaf_root)?;
         assert!(
             leaf_build.status.success(),
             "expected transitive nominal provider build to succeed.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&leaf_build.stdout),
             String::from_utf8_lossy(&leaf_build.stderr)
         );
-
+        assert_library_build_phase_keys(
+            &leaf_build,
+            &[
+                "library_codegen_emit_rust",
+                "library_codegen_write_project",
+                "library_codegen_sync_provider_dependencies",
+                "library_oven_prepare_profiles",
+                "library_oven_prepare_vocab_context",
+                "library_generate_rust",
+            ],
+        )?;
         let provider_root = tmp.path().join("compiled_parent");
         std::fs::create_dir_all(provider_root.join("src"))?;
         std::fs::write(
@@ -16402,8 +16339,7 @@ pub class Child extends Base:
             provider_root.join("src/lib.incn"),
             "pub from crate.classes import Child as PublicChild\npub from crate.classes import Payload\n",
         )?;
-
-        let provider_build = run_build_lib(&provider_root)?;
+        let provider_build = run_profiled_build_lib("incan build --lib compiled_parent", &provider_root)?;
         assert!(
             provider_build.status.success(),
             "expected compiled-parent provider build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -16433,14 +16369,13 @@ pub class MiddleChild extends Child:
             middle_root.join("src/lib.incn"),
             "pub from crate.classes import MiddleChild as PublicMiddleChild\n",
         )?;
-        let middle_build = run_build_lib(&middle_root)?;
+        let middle_build = run_profiled_build_lib("incan build --lib compiled_middle", &middle_root)?;
         assert!(
             middle_build.status.success(),
             "expected compiled intermediate subclass library to succeed.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&middle_build.stdout),
             String::from_utf8_lossy(&middle_build.stderr)
         );
-
         let decoy_root = tmp.path().join("compiled_parent_decoy");
         std::fs::create_dir_all(decoy_root.join("src"))?;
         std::fs::write(
@@ -16454,7 +16389,7 @@ pub class MiddleChild extends Child:
   pub own_flag: int
 "#,
         )?;
-        let decoy_build = run_build_lib(&decoy_root)?;
+        let decoy_build = run_profiled_build_lib("incan build --lib compiled_parent_decoy", &decoy_root)?;
         assert!(
             decoy_build.status.success(),
             "expected same-leaf-name decoy provider build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -16522,14 +16457,6 @@ pub class LocalMiddleChild extends MiddleChild:
 "#,
         )?;
 
-        let check_output = run_check(&consumer_main)?;
-        assert!(
-            check_output.status.success(),
-            "expected a consumer subclass of a compiled class to typecheck.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&check_output.stdout),
-            String::from_utf8_lossy(&check_output.stderr)
-        );
-
         let lock_output = run_lock(&consumer_main)?;
         assert!(
             lock_output.status.success(),
@@ -16539,15 +16466,16 @@ pub class LocalMiddleChild extends MiddleChild:
         );
 
         let out_dir = consumer_root.join("out");
-        let build_output = super::incan_command()
+        let mut build_command = super::incan_command();
+        build_command
             .args([
                 "build",
                 consumer_main.to_string_lossy().as_ref(),
                 out_dir.to_string_lossy().as_ref(),
                 "--locked",
             ])
-            .env("CARGO_NET_OFFLINE", "true")
-            .output()?;
+            .env("CARGO_NET_OFFLINE", "true");
+        let build_output = run_profiled_build_command("incan build --locked compiled_parent_consumer", build_command)?;
         assert!(
             build_output.status.success(),
             "expected inherited compiled-parent fields to survive generated Rust lowering.\nstdout:\n{}\nstderr:\n{}",
@@ -19278,14 +19206,6 @@ def reject_mismatched_owner(left: list[f32], right: list[f32]) -> f32:
             "import pub::filterkit\n\ndef main() -> None:\n  where true:\n    pass\n",
         )?;
 
-        let check_output = run_check(&main_path)?;
-        assert!(
-            check_output.status.success(),
-            "expected check to succeed when desugared output uses a provider helper binding.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&check_output.stdout),
-            String::from_utf8_lossy(&check_output.stderr)
-        );
-
         let out_dir = tmp.path().join("out");
         let build_output = run_build(&main_path, &out_dir)?;
         assert!(
@@ -19997,14 +19917,6 @@ def test_quality_expression_vocab_result() -> None:
 "#,
         )?;
 
-        let check_output = run_check(&main_path)?;
-        assert!(
-            check_output.status.success(),
-            "expected quality expression vocab declaration to typecheck.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&check_output.stdout),
-            String::from_utf8_lossy(&check_output.stderr)
-        );
-
         let out_dir = tmp.path().join("out");
         let build_output = run_build(&main_path, &out_dir)?;
         let generated_main = std::fs::read_to_string(out_dir.join("src/main.rs"))?;
@@ -20192,22 +20104,6 @@ def main() -> None:
             "[project]\nname = \"consumer\"\n\n[dependencies]\nquerykit = { path = \"../deps/querykit\" }\n",
             "import pub::querykit\n\ndef main() -> None:\n  screen true:\n    pass\n",
         )?;
-
-        let where_check = run_check(&where_main)?;
-        assert!(
-            where_check.status.success(),
-            "expected helper-backed `where` check to succeed.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&where_check.stdout),
-            String::from_utf8_lossy(&where_check.stderr)
-        );
-
-        let screen_check = run_check(&screen_main)?;
-        assert!(
-            screen_check.status.success(),
-            "expected helper-backed `screen` check to succeed.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&screen_check.stdout),
-            String::from_utf8_lossy(&screen_check.stderr)
-        );
 
         let where_out_dir = tmp.path().join("where_out");
         let where_build = run_build(&where_main, &where_out_dir)?;

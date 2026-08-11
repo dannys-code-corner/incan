@@ -39,7 +39,10 @@ pub(crate) const OVEN_INTEROP_EXECUTION_PROVENANCE_SCHEMA_VERSION: u32 = 3;
 /// receipt-compatible entry as reusable. Normal commands reconstruct this same input from the selected receipt.
 pub(crate) const OVEN_INTEROP_PLAN_SCHEMA_INPUT: &str = "oven-interop-plan-schema";
 /// Current immutable final-plan materialization contract.
-const OVEN_INTEROP_PLAN_SCHEMA: &str = "3";
+///
+/// Version 5 records native directories beneath the loader-safe immutable store layout. A plan baked before the
+/// current directory encoding can embed a split ELF `RUNPATH`, so it must not be reused.
+const OVEN_INTEROP_PLAN_SCHEMA: &str = "5";
 /// Receipt input key that binds a normal consumer to one selected native-execution contract.
 pub(crate) const OVEN_INTEROP_EXECUTION_RECEIPT_INPUT: &str = "oven-interop-execution-receipt";
 /// Store-owned directory containing static archives baked from declared interop shims or artifacts.
@@ -1169,7 +1172,7 @@ pub(crate) fn selected_interop_toolchain_identity(
     validate_regular_executable(Some(c_compiler), "selected C compiler")?;
     let mut identities = BTreeMap::from([(
         "c-compiler".to_string(),
-        digest_regular_file(c_compiler, "selected C compiler")?,
+        digest_regular_executable(c_compiler, "selected C compiler")?,
     )]);
     let has_cxx_shim = target
         .shims
@@ -1185,7 +1188,7 @@ pub(crate) fn selected_interop_toolchain_identity(
         validate_regular_executable(Some(cxx_compiler), "selected C++ compiler")?;
         identities.insert(
             "cxx-compiler".to_string(),
-            digest_regular_file(cxx_compiler, "selected C++ compiler")?,
+            digest_regular_executable(cxx_compiler, "selected C++ compiler")?,
         );
     }
     let has_shim = target
@@ -1202,7 +1205,7 @@ pub(crate) fn selected_interop_toolchain_identity(
         validate_regular_executable(Some(archiver), "selected native archiver")?;
         identities.insert(
             "archiver".to_string(),
-            digest_regular_file(archiver, "selected native archiver")?,
+            digest_regular_executable(archiver, "selected native archiver")?,
         );
     }
     digest_serialized(&identities, "selected Oven interop toolchain executables")
@@ -1211,10 +1214,25 @@ pub(crate) fn selected_interop_toolchain_identity(
 /// Require an explicitly selected regular executable before it can start a compiler-owned native process.
 fn validate_regular_executable(path: Option<&Path>, label: &str) -> Result<(), String> {
     let path = path.ok_or_else(|| format!("Oven interop bake requires {label}"))?;
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| format!("could not inspect {label} {}: {error}", path.display()))?;
-    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err(format!("{label} must be a regular executable file: {}", path.display()));
+    let _ = canonical_regular_executable(path, label)?;
+    Ok(())
+}
+
+/// Resolve one selected executable and verify that the resolved target is a regular executable file.
+///
+/// System compiler entry points commonly use a stable symlink such as `/usr/bin/cc`. The resolved target—not the
+/// mutable symlink path—is what Oven digests and authorizes for this one bake.
+fn canonical_regular_executable(path: &Path, label: &str) -> Result<PathBuf, String> {
+    let resolved = path
+        .canonicalize()
+        .map_err(|error| format!("could not resolve {label} {}: {error}", path.display()))?;
+    let metadata = fs::metadata(&resolved)
+        .map_err(|error| format!("could not inspect resolved {label} {}: {error}", resolved.display()))?;
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "{label} must resolve to a regular executable file: {}",
+            path.display()
+        ));
     }
     #[cfg(unix)]
     {
@@ -1224,7 +1242,13 @@ fn validate_regular_executable(path: Option<&Path>, label: &str) -> Result<(), S
             return Err(format!("{label} is not executable: {}", path.display()));
         }
     }
-    Ok(())
+    Ok(resolved)
+}
+
+/// Digest the resolved regular executable that an Oven interop bake is allowed to launch.
+fn digest_regular_executable(path: &Path, label: &str) -> Result<String, String> {
+    let resolved = canonical_regular_executable(path, label)?;
+    digest_regular_file(&resolved, label)
 }
 
 /// Copy every package-declared static archive after rechecking its locked path and digest.
@@ -1400,6 +1424,11 @@ fn compile_locked_interop_shims(
             InteropShimLanguage::Cxx => request.cxx_compiler,
         }
         .ok_or_else(|| format!("locked interop shim `{}` has no selected compiler", shim.name))?;
+        let compiler_label = match shim.language {
+            InteropShimLanguage::C => "selected C compiler",
+            InteropShimLanguage::Cxx => "selected C++ compiler",
+        };
+        let compiler = canonical_regular_executable(compiler, compiler_label)?;
         if !is_interop_native_library_name(&shim.output) {
             return Err(format!("locked interop shim `{}` has an unsafe output name", shim.name));
         }
@@ -1414,13 +1443,13 @@ fn compile_locked_interop_shims(
         for (index, source) in shim.sources.iter().enumerate() {
             let source = verified_locked_input(request.project_root, source, "interop shim source")?;
             let object = object_root.join(format!("{index:04}.o"));
-            let mut command = Command::new(compiler);
+            let mut command = Command::new(&compiler);
             if shim.language == InteropShimLanguage::Cxx {
                 command.args(["-x", "c++"]);
             }
             command.arg("-c").arg(&source).arg("-o").arg(&object);
             append_locked_compile_arguments(&mut command, request, &include_roots);
-            run_interop_tool(command, compiler, &format!("compile interop shim `{}`", shim.name))?;
+            run_interop_tool(command, &compiler, &format!("compile interop shim `{}`", shim.name))?;
             let _ = digest_regular_file(&object, "compiled interop shim object")?;
             objects.push(object);
         }
@@ -1428,9 +1457,10 @@ fn compile_locked_interop_shims(
         let archiver = request
             .archiver
             .ok_or_else(|| format!("locked interop shim `{}` has no selected archiver", shim.name))?;
-        let mut command = Command::new(archiver);
+        let archiver = canonical_regular_executable(archiver, "selected native archiver")?;
+        let mut command = Command::new(&archiver);
         command.arg("crs").arg(&archive).args(&objects);
-        run_interop_tool(command, archiver, &format!("archive interop shim `{}`", shim.name))?;
+        run_interop_tool(command, &archiver, &format!("archive interop shim `{}`", shim.name))?;
         archives.push(OvenInteropBakedArchive {
             name: shim.output.clone(),
             relative_path: format!("{OVEN_INTEROP_NATIVE_DIRECTORY}/lib{}.a", shim.output),
@@ -1464,9 +1494,11 @@ fn append_locked_compile_arguments(
     request: &OvenInteropNativeBakeRequest<'_>,
     include_roots: &[PathBuf],
 ) {
-    command
-        .arg("-target")
-        .arg(clang_target_for_rust_target(&request.target.target));
+    if interop_compiler_uses_clang_target_flag(request.target) {
+        command
+            .arg("-target")
+            .arg(clang_target_for_rust_target(&request.target.target));
+    }
     if let Some(sdk_root) = request.sdk_root {
         command.arg("-isysroot").arg(sdk_root);
     }
@@ -1476,6 +1508,18 @@ fn append_locked_compile_arguments(
     for root in include_roots {
         command.arg("-I").arg(root);
     }
+}
+
+/// Return whether this locked compiler capability accepts Clang's explicit target flag.
+///
+/// A `host-c-compiler` is a native compiler selected by the maintainer for the host target. Its driver is allowed
+/// to be GCC-compatible, where `-target` is not valid. Target-aware capabilities remain responsible for accepting
+/// the explicit Clang spelling generated below; cross-target toolchains therefore do not inherit a host default.
+fn interop_compiler_uses_clang_target_flag(target: &LockedInteropTarget) -> bool {
+    target
+        .toolchain
+        .as_ref()
+        .is_none_or(|toolchain| toolchain.capability != "host-c-compiler")
 }
 
 /// Translate the Rust target vocabulary into the corresponding Clang target spelling without ambient detection.
@@ -1735,8 +1779,9 @@ mod tests {
         OvenInteropAdapter, OvenInteropAdapterStageRequest, OvenInteropBakedArchive, OvenInteropBakedBundle,
         OvenInteropCapabilitySelection, OvenInteropNativeBakeRequest, bake_interop_native_plan,
         bind_interop_native_archives, default_interop_execution_receipt_path, interop_adapter_bundle_path,
-        interop_execution_build_unit_inputs, load_interop_execution_receipt, receipt_interop_execution,
-        stage_interop_adapter, validate_interop_execution_receipt, write_interop_execution_receipt,
+        interop_compiler_uses_clang_target_flag, interop_execution_build_unit_inputs, load_interop_execution_receipt,
+        receipt_interop_execution, stage_interop_adapter, validate_interop_execution_receipt,
+        write_interop_execution_receipt,
     };
     #[cfg(target_os = "macos")]
     use crate::oven::rustc::select_direct_rustc_plan_for_execution;
@@ -1819,6 +1864,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn host_c_compiler_uses_its_native_driver_target_while_clang_capabilities_are_explicit() {
+        let mut host_target = locked_target();
+        host_target.target = "x86_64-unknown-linux-gnu".to_string();
+        host_target.sdk = None;
+        host_target.platform = None;
+        host_target.toolchain = Some(CapabilityRequirement {
+            capability: "host-c-compiler".to_string(),
+            version: Some(">=1, <2".to_string()),
+        });
+
+        assert!(!interop_compiler_uses_clang_target_flag(&host_target));
+        assert!(interop_compiler_uses_clang_target_flag(&locked_target()));
+    }
+
     fn static_bake_request<'a>(
         store: &'a OvenStore,
         project_root: &'a Path,
@@ -1856,7 +1916,7 @@ mod tests {
         let inputs = interop_execution_build_unit_inputs(&receipt);
         assert_eq!(inputs.len(), 2);
         assert_eq!(inputs.get("oven-interop-execution-receipt"), Some(&receipt.identity));
-        assert_eq!(inputs.get("oven-interop-plan-schema"), Some(&"3".to_string()));
+        assert_eq!(inputs.get("oven-interop-plan-schema"), Some(&"5".to_string()));
 
         let mut changed = target;
         changed.shims[0].sources[0].digest = "sha256:changed-source".to_string();
@@ -3426,6 +3486,9 @@ fn main() {
             sdk_identity_file: None,
         })?;
         assert_eq!(baked.bundle_names, ["fixture_runtime"]);
+        let (selected_entry, _lease) = store.select(&baked.plan_identity)?;
+        let native_root = selected_entry.materialized_root();
+        assert!(!native_root.to_string_lossy().contains(':'));
         let direct = bake_stored_direct_rustc_run(&OvenStoredDirectRustcRunRequest {
             store: &store,
             plan_identity: baked.plan_identity,
@@ -3438,12 +3501,20 @@ fn main() {
             source_evidence_key: "generated-root".to_string(),
         })?;
         assert!(!direct.cargo_process_started);
-        let status = Command::new(&direct.output)
+        let output = Command::new(&direct.output)
             .env_remove("DYLD_LIBRARY_PATH")
             .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
             .env_remove("LD_LIBRARY_PATH")
-            .status()?;
-        assert!(status.success());
+            .output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "sealed dynamic-runtime consumer exited with {}; stdout: {}; stderr: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            )
+            .into());
+        }
         Ok(())
     }
 

@@ -34,7 +34,9 @@ fn incan_command(project_root: &Path, incan_home: &Path) -> Command {
 }
 
 fn run_checked(mut command: Command, label: &str) -> Result<Output, Box<dyn std::error::Error>> {
+    let timing = support::command_timing_started();
     let output = command.output()?;
+    support::report_command_timing(label, timing);
     if output.status.success() {
         return Ok(output);
     }
@@ -134,25 +136,33 @@ fn normal_oven_reuses_sealed_inputs_offline_across_projects() -> Result<(), Box<
     write_dependency_project(&first_root)?;
     write_dependency_project(&second_root)?;
 
-    for project_root in [&first_root, &second_root] {
-        let mut build = incan_command(project_root, &incan_home);
-        build.args(["build", "src/main.incn", "--offline"]);
-        run_checked(build, "sealed offline build")?;
+    let mut first_build = incan_command(&first_root, &incan_home);
+    // This retired limit must not influence an Oven command or create its removed cache.
+    first_build
+        .args(["build", "src/main.incn", "--offline"])
+        .env("INCAN_GENERATED_CACHE_MAX_ENTRY_BYTES", "1");
+    run_checked(first_build, "sealed offline build without a generated Cargo cache")?;
 
-        let mut run = incan_command(project_root, &incan_home);
-        run.args(["run", "src/main.incn", "--offline"]);
-        run_checked(run, "sealed offline run")?;
+    let mut first_run = incan_command(&first_root, &incan_home);
+    first_run.args(["run", "src/main.incn", "--offline"]);
+    run_checked(first_run, "sealed offline run")?;
 
-        let mut test = incan_command(project_root, &incan_home);
-        test.args(["test", "tests/cache_test.incn", "--offline"]);
-        run_checked(test, "sealed offline test")?;
+    let mut first_test = incan_command(&first_root, &incan_home);
+    first_test.args(["test", "tests/cache_test.incn", "--offline"]);
+    run_checked(first_test, "sealed offline test")?;
 
-        let mut library = incan_command(project_root, &incan_home);
-        library.args(["build", "--lib", "--offline"]);
-        run_checked(library, "sealed offline library build")?;
+    let mut first_library = incan_command(&first_root, &incan_home);
+    first_library.args(["build", "--lib", "--offline"]);
+    run_checked(first_library, "sealed offline library build")?;
+    assert_no_generated_cargo_state(&first_root, &incan_home);
 
-        assert_no_generated_cargo_state(project_root, &incan_home);
-    }
+    // The first project covers every normal-command mode. One identical-project build is sufficient to prove that
+    // its compatible sealed inputs are reusable across a project boundary; repeating the already-proven debug run
+    // would only walk the same consumption path a second time.
+    let mut second_build = incan_command(&second_root, &incan_home);
+    second_build.args(["build", "src/main.incn", "--offline"]);
+    run_checked(second_build, "cross-project sealed offline build reuse")?;
+    assert_no_generated_cargo_state(&second_root, &incan_home);
     Ok(())
 }
 
@@ -215,23 +225,5 @@ fn concurrent_normal_oven_builds_ignore_cargo_rustc_wrapper() -> Result<(), Box<
     );
     assert_no_generated_cargo_state(&fixture.path().join("first"), &fixture.path().join("first-home"));
     assert_no_generated_cargo_state(&fixture.path().join("second"), &fixture.path().join("second-home"));
-    Ok(())
-}
-
-#[test]
-fn normal_oven_has_no_generated_cargo_cache_to_bound() -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = tempfile::tempdir()?;
-    let incan_home = fixture.path().join("incan-home");
-    let project_root = fixture.path().join("project");
-    write_dependency_project(&project_root)?;
-
-    for label in ["first Oven build", "second Oven build"] {
-        let mut build = incan_command(&project_root, &incan_home);
-        build
-            .args(["build", "src/main.incn", "--offline"])
-            .env("INCAN_GENERATED_CACHE_MAX_ENTRY_BYTES", "1");
-        run_checked(build, label)?;
-        assert_no_generated_cargo_state(&project_root, &incan_home);
-    }
     Ok(())
 }

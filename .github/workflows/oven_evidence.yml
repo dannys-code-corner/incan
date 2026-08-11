@@ -110,6 +110,7 @@ jobs:
           bash scripts/bench_oven_alpha.sh \
             --incan "$GITHUB_WORKSPACE/target/oven-alpha-release-toolchain/bin/incan" \
             --release-identity "GitHub Actions release compiler for $GITHUB_SHA" \
+            --rustc "$(rustup which --toolchain '${{ matrix.toolchain }}' rustc)" \
             --checkout-revision "$GITHUB_SHA" \
             --workload build \
             --source "$GITHUB_WORKSPACE/src/oven/fixtures/release_core.incn" \
