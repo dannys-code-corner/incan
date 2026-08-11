@@ -368,7 +368,7 @@ fn scheduler_nested_build_and_run_fail_closed_when_the_immutable_native_plan_is_
         !marker.exists(),
         "scheduler-native build/run miss launched the guarded Cargo executable"
     );
-    let entries = incan_home.join("oven/store/v1/entries");
+    let entries = incan_home.join("oven/store/v2/entries");
     assert!(
         !entries.exists() || fs::read_dir(&entries)?.next().is_none(),
         "scheduler-native build/run miss materialized a caller-owned store entry at {}",
@@ -2203,7 +2203,7 @@ hees_ai = { workspace = true }
             provider_store.display()
         );
         assert!(
-            incan_home.join("oven/store/v1").is_dir(),
+            incan_home.join("oven/store/v2").is_dir(),
             "cold normal Oven lock did not materialize its selected Loaf into the bounded Oven store"
         );
     }

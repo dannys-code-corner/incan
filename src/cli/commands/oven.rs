@@ -5082,7 +5082,7 @@ fn default_store_root(incan_home: Option<OsString>, home: Option<OsString>) -> O
             home.filter(|path| !path.is_empty())
                 .map(|path| PathBuf::from(path).join(".incan"))
         })
-        .map(|root| root.join("oven").join("store").join("v1"))
+        .map(|root| root.join("oven").join("store").join("v2"))
 }
 
 /// Return the platform home environment used by installed Incan binaries.
@@ -5900,11 +5900,11 @@ mod tests {
     fn default_store_root_prefers_incan_home() {
         assert_eq!(
             default_store_root(Some(OsString::from("/incan")), Some(OsString::from("/user"))),
-            Some(PathBuf::from("/incan/oven/store/v1"))
+            Some(PathBuf::from("/incan/oven/store/v2"))
         );
         assert_eq!(
             default_store_root(None, Some(OsString::from("/user"))),
-            Some(PathBuf::from("/user/.incan/oven/store/v1"))
+            Some(PathBuf::from("/user/.incan/oven/store/v2"))
         );
     }
 

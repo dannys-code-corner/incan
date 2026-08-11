@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use super::{OvenBuildIntent, OvenReceipt, digest_bytes};
 
 /// Version of the persistent Oven artifact-store layout.
-pub const OVEN_STORE_SCHEMA_VERSION: u32 = 3;
+pub const OVEN_STORE_SCHEMA_VERSION: u32 = 4;
 const ENTRIES_DIRECTORY: &str = "entries";
 const STAGING_DIRECTORY: &str = "staging";
 const MANIFEST_FILE: &str = "artifact.json";
@@ -1639,8 +1639,14 @@ impl OvenStore {
     }
 
     /// Return the owned immutable entry path for a validated identity.
+    ///
+    /// The physical directory spelling is deliberately loader-safe: a content identity uses `sha256:`, but `:` is
+    /// a path-list separator in ELF `RUNPATH`. Native direct-Rustc consumers may embed this directory in an rpath,
+    /// so preserving the digest identity verbatim would split one immutable directory into two invalid locations on
+    /// Linux. The v2 store root adopts the safe spelling below, so prior entries are never selected into a new
+    /// direct-Rustc runtime closure.
     fn entry_root(&self, identity: &str) -> PathBuf {
-        self.entries_root().join(identity)
+        self.entries_root().join(entry_directory_name(identity))
     }
 
     /// Return the published-entry root.
@@ -1656,9 +1662,21 @@ impl OvenStore {
     /// Return a manager-serialized unique staging path.
     fn staging_root(&self, identity: &str) -> PathBuf {
         let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        self.staging_root_base()
-            .join(format!("{identity}-{}-{sequence}", std::process::id()))
+        self.staging_root_base().join(format!(
+            "{}-{}-{sequence}",
+            entry_directory_name(identity),
+            std::process::id()
+        ))
     }
+}
+
+/// Encode an immutable identity for a directory that can later appear in a native runtime search path.
+///
+/// The manifest continues to retain the canonical `sha256:<hex>` identity. This is only a filesystem layout detail.
+fn entry_directory_name(identity: &str) -> String {
+    identity
+        .strip_prefix("sha256:")
+        .map_or_else(|| identity.to_string(), |digest| format!("sha256-{digest}"))
 }
 
 /// Remove only private, not-yet-visible batch staging roots after a failed all-or-nothing publication.
@@ -2219,13 +2237,12 @@ fn measure_entry_for_admission_with_directory_identity(
     require_identity_directory_name: bool,
 ) -> Result<OvenStoreEntry, OvenStoreError> {
     let manifest = verify_entry_manifest(root)?;
-    let expected_directory_name = manifest.identity.as_str();
-    if require_identity_directory_name
-        && root.file_name().and_then(|name| name.to_str()) != Some(expected_directory_name)
-    {
+    let directory_name = root.file_name().and_then(|name| name.to_str());
+    let encoded_directory_name = entry_directory_name(&manifest.identity);
+    if require_identity_directory_name && directory_name != Some(encoded_directory_name.as_str()) {
         return Err(OvenStoreError::Integrity {
             identity: manifest.identity,
-            message: "entry directory name does not match its immutable manifest identity".to_string(),
+            message: "entry directory name does not match its immutable manifest identity encoding".to_string(),
         });
     }
     let payload_path = root.join(PAYLOAD_FILE);
@@ -2859,6 +2876,27 @@ mod tests {
         assert_eq!(entry.logical_bytes, 4 + u64::try_from(b"publisher proof".len())?);
         assert_eq!(entry.manifest.materialized_files.len(), 1);
         assert_eq!(store.inspect()?.logical_bytes, entry.logical_bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn store_uses_a_loader_safe_entry_directory() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let manifest = store.publish(&request(project.path(), "engine-arm64", b"runtime plan")?)?;
+        let encoded = store.entry_root(&manifest.identity);
+        let encoded_name = encoded
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("encoded entry has no UTF-8 name")?;
+        assert!(encoded_name.starts_with("sha256-"));
+        assert!(!encoded_name.contains(':'));
+
+        let (selected, _lease) = store.select(&manifest.identity)?;
+        assert_eq!(selected.path, encoded);
+        assert_eq!(store.inspect()?.entries.len(), 1);
         Ok(())
     }
 

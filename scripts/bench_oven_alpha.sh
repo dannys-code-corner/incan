@@ -142,7 +142,7 @@ if [ -n "$clean_worktree_source" ]; then
     fi
 fi
 
-store_root="$incan_home/oven/store/v1"
+store_root="$incan_home/oven/store/v2"
 if [ -d "$store_root/entries" ] && find "$store_root/entries" -mindepth 1 -maxdepth 1 -type d | grep -q .; then
     echo "--incan-home must start with an empty Oven store so first materialization is attributable: $store_root" >&2
     exit 2
@@ -181,16 +181,30 @@ run_stage() {
         || storage_policy_env+=("INCAN_OVEN_MAX_DOMAIN_PHYSICAL_BYTES=$max_domain_physical_bytes")
     [ -z "$max_domain_logical_bytes" ] \
         || storage_policy_env+=("INCAN_OVEN_MAX_DOMAIN_LOGICAL_BYTES=$max_domain_logical_bytes")
-    env -u INCAN_SOURCE_ROOT -u INCAN_STDLIB -u INCAN_STDLIB_DIR -u INCAN_STDLIB_PATH \
-        -u INCAN_TOOLCHAIN_CRATES_DIR -u INCAN_SDK_INVENTORY \
-        -u INCAN_INTERNAL_SDK_PROVIDER_STORE -u INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE \
-        -u INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT -u INCAN_INTERNAL_OVEN_LOAF_EXECUTION \
-        -u INCAN_INTERNAL_OVEN_RUNTIME_ROOT \
-        INCAN_HOME="$incan_home" \
-        RUSTC="$rustc" \
-        "${storage_policy_env[@]}" \
-        PATH="${cargo_guard_dir:+$cargo_guard_dir:}$PATH" \
-        "$@" >"$output_dir/$stage.log" 2>&1
+    # macOS still ships Bash 3.2, where expanding an empty array under `set -u` is an unbound-variable error.
+    # Keep the policy optional without relaxing nounset handling for the benchmark or its measured command.
+    if [ "${#storage_policy_env[@]}" -gt 0 ]; then
+        env -u INCAN_SOURCE_ROOT -u INCAN_STDLIB -u INCAN_STDLIB_DIR -u INCAN_STDLIB_PATH \
+            -u INCAN_TOOLCHAIN_CRATES_DIR -u INCAN_SDK_INVENTORY \
+            -u INCAN_INTERNAL_SDK_PROVIDER_STORE -u INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE \
+            -u INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT -u INCAN_INTERNAL_OVEN_LOAF_EXECUTION \
+            -u INCAN_INTERNAL_OVEN_RUNTIME_ROOT \
+            INCAN_HOME="$incan_home" \
+            RUSTC="$rustc" \
+            "${storage_policy_env[@]}" \
+            PATH="${cargo_guard_dir:+$cargo_guard_dir:}$PATH" \
+            "$@" >"$output_dir/$stage.log" 2>&1
+    else
+        env -u INCAN_SOURCE_ROOT -u INCAN_STDLIB -u INCAN_STDLIB_DIR -u INCAN_STDLIB_PATH \
+            -u INCAN_TOOLCHAIN_CRATES_DIR -u INCAN_SDK_INVENTORY \
+            -u INCAN_INTERNAL_SDK_PROVIDER_STORE -u INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE \
+            -u INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT -u INCAN_INTERNAL_OVEN_LOAF_EXECUTION \
+            -u INCAN_INTERNAL_OVEN_RUNTIME_ROOT \
+            INCAN_HOME="$incan_home" \
+            RUSTC="$rustc" \
+            PATH="${cargo_guard_dir:+$cargo_guard_dir:}$PATH" \
+            "$@" >"$output_dir/$stage.log" 2>&1
+    fi
     status=$?
     set -e
     finished=$(now_ms)

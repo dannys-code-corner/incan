@@ -40,9 +40,9 @@ pub(crate) const OVEN_INTEROP_EXECUTION_PROVENANCE_SCHEMA_VERSION: u32 = 3;
 pub(crate) const OVEN_INTEROP_PLAN_SCHEMA_INPUT: &str = "oven-interop-plan-schema";
 /// Current immutable final-plan materialization contract.
 ///
-/// Version 4 records the selected host compiler's own target semantics rather than unconditionally appending the
-/// Clang-only `-target` argument. A plan baked under an older invocation contract must not be reused.
-const OVEN_INTEROP_PLAN_SCHEMA: &str = "4";
+/// Version 5 records native directories beneath the loader-safe immutable store layout. A plan baked before the
+/// current directory encoding can embed a split ELF `RUNPATH`, so it must not be reused.
+const OVEN_INTEROP_PLAN_SCHEMA: &str = "5";
 /// Receipt input key that binds a normal consumer to one selected native-execution contract.
 pub(crate) const OVEN_INTEROP_EXECUTION_RECEIPT_INPUT: &str = "oven-interop-execution-receipt";
 /// Store-owned directory containing static archives baked from declared interop shims or artifacts.
@@ -1916,7 +1916,7 @@ mod tests {
         let inputs = interop_execution_build_unit_inputs(&receipt);
         assert_eq!(inputs.len(), 2);
         assert_eq!(inputs.get("oven-interop-execution-receipt"), Some(&receipt.identity));
-        assert_eq!(inputs.get("oven-interop-plan-schema"), Some(&"4".to_string()));
+        assert_eq!(inputs.get("oven-interop-plan-schema"), Some(&"5".to_string()));
 
         let mut changed = target;
         changed.shims[0].sources[0].digest = "sha256:changed-source".to_string();
@@ -3486,6 +3486,9 @@ fn main() {
             sdk_identity_file: None,
         })?;
         assert_eq!(baked.bundle_names, ["fixture_runtime"]);
+        let (selected_entry, _lease) = store.select(&baked.plan_identity)?;
+        let native_root = selected_entry.materialized_root();
+        assert!(!native_root.to_string_lossy().contains(':'));
         let direct = bake_stored_direct_rustc_run(&OvenStoredDirectRustcRunRequest {
             store: &store,
             plan_identity: baked.plan_identity,
@@ -3498,12 +3501,20 @@ fn main() {
             source_evidence_key: "generated-root".to_string(),
         })?;
         assert!(!direct.cargo_process_started);
-        let status = Command::new(&direct.output)
+        let output = Command::new(&direct.output)
             .env_remove("DYLD_LIBRARY_PATH")
             .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
             .env_remove("LD_LIBRARY_PATH")
-            .status()?;
-        assert!(status.success());
+            .output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "sealed dynamic-runtime consumer exited with {}; stdout: {}; stderr: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            )
+            .into());
+        }
         Ok(())
     }
 
