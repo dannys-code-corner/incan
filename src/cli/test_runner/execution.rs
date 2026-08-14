@@ -27,12 +27,13 @@ use crate::frontend::vocab_desugar_pass;
 use crate::frontend::{lexer, parser};
 use crate::lockfile::CargoFeatureSelection;
 use crate::manifest::DependencySpec;
+use crate::oven::legacy_cargo::direct_rustc_compile_environment;
 use crate::oven::loaf::{OVEN_LOAF_MISS_GUIDANCE, runtime_build_unit_inputs};
 use crate::oven::native_test::{OvenNativeTestRequest, run_native_test_batch};
 use crate::oven::rustc::{
     OvenTrustedDirectRustcTargetRequest, attach_caller_owned_rustc_libraries, bake_trusted_direct_rustc_test,
     materialize_declared_rust_libraries_with_selected_path_authority, resolve_active_rustc, rustc_host_target,
-    rustc_identity, trusted_artifact_plan_for_source_evidence,
+    rustc_identity,
 };
 use crate::oven::{
     OvenGeneratedProjectRequest, default_receipt_path, digest_dependency_specs, receipt_generated_project,
@@ -56,12 +57,6 @@ pub(super) struct TestExecutionOptions {
     pub verbose: bool,
     pub emit_progress: bool,
 }
-
-/// Receipt-selected direct-Rustc closure for a nested normal test.
-///
-/// A compiler-suite child receives a parent-leased immutable compiler-data root. It uses that Loaf directly instead
-/// of publishing a duplicate closure into its output-owned store; ordinary tests keep the bounded-store path.
-type OvenTestPlanSelection = crate::cli::commands::build::OvenDirectRustcPlanSelection;
 
 /// Validate strict Incan lock policy once before Oven schedules any generated native test harnesses.
 ///
@@ -2595,18 +2590,8 @@ fn run_file_tests_batch_oven(
     // Classify caller declarations against the source projection, while retaining full-plan path authority for an
     // exact compiler-owned dependency. The complete plan may include private compiler helpers whose names overlap
     // ordinary caller dependencies such as serde_json.
-    let full_artifact_plan = match &plan_selection {
-        OvenTestPlanSelection::Stored(selected) => &selected.artifact_plan,
-        OvenTestPlanSelection::ToolchainLoaf(native) => &native.artifact_plan,
-    };
-    let artifact_plan = match &plan_selection {
-        OvenTestPlanSelection::Stored(selected) => {
-            trusted_artifact_plan_for_source_evidence(&selected.artifact_plan, &selected.artifacts, "generated-root")
-        }
-        OvenTestPlanSelection::ToolchainLoaf(native) => {
-            trusted_artifact_plan_for_source_evidence(&native.artifact_plan, &native.artifacts, "generated-root")
-        }
-    };
+    let full_artifact_plan = plan_selection.artifact_plan();
+    let artifact_plan = plan_selection.source_artifact_plan("generated-root");
     let artifact_plan = match artifact_plan {
         Ok(plan) => plan,
         Err(error) => return failure(error.to_string()),
@@ -2617,49 +2602,23 @@ fn run_file_tests_batch_oven(
             &artifact_plan,
         );
 
-    let registry_authority = match &plan_selection {
-        OvenTestPlanSelection::Stored(selected) => selected
-            .artifacts
-            .registry_leaf_authority(&selected.artifact_root, &selected.artifact_plan),
-        OvenTestPlanSelection::ToolchainLoaf(native) => native
-            .artifacts
-            .registry_leaf_authority(&native.artifact_root, &native.artifact_plan),
-    };
+    let registry_authority = plan_selection.registry_leaf_authority();
     let selected_path_authority =
         crate::cli::commands::build::compiler_selected_path_authority(full_artifact_plan, Some(&provider_plan));
 
     if crate::cli::commands::build::has_caller_owned_project_libraries(&provider_plan) {
-        let re_materialized = match &plan_selection {
-            OvenTestPlanSelection::Stored(selected) => {
-                match crate::cli::commands::build::rematerialize_caller_owned_libraries(
-                    &provider_plan,
-                    "debug",
-                    &selected.artifacts,
-                    &selected.artifact_root,
-                    &selected.artifact_plan,
-                    &rustc,
-                    &generated_root,
-                    registry_authority.as_ref(),
-                ) {
-                    Ok(libraries) => libraries,
-                    Err(error) => return failure(error.message),
-                }
-            }
-            OvenTestPlanSelection::ToolchainLoaf(native) => {
-                match crate::cli::commands::build::rematerialize_caller_owned_libraries(
-                    &provider_plan,
-                    "debug",
-                    &native.artifacts,
-                    &native.artifact_root,
-                    &native.artifact_plan,
-                    &rustc,
-                    &generated_root,
-                    registry_authority.as_ref(),
-                ) {
-                    Ok(libraries) => libraries,
-                    Err(error) => return failure(error.message),
-                }
-            }
+        let re_materialized = match crate::cli::commands::build::rematerialize_caller_owned_libraries(
+            &provider_plan,
+            "debug",
+            plan_selection.artifacts(),
+            plan_selection.output_guard_root(),
+            plan_selection.artifact_plan(),
+            &rustc,
+            &generated_root,
+            registry_authority.as_ref(),
+        ) {
+            Ok(libraries) => libraries,
+            Err(error) => return failure(error.message),
         };
         if let Err(error) = crate::cli::commands::build::replace_caller_owned_package_libraries(
             &mut caller_owned_libraries,
@@ -2694,62 +2653,32 @@ fn run_file_tests_batch_oven(
         return failure("Oven Alpha resolved duplicate caller-owned Rust library crate names".to_string());
     }
     let bake_start = Instant::now();
-    let bake = match &plan_selection {
-        OvenTestPlanSelection::Stored(selected) => {
-            let mut artifact_plan = match trusted_artifact_plan_for_source_evidence(
-                &selected.artifact_plan,
-                &selected.artifacts,
-                "generated-root",
-            ) {
-                Ok(plan) => plan,
-                Err(error) => return failure(error.to_string()),
-            };
-            if let Err(error) = attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries) {
-                return failure(format!("Oven direct-rustc test compilation failed: {error}"));
-            }
-            bake_trusted_direct_rustc_test(&OvenTrustedDirectRustcTargetRequest {
-                receipt: &receipt,
-                artifacts: &selected.artifacts,
-                artifact_root: &selected.artifact_root,
-                artifact_plan: Some(&artifact_plan),
-                rustc: &rustc,
-                source: &generator.crate_root_path(),
-                output: &generated_root.join("oven/debug").join(&native_output_name),
-                crate_name: &runner_crate_name,
-                edition: "2024",
-                source_evidence_key: "generated-root",
-                features: &receipt.intent.features,
-                prefer_dynamic: false,
-            })
-        }
-        OvenTestPlanSelection::ToolchainLoaf(native) => {
-            let mut artifact_plan = match trusted_artifact_plan_for_source_evidence(
-                &native.artifact_plan,
-                &native.artifacts,
-                "generated-root",
-            ) {
-                Ok(plan) => plan,
-                Err(error) => return failure(error.to_string()),
-            };
-            if let Err(error) = attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries) {
-                return failure(format!("Oven direct-rustc test compilation failed: {error}"));
-            }
-            bake_trusted_direct_rustc_test(&OvenTrustedDirectRustcTargetRequest {
-                receipt: &receipt,
-                artifacts: &native.artifacts,
-                artifact_root: &native.artifact_root,
-                artifact_plan: Some(&artifact_plan),
-                rustc: &rustc,
-                source: &generator.crate_root_path(),
-                output: &generated_root.join("oven/debug").join(&native_output_name),
-                crate_name: &runner_crate_name,
-                edition: "2024",
-                source_evidence_key: "generated-root",
-                features: &receipt.intent.features,
-                prefer_dynamic: false,
-            })
-        }
+    let mut artifact_plan = match plan_selection.source_artifact_plan("generated-root") {
+        Ok(plan) => plan,
+        Err(error) => return failure(error.to_string()),
     };
+    artifact_plan.compile_environment =
+        match direct_rustc_compile_environment(&generated_root, &generator.crate_root_path()) {
+            Ok(environment) => environment,
+            Err(error) => return failure(error.to_string()),
+        };
+    if let Err(error) = attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries) {
+        return failure(format!("Oven direct-rustc test compilation failed: {error}"));
+    }
+    let bake = bake_trusted_direct_rustc_test(&OvenTrustedDirectRustcTargetRequest {
+        receipt: &receipt,
+        artifacts: plan_selection.artifacts(),
+        artifact_root: plan_selection.output_guard_root(),
+        artifact_plan: Some(&artifact_plan),
+        rustc: &rustc,
+        source: &generator.crate_root_path(),
+        output: &generated_root.join("oven/debug").join(&native_output_name),
+        crate_name: &runner_crate_name,
+        edition: "2024",
+        source_evidence_key: "generated-root",
+        features: &receipt.intent.features,
+        prefer_dynamic: false,
+    });
     let bake = match bake {
         Ok(bake) => bake,
         Err(error) => return failure(format!("Oven direct-rustc test compilation failed: {error}")),

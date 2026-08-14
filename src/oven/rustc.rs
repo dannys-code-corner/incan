@@ -29,6 +29,13 @@ use crate::oven::store::{OvenArtifactKind, OvenStore, OvenStoreError, OvenStoreE
 pub const OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION: u32 = 9;
 /// Fixed supporting-artifact path for the publisher lock that owns sealed registry sources.
 pub const OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH: &str = "registry-sources/Cargo.lock";
+/// Prefix reserved for compiler-owned runtime crates supplied by the release-version standard-library Loaf family.
+///
+/// Cargo gives compiler workspace dependencies generated-package-specific artifact names. Project-extension
+/// composition replaces every `incan_*` runtime artifact with its selected base counterpart after validating the
+/// common target, toolchain, profile, and complete manifests; user and registry dependencies remain byte-exact
+/// artifacts.
+pub const OVEN_COMPILER_RUNTIME_CRATE_PREFIX: &str = "incan_";
 /// Schema version for caller-owned native-output reuse evidence.
 const OVEN_DIRECT_RUSTC_OUTPUT_RECEIPT_SCHEMA_VERSION: u32 = 2;
 
@@ -139,6 +146,19 @@ pub struct OvenRustcArtifactPlan {
     /// A compiler-suite receipt covers its workspace source closure, but output reuse also records these exact
     /// library bytes so a changed intermediate cannot be mistaken for the previously linked root.
     pub(crate) caller_owned_library_digests: BTreeMap<String, String>,
+}
+
+/// A verified partition of one complete direct-Rustc closure across a selected base Loaf and a project extension.
+///
+/// The partition is derived from exact relative paths and digests, never crate names.  This makes an extension a
+/// genuine delta: a same-named artifact whose bytes differ is not silently borrowed from a base compiled with a
+/// different feature graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OvenRustcArtifactPartition {
+    /// Artifacts supplied by the selected immutable base Loaf.
+    pub(crate) base_paths: BTreeSet<String>,
+    /// Artifacts that must be retained in the receipt-bound extension Loaf.
+    pub(crate) extension_paths: BTreeSet<String>,
 }
 
 /// Materialized compiler-owned cross-target closure available only to vocabulary extraction.
@@ -275,9 +295,37 @@ impl OvenRegistryLeafAuthority {
         }
     }
 
+    /// Construct authority for a complete plan materialized across independently leased immutable roots.
+    ///
+    /// The caller must first validate the unfragmented manifest and materialize every declared artifact through
+    /// [`OvenRustcArtifactManifest::materialize_trusted_store_composed`]. A registry leaf's source tree may be
+    /// byte-identical to the base while its target rlib belongs to the extension, so fragment-local catalogs are
+    /// intentionally insufficient here. Each entry still names only the root containing its verified rlib; all
+    /// transitive metadata directories come from the already verified composed plan.
+    #[must_use]
+    pub(crate) fn from_composed_plan(
+        entries: Vec<(PathBuf, OvenRustcRegistryLeaf)>,
+        artifact_plan: &OvenRustcArtifactPlan,
+    ) -> Option<Self> {
+        (!entries.is_empty()).then(|| Self {
+            entries: entries
+                .into_iter()
+                .map(|(artifact_root, leaf)| OvenRegistryLeafAuthorityEntry {
+                    artifact_root,
+                    leaf,
+                    dependency_search_paths: artifact_plan.dependency_search_paths.clone(),
+                })
+                .collect(),
+        })
+    }
+
     #[cfg(test)]
     #[must_use]
-    /// Join test catalogs without granting production consumers cross-domain registry selection.
+    /// Join catalogs from fragments already proven to form one receipt-bound composed direct-Rustc closure.
+    ///
+    /// Callers must not use this as a general registry resolver.  Each authority retains the root and verified
+    /// metadata search paths that published its leaves; composition is safe only after the outer artifact manifest
+    /// has required every fragment and rejected duplicate/substituted artifacts.
     pub(crate) fn aggregate(authorities: impl IntoIterator<Item = Self>) -> Self {
         Self {
             entries: authorities
@@ -1775,11 +1823,317 @@ pub enum OvenRustcError {
     PlanSelection { receipt_identity: String, message: String },
 }
 
+/// Return the compiler-owned crate name encoded by one Cargo artifact filename.
+///
+/// Artifact manifests retain relative paths and digests, not package metadata. Compiler workspace crates reserve the
+/// `incan_` crate namespace, so the filename is the narrow stable evidence that a supporting artifact belongs to the
+/// release-version runtime rather than to a registry or caller dependency.
+fn compiler_runtime_name_from_artifact_path(relative_path: &str) -> Option<&str> {
+    let filename = Path::new(relative_path).file_name()?.to_str()?;
+    let crate_and_digest = filename.strip_prefix("lib")?.split_once('-')?.0;
+    crate_and_digest
+        .strip_prefix(OVEN_COMPILER_RUNTIME_CRATE_PREFIX)
+        .map(|_| crate_and_digest)
+}
+
+/// Index every compiler-owned artifact declared by an immutable standard-library Loaf.
+///
+/// A compiler runtime artifact must be unique within one target/profile Loaf. Ambiguous artifact names would make a
+/// project extension choose an arbitrary build-script or target output, so selection fails before publication or
+/// normal execution.
+fn compiler_runtime_artifacts_by_name(
+    base: &OvenRustcArtifactManifest,
+) -> Result<BTreeMap<String, OvenRustcSupportingArtifact>, OvenRustcError> {
+    let mut artifacts = BTreeMap::new();
+    for artifact in base.composition_artifacts()? {
+        let Some(crate_name) = compiler_runtime_name_from_artifact_path(&artifact.relative_path) else {
+            continue;
+        };
+        if artifacts.insert(crate_name.to_string(), artifact.clone()).is_some() {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension base",
+                message: format!("declares multiple compiler runtime artifacts for `{crate_name}`"),
+            });
+        }
+    }
+    Ok(artifacts)
+}
+
+/// Replace one compiler-owned direct external with the selected base artifact.
+fn replace_compiler_runtime_extern(
+    artifact: &mut OvenRustcArtifactExtern,
+    base_artifacts: &BTreeMap<String, OvenRustcSupportingArtifact>,
+) -> Result<(), OvenRustcError> {
+    if !artifact.crate_name.starts_with(OVEN_COMPILER_RUNTIME_CRATE_PREFIX) {
+        return Ok(());
+    }
+    let base_artifact = base_artifacts
+        .get(&artifact.crate_name)
+        .ok_or_else(|| OvenRustcError::InvalidInput {
+            field: "project extension base",
+            message: format!(
+                "does not declare compiler runtime artifact `{}` required by the project plan",
+                artifact.crate_name
+            ),
+        })?;
+    artifact.relative_path = base_artifact.relative_path.clone();
+    artifact.digest = base_artifact.digest.clone();
+    Ok(())
+}
+
+/// Replace one compiler-owned supporting artifact with the selected base artifact.
+fn replace_compiler_runtime_supporting_artifact(
+    artifact: &mut OvenRustcSupportingArtifact,
+    base_artifacts: &BTreeMap<String, OvenRustcSupportingArtifact>,
+) -> Result<(), OvenRustcError> {
+    let Some(crate_name) = compiler_runtime_name_from_artifact_path(&artifact.relative_path) else {
+        return Ok(());
+    };
+    let base_artifact = base_artifacts
+        .get(crate_name)
+        .ok_or_else(|| OvenRustcError::InvalidInput {
+            field: "project extension base",
+            message: format!("does not declare compiler runtime artifact `{crate_name}` required by the project plan"),
+        })?;
+    *artifact = base_artifact.clone();
+    Ok(())
+}
+
 impl OvenRustcArtifactManifest {
     /// Return the complete artifact file set declared by this immutable plan without reading artifact bytes.
     pub(crate) fn declared_artifact_paths(&self) -> Result<BTreeSet<String>, OvenRustcError> {
         self.validate_shape(&self.intent)?;
         Ok(expected_artifacts(self)?.into_keys().collect())
+    }
+
+    /// Replace generated-project compiler runtime artifacts with exact artifacts from the selected base.
+    ///
+    /// Cargo derives a different filename and digest for a path dependency when the generated package identity
+    /// changes. Those artifacts are one compiler runtime, not a project-local copy: the selected release Loaf owns
+    /// its target/toolchain/profile-compatible closure. This method substitutes every compiler-owned `incan_*`
+    /// input, then retains the rest of the base closure as support. The latter is required because runtime metadata
+    /// may name host-side proc macros or transitive rlibs that direct Rustc must find under the base's verified
+    /// search paths. User and registry artifacts remain byte-exact project-extension inputs and are still
+    /// partitioned normally afterwards.
+    pub(crate) fn with_compiler_runtime_family_from_base(&self, base: &Self) -> Result<Self, OvenRustcError> {
+        self.validate_shape(&self.intent)?;
+        base.validate_shape(&self.intent)?;
+        let project_runtime_indexes = self
+            .externs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, artifact)| (artifact.crate_name == "incan_stdlib").then_some(index))
+            .collect::<Vec<_>>();
+        let [project_runtime_index] = project_runtime_indexes.as_slice() else {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension runtime",
+                message: "must declare exactly one `incan_stdlib` root external".to_string(),
+            });
+        };
+        let base_runtimes = base
+            .externs
+            .iter()
+            .filter(|artifact| artifact.crate_name == "incan_stdlib")
+            .collect::<Vec<_>>();
+        let [base_runtime] = base_runtimes.as_slice() else {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension base",
+                message: "must declare exactly one `incan_stdlib` root external".to_string(),
+            });
+        };
+        let mut composed = self.clone();
+        composed.externs[*project_runtime_index] = (*base_runtime).clone();
+        let base_compiler_artifacts = compiler_runtime_artifacts_by_name(base)?;
+        for artifact in &mut composed.externs {
+            replace_compiler_runtime_extern(artifact, &base_compiler_artifacts)?;
+        }
+        for artifact in &mut composed.supporting_artifacts {
+            replace_compiler_runtime_supporting_artifact(artifact, &base_compiler_artifacts)?;
+        }
+        for auxiliary in &mut composed.vocab_auxiliary_targets {
+            for artifact in &mut auxiliary.externs {
+                replace_compiler_runtime_extern(artifact, &base_compiler_artifacts)?;
+            }
+        }
+        let mut declared = expected_artifacts(&composed)?;
+        for artifact in base.composition_artifacts()? {
+            if artifact.relative_path == base_runtime.relative_path {
+                continue;
+            }
+            match declared.get(&artifact.relative_path) {
+                Some(digest) if digest == &artifact.digest => {}
+                Some(digest) => {
+                    return Err(OvenRustcError::InvalidInput {
+                        field: "project extension base",
+                        message: format!(
+                            "base artifact `{}` conflicts with project artifact digest {digest}; base and extension cannot share one relative path",
+                            artifact.relative_path
+                        ),
+                    });
+                }
+                None => {
+                    declared.insert(artifact.relative_path.clone(), artifact.digest.clone());
+                    composed.supporting_artifacts.push(artifact);
+                }
+            }
+        }
+        composed.supporting_artifacts.sort_by(|left, right| {
+            left.relative_path
+                .cmp(&right.relative_path)
+                .then_with(|| left.digest.cmp(&right.digest))
+        });
+        composed.validate_shape(&self.intent)?;
+        Ok(composed)
+    }
+
+    /// Partition this complete publisher closure against one already selected base Loaf.
+    ///
+    /// Only byte-identical declared artifacts can be supplied by the base.  A path collision with a different
+    /// digest is a feature/toolchain incompatibility, not an opportunity to select whichever copy happens to be
+    /// present first.  The caller retains the two resulting fragments under independent active leases and composes
+    /// them through [`Self::materialize_trusted_store_composed`].
+    pub(crate) fn partition_against_base(&self, base: &Self) -> Result<OvenRustcArtifactPartition, OvenRustcError> {
+        self.validate_shape(&self.intent)?;
+        base.validate_shape(&self.intent)?;
+        let complete = expected_artifacts(self)?;
+        let base_artifacts = expected_artifacts(base)?;
+        let mut base_paths = BTreeSet::new();
+        let mut extension_paths = BTreeSet::new();
+        for (path, digest) in complete {
+            match base_artifacts.get(&path) {
+                Some(base_digest) if base_digest == &digest => {
+                    base_paths.insert(path);
+                }
+                Some(base_digest) => {
+                    return Err(OvenRustcError::InvalidInput {
+                        field: "project extension base",
+                        message: format!(
+                            "artifact `{path}` conflicts with selected base Loaf digest {base_digest}; project extension requires {digest}"
+                        ),
+                    });
+                }
+                None => {
+                    extension_paths.insert(path);
+                }
+            }
+        }
+        Ok(OvenRustcArtifactPartition {
+            base_paths,
+            extension_paths,
+        })
+    }
+
+    /// Retain the one verified fragment of this complete closure whose artifacts are named by `paths`.
+    ///
+    /// The result deliberately omits source-evidence routing: only the complete outer manifest owns the execution
+    /// contract.  A fragment is an artifact-root declaration for the compositor, not a second executable plan.
+    pub(crate) fn artifact_fragment(&self, paths: &BTreeSet<String>) -> Result<Self, OvenRustcError> {
+        self.validate_shape(&self.intent)?;
+        let declared = expected_artifacts(self)?;
+        if let Some(unknown) = paths.iter().find(|path| !declared.contains_key(*path)) {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension fragment",
+                message: format!("names artifact `{unknown}` absent from the complete plan"),
+            });
+        }
+        let includes = |relative_path: &str| paths.contains(relative_path);
+        let retains_search_path = |search_path: &str| {
+            paths
+                .iter()
+                .any(|relative_path| artifact_is_below_search_path(relative_path, search_path))
+        };
+        let mut vocab_auxiliary_targets = Vec::new();
+        for auxiliary in &self.vocab_auxiliary_targets {
+            let externs = auxiliary
+                .externs
+                .iter()
+                .filter(|artifact| includes(&artifact.relative_path))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !externs.is_empty() {
+                vocab_auxiliary_targets.push(OvenRustcAuxiliaryTarget {
+                    target: auxiliary.target.clone(),
+                    dependency_search_paths: auxiliary
+                        .dependency_search_paths
+                        .iter()
+                        .filter(|path| retains_search_path(path))
+                        .cloned()
+                        .collect(),
+                    externs,
+                });
+            }
+        }
+        Ok(Self {
+            schema_version: self.schema_version,
+            intent: self.intent.clone(),
+            dependency_search_paths: self
+                .dependency_search_paths
+                .iter()
+                .filter(|path| retains_search_path(path))
+                .cloned()
+                .collect(),
+            native_search_paths: self
+                .native_search_paths
+                .iter()
+                .filter(|path| retains_search_path(path))
+                .cloned()
+                .collect(),
+            externs: self
+                .externs
+                .iter()
+                .filter(|artifact| includes(&artifact.relative_path))
+                .cloned()
+                .collect(),
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
+            compile_environment: self.compile_environment.clone(),
+            vocab_auxiliary_targets,
+            supporting_artifacts: self
+                .supporting_artifacts
+                .iter()
+                .filter(|artifact| includes(&artifact.relative_path))
+                .cloned()
+                .collect(),
+        })
+    }
+
+    /// Return every declared artifact as a root fragment record for trusted multi-root composition.
+    ///
+    /// `externs` and vocabulary auxiliary externs are execution roles, not separate files.  The compositor needs
+    /// every physical path exactly once before it can later map the complete outer manifest's `--extern` list.
+    pub(crate) fn composition_artifacts(&self) -> Result<Vec<OvenRustcSupportingArtifact>, OvenRustcError> {
+        self.validate_shape(&self.intent)?;
+        let mut artifacts = self
+            .externs
+            .iter()
+            .map(|artifact| OvenRustcSupportingArtifact {
+                relative_path: artifact.relative_path.clone(),
+                digest: artifact.digest.clone(),
+            })
+            .chain(self.supporting_artifacts.iter().cloned())
+            .chain(self.vocab_auxiliary_targets.iter().flat_map(|auxiliary| {
+                auxiliary.externs.iter().map(|artifact| OvenRustcSupportingArtifact {
+                    relative_path: artifact.relative_path.clone(),
+                    digest: artifact.digest.clone(),
+                })
+            }))
+            .collect::<Vec<_>>();
+        artifacts.sort_by(|left, right| {
+            left.relative_path
+                .cmp(&right.relative_path)
+                .then_with(|| left.digest.cmp(&right.digest))
+        });
+        if artifacts
+            .windows(2)
+            .any(|pair| pair[0].relative_path == pair[1].relative_path)
+        {
+            return Err(OvenRustcError::InvalidInput {
+                field: "artifact manifest",
+                message: "declares one composition artifact path more than once".to_string(),
+            });
+        }
+        Ok(artifacts)
     }
 
     /// Verify and materialize exact compiler inputs without scanning Cargo output or resolving dependencies.
@@ -1874,19 +2228,36 @@ impl OvenRustcArtifactManifest {
         self.validate_shape(expected_intent)?;
         let root = canonical_directory(artifact_root, "artifact root")?;
         let expected = expected_artifacts(self)?;
-        let dependency_search_paths =
-            trusted_materialize_search_paths(&root, &self.dependency_search_paths, "dependency search", &expected)?;
-        let native_search_paths =
-            trusted_materialize_search_paths(&root, &self.native_search_paths, "native search", &expected)?;
+        let mut trusted_parents = BTreeMap::new();
+        let dependency_search_paths = trusted_materialize_search_paths(
+            &root,
+            &self.dependency_search_paths,
+            "dependency search",
+            &expected,
+            &mut trusted_parents,
+        )?;
+        let native_search_paths = trusted_materialize_search_paths(
+            &root,
+            &self.native_search_paths,
+            "native search",
+            &expected,
+            &mut trusted_parents,
+        )?;
         for auxiliary in &self.vocab_auxiliary_targets {
             let _ = trusted_materialize_search_paths(
                 &root,
                 &auxiliary.dependency_search_paths,
                 "vocab auxiliary dependency search",
                 &expected,
+                &mut trusted_parents,
             )?;
             for artifact in &auxiliary.externs {
-                let _ = trusted_file(&root, &artifact.relative_path, "vocab auxiliary extern")?;
+                let _ = trusted_file(
+                    &root,
+                    &artifact.relative_path,
+                    "vocab auxiliary extern",
+                    &mut trusted_parents,
+                )?;
             }
         }
         let externs = self
@@ -1895,12 +2266,12 @@ impl OvenRustcArtifactManifest {
             .map(|artifact| {
                 Ok((
                     artifact.crate_name.clone(),
-                    trusted_file(&root, &artifact.relative_path, "extern")?,
+                    trusted_file(&root, &artifact.relative_path, "extern", &mut trusted_parents)?,
                 ))
             })
             .collect::<Result<Vec<_>, OvenRustcError>>()?;
         for artifact in &self.supporting_artifacts {
-            trusted_file(&root, &artifact.relative_path, "supporting")?;
+            trusted_file(&root, &artifact.relative_path, "supporting", &mut trusted_parents)?;
         }
         Ok(OvenRustcArtifactPlan {
             dependency_search_paths,
@@ -1923,6 +2294,7 @@ impl OvenRustcArtifactManifest {
     ) -> Result<Option<OvenRustcAuxiliaryTargetPlan>, OvenRustcError> {
         let root = canonical_directory(artifact_root, "artifact root")?;
         let expected = expected_artifacts(self)?;
+        let mut trusted_parents = BTreeMap::new();
         let Some(auxiliary) = self
             .vocab_auxiliary_targets
             .iter()
@@ -1935,6 +2307,7 @@ impl OvenRustcArtifactManifest {
             &auxiliary.dependency_search_paths,
             "vocab auxiliary dependency search",
             &expected,
+            &mut trusted_parents,
         )?;
         let externs = auxiliary
             .externs
@@ -1942,7 +2315,12 @@ impl OvenRustcArtifactManifest {
             .map(|artifact| {
                 Ok((
                     artifact.crate_name.clone(),
-                    trusted_file(&root, &artifact.relative_path, "vocab auxiliary extern")?,
+                    trusted_file(
+                        &root,
+                        &artifact.relative_path,
+                        "vocab auxiliary extern",
+                        &mut trusted_parents,
+                    )?,
                 ))
             })
             .collect::<Result<Vec<_>, OvenRustcError>>()?;
@@ -1975,6 +2353,7 @@ impl OvenRustcArtifactManifest {
         let mut native_search_paths = Vec::new();
         for fragment in roots {
             let root = canonical_directory(fragment.artifact_root, "composed artifact root")?;
+            let mut trusted_parents = BTreeMap::new();
             let mut fragment_expected = BTreeMap::new();
             for artifact in fragment.supporting_artifacts {
                 let relative = normalized_relative_path(&artifact.relative_path, "composed supporting artifact")?;
@@ -1988,7 +2367,7 @@ impl OvenRustcArtifactManifest {
                         message: format!("declare mismatched digest for `{relative}`"),
                     });
                 }
-                let path = trusted_file(&root, &relative, "composed supporting artifact")?;
+                let path = trusted_file(&root, &relative, "composed supporting artifact", &mut trusted_parents)?;
                 if locations.insert(relative.clone(), path).is_some() {
                     return Err(OvenRustcError::InvalidInput {
                         field: "composed artifact roots",
@@ -2013,12 +2392,14 @@ impl OvenRustcArtifactManifest {
                 fragment.dependency_search_paths,
                 "composed dependency search",
                 &fragment_expected,
+                &mut trusted_parents,
             )?);
             native_search_paths.extend(trusted_materialize_search_paths(
                 &root,
                 fragment.native_search_paths,
                 "composed native search",
                 &fragment_expected,
+                &mut trusted_parents,
             )?);
         }
         let missing = expected
@@ -3900,12 +4281,18 @@ fn materialize_search_paths(
     Ok(materialized)
 }
 
-/// Verify the safe directory/file shape of a store-owned closure without repeating publisher-time SHA-256 work.
+/// Verify a selected store-owned search directory without repeating publisher-time closure enumeration.
+///
+/// Publisher-time materialization verifies every child and its digest. A normal consumer proves the selected
+/// directory itself is non-symlinked and contains at least one declared artifact, then separately validates every
+/// manifest-declared file it can hand to Rustc. Re-enumerating every unrelated child here would make prepared
+/// direct-Rustc selection behave like a cold whole-closure audit.
 fn trusted_materialize_search_paths(
     root: &Path,
     paths: &[String],
     kind: &'static str,
     expected: &BTreeMap<String, String>,
+    trusted_parents: &mut BTreeMap<PathBuf, PathBuf>,
 ) -> Result<Vec<PathBuf>, OvenRustcError> {
     let mut materialized = Vec::new();
     let mut seen = BTreeSet::new();
@@ -3917,7 +4304,7 @@ fn trusted_materialize_search_paths(
                 message: format!("declares duplicate {kind} path `{relative}`"),
             });
         }
-        let path = safe_path(root, &normalized, kind)?;
+        let path = trusted_safe_path(root, &normalized, kind, trusted_parents)?;
         let metadata = fs::symlink_metadata(&path).map_err(|source| OvenRustcError::Io {
             path: path.clone(),
             source,
@@ -3929,42 +4316,10 @@ fn trusted_materialize_search_paths(
                 message: "must be a non-symlink directory".to_string(),
             });
         }
-        let mut files_in_directory = 0_u64;
-        for child in fs::read_dir(&path).map_err(|source| OvenRustcError::Io {
-            path: path.clone(),
-            source,
-        })? {
-            let child = child.map_err(|source| OvenRustcError::Io {
-                path: path.clone(),
-                source,
-            })?;
-            let child_path = child.path();
-            let child_metadata = fs::symlink_metadata(&child_path).map_err(|source| OvenRustcError::Io {
-                path: child_path.clone(),
-                source,
-            })?;
-            if !child_metadata.is_file() || child_metadata.file_type().is_symlink() {
-                return Err(OvenRustcError::InvalidArtifactPath {
-                    kind,
-                    path: child_path,
-                    message: "search directories may contain only regular files".to_string(),
-                });
-            }
-            let relative_child = child_path
-                .strip_prefix(root)
-                .map_err(|_| OvenRustcError::InvalidArtifactPath {
-                    kind,
-                    path: child_path.clone(),
-                    message: "resolved path escaped artifact root".to_string(),
-                })?
-                .to_string_lossy()
-                .replace('\\', "/");
-            if !expected.contains_key(&relative_child) {
-                return Err(OvenRustcError::UnrecordedSearchArtifact { path: child_path });
-            }
-            files_in_directory = files_in_directory.saturating_add(1);
-        }
-        if files_in_directory == 0 {
+        if !expected
+            .keys()
+            .any(|artifact| Path::new(artifact).starts_with(Path::new(&normalized)))
+        {
             return Err(OvenRustcError::InvalidArtifactPath {
                 kind,
                 path,
@@ -4011,9 +4366,14 @@ fn verified_file(
 }
 
 /// Return a safe regular store artifact without repeating its publisher-verified content digest.
-fn trusted_file(root: &Path, relative: &str, kind: &'static str) -> Result<PathBuf, OvenRustcError> {
+fn trusted_file(
+    root: &Path,
+    relative: &str,
+    kind: &'static str,
+    trusted_parents: &mut BTreeMap<PathBuf, PathBuf>,
+) -> Result<PathBuf, OvenRustcError> {
     let relative = normalized_relative_path(relative, kind)?;
-    let path = safe_path(root, &relative, kind)?;
+    let path = trusted_safe_path(root, &relative, kind, trusted_parents)?;
     let metadata = fs::symlink_metadata(&path).map_err(|source| OvenRustcError::Io {
         path: path.clone(),
         source,
@@ -4023,6 +4383,44 @@ fn trusted_file(root: &Path, relative: &str, kind: &'static str) -> Result<PathB
             kind,
             path,
             message: "must be a non-symlink regular file".to_string(),
+        });
+    }
+    Ok(path)
+}
+
+/// Resolve a selected immutable path while canonicalizing each parent directory at most once per plan.
+///
+/// The generation lock and read-only publisher-owned root make every checked parent stable for the current
+/// selection. We still verify that each distinct parent remains beneath the canonical artifact root and validate the
+/// requested child as a regular non-symlink file in [`trusted_file`]. This avoids repeating the same filesystem walk
+/// for every extern stored below one `deps` directory.
+fn trusted_safe_path(
+    root: &Path,
+    relative: &str,
+    kind: &'static str,
+    trusted_parents: &mut BTreeMap<PathBuf, PathBuf>,
+) -> Result<PathBuf, OvenRustcError> {
+    let path = root.join(relative);
+    let parent = path.parent().ok_or_else(|| OvenRustcError::InvalidArtifactPath {
+        kind,
+        path: path.clone(),
+        message: "has no parent directory".to_string(),
+    })?;
+    let canonical_parent = if let Some(parent) = trusted_parents.get(parent) {
+        parent.clone()
+    } else {
+        let canonical_parent = parent.canonicalize().map_err(|source| OvenRustcError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        trusted_parents.insert(parent.to_path_buf(), canonical_parent.clone());
+        canonical_parent
+    };
+    if !canonical_parent.starts_with(root) {
+        return Err(OvenRustcError::InvalidArtifactPath {
+            kind,
+            path,
+            message: "escapes immutable artifact root".to_string(),
         });
     }
     Ok(path)
@@ -4355,7 +4753,7 @@ struct RustcJsonSpan {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -5144,6 +5542,136 @@ mod tests {
         assert_eq!(plan.dependency_search_paths.len(), 2);
         assert!(plan.dependency_search_paths.iter().any(|path| path == &first_deps));
         assert!(plan.dependency_search_paths.iter().any(|path| path == &second_deps));
+
+        let base_paths = BTreeSet::from(["deps/libfirst.rlib".to_string()]);
+        let base_manifest = manifest.artifact_fragment(&base_paths)?;
+        let partition = manifest.partition_against_base(&base_manifest)?;
+        assert_eq!(partition.base_paths, base_paths);
+        assert_eq!(
+            partition.extension_paths,
+            BTreeSet::from(["deps/libsecond.rlib".to_string()])
+        );
+        let extension_manifest = manifest.artifact_fragment(&partition.extension_paths)?;
+        assert_eq!(extension_manifest.supporting_artifacts, second_fragment);
+
+        let mut conflicting_base = base_manifest.clone();
+        conflicting_base.supporting_artifacts[0].digest = "sha256:other".to_string();
+        let conflict = manifest.partition_against_base(&conflicting_base);
+        assert!(matches!(conflict, Err(OvenRustcError::InvalidInput { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn project_extension_replaces_the_complete_compiler_runtime_family_with_base_artifacts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let receipt = intent(root.path())?;
+        let project = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent.clone(),
+            dependency_search_paths: vec!["deps".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![
+                OvenRustcArtifactExtern {
+                    crate_name: "incan_stdlib".to_string(),
+                    relative_path: "deps/libincan_stdlib-project.rlib".to_string(),
+                    digest: "sha256:project-runtime".to_string(),
+                },
+                OvenRustcArtifactExtern {
+                    crate_name: "project_dependency".to_string(),
+                    relative_path: "deps/libproject_dependency.rlib".to_string(),
+                    digest: "sha256:project-dependency".to_string(),
+                },
+            ],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_core-project.rlib".to_string(),
+                    digest: "sha256:project-core".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_derive-project.dylib".to_string(),
+                    digest: "sha256:project-derive".to_string(),
+                },
+            ],
+        };
+        let base = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent.clone(),
+            dependency_search_paths: vec!["deps".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![OvenRustcArtifactExtern {
+                crate_name: "incan_stdlib".to_string(),
+                relative_path: "deps/libincan_stdlib-release.rlib".to_string(),
+                digest: "sha256:release-runtime".to_string(),
+            }],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_core-release.rlib".to_string(),
+                    digest: "sha256:release-core".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_derive-release.dylib".to_string(),
+                    digest: "sha256:release-derive".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libbase_runtime_dependency.rlib".to_string(),
+                    digest: "sha256:base-runtime-dependency".to_string(),
+                },
+            ],
+        };
+
+        let composed = project.with_compiler_runtime_family_from_base(&base)?;
+        assert_eq!(composed.externs[0].relative_path, "deps/libincan_stdlib-release.rlib");
+        assert_eq!(composed.externs[1], project.externs[1]);
+        assert_eq!(
+            composed.supporting_artifacts,
+            vec![
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libbase_runtime_dependency.rlib".to_string(),
+                    digest: "sha256:base-runtime-dependency".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_core-release.rlib".to_string(),
+                    digest: "sha256:release-core".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_derive-release.dylib".to_string(),
+                    digest: "sha256:release-derive".to_string(),
+                },
+            ]
+        );
+        let partition = composed.partition_against_base(&base)?;
+        assert_eq!(
+            partition.base_paths,
+            BTreeSet::from([
+                "deps/libbase_runtime_dependency.rlib".to_string(),
+                "deps/libincan_core-release.rlib".to_string(),
+                "deps/libincan_derive-release.dylib".to_string(),
+                "deps/libincan_stdlib-release.rlib".to_string(),
+            ])
+        );
+        assert_eq!(
+            partition.extension_paths,
+            BTreeSet::from(["deps/libproject_dependency.rlib".to_string()])
+        );
+        assert!(partition.extension_paths.iter().all(|path| !path.contains("libincan_")));
+
+        let mut incomplete_base = base.clone();
+        incomplete_base
+            .supporting_artifacts
+            .retain(|artifact| !artifact.relative_path.contains("libincan_core-"));
+        let incomplete = project.with_compiler_runtime_family_from_base(&incomplete_base);
+        assert!(matches!(incomplete, Err(OvenRustcError::InvalidInput { .. })));
         Ok(())
     }
 
@@ -5169,6 +5697,43 @@ mod tests {
 
         let result = manifest.materialize(root.path(), &receipt.intent);
         assert!(matches!(result, Err(OvenRustcError::InvalidArtifactPath { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_artifact_plan_uses_declared_inputs_without_rescanning_search_children()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let dependencies = root.path().join("deps");
+        fs::create_dir(&dependencies)?;
+        let declared = dependencies.join("libdeclared.rlib");
+        let unrelated = dependencies.join("unrelated-source-file.rs");
+        fs::write(&declared, b"declared artifact")?;
+        fs::write(&unrelated, b"not a direct rustc input")?;
+        let receipt = intent(root.path())?;
+        let manifest = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent.clone(),
+            dependency_search_paths: vec!["deps".to_string()],
+            native_search_paths: Vec::new(),
+            externs: Vec::new(),
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![OvenRustcSupportingArtifact {
+                relative_path: "deps/libdeclared.rlib".to_string(),
+                digest: digest_bytes(b"declared artifact"),
+            }],
+        };
+
+        let trusted = manifest.materialize_trusted_store(root.path(), &receipt.intent)?;
+        assert_eq!(trusted.dependency_search_paths, vec![fs::canonicalize(&dependencies)?]);
+        assert!(matches!(
+            manifest.materialize(root.path(), &receipt.intent),
+            Err(OvenRustcError::UnrecordedSearchArtifact { .. })
+        ));
         Ok(())
     }
 

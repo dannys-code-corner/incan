@@ -1,6 +1,8 @@
 use crate::cache_resolve::{dependency_manifest_dir_from_lock_with_search_roots, dependency_manifest_dir_from_manifest};
 use super::*;
-use incan_core::interop::{RustItemKind, RustTraitAssoc, RustTypeInfo, RustTypeShape, RustVisibility};
+use incan_core::interop::{
+    RustFunctionSig, RustItemKind, RustParam, RustTraitAssoc, RustTypeInfo, RustTypeShape, RustVisibility,
+};
 
 /// Build minimal public Rust type metadata for cache round-trip tests.
 fn dummy_type_metadata(path: &str) -> RustItemMetadata {
@@ -17,6 +19,25 @@ fn dummy_type_metadata(path: &str) -> RustItemMetadata {
             implemented_traits: Vec::new(),
             fields: Vec::new(),
             variants: Vec::new(),
+        }),
+    }
+}
+
+/// Build minimal public function metadata for complete-cache round-trip tests.
+fn dummy_function_metadata(path: &str) -> RustItemMetadata {
+    RustItemMetadata {
+        canonical_path: path.to_string(),
+        definition_path: None,
+        visibility: RustVisibility::Public,
+        kind: RustItemKind::Function(RustFunctionSig {
+            type_params: Vec::new(),
+            params: vec![RustParam {
+                name: Some("value".to_string()),
+                type_display: "u64".to_string(),
+            }],
+            return_type: "u64".to_string(),
+            is_async: false,
+            is_unsafe: false,
         }),
     }
 }
@@ -189,6 +210,147 @@ fn disk_cache_round_trips_inserted_items() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+/// Complete extraction must reuse a semantic function record from a fresh disk cache without reopening the
+/// generated Rust workspace. Functions have no partial metadata state analogous to incomplete type methods.
+#[test]
+fn complete_disk_cache_reuses_semantic_function_metadata() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    let root = tmp.path().canonicalize()?;
+    let query = "demo::transform";
+    let cache = RustMetadataCache::new();
+    cache.insert_test_item(root.as_path(), dummy_function_metadata(query))?;
+    {
+        let mut inner = cache
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("poisoned cache"))?;
+        inner.complete_items.insert((root.clone(), query.to_string()));
+        persist_item_to_disk_cache(&inner, root.as_path())?;
+    }
+
+    let cache = RustMetadataCache::new();
+    let metadata = cache.get_or_extract_complete(root.as_path(), query, &|_| ())?;
+    assert_eq!(metadata.canonical_path, query);
+    assert!(matches!(metadata.kind, RustItemKind::Function(_)));
+    let inner = cache
+        .inner
+        .lock()
+        .map_err(|_| std::io::Error::other("poisoned cache"))?;
+    assert!(
+        inner.workspaces.is_empty(),
+        "a complete cached function must not reopen rust-analyzer"
+    );
+    Ok(())
+}
+
+/// Complete extraction must reuse a persisted stable miss rather than reopening a workspace that cannot satisfy it.
+#[test]
+fn complete_disk_cache_reuses_stable_negative_lookup() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    let root = tmp.path().canonicalize()?;
+    let query = "missing_crate::symbol";
+    let cache = RustMetadataCache::new();
+    {
+        let mut inner = cache
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("poisoned cache"))?;
+        inner.failed_items.insert(
+            (root.clone(), query.to_string()),
+            NegativeLookup::CrateNotFound("missing_crate".to_string()),
+        );
+        persist_negative_to_disk_cache(&inner, root.as_path())?;
+    }
+
+    let cache = RustMetadataCache::new();
+    let result = cache.get_or_extract_complete(root.as_path(), query, &|_| ());
+    assert!(matches!(result, Err(RustMetadataError::CrateNotFound(crate_name)) if crate_name == "missing_crate"));
+    let inner = cache
+        .inner
+        .lock()
+        .map_err(|_| std::io::Error::other("poisoned cache"))?;
+    assert!(
+        inner.workspaces.is_empty(),
+        "a cached stable miss must not reopen rust-analyzer"
+    );
+    Ok(())
+}
+
+/// A complete semantic function extraction must persist its own completeness evidence for a later compiler process.
+#[test]
+fn complete_function_extraction_round_trips_without_reopening_workspace() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    fs::create_dir_all(tmp.path().join("src"))?;
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(
+        tmp.path().join("src/lib.rs"),
+        "/// Preserve the value.\npub fn transform(value: u64) -> u64 { value }\n",
+    )?;
+    let root = tmp.path().canonicalize()?;
+    let query = "probe::transform";
+
+    let first = RustMetadataCache::new();
+    let extracted = first.get_or_extract_complete(root.as_path(), query, &|_| ())?;
+    assert!(matches!(extracted.kind, RustItemKind::Function(_)));
+    drop(first);
+
+    let second = RustMetadataCache::new();
+    let reused = second.get_or_extract_complete(root.as_path(), query, &|_| ())?;
+    assert_eq!(reused, extracted);
+    let inner = second
+        .inner
+        .lock()
+        .map_err(|_| std::io::Error::other("poisoned cache"))?;
+    assert!(
+        inner.workspaces.is_empty(),
+        "the fresh compiler process must select the persisted complete function record"
+    );
+    Ok(())
+}
+
+/// A stable miss discovered by complete extraction must also persist across compiler processes.
+#[test]
+fn complete_negative_extraction_round_trips_without_reopening_workspace() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    fs::create_dir_all(tmp.path().join("src"))?;
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(tmp.path().join("src/lib.rs"), "pub fn present() {}\n")?;
+    let root = tmp.path().canonicalize()?;
+    let query = "probe::missing";
+
+    let first = RustMetadataCache::new();
+    let initial = first.get_or_extract_complete(root.as_path(), query, &|_| ());
+    assert!(matches!(initial, Err(RustMetadataError::PathNotResolved(path)) if path == query));
+    drop(first);
+
+    let second = RustMetadataCache::new();
+    let reused = second.get_or_extract_complete(root.as_path(), query, &|_| ());
+    assert!(matches!(reused, Err(RustMetadataError::PathNotResolved(path)) if path == query));
+    let inner = second
+        .inner
+        .lock()
+        .map_err(|_| std::io::Error::other("poisoned cache"))?;
+    assert!(
+        inner.workspaces.is_empty(),
+        "the fresh compiler process must select the persisted stable miss"
+    );
+    Ok(())
+}
+
 /// Disk-cache entries are ignored when the generated workspace inputs change.
 #[test]
 fn disk_cache_invalidates_when_workspace_fingerprint_changes() -> Result<(), Box<dyn std::error::Error>> {
@@ -205,6 +367,7 @@ fn disk_cache_invalidates_when_workspace_fingerprint_changes() -> Result<(), Box
             inspector_version: format!("cache-format-{DISK_CACHE_FORMAT}"),
             workspace_fingerprint: fingerprint,
             items: HashMap::from([("demo::Thing".to_string(), dummy_type_metadata("demo::Thing"))]),
+            complete_items: HashSet::new(),
             misses: HashMap::new(),
         },
     )?;
@@ -255,6 +418,7 @@ fn disk_cache_does_not_invalidate_on_package_version_label() -> Result<(), Box<d
             inspector_version: "0.3.0-old-rc-label".to_string(),
             workspace_fingerprint: fingerprint,
             items: HashMap::from([("demo::Thing".to_string(), dummy_type_metadata("demo::Thing"))]),
+            complete_items: HashSet::new(),
             misses: HashMap::new(),
         },
     )?;
@@ -287,6 +451,7 @@ fn disk_cache_accepts_legacy_versioned_workspace_fingerprint() -> Result<(), Box
             inspector_version: old_version.to_string(),
             workspace_fingerprint: fingerprint,
             items: HashMap::from([("demo::Thing".to_string(), dummy_type_metadata("demo::Thing"))]),
+            complete_items: HashSet::new(),
             misses: HashMap::new(),
         },
     )?;

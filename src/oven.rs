@@ -114,6 +114,16 @@ pub struct OvenGeneratedProjectRequest {
     build_unit_inputs: BTreeMap<String, String>,
 }
 
+/// Verified generated-source closure that may be shared by profile-specific receipts in one command.
+///
+/// The source closure is independent of the direct-Rustc profile. Keeping this proof separate lets a normal
+/// library build derive debug and release receipt identities without walking the same generated tree twice.
+#[derive(Debug, Clone)]
+pub(crate) struct OvenGeneratedProjectSourceEvidence {
+    names: BTreeSet<String>,
+    supplemental_digests: BTreeMap<String, String>,
+}
+
 /// Compiler-owned request for the repository's Rust libtest suite receipt.
 ///
 /// This is deliberately distinct from an arbitrary frozen Cargo package: it records the compiler source closure and
@@ -473,6 +483,42 @@ pub fn import_frozen_project(request: &OvenImportRequest) -> Result<OvenReceipt,
 /// intent, and generated-source digests rather than any local source or output path. A later Oven plan selection
 /// must still prove its exact native dependency closure against this receipt before `rustc` runs.
 pub fn receipt_generated_project(request: &OvenGeneratedProjectRequest) -> Result<OvenReceipt, OvenError> {
+    let source_evidence = generated_project_source_evidence(request)?;
+    receipt_generated_project_with_source_evidence(request, &source_evidence)
+}
+
+/// Derive one reusable generated-source proof for profile-specific receipts in the current command.
+///
+/// This reads and verifies every requested source exactly once. The opaque result can be supplied only to a request
+/// with the same normalized source-evidence keys, so a debug or release intent cannot silently borrow unrelated
+/// generated inputs.
+pub(crate) fn generated_project_source_evidence(
+    request: &OvenGeneratedProjectRequest,
+) -> Result<OvenGeneratedProjectSourceEvidence, OvenError> {
+    let names = generated_source_evidence_names(request)?;
+    let supplemental_digests = generated_source_evidence(request)?;
+    Ok(OvenGeneratedProjectSourceEvidence {
+        names,
+        supplemental_digests,
+    })
+}
+
+/// Receipt a generated project with a previously verified source closure.
+///
+/// The caller may vary build intent, including debug versus release profile, but the request must retain exactly the
+/// source-evidence keys that produced `source_evidence`. This is an in-process reuse boundary, not a persisted
+/// cache: each returned receipt still carries complete content-derived source evidence and verifies normally.
+pub(crate) fn receipt_generated_project_with_source_evidence(
+    request: &OvenGeneratedProjectRequest,
+    source_evidence: &OvenGeneratedProjectSourceEvidence,
+) -> Result<OvenReceipt, OvenError> {
+    let expected_names = generated_source_evidence_names(request)?;
+    if source_evidence.names != expected_names {
+        return Err(OvenError::InvalidGeneratedSource {
+            path: request.project_root.clone(),
+            message: "reused source evidence does not match the request's generated source keys".to_string(),
+        });
+    }
     let project = OvenProjectIdentity {
         name: normalized_value(&request.project.name, "project name")?,
         version: normalized_value(&request.project.version, "project version")?,
@@ -481,7 +527,7 @@ pub fn receipt_generated_project(request: &OvenGeneratedProjectRequest) -> Resul
         cargo_manifest_digest: None,
         cargo_lock_digest: None,
         incan_manifest_digest: None,
-        supplemental_digests: generated_source_evidence(request)?,
+        supplemental_digests: source_evidence.supplemental_digests.clone(),
         build_unit_inputs: normalized_build_unit_inputs(&request.build_unit_inputs)?,
     };
     let intent = normalized_build_intent(&request.target, &request.toolchain, &request.profile, &request.features)?;
@@ -843,6 +889,31 @@ fn generated_source_evidence(request: &OvenGeneratedProjectRequest) -> Result<BT
         });
     }
     Ok(digests)
+}
+
+/// Return the normalized source-evidence key set without reading the requested files.
+fn generated_source_evidence_names(request: &OvenGeneratedProjectRequest) -> Result<BTreeSet<String>, OvenError> {
+    let mut names = BTreeSet::new();
+    for (name, path) in request
+        .generated_sources
+        .iter()
+        .chain(request.generated_source_trees.iter())
+    {
+        let name = normalized_generated_source_name(name)?;
+        if !names.insert(name.clone()) {
+            return Err(OvenError::InvalidGeneratedSource {
+                path: path.clone(),
+                message: format!("duplicate generated source evidence key `{name}`"),
+            });
+        }
+    }
+    if names.is_empty() {
+        return Err(OvenError::InvalidGeneratedSource {
+            path: request.project_root.clone(),
+            message: "must declare at least one generated source file or tree".to_string(),
+        });
+    }
+    Ok(names)
 }
 
 /// Normalize a caller-facing source-evidence key without allowing blank identity records.
@@ -1255,8 +1326,9 @@ mod tests {
 
     use super::{
         OvenCompilerSuiteRequest, OvenGeneratedProjectRequest, OvenImportRequest, OvenReceipt, default_receipt_path,
-        digest_bytes, import_frozen_project, receipt_generated_project, receipt_native_compiler_suite,
-        receipt_with_build_unit_input, write_receipt,
+        digest_bytes, generated_project_source_evidence, import_frozen_project, receipt_generated_project,
+        receipt_generated_project_with_source_evidence, receipt_native_compiler_suite, receipt_with_build_unit_input,
+        write_receipt,
     };
 
     fn receipt_without_build_unit_input(
@@ -1341,6 +1413,51 @@ mod tests {
             &generated_request(second.path()).with_build_unit_input("runtime-lock", "sha256:changed"),
         )?;
         assert_ne!(first_receipt.build_unit_identity, runtime_changed.build_unit_identity);
+        Ok(())
+    }
+
+    #[test]
+    fn generated_project_receipts_reuse_one_verified_source_closure_across_profiles()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        write_generated_source_closure(project.path(), "fn main() { println!(\"oven\"); }\n")?;
+        let release_request = generated_request(project.path());
+        let debug_request = OvenGeneratedProjectRequest::new(
+            project.path(),
+            "generated_fixture",
+            "0.1.0",
+            "aarch64-apple-darwin",
+            "rustc 1.96.0",
+            "debug",
+            vec!["default".to_string()],
+        )
+        .with_generated_source("generated-rust-main", project.path().join("src/main.rs"))
+        .with_generated_source_tree("generated-rust-tree", project.path().join("src"));
+
+        let source_evidence = generated_project_source_evidence(&release_request)?;
+        let reused_release = receipt_generated_project_with_source_evidence(&release_request, &source_evidence)?;
+        let reused_debug = receipt_generated_project_with_source_evidence(&debug_request, &source_evidence)?;
+
+        assert_eq!(reused_release, receipt_generated_project(&release_request)?);
+        assert_eq!(reused_debug, receipt_generated_project(&debug_request)?);
+        assert_ne!(reused_release.identity, reused_debug.identity);
+
+        let mismatched_request = OvenGeneratedProjectRequest::new(
+            project.path(),
+            "generated_fixture",
+            "0.1.0",
+            "aarch64-apple-darwin",
+            "rustc 1.96.0",
+            "debug",
+            vec!["default".to_string()],
+        )
+        .with_generated_source("different-generated-root", project.path().join("src/main.rs"))
+        .with_generated_source_tree("generated-rust-tree", project.path().join("src"));
+        let error = match receipt_generated_project_with_source_evidence(&mismatched_request, &source_evidence) {
+            Ok(_) => return Err("mismatched source evidence must not authorize another request".into()),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("does not match"));
         Ok(())
     }
 

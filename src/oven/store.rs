@@ -1196,10 +1196,12 @@ impl OvenStore {
             source,
         })?;
         self.reclaim_stale_staging()?;
-        // Requesting the complete aggregate transient amount retains the established deterministic policy of
-        // reclaiming every inactive entry before an expensive publisher run. Unlike the former implementation, an
-        // active entry merely consumes part of the run's staging budget below.
-        let report = self.prune_to_limits(None, 0, self.limits.max_physical_bytes, true)?;
+        // A reservation is not itself evidence that an existing immutable entry is obsolete. Keep every entry that
+        // already fits policy so a debug/release sibling or a second project can reuse it; the measured hand-off
+        // below is where the actual pending closure is admitted and any necessary inactive reclamation occurs.
+        // The staging monitor still receives only the remaining aggregate/domain allowance, so this preserves the
+        // hard transient bound without turning each explicit bake into a cache flush.
+        let report = self.prune_to_limits(None, 0, 0, true)?;
         let entries = self.collect_entries_for_admission()?;
         let retained_physical_bytes = entries.iter().map(|entry| entry.physical_bytes).sum::<u64>();
         let (_, retained_domain_physical_bytes) = domain_totals(&entries, domain);
@@ -1727,12 +1729,15 @@ fn entry_directory_name(identity: &str) -> String {
 
 /// Return the on-disk directory name for one immutable artifact kind.
 ///
-/// A direct-rustc plan is Oven's project-level Loaf: it carries its own receipt,
-/// verified closure, and plan. Other store objects remain generic execution or
-/// scheduling artifacts and therefore keep the ordinary entry spelling.
+/// Direct-rustc plans and project extensions are Oven's project-level Loafs: each carries a receipt-bound direct
+/// execution contract and immutable closure fragment. Other store objects remain generic execution or scheduling
+/// artifacts and therefore keep the ordinary entry spelling.
 fn entry_directory_name_for_kind(identity: &str, kind: OvenArtifactKind) -> String {
     let directory = entry_directory_name(identity);
-    if kind == OvenArtifactKind::DirectRustcPlan {
+    if matches!(
+        kind,
+        OvenArtifactKind::DirectRustcPlan | OvenArtifactKind::ProjectPayload
+    ) {
         format!("{directory}.loaf")
     } else {
         directory
@@ -1741,7 +1746,10 @@ fn entry_directory_name_for_kind(identity: &str, kind: OvenArtifactKind) -> Stri
 
 /// Return the immutable manifest spelling for one artifact class.
 fn manifest_file_name(kind: OvenArtifactKind) -> &'static str {
-    if kind == OvenArtifactKind::DirectRustcPlan {
+    if matches!(
+        kind,
+        OvenArtifactKind::DirectRustcPlan | OvenArtifactKind::ProjectPayload
+    ) {
         LOAF_MANIFEST_FILE
     } else {
         ARTIFACT_MANIFEST_FILE
@@ -3182,6 +3190,21 @@ mod tests {
         assert!(!loaf_root.join(super::ARTIFACT_MANIFEST_FILE).exists());
         assert!(store.select(&first.identity).is_ok());
         assert_eq!(store.inspect()?.entries.len(), 1);
+
+        let extension = store.publish(&OvenArtifactPublishRequest {
+            receipt: first_request.receipt.clone(),
+            domain: "shared-Loaf".to_string(),
+            kind: OvenArtifactKind::ProjectPayload,
+            payload: b"project extension payload".to_vec(),
+            materialized_files: Vec::new(),
+        })?;
+        let extension_root = store.entry_root(&extension.identity);
+        assert_eq!(
+            extension_root.extension().and_then(|extension| extension.to_str()),
+            Some("loaf")
+        );
+        assert!(extension_root.join(super::LOAF_MANIFEST_FILE).is_file());
+        assert!(store.select(&extension.identity).is_ok());
         Ok(())
     }
 
@@ -3205,12 +3228,12 @@ mod tests {
 
         drop(lease);
         let inactive_reservation = store.reserve_legacy_cargo_publisher_capacity("engine")?;
-        assert_eq!(inactive_reservation.prune_report.removed_entries, vec![first.identity]);
-        assert_eq!(
-            inactive_reservation.transient_limit_bytes,
-            store.limits().max_physical_bytes
+        assert!(inactive_reservation.prune_report.removed_entries.is_empty());
+        assert!(
+            inactive_reservation.transient_limit_bytes < store.limits().max_physical_bytes,
+            "an inactive reusable entry must reduce the staging allowance instead of being discarded speculatively"
         );
-        assert!(store.inspect()?.entries.is_empty());
+        assert_eq!(store.inspect()?.entries.len(), 1);
         Ok(())
     }
 

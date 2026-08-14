@@ -293,13 +293,15 @@ test-oven-partition:
 	@$(MAKE) --no-print-directory test-oven-replay \
 		INCAN_TEST_OVEN_COMPILER_SUITE_PARTITION_ARGS='--partition-index $(INCAN_TEST_OVEN_PARTITION_INDEX) --partition-count $(INCAN_TEST_OVEN_PARTITION_COUNT)'
 
+# Rust-analyzer fixture metadata creates nested Cargo lockfile copies. The Unix-only Oven suite therefore owns a
+# short `/tmp` scratch directory instead of inheriting an arbitrarily deep worktree `TMPDIR`.
 .PHONY: test-oven-replay
 test-oven-replay:
 	@echo "\033[1mRunning complete compiler suite through Oven...\033[0m"
 	@set -e; \
 		mkdir -p "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)"; \
 		suite_output="$$(mktemp -d "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)/oven-compiler-suite-output.XXXXXX")"; \
-		suite_tmp="$$(mktemp -d "$${TMPDIR:-/tmp}/incan-oven-suite.XXXXXX")"; \
+		suite_tmp="$$(mktemp -d "/tmp/incan-oven-suite.XXXXXX")"; \
 		suite_succeeded=false; \
 		cleanup_suite_output() { \
 			rm -rf -- "$$suite_tmp"; \
@@ -591,6 +593,7 @@ test-timings:
 	@cargo test --all --no-run --timings
 	@echo "\033[32m✓ Timing report generated in target/cargo-timings\033[0m"
 
+# Keep single-root diagnostics on the same short, invocation-owned scratch policy as full suite replay.
 .PHONY: test-one  ## test - Run one receipt-bound compiler-suite source root (optional TEST_EXACT=module::case)
 test-one: test-prewarm-oven-loafs
 	@test -n "$(TEST_ROOT)" || { echo "usage: make test-one TEST_ROOT=tests/cli_integration.rs" >&2; exit 2; }
@@ -598,7 +601,7 @@ test-one: test-prewarm-oven-loafs
 	@set -e; \
 		mkdir -p "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)"; \
 		root_output="$$(mktemp -d "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)/oven-test-one.XXXXXX")"; \
-		root_tmp="$$(mktemp -d "$${TMPDIR:-/tmp}/incan-oven-root.XXXXXX")"; \
+		root_tmp="$$(mktemp -d "/tmp/incan-oven-root.XXXXXX")"; \
 		root_succeeded=false; \
 		cleanup_root_output() { \
 			rm -rf -- "$$root_tmp"; \

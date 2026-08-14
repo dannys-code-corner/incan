@@ -94,6 +94,8 @@ fn legacy_cargo_capacity_abort_terminates_descendants() -> Result<(), Box<dyn st
         cargo,
         rustc,
         sdk_inventory: None,
+        compiler_loaf_root: None,
+        base_loaf: None,
         domain: "oven-pr-capacity".to_string(),
         publication_kind: OvenLegacyCargoPublicationKind::Executable,
         source_evidence_key: "generated-root".to_string(),

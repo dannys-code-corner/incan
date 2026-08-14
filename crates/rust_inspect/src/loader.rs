@@ -944,7 +944,10 @@ impl RustWorkspace {
         let (db, vfs, _pm) = load_workspace_at(&manifest_dir, &cargo_config, &load_config, progress).map_err(|e| {
             RustMetadataError::LoadWorkspace {
                 path: manifest_dir.clone(),
-                message: e.to_string(),
+                // `rust-analyzer` adds the manifest path as its outer context. Preserve its inner Cargo diagnostic as
+                // well: a caller can otherwise see only the redundant "failed to load" message and cannot distinguish
+                // a malformed project from a path or toolchain failure in the explicit inspection capability.
+                message: format!("{e:#}"),
             }
         })?;
         let crate_index = Self::build_crate_index(&db);

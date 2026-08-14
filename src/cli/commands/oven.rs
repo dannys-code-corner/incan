@@ -48,9 +48,10 @@ use crate::oven::legacy_cargo::{
 use crate::oven::loaf::{
     LoafTemporaryDirectory, OVEN_LOAF_ENV, OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OvenLoafBakerContext,
     OvenLoafEnvelope, OvenLoafEnvelopeManifest, OvenLoafEnvelopeMember, OvenLoafFixtureAction, OvenLoafMemberRole,
-    OvenLoafPreparation, acquire_exclusive_loaf_generation_lock, commit_loaf_generation, loaf_directory_byte_counts,
-    loaf_envelope_inspection_packages, loaf_envelope_specifications, loaf_raw_disk_bytes,
-    prepare_loaf_from_generated_project, retire_unreferenced_loaf_generations, validate_stored_loaf_for_reuse,
+    OvenLoafPreparation, acquire_committed_loaf_generation, acquire_exclusive_loaf_generation_lock,
+    commit_loaf_generation, loaf_directory_byte_counts, loaf_envelope_inspection_packages,
+    loaf_envelope_specifications, loaf_raw_disk_bytes, prepare_loaf_from_generated_project,
+    retire_unreferenced_loaf_generations, validate_stored_loaf_for_reuse,
 };
 use crate::oven::native_test::{
     OvenNativeTestCaseCounts, OvenNativeTestCaseTiming, OvenNativeTestCommandTiming, OvenNativeTestRequest,
@@ -512,6 +513,7 @@ pub fn oven_legacy_cargo_prepare(options: OvenLegacyCargoPrepareCommandOptions) 
         cargo: options.cargo,
         rustc: options.rustc,
         sdk_inventory: None,
+        compiler_loaf_root: None,
         domain: options.domain,
         publication_kind: OvenLegacyCargoPublicationKind::Executable,
         source_evidence_key: "generated-root".to_string(),
@@ -519,6 +521,7 @@ pub fn oven_legacy_cargo_prepare(options: OvenLegacyCargoPrepareCommandOptions) 
         inspection_packages: None,
         direct_dependency_closure: OvenLegacyCargoDirectDependencyClosure::GeneratedSource,
         compact_debug_info: false,
+        base_loaf: None,
     })
     .map_err(oven_error)?;
     match options.format {
@@ -824,11 +827,29 @@ struct OvenLoafBakeReport {
     max_domain_physical_bytes: u64,
     max_domain_logical_bytes: u64,
     elapsed_ms: u128,
+    /// Cold-baker phase ledger. These phases are measured by Oven itself so CI never has to infer work from shell
+    /// command boundaries or Cargo's human output.
+    phase_timing: OvenLoafBakePhaseTiming,
     cargo_process_started: bool,
     evidence: OvenLoafEnvelopeEvidence,
     loafs: Vec<OvenLoafBakeEntryReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compiler_suite: Option<OvenCompilerSuiteBakeReport>,
+}
+
+/// Product-owned elapsed-time attribution for one Loaf-baker invocation.
+#[derive(Debug, Default, Serialize)]
+struct OvenLoafBakePhaseTiming {
+    /// Input validation, compatibility evidence, and exact-envelope reuse inspection.
+    preflight_elapsed_ms: u128,
+    /// Locked registry/inspection authority preparation for a cold envelope.
+    inspection_authority_elapsed_ms: u128,
+    /// Checked fixture receipt generation and direct-Rustc Loaf preparation.
+    fixture_preparation_elapsed_ms: u128,
+    /// Atomic generation publication, retirement, and owned-byte accounting.
+    envelope_publication_elapsed_ms: u128,
+    /// Receipt-bound compiler-suite index/foundation preparation after the envelope is available.
+    compiler_suite_preparation_elapsed_ms: u128,
 }
 
 /// Source-plan and bounded-store evidence baked with the compiler-suite Loaf envelope.
@@ -1046,6 +1067,10 @@ fn reuse_complete_loaf_envelope(
         max_domain_physical_bytes: limits.max_domain_physical_bytes,
         max_domain_logical_bytes: limits.max_domain_logical_bytes,
         elapsed_ms: started.elapsed().as_millis(),
+        phase_timing: OvenLoafBakePhaseTiming {
+            preflight_elapsed_ms: started.elapsed().as_millis(),
+            ..OvenLoafBakePhaseTiming::default()
+        },
         cargo_process_started: false,
         evidence: evidence.clone(),
         loafs: reports,
@@ -1180,6 +1205,10 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
         &options.sdk_inventory,
         &options.rustc,
     )?;
+    let mut phase_timing = OvenLoafBakePhaseTiming {
+        preflight_elapsed_ms: started.elapsed().as_millis(),
+        ..OvenLoafBakePhaseTiming::default()
+    };
     if let Some(report) =
         reuse_complete_loaf_envelope(&options.output, scratch.path(), envelope, &evidence, limits, started)?
     {
@@ -1212,6 +1241,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
     let envelope_inspection_packages = loaf_envelope_inspection_packages(envelope).map_err(CliError::failure)?;
     // A cold first bake cannot consume a Loaf that does not exist yet. Resolve its Rust inspection sources once at
     // this already explicit Cargo boundary, then hand the typed locked authority to every no-Cargo fixture child.
+    let inspection_authority_started = Instant::now();
     let authority_dir = scratch.path().join("rust-inspect-authority");
     fs::create_dir_all(&authority_dir).map_err(|error| {
         CliError::failure(format!(
@@ -1254,6 +1284,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
             ))
         })?
     };
+    phase_timing.inspection_authority_elapsed_ms = inspection_authority_started.elapsed().as_millis();
     let cargo_process_started = true;
     let mut transient_peak_physical_bytes = 0_u64;
     let compiler_support_target = scratch.path().join("compiler-support-target");
@@ -1264,6 +1295,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
         ))
     })?;
     let compiler_lock = loaf_compiler_lock_path(&options.compiler_root)?;
+    let fixture_preparation_started = Instant::now();
     for specification in loaf_envelope_specifications(envelope) {
         let inspection_packages = if specification.role.provides_source_authority() {
             specification.inspection_packages().map_err(CliError::failure)?
@@ -1405,6 +1437,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
             result,
         });
     }
+    phase_timing.fixture_preparation_elapsed_ms = fixture_preparation_started.elapsed().as_millis();
 
     let logical_bytes = pending.iter().map(|entry| entry.result.logical_bytes).sum::<u64>();
     let physical_bytes = pending.iter().map(|entry| entry.result.physical_bytes).sum::<u64>();
@@ -1415,6 +1448,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
     }
 
     let prepared_count = pending.len();
+    let envelope_publication_started = Instant::now();
     let manifest = OvenLoafEnvelopeManifest {
         schema_version: OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION,
         envelope: loaf_envelope_name(envelope).to_string(),
@@ -1480,6 +1514,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
             "published Loaf output uses {owned_physical_bytes} physical bytes after reclaiming obsolete generations, exceeding its {max_physical_bytes}-byte allowance"
         )));
     }
+    phase_timing.envelope_publication_elapsed_ms = envelope_publication_started.elapsed().as_millis();
     let reused_count = 0;
     let report = OvenLoafBakeReport {
         action: "prepared".to_string(),
@@ -1500,6 +1535,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
         max_domain_physical_bytes,
         max_domain_logical_bytes,
         elapsed_ms: started.elapsed().as_millis(),
+        phase_timing,
         cargo_process_started,
         evidence,
         loafs: pending,
@@ -1535,6 +1571,7 @@ fn finish_loaf_bake(
         report.elapsed_ms = started.elapsed().as_millis();
         return Ok(report);
     }
+    let compiler_suite_preparation_started = Instant::now();
     let suite_store = compiler_suite_store_path(options)?;
     let default_limits = loaf_envelope_default_limits(envelope);
     let max_physical_bytes = options.max_physical_bytes.unwrap_or(default_limits.max_physical_bytes);
@@ -1575,6 +1612,7 @@ fn finish_loaf_bake(
         cargo: options.cargo.clone(),
         rustc: options.rustc.clone(),
         sdk_inventory: Some(options.sdk_inventory.clone()),
+        compiler_loaf_root: Some(options.output.clone()),
         domain: "compiler-suite-lsp".to_string(),
         publication_kind: OvenLegacyCargoPublicationKind::LibraryTests,
         source_evidence_key: "compiler-libtest-root".to_string(),
@@ -1582,6 +1620,7 @@ fn finish_loaf_bake(
         inspection_packages: Some(Vec::new()),
         direct_dependency_closure: OvenLegacyCargoDirectDependencyClosure::CheckedDeclared,
         compact_debug_info: false,
+        base_loaf: None,
     })
     .map_err(oven_error)?;
     let suite_reused = prepare.cargo_version == "not-run-existing-suite";
@@ -1621,6 +1660,8 @@ fn finish_loaf_bake(
         )));
     }
     report.elapsed_ms = started.elapsed().as_millis();
+    report.phase_timing.compiler_suite_preparation_elapsed_ms =
+        compiler_suite_preparation_started.elapsed().as_millis();
     report.compiler_suite = Some(OvenCompilerSuiteBakeReport {
         receipt: receipt_path,
         prepare,
@@ -1738,7 +1779,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     }
     let suite = serde_json::from_slice::<OvenCompilerTestSuitePayload>(&payload)
         .map_err(|error| CliError::failure(format!("stored Oven compiler suite payload is invalid: {error}")))?;
-    if !matches!(suite.schema_version, 8..=13) {
+    if !matches!(suite.schema_version, 8..=14) {
         return Err(CliError::failure(format!(
             "stored Oven compiler suite payload schema {} is unsupported",
             suite.schema_version
@@ -1820,7 +1861,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             let foundations = select_compiler_suite_foundations(&store, &receipt, &suite.foundation_references)?;
             (shards, foundations)
         }
-        11..=13 => {
+        11..=14 => {
             if !suite.test_targets.is_empty()
                 || !suite.binary_targets.is_empty()
                 || suite.test_artifact_closure.is_some()
@@ -1845,11 +1886,48 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     } else {
         Vec::new()
     };
+    let (external_toolchain_data_root, _external_toolchain_generation) = if suite.schema_version == 14 {
+        let reference = suite.toolchain_loaf_generation.as_ref().ok_or_else(|| {
+            CliError::failure(
+                "schema-14 Oven compiler-suite index has no compiler Loaf generation reference".to_string(),
+            )
+        })?;
+        if !suite.toolchain_data_references.is_empty() {
+            return Err(CliError::failure(
+                "schema-14 Oven compiler-suite index must not retain copied Loaf data partitions".to_string(),
+            ));
+        }
+        let data_root = crate::toolchain_layout::compiler_owned_oven_data_root().ok_or_else(|| {
+            CliError::failure(
+                "schema-14 Oven compiler-suite index requires the committed compiler-owned Loaf envelope selected by its receipt"
+                    .to_string(),
+            )
+        })?;
+        let loaf_root = data_root.join("share/incan/oven/loafs");
+        let generation = acquire_committed_loaf_generation(&loaf_root)
+            .map_err(oven_error)?
+            .ok_or_else(|| {
+                CliError::failure(
+                    "schema-14 Oven compiler-suite index requires a committed compiler-owned Loaf generation"
+                        .to_string(),
+                )
+            })?;
+        if generation.generation_identity() != reference.generation_identity {
+            return Err(CliError::failure(format!(
+                "schema-14 Oven compiler-suite index requires compiler Loaf generation `{}`, but the active toolchain provides `{}`",
+                reference.generation_identity,
+                generation.generation_identity(),
+            )));
+        }
+        (Some(data_root), Some(generation))
+    } else {
+        (None, None)
+    };
     // Schema 12 derives its compiler-owned generated-code check capability from the workspace-library graph. A
     // focused target need not itself own `incan_stdlib`, so retain the complete receipt-bound shard lease set solely
     // while deriving that shared capability. This does not broaden execution: the prepared-child queue below still
     // contains only `selected_shard_references`. It also avoids a fabricated ambient closure or Cargo recovery path.
-    let warning_check_shards = if matches!(suite.schema_version, 12 | 13) && !options.targets.is_empty() {
+    let warning_check_shards = if matches!(suite.schema_version, 12..=14) && !options.targets.is_empty() {
         Some(select_compiler_suite_shards(
             &store,
             &receipt,
@@ -1864,7 +1942,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
         8 => suite.test_artifact_closure.as_ref().ok_or_else(|| {
             CliError::failure("stored compiler-suite payload has no direct-rustc test closure".to_string())
         })?,
-        9..=13 => suite.cli_artifact_closure.as_ref().ok_or_else(|| {
+        9..=14 => suite.cli_artifact_closure.as_ref().ok_or_else(|| {
             CliError::failure("stored indexed compiler-suite payload has no compiler CLI closure".to_string())
         })?,
         _ => unreachable!("schema was validated above"),
@@ -1901,7 +1979,9 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             "cannot canonicalize stored compiler-suite SDK provider inventory: {error}"
         ))
     })?;
-    let compiler_data_root = if suite.schema_version == 13 {
+    let compiler_data_root = if suite.schema_version == 14 {
+        external_toolchain_data_root
+    } else if suite.schema_version == 13 {
         Some(materialize_compiler_suite_toolchain_data(
             &output_directory,
             &toolchain_data_executions,
@@ -1917,7 +1997,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     // map so a full test run does not rebuild (or retain) the same compiler libraries once per test root.
     let mut workspace_library_cache = BTreeMap::new();
     let mut binary_cache = BTreeMap::new();
-    let warning_check_artifacts = if matches!(suite.schema_version, 12 | 13) {
+    let warning_check_artifacts = if matches!(suite.schema_version, 12..=14) {
         bake_compiler_suite_warning_check_artifacts(
             warning_check_shards,
             &receipt,
@@ -2016,6 +2096,15 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
         compiler_data_root.as_deref(),
         &output_directory,
     )?;
+    // `rust-analyzer` gives each fixture workspace a short-lived lockfile copy below `TMPDIR`. A caller can invoke
+    // the suite from a deeply nested worktree, where forwarding that path makes otherwise-valid Cargo metadata
+    // inspection fail before Oven has a chance to execute the stored root. Keep this mutable scratch directory
+    // invocation-owned but deliberately short; all durable suite output remains under the caller-selected output.
+    let suite_temporary_directory = compiler_suite_temporary_directory()?;
+    environment.insert(
+        "TMPDIR".to_string(),
+        suite_temporary_directory.path().display().to_string(),
+    );
     environment.insert(
         "CARGO_BIN_EXE_incan".to_string(),
         compiler_suite_environment_path(&cli_bake.output)?.display().to_string(),
@@ -2088,8 +2177,9 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
                         "schema-10-or-earlier Oven compiler suite shard declares workspace-library edges that its stored schema cannot execute",
                     ));
                 }
-                let foundations = matches!(suite.schema_version, 10..=13).then_some(&foundation_executions);
-                let foundation_references = if matches!(suite.schema_version, 10..=13) {
+                let foundations = compiler_suite_uses_indexed_foundations(suite.schema_version)
+                    .then_some(&foundation_executions);
+                let foundation_references = if compiler_suite_uses_indexed_foundations(suite.schema_version) {
                     shard.payload.foundation_references.as_slice()
                 } else {
                     &[]
@@ -2459,6 +2549,27 @@ fn compiler_suite_environment_with_vocab(
         vocab_extraction_artifacts,
     )?;
     Ok(environment)
+}
+
+/// Create short-lived scratch space for compiler-suite fixture tools.
+///
+/// The v0.5 suite runs on Unix hosts. `/tmp` keeps rust-analyzer's nested Cargo lockfile paths below platform limits
+/// even when the caller's worktree or selected suite output has a long absolute path. The guard object remains live
+/// for the entire scheduler invocation, so children cannot observe a reclaimed directory.
+#[cfg(unix)]
+fn compiler_suite_temporary_directory() -> CliResult<LoafTemporaryDirectory> {
+    LoafTemporaryDirectory::create(Path::new("/tmp"), ".incan-oven-suite-").map_err(|error| {
+        CliError::failure(format!(
+            "cannot create short compiler-suite temporary directory: {error}"
+        ))
+    })
+}
+
+/// Create invocation-owned scratch space on platforms outside the supported v0.5 compiler-suite hosts.
+#[cfg(not(unix))]
+fn compiler_suite_temporary_directory() -> CliResult<LoafTemporaryDirectory> {
+    LoafTemporaryDirectory::create(&env::temp_dir(), ".incan-oven-suite-")
+        .map_err(|error| CliError::failure(format!("cannot create compiler-suite temporary directory: {error}")))
 }
 
 /// Convert a scheduler-selected path into an absolute environment value before a test changes directory.
@@ -2942,6 +3053,14 @@ fn prepare_compiler_suite_child<'a>(
         foundation_references,
         foundations,
     })
+}
+
+/// Return whether one indexed compiler-suite schema composes its direct-Rustc plan from leased foundations.
+///
+/// Schema 14 changes only how children reach the compiler-owned standard-library Loaf family. It retains the
+/// schema-10 foundation contract for Cargo-published third-party artifacts, so it must never bypass this path.
+fn compiler_suite_uses_indexed_foundations(schema_version: u32) -> bool {
+    matches!(schema_version, 10..=14)
 }
 
 /// Apply the package-qualified process capabilities owned by the compiler-suite registry.
@@ -5397,6 +5516,7 @@ mod tests {
         compiler_suite_directory, compiler_suite_environment, compiler_suite_environment_path,
         compiler_suite_exact_test_selection, compiler_suite_file, compiler_suite_libtest_threads,
         compiler_suite_remove_generated_rust_closure, compiler_suite_selected_shard_references,
+        compiler_suite_temporary_directory, compiler_suite_uses_indexed_foundations,
         compiler_suite_workspace_library_dependency_closure, default_rustup_home, default_store_root,
         loaf_envelope_default_limits, loaf_envelope_evidence, native_test_failure_summary, oven_import,
         oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path, prepare_compiler_suite_child,
@@ -5682,6 +5802,7 @@ mod tests {
                 identity: "sha256:fixture-toolchain-data".to_string(),
                 label: "toolchain-data-0000".to_string(),
             }],
+            toolchain_loaf_generation: None,
             binary_targets: Vec::new(),
             test_artifact_closure: None,
             cli_artifact_closure: Some(OvenCompilerTestSuiteArtifactClosure {
@@ -5755,6 +5876,7 @@ mod tests {
             max_domain_physical_bytes: 10_000_000,
             max_domain_logical_bytes: 10_000_000,
             elapsed_ms: 0,
+            phase_timing: super::OvenLoafBakePhaseTiming::default(),
             cargo_process_started: false,
             evidence,
             loafs: Vec::new(),
@@ -6346,6 +6468,14 @@ mod tests {
     }
 
     #[test]
+    fn compiler_suite_schema_fourteen_composes_its_leased_foundations() {
+        assert!(!compiler_suite_uses_indexed_foundations(9));
+        for schema_version in 10..=14 {
+            assert!(compiler_suite_uses_indexed_foundations(schema_version));
+        }
+    }
+
+    #[test]
     fn compiler_suite_storage_policy_has_measured_headroom() {
         let limits = loaf_envelope_default_limits(OvenLoafEnvelope::CompilerSuite);
         assert_eq!(
@@ -6727,6 +6857,17 @@ mod tests {
 
         assert_eq!(cli, output.path().join("compiler-cli/incan"));
         assert!(cli.starts_with(output.path()));
+        Ok(())
+    }
+
+    /// Fixture metadata must not inherit an arbitrarily deep caller temporary directory.
+    #[cfg(unix)]
+    #[test]
+    fn compiler_suite_temporary_directory_uses_the_short_system_root() -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = compiler_suite_temporary_directory()?;
+
+        assert_eq!(temporary.path().parent(), Some(Path::new("/tmp")));
+        assert!(temporary.path().is_dir());
         Ok(())
     }
 

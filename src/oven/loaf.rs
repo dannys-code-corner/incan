@@ -485,6 +485,8 @@ pub struct OvenLoafAccounting {
 /// project store. Project-specific compatibility closures remain separately bounded store Loafs.
 #[derive(Debug)]
 pub struct OvenToolchainLoaf {
+    /// Content address of the selected immutable `loaf.json` contract.
+    pub loaf_identity: String,
     /// Stable identity of the compiler-shipped loaf selected for this receipt.
     pub loaf_build_unit_identity: String,
     /// Receipt-compatible direct-Rustc manifest retained by the loaf.
@@ -987,6 +989,7 @@ pub fn prepare_loaf_from_generated_project(
         cargo: context.cargo.to_path_buf(),
         rustc: context.rustc.to_path_buf(),
         sdk_inventory: None,
+        compiler_loaf_root: None,
         domain: format!("toolchain-base-{}", receipt.intent.profile),
         publication_kind: OvenLegacyCargoPublicationKind::Executable,
         source_evidence_key: "generated-root".to_string(),
@@ -998,6 +1001,7 @@ pub fn prepare_loaf_from_generated_project(
             OvenLegacyCargoDirectDependencyClosure::GeneratedSource
         },
         compact_debug_info: true,
+        base_loaf: None,
     })?;
     let identity = receipt
         .build_unit_identity
@@ -2222,9 +2226,10 @@ pub(crate) fn committed_loaf_paths(loaf_root: &Path) -> Result<Vec<PathBuf>, Ove
 
 /// Validate the typed committed-envelope authority without traversing every Loaf artifact tree.
 ///
-/// Selection needs only content-addressed metadata and compatibility records to choose one closure. The final
-/// selected Loaf is structurally audited by [`loaf_from_loaf_with_lock`] before any artifact path reaches Rustc.
-/// Full-generation consumers use [`committed_loaf_paths`] instead.
+/// Selection needs only content-addressed metadata and compatibility records to choose one closure. The selected
+/// Loaf then validates every manifest-declared Rustc input before it is passed to Rustc; it deliberately does not
+/// walk unrelated files below the immutable Loaf directory. Full-generation consumers use [`committed_loaf_paths`]
+/// to reject any undeclared file during an explicit whole-Loaf audit.
 fn committed_loaf_metadata_paths(loaf_root: &Path) -> Result<Vec<PathBuf>, OvenLoafError> {
     committed_loaf_metadata_paths_with_role(loaf_root, None)
 }
@@ -2431,11 +2436,17 @@ pub(crate) fn committed_loaf_envelope_compatibility_identity(
 
 /// One committed Loaf generation whose paths remain stable for the lifetime of its shared lock.
 pub(crate) struct OvenCommittedLoafGeneration {
+    generation_identity: String,
     paths: Vec<PathBuf>,
     _lock: OvenLoafGenerationLock,
 }
 
 impl OvenCommittedLoafGeneration {
+    /// Return the exact committed envelope generation protected by this shared lock.
+    pub(crate) fn generation_identity(&self) -> &str {
+        &self.generation_identity
+    }
+
     /// Return the verified Loaf manifests protected by this generation's shared lock.
     pub(crate) fn paths(&self) -> &[PathBuf] {
         &self.paths
@@ -2450,8 +2461,10 @@ pub(crate) fn acquire_committed_loaf_generation(
         return Ok(None);
     }
     let generation_lock = acquire_loaf_generation_lock(loaf_root)?;
+    let (manifest, _) = committed_loaf_envelope_manifest(loaf_root, "compiler-suite")?;
     let paths = committed_loaf_paths(loaf_root)?;
     Ok(Some(OvenCommittedLoafGeneration {
+        generation_identity: manifest.generation_identity,
         paths,
         _lock: generation_lock,
     }))
@@ -2556,6 +2569,36 @@ pub fn resolve_toolchain_loaf_for_registry_dependencies(
         dependencies,
         OvenLoafRegistryRequirement::LinkableLeaf,
     )
+}
+
+/// Resolve one compiler-shipped Loaf by the content address recorded in a project extension payload.
+///
+/// This is intentionally stricter than ordinary compatible-Loaf selection.  An extension is valid only with the
+/// exact base it was partitioned against; choosing a newer or merely similarly capable Loaf could redirect a
+/// direct-Rustc relative path to different metadata.  The returned value retains the generation lock until its
+/// consuming execution finishes.
+pub fn resolve_toolchain_loaf_by_identity(
+    receipt: &OvenReceipt,
+    loaf_identity: &str,
+) -> Result<Option<OvenToolchainLoaf>, OvenLoafError> {
+    let loaf_root = crate::toolchain_layout::resolve_toolchain_data_path(Path::new(TOOLCHAIN_LOAF_RELATIVE_ROOT));
+    if !loaf_root.join("envelope.json").is_file() {
+        return Ok(None);
+    }
+    let generation_lock = acquire_loaf_generation_lock(&loaf_root)?;
+    for loaf_path in committed_loaf_metadata_paths_for_authority(&loaf_root, OvenLoafMemberRole::CompiledClosure)? {
+        if loaf_file_identity(&loaf_path)? != loaf_identity {
+            continue;
+        }
+        return loaf_from_loaf_with_lock(
+            receipt,
+            &loaf_path,
+            OvenLoafSelection::CompilerOwnedProviderSuperset,
+            Some(generation_lock),
+        )
+        .map(Some);
+    }
+    Ok(None)
 }
 
 /// Resolve a scheduler-held source-authority Loaf whose immutable source catalog satisfies every registry root.
@@ -2711,7 +2754,14 @@ fn select_compatible_loaf_with_registry_requirement(
     Ok(select_most_specific_compatible_loaf(supported))
 }
 
-/// Verify that one loaf authorizes `receipt` and resolve its compiler-owned direct-Rustc closure.
+/// Verify that one Loaf authorizes `receipt` and resolve its compiler-owned direct-Rustc closure.
+///
+/// This is the normal consumer boundary. It verifies the content-addressed manifest, the receipt/compatibility
+/// relationship, the registry catalog, and every declared file used by the resulting Rustc plan. It intentionally
+/// does not recursively inspect unrelated files in the immutable directory: those files cannot become a Rustc input
+/// through the sealed manifest, while walking complete source trees on every command would make a prepared Loaf
+/// behave like a cold cache. [`committed_loaf_paths`] retains the explicit whole-Loaf audit for publication and
+/// inspection flows.
 fn loaf_from_loaf(
     receipt: &OvenReceipt,
     loaf_path: &Path,
@@ -2764,13 +2814,14 @@ fn loaf_from_loaf_with_lock(
         });
     }
     validate_registry_leaf_catalog(&loaf, loaf_path)?;
-    validate_loaf_declared_file_set(&loaf, loaf_path)?;
+    let loaf_identity = loaf_file_identity(loaf_path)?;
     let artifact_root = loaf_path.parent().ok_or_else(|| OvenLoafError::InvalidLoaf {
         path: loaf_path.to_path_buf(),
         message: "loaf file has no parent directory".to_string(),
     })?;
     let artifact_plan = loaf.plan.materialize_trusted_store(artifact_root, &receipt.intent)?;
     Ok(OvenToolchainLoaf {
+        loaf_identity,
         loaf_build_unit_identity: loaf.build_unit_identity,
         artifacts: loaf.plan,
         registry_leaves: loaf.registry_leaves,
@@ -2785,6 +2836,8 @@ fn loaf_from_loaf_with_lock(
 /// The envelope has already restricted this path to a source-authority member. This second verification makes that
 /// role meaningful at the trust boundary: source inspection accepts exact runtime provenance and intent, while
 /// direct-`rustc` callers must still use [`loaf_from_loaf_with_lock`] and its provider/leaf compatibility checks.
+/// Like executable selection, this validates only manifest-declared source and artifact paths; an explicit
+/// whole-Loaf audit owns undeclared-file discovery.
 fn source_authority_loaf_from_loaf_with_lock(
     receipt: &OvenReceipt,
     loaf_path: &Path,
@@ -2823,13 +2876,14 @@ fn source_authority_loaf_from_loaf_with_lock(
         });
     }
     validate_registry_leaf_catalog(&loaf, loaf_path)?;
-    validate_loaf_declared_file_set(&loaf, loaf_path)?;
+    let loaf_identity = loaf_file_identity(loaf_path)?;
     let artifact_root = loaf_path.parent().ok_or_else(|| OvenLoafError::InvalidLoaf {
         path: loaf_path.to_path_buf(),
         message: "source-authority loaf file has no parent directory".to_string(),
     })?;
     let artifact_plan = loaf.plan.materialize_trusted_store(artifact_root, &receipt.intent)?;
     Ok(OvenToolchainLoaf {
+        loaf_identity,
         loaf_build_unit_identity: loaf.build_unit_identity,
         artifacts: loaf.plan,
         registry_leaves: loaf.registry_leaves,
@@ -3230,7 +3284,7 @@ mod tests {
         acquire_loaf_generation_lock, committed_loaf_envelope_compatibility_identity, committed_loaf_paths,
         digest_runtime_crate_source, loaf_envelope_inspection_packages, loaf_envelope_specifications, loaf_from_loaf,
         merge_loaf_inspection_sources, registry_source_dependencies_supported_by_catalog, run_bounded_loaf_cargo,
-        select_most_specific_compatible_loaf,
+        select_most_specific_compatible_loaf, validate_loaf_declared_file_set,
     };
     use crate::manifest::{DependencySource, DependencySpec};
     use crate::oven::legacy_cargo::OvenLegacyCargoInspectionSource;
@@ -3779,6 +3833,7 @@ mod tests {
             },
         });
         let native = super::OvenToolchainLoaf {
+            loaf_identity: "sha256:fixture-loaf".to_string(),
             loaf_build_unit_identity: receipt.build_unit_identity,
             artifacts,
             registry_leaves: Vec::new(),
@@ -3896,9 +3951,14 @@ mod tests {
         assert_eq!(resolved.artifact_root, loaf.path());
         assert!(resolved.artifact_plan.externs.is_empty());
 
+        // An immutable consumer validates only the manifest-declared files it can pass to Rustc. An unrelated
+        // extra file therefore cannot influence execution and must not trigger a full recursive directory walk on
+        // every normal command. The explicit whole-Loaf audit below retains the stronger undeclared-file check.
         fs::write(loaf.path().join("unsealed-extra.bin"), "not part of the Loaf")?;
-        let error = match loaf_from_loaf(&second_receipt, &loaf_path, OvenLoafSelection::Exact) {
-            Ok(_) => return Err("selected Loaf with an undeclared file must fail closed".into()),
+        let selection = loaf_from_loaf(&second_receipt, &loaf_path, OvenLoafSelection::Exact)?;
+        assert_eq!(selection.artifact_root, loaf.path());
+        let error = match validate_loaf_declared_file_set(&loaf_payload, &loaf_path) {
+            Ok(()) => return Err("a whole-Loaf audit must reject undeclared files".into()),
             Err(error) => error,
         };
         assert!(error.to_string().contains("undeclared file"));

@@ -56,16 +56,17 @@ use crate::oven::interop::{
     load_interop_execution_receipt, validate_interop_execution_receipt,
 };
 use crate::oven::legacy_cargo::{
-    OvenLegacyCargoDirectDependencyClosure, OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind,
-    direct_rustc_compile_environment, prepare_direct_rustc_plan,
+    OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION, OvenLegacyCargoBaseLoaf, OvenLegacyCargoDirectDependencyClosure,
+    OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind, OvenProjectExtensionPayload,
+    direct_rustc_compile_environment, direct_rustc_reusable_project_plan_environment, prepare_direct_rustc_plan,
 };
 use crate::oven::loaf::{
-    OVEN_LOAF_ENV, OVEN_LOAF_MISS_GUIDANCE, OvenLoafSelection, OvenToolchainLoaf,
-    resolve_toolchain_loaf_for_registry_dependencies, runtime_build_unit_inputs,
+    OVEN_LOAF_ENV, OVEN_LOAF_MISS_GUIDANCE, OvenLoafSelection, OvenToolchainLoaf, resolve_toolchain_loaf,
+    resolve_toolchain_loaf_by_identity, resolve_toolchain_loaf_for_registry_dependencies, runtime_build_unit_inputs,
 };
 use crate::oven::rustc::{
     OvenCallerOwnedRustcLibrary, OvenRegistryLeafAuthority, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
-    OvenRustcError, OvenSelectedPathRustcAuthority, OvenTrustedDirectRustcTargetRequest,
+    OvenRustcError, OvenSelectedPathRustcAuthority, OvenTrustedDirectRustcTargetRequest, OvenTrustedRustcArtifactRoot,
     attach_caller_owned_rustc_libraries, bake_trusted_direct_rustc_library, bake_trusted_direct_rustc_proc_macro,
     bake_trusted_direct_rustc_run, clear_inherited_cargo_environment, direct_rustc_source_extern_names,
     materialize_declared_rust_libraries_with_selected_path_authority, resolve_active_rustc, rustc_host_target,
@@ -74,7 +75,8 @@ use crate::oven::rustc::{
 };
 use crate::oven::store::{OvenArtifactKind, OvenStore, OvenStoreLease};
 use crate::oven::{
-    OvenGeneratedProjectRequest, digest_bytes, digest_dependency_specs, receipt_generated_project, write_receipt,
+    OvenGeneratedProjectRequest, digest_bytes, digest_dependency_specs, generated_project_source_evidence,
+    receipt_generated_project, receipt_generated_project_with_source_evidence, write_receipt,
 };
 use crate::oven_interop::locked_oven_interop_targets;
 use crate::provider::{
@@ -311,6 +313,7 @@ impl OvenBakeProjectTarget {
 pub(crate) enum OvenDirectRustcPlanSelection {
     Stored(Box<OvenStoredDirectRustcExecutionPlan>),
     ToolchainLoaf(Box<OvenToolchainLoaf>),
+    ProjectExtension(Box<OvenProjectExtensionExecutionPlan>),
 }
 
 impl OvenDirectRustcPlanSelection {
@@ -321,6 +324,10 @@ impl OvenDirectRustcPlanSelection {
             Self::ToolchainLoaf(native) => {
                 format!("loaf:{}", native.loaf_build_unit_identity)
             }
+            Self::ProjectExtension(extension) => format!(
+                "loaf:{}+extension:{}",
+                extension.base.loaf_identity, extension.extension.identity
+            ),
         }
     }
 
@@ -329,10 +336,11 @@ impl OvenDirectRustcPlanSelection {
     /// Callers must derive both omission and selected-path authority from this same plan. Reconstructing only its
     /// crate-name set loses the path/receipt relationship that distinguishes a compiler runtime from a lookalike
     /// caller dependency.
-    fn artifact_plan(&self) -> &OvenRustcArtifactPlan {
+    pub(crate) fn artifact_plan(&self) -> &OvenRustcArtifactPlan {
         match self {
             Self::Stored(selected) => &selected.artifact_plan,
             Self::ToolchainLoaf(native) => &native.artifact_plan,
+            Self::ProjectExtension(extension) => &extension.artifact_plan,
         }
     }
 
@@ -340,7 +348,10 @@ impl OvenDirectRustcPlanSelection {
     ///
     /// The complete plan also carries compiler-private support crates. They remain available to compiler-owned
     /// roots, but must not cause a normal project declaration with the same crate name to be skipped.
-    fn source_artifact_plan(&self, source_evidence_key: &str) -> Result<OvenRustcArtifactPlan, OvenRustcError> {
+    pub(crate) fn source_artifact_plan(
+        &self,
+        source_evidence_key: &str,
+    ) -> Result<OvenRustcArtifactPlan, OvenRustcError> {
         match self {
             Self::Stored(selected) => trusted_artifact_plan_for_source_evidence(
                 &selected.artifact_plan,
@@ -350,6 +361,52 @@ impl OvenDirectRustcPlanSelection {
             Self::ToolchainLoaf(native) => {
                 trusted_artifact_plan_for_source_evidence(&native.artifact_plan, &native.artifacts, source_evidence_key)
             }
+            Self::ProjectExtension(extension) => trusted_artifact_plan_for_source_evidence(
+                &extension.artifact_plan,
+                &extension.artifacts,
+                source_evidence_key,
+            ),
+        }
+    }
+
+    /// Return the complete execution manifest retained by this selected closure.
+    pub(crate) fn artifacts(&self) -> &OvenRustcArtifactManifest {
+        match self {
+            Self::Stored(selected) => &selected.artifacts,
+            Self::ToolchainLoaf(native) => &native.artifacts,
+            Self::ProjectExtension(extension) => &extension.artifacts,
+        }
+    }
+
+    /// Return one immutable root used only for caller-output containment checks.
+    ///
+    /// A composed extension passes its extension root here while its already verified `artifact_plan` supplies paths
+    /// from both leased roots.  The output itself remains caller-owned and must be outside either root.
+    pub(crate) fn output_guard_root(&self) -> &Path {
+        match self {
+            Self::Stored(selected) => &selected.artifact_root,
+            Self::ToolchainLoaf(native) => &native.artifact_root,
+            Self::ProjectExtension(extension) => &extension.extension.artifact_root,
+        }
+    }
+
+    /// Return the one root that contains every vocabulary auxiliary closure, when it is not split across fragments.
+    pub(crate) fn vocab_artifact_root(&self) -> Option<&Path> {
+        match self {
+            Self::Stored(selected) => Some(&selected.artifact_root),
+            Self::ToolchainLoaf(native) => Some(&native.artifact_root),
+            Self::ProjectExtension(extension) => extension.vocab_artifact_root.as_deref(),
+        }
+    }
+
+    /// Build the registry authority from exactly the roots that form this selected closure.
+    pub(crate) fn registry_leaf_authority(&self) -> Option<OvenRegistryLeafAuthority> {
+        match self {
+            Self::Stored(selected) => selected
+                .artifacts
+                .registry_leaf_authority(&selected.artifact_root, &selected.artifact_plan),
+            Self::ToolchainLoaf(native) => Some(native.registry_leaf_authority()),
+            Self::ProjectExtension(extension) => extension.registry_leaf_authority.clone(),
         }
     }
 }
@@ -364,6 +421,26 @@ pub(crate) struct OvenStoredDirectRustcExecutionPlan {
     pub artifact_root: PathBuf,
     pub artifact_plan: OvenRustcArtifactPlan,
     _lease: OvenStoreLease,
+}
+
+/// Receipt-bound store entry that contributes only project-specific files to one exact compiler Loaf.
+struct OvenStoredProjectExtensionExecutionPlan {
+    identity: String,
+    artifact_root: PathBuf,
+    _lease: OvenStoreLease,
+}
+
+/// One complete direct-Rustc execution contract composed from a compiler Loaf and a store-owned project extension.
+///
+/// Both fields hold their independent leases/locks for the entire normal command.  The composed plan is resolved
+/// once before any compiler process starts, so publication/pruning cannot replace or reclaim one side mid-command.
+pub(crate) struct OvenProjectExtensionExecutionPlan {
+    base: OvenToolchainLoaf,
+    extension: OvenStoredProjectExtensionExecutionPlan,
+    artifacts: OvenRustcArtifactManifest,
+    artifact_plan: OvenRustcArtifactPlan,
+    registry_leaf_authority: Option<OvenRegistryLeafAuthority>,
+    vocab_artifact_root: Option<PathBuf>,
 }
 
 /// Resolve a receipt-compatible direct-Rustc payload while retaining the execution lease acquired during matching.
@@ -403,6 +480,186 @@ pub(crate) fn select_receipt_direct_rustc_execution_plan(
         artifact_plan,
         _lease: lease,
     }))
+}
+
+/// Select one receipt-bound project extension and reconstitute its exact base-plus-extension execution set.
+///
+/// The extension payload names the content address of the standard-library Loaf it was partitioned against.  A
+/// compatible substitute is deliberately not accepted: Rust metadata and a `-L` path are paired artifacts, so a
+/// newer Loaf with matching crate names could still be semantically different.  Both roots remain leased/locked in
+/// the returned selection and are composed before any direct-Rustc command starts.
+fn select_receipt_project_extension_execution_plan(
+    store: &OvenStore,
+    receipt: &crate::oven::OvenReceipt,
+) -> CliResult<Option<OvenProjectExtensionExecutionPlan>> {
+    let mut selected = store
+        .select_payloads_matching_for_execution(|manifest| {
+            manifest.kind == OvenArtifactKind::ProjectPayload
+                && manifest.build_unit_identity == receipt.build_unit_identity
+                && manifest.intent == receipt.intent
+        })
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    if selected.is_empty() {
+        return Ok(None);
+    }
+    if selected.len() != 1 {
+        let identities = selected
+            .iter()
+            .map(|candidate| candidate.manifest.identity.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(CliError::failure(format!(
+            "multiple receipt-compatible Oven project extension Loafs are available: {identities}"
+        )));
+    }
+    let (manifest, artifact_root, payload, lease) = selected.remove(0).into_parts();
+    let extension_payload = serde_json::from_slice::<OvenProjectExtensionPayload>(&payload).map_err(|error| {
+        CliError::failure(format!(
+            "selected Oven project extension Loaf has an invalid payload: {error}"
+        ))
+    })?;
+    if extension_payload.schema_version != OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION {
+        return Err(CliError::failure(format!(
+            "selected Oven project extension Loaf uses unsupported schema {}",
+            extension_payload.schema_version
+        )));
+    }
+    let base = resolve_toolchain_loaf_by_identity(receipt, &extension_payload.base_loaf_identity)
+        .map_err(|error| CliError::failure(error.to_string()))?
+        .ok_or_else(|| {
+            CliError::failure(format!(
+                "selected Oven project extension Loaf requires base `{}`, but that exact installed standard-library Loaf is unavailable; rebake the project for this Incan release",
+                extension_payload.base_loaf_identity
+            ))
+        })?;
+    if base.loaf_build_unit_identity != extension_payload.base_build_unit_identity {
+        return Err(CliError::failure(
+            "selected Oven project extension Loaf base does not authorize this receipt",
+        ));
+    }
+    let recomposed_plan = extension_payload
+        .publisher_plan
+        .with_compiler_runtime_family_from_base(&base.artifacts)
+        .map_err(oven_rustc_error)?;
+    if recomposed_plan != extension_payload.complete_plan {
+        return Err(CliError::failure(
+            "selected Oven project extension Loaf effective plan does not match its sealed publisher plan and exact base runtime",
+        ));
+    }
+    let partition = extension_payload
+        .complete_plan
+        .partition_against_base(&base.artifacts)
+        .map_err(oven_rustc_error)?;
+    let expected_extension_paths = partition.extension_paths.iter().cloned().collect::<Vec<_>>();
+    if extension_payload.extension_paths != expected_extension_paths {
+        return Err(CliError::failure(
+            "selected Oven project extension Loaf does not retain the exact delta derived from its base",
+        ));
+    }
+    if partition.base_paths.is_empty() || partition.extension_paths.is_empty() {
+        return Err(CliError::failure(
+            "selected Oven project extension Loaf must contain both a base fragment and a project-specific fragment",
+        ));
+    }
+    let base_fragment = extension_payload
+        .complete_plan
+        .artifact_fragment(&partition.base_paths)
+        .map_err(oven_rustc_error)?;
+    let extension_fragment = extension_payload
+        .complete_plan
+        .artifact_fragment(&partition.extension_paths)
+        .map_err(oven_rustc_error)?;
+    let base_artifacts = base_fragment.composition_artifacts().map_err(oven_rustc_error)?;
+    let extension_artifacts = extension_fragment.composition_artifacts().map_err(oven_rustc_error)?;
+    let roots = [
+        OvenTrustedRustcArtifactRoot {
+            artifact_root: &base.artifact_root,
+            dependency_search_paths: &base_fragment.dependency_search_paths,
+            native_search_paths: &base_fragment.native_search_paths,
+            supporting_artifacts: &base_artifacts,
+        },
+        OvenTrustedRustcArtifactRoot {
+            artifact_root: &artifact_root,
+            dependency_search_paths: &extension_fragment.dependency_search_paths,
+            native_search_paths: &extension_fragment.native_search_paths,
+            supporting_artifacts: &extension_artifacts,
+        },
+    ];
+    let artifact_plan = extension_payload
+        .complete_plan
+        .materialize_trusted_store_composed(&roots, &receipt.intent)
+        .map_err(oven_rustc_error)?;
+    let registry_leaf_entries = extension_payload
+        .complete_plan
+        .registry_leaves
+        .iter()
+        .map(|leaf| {
+            let artifact_root = if partition.base_paths.contains(&leaf.artifact.relative_path) {
+                base.artifact_root.clone()
+            } else if partition.extension_paths.contains(&leaf.artifact.relative_path) {
+                artifact_root.clone()
+            } else {
+                return Err(CliError::failure(format!(
+                    "selected Oven project extension Loaf has a registry leaf outside its declared base and extension fragments: {}",
+                    leaf.artifact.relative_path
+                )));
+            };
+            Ok((artifact_root, leaf.clone()))
+        })
+        .collect::<CliResult<Vec<_>>>()?;
+    let registry_leaf_authority = OvenRegistryLeafAuthority::from_composed_plan(registry_leaf_entries, &artifact_plan);
+    let vocab_paths = extension_payload
+        .complete_plan
+        .vocab_auxiliary_targets
+        .iter()
+        .flat_map(|target| target.externs.iter().map(|artifact| artifact.relative_path.as_str()))
+        .collect::<BTreeSet<_>>();
+    let vocab_artifact_root =
+        if vocab_paths.is_empty() || vocab_paths.iter().all(|path| partition.base_paths.contains(*path)) {
+            Some(base.artifact_root.clone())
+        } else if vocab_paths.iter().all(|path| partition.extension_paths.contains(*path)) {
+            Some(artifact_root.clone())
+        } else {
+            None
+        };
+    Ok(Some(OvenProjectExtensionExecutionPlan {
+        base,
+        extension: OvenStoredProjectExtensionExecutionPlan {
+            identity: manifest.identity,
+            artifact_root,
+            _lease: lease,
+        },
+        artifacts: extension_payload.complete_plan,
+        artifact_plan,
+        registry_leaf_authority,
+        vocab_artifact_root,
+    }))
+}
+
+/// Select either form of receipt-bound project publication from the bounded store.
+///
+/// Older valid project Loafs remain self-contained direct plans.  New extension Loafs are selected only with their
+/// exact base.  Keeping this migration rule here means explicit bake and normal consumers share one fail-closed
+/// decision rather than each having an incompatible interpretation of a stored payload.
+fn select_published_project_plan(
+    store: &OvenStore,
+    receipt: &crate::oven::OvenReceipt,
+    materialization: OvenToolchainMaterialization,
+) -> CliResult<Option<OvenDirectRustcPlanPreparation>> {
+    if let Some(selected) = select_receipt_direct_rustc_execution_plan(store, receipt)? {
+        return Ok(Some(OvenDirectRustcPlanPreparation {
+            plan_selection: OvenDirectRustcPlanSelection::Stored(Box::new(selected)),
+            materialization,
+        }));
+    }
+    Ok(
+        select_receipt_project_extension_execution_plan(store, receipt)?.map(|selected| {
+            OvenDirectRustcPlanPreparation {
+                plan_selection: OvenDirectRustcPlanSelection::ProjectExtension(Box::new(selected)),
+                materialization,
+            }
+        }),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -2527,14 +2784,7 @@ fn selected_direct_rustc_source_extern_names(
     selection: &OvenDirectRustcPlanSelection,
     source_evidence_key: &str,
 ) -> CliResult<BTreeSet<String>> {
-    match selection {
-        OvenDirectRustcPlanSelection::Stored(selected) => {
-            direct_rustc_source_extern_names(&selected.artifacts, source_evidence_key).map_err(oven_rustc_error)
-        }
-        OvenDirectRustcPlanSelection::ToolchainLoaf(native) => {
-            direct_rustc_source_extern_names(&native.artifacts, source_evidence_key).map_err(oven_rustc_error)
-        }
-    }
+    direct_rustc_source_extern_names(selection.artifacts(), source_evidence_key).map_err(oven_rustc_error)
 }
 
 /// Keep only declared Rust dependencies that the selected immutable plan does not already provide.
@@ -3151,6 +3401,12 @@ fn select_oven_direct_rustc_plan_with_materialization(
     if receipt_requires_final_interop_plan(receipt) {
         return Err(interop_final_plan_required_error());
     }
+    // A receipt-exact project Loaf is narrower than the release-wide standard-library family and must win when it
+    // exists. Selecting the broad family first would expose its fixture-only direct externs to a normal project,
+    // then bypass the exact base-plus-extension composition that the explicit baker already sealed.
+    if let Some(selected) = select_published_project_plan(store, receipt, OvenToolchainMaterialization::Reused)? {
+        return Ok(Some(selected));
+    }
     if let Some(native) = resolve_toolchain_loaf_for_registry_dependencies(
         receipt,
         OvenLoafSelection::CompilerOwnedProviderSuperset,
@@ -3163,31 +3419,29 @@ fn select_oven_direct_rustc_plan_with_materialization(
             materialization: OvenToolchainMaterialization::ToolchainLoaf,
         }));
     }
-    Ok(
-        select_receipt_direct_rustc_execution_plan(store, receipt)?.map(|selected| OvenDirectRustcPlanPreparation {
-            plan_selection: OvenDirectRustcPlanSelection::Stored(Box::new(selected)),
-            materialization: OvenToolchainMaterialization::Reused,
-        }),
-    )
+    Ok(None)
 }
 
-/// Publish a receipt-compatible generated-project closure at Oven's one
-/// explicit project-bake boundary.
+/// Publish a receipt-compatible generated-project extension at Oven's one explicit project-bake boundary.
 ///
 /// The compatibility baker owns Cargo only for this transaction. It creates a
 /// private bounded target, seals the verified direct-rustc artifacts into the
-/// shared Oven store, and removes the private target before returning. The
-/// release-scoped domain deliberately groups compatible project closures by
+/// shared Oven store, and removes the private target before returning. When a
+/// compatible full-stdlib Loaf is available, the baker writes only the
+/// digest-distinct project fragment and records that exact base identity. The
+/// release-scoped domain deliberately groups compatible project extensions by
 /// Incan version rather than by checkout path or generated-source digest; the
-/// receipt and direct-rustc plan remain the exact selection authority.
+/// receipt and complete direct-rustc plan remain the exact selection authority.
 fn bake_generated_project_compatibility_plan(
     store: &OvenStore,
     receipt: &crate::oven::OvenReceipt,
     generated_project: &Path,
     generated_root: &Path,
     rustc: &Path,
+    base_loaf: Option<&OvenToolchainLoaf>,
 ) -> CliResult<OvenToolchainMaterialization> {
-    let compile_environment = direct_rustc_compile_environment(generated_project, generated_root)
+    discard_stale_generated_cargo_lock(generated_project)?;
+    let compile_environment = direct_rustc_reusable_project_plan_environment(generated_project, generated_root)
         .map_err(|error| CliError::failure(error.to_string()))?;
     let publication = prepare_direct_rustc_plan(&OvenLegacyCargoPrepareRequest {
         store,
@@ -3197,6 +3451,7 @@ fn bake_generated_project_compatibility_plan(
             .map_err(|error| CliError::failure(format!("cannot resolve Cargo for explicit Oven bake: {error}")))?,
         rustc: rustc.to_path_buf(),
         sdk_inventory: None,
+        compiler_loaf_root: None,
         domain: format!("incan-release-{INCAN_VERSION}"),
         publication_kind: OvenLegacyCargoPublicationKind::Executable,
         source_evidence_key: "generated-root".to_string(),
@@ -3204,6 +3459,11 @@ fn bake_generated_project_compatibility_plan(
         inspection_packages: None,
         direct_dependency_closure: OvenLegacyCargoDirectDependencyClosure::GeneratedSource,
         compact_debug_info: false,
+        base_loaf: base_loaf.map(|base| OvenLegacyCargoBaseLoaf {
+            loaf_identity: base.loaf_identity.clone(),
+            build_unit_identity: base.loaf_build_unit_identity.clone(),
+            artifacts: &base.artifacts,
+        }),
     })
     .map_err(|error| CliError::failure(error.to_string()))?;
     Ok(if publication.cargo_version == "not-run-existing-plan" {
@@ -3211,6 +3471,35 @@ fn bake_generated_project_compatibility_plan(
     } else {
         OvenToolchainMaterialization::CompatibilityBaked
     })
+}
+
+/// Remove only the compiler-generated Cargo lock before a genuine explicit publisher miss.
+///
+/// The generated project lives below Incan's target output and its lock reflects an earlier generated manifest, not
+/// user-owned dependency authority. Keeping it after a source or manifest change makes Cargo reject the named
+/// publisher with `--locked` before it can produce the new receipt-bound closure. Normal build, run, and test never
+/// reach this function; a compatible published Loaf returns before it can cause a second publisher transaction.
+fn discard_stale_generated_cargo_lock(generated_project: &Path) -> CliResult<()> {
+    let lock_path = generated_project.join("Cargo.lock");
+    match fs::remove_file(&lock_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CliError::failure(format!(
+            "cannot refresh compiler-generated Cargo lock {} for explicit Oven bake: {error}",
+            lock_path.display()
+        ))),
+    }
+}
+
+/// Select the immutable full-stdlib base that an explicit project bake may extend.
+///
+/// The base is selected for exact runtime/provider compatibility only.  Caller-visible registry requirements are
+/// intentionally not part of this decision: an absent user dependency is precisely what the project extension is
+/// allowed to add after the explicit Cargo transaction.  Normal consumers still require a complete compatible base
+/// or a previously published extension and never invoke this helper as a fallback.
+fn project_extension_base_loaf(receipt: &crate::oven::OvenReceipt) -> CliResult<Option<OvenToolchainLoaf>> {
+    resolve_toolchain_loaf(receipt, OvenLoafSelection::CompilerOwnedProviderSuperset)
+        .map_err(|error| CliError::failure(error.to_string()))
 }
 
 /// Select a plan for an explicit project bake, publishing exactly once only
@@ -3233,26 +3522,25 @@ fn select_or_bake_generated_project_plan(
         // would either hide the bake behind an unrelated stdlib Loaf or reject the miss before this explicit action
         // has a chance to use its package-qualified Cargo capability. Normal build, run, and test never take this
         // branch because they pass `ConsumeOnly`.
-        if let Some(selected) = select_receipt_direct_rustc_execution_plan(store, receipt)? {
-            return Ok(Some(OvenDirectRustcPlanPreparation {
-                plan_selection: OvenDirectRustcPlanSelection::Stored(Box::new(selected)),
-                materialization: OvenToolchainMaterialization::Reused,
-            }));
+        if let Some(selected) = select_published_project_plan(store, receipt, OvenToolchainMaterialization::Reused)? {
+            return Ok(Some(selected));
         }
-        let materialization =
-            bake_generated_project_compatibility_plan(store, receipt, generated_project, generated_root, rustc)?;
-        return select_receipt_direct_rustc_execution_plan(store, receipt)?
-            .map(|selected| {
-                Some(OvenDirectRustcPlanPreparation {
-                    plan_selection: OvenDirectRustcPlanSelection::Stored(Box::new(selected)),
-                    materialization,
-                })
-            })
+        let base_loaf = project_extension_base_loaf(receipt)?;
+        let materialization = bake_generated_project_compatibility_plan(
+            store,
+            receipt,
+            generated_project,
+            generated_root,
+            rustc,
+            base_loaf.as_ref(),
+        )?;
+        return select_published_project_plan(store, receipt, materialization)?
             .ok_or_else(|| {
                 CliError::failure(
                     "the explicit Oven project bake completed without a receipt-compatible direct-rustc plan",
                 )
-            });
+            })
+            .map(Some);
     }
     if let Some(selected) = select_oven_direct_rustc_plan_with_materialization(store, receipt, registry_dependencies)? {
         return Ok(Some(selected));
@@ -3260,18 +3548,20 @@ fn select_or_bake_generated_project_plan(
     if mode != OvenProjectPlanMode::ExplicitBake {
         return Ok(None);
     }
-    let materialization =
-        bake_generated_project_compatibility_plan(store, receipt, generated_project, generated_root, rustc)?;
-    select_receipt_direct_rustc_execution_plan(store, receipt)?
-        .map(|selected| {
-            Some(OvenDirectRustcPlanPreparation {
-                plan_selection: OvenDirectRustcPlanSelection::Stored(Box::new(selected)),
-                materialization,
-            })
-        })
+    let base_loaf = project_extension_base_loaf(receipt)?;
+    let materialization = bake_generated_project_compatibility_plan(
+        store,
+        receipt,
+        generated_project,
+        generated_root,
+        rustc,
+        base_loaf.as_ref(),
+    )?;
+    select_published_project_plan(store, receipt, materialization)?
         .ok_or_else(|| {
             CliError::failure("the explicit Oven project bake completed without a receipt-compatible direct-rustc plan")
         })
+        .map(Some)
 }
 
 /// Return whether this receipt requires an exact final native interop plan rather than a base Loaf.
@@ -3326,14 +3616,7 @@ fn format_oven_registry_dependency_requirements(dependencies: &[DependencySpec])
 fn registry_leaf_authority_for_plan_selection(
     selection: &OvenDirectRustcPlanSelection,
 ) -> CliResult<Option<OvenRegistryLeafAuthority>> {
-    match selection {
-        OvenDirectRustcPlanSelection::Stored(selected) => Ok(selected
-            .artifacts
-            .registry_leaf_authority(&selected.artifact_root, &selected.artifact_plan)),
-        OvenDirectRustcPlanSelection::ToolchainLoaf(native) => Ok(native
-            .artifacts
-            .registry_leaf_authority(&native.artifact_root, &native.artifact_plan)),
-    }
+    Ok(selection.registry_leaf_authority())
 }
 
 /// Return the caller-owned Oven binary destination, intentionally outside generated-Cargo target layout.
@@ -3353,81 +3636,42 @@ fn bake_oven_project(
 ) -> CliResult<crate::oven::rustc::OvenDirectRustcBake> {
     let mut caller_owned_libraries = prepared.caller_owned_libraries.clone();
     let registry_authority = registry_leaf_authority_for_plan_selection(&prepared.plan_selection)?;
-    match &prepared.plan_selection {
-        OvenDirectRustcPlanSelection::Stored(selected) => {
-            if has_caller_owned_project_libraries(&prepared.provider_plan) {
-                let re_materialized = rematerialize_caller_owned_libraries(
-                    &prepared.provider_plan,
-                    profile,
-                    &selected.artifacts,
-                    &selected.artifact_root,
-                    &selected.artifact_plan,
-                    &prepared.rustc,
-                    prepared.generator.output_dir(),
-                    registry_authority.as_ref(),
-                )?;
-                replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
-            }
-            let mut artifact_plan = trusted_artifact_plan_for_source_evidence(
-                &selected.artifact_plan,
-                &selected.artifacts,
-                "generated-root",
-            )
-            .map_err(oven_rustc_error)?;
-            attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries)
-                .map_err(oven_rustc_error)?;
-            bake_trusted_direct_rustc_run(&OvenTrustedDirectRustcTargetRequest {
-                receipt: &prepared.receipt,
-                artifacts: &selected.artifacts,
-                artifact_root: &selected.artifact_root,
-                artifact_plan: Some(&artifact_plan),
-                rustc: &prepared.rustc,
-                source: &prepared.generator.crate_root_path(),
-                output: &oven_binary_path(prepared, profile),
-                crate_name: &prepared.crate_name,
-                edition: &prepared.rust_edition,
-                source_evidence_key: "generated-root",
-                features: &prepared.receipt.intent.features,
-                prefer_dynamic: false,
-            })
-            .map_err(oven_rustc_error)
-        }
-        OvenDirectRustcPlanSelection::ToolchainLoaf(native) => {
-            if has_caller_owned_project_libraries(&prepared.provider_plan) {
-                let re_materialized = rematerialize_caller_owned_libraries(
-                    &prepared.provider_plan,
-                    profile,
-                    &native.artifacts,
-                    &native.artifact_root,
-                    &native.artifact_plan,
-                    &prepared.rustc,
-                    prepared.generator.output_dir(),
-                    registry_authority.as_ref(),
-                )?;
-                replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
-            }
-            let mut artifact_plan =
-                trusted_artifact_plan_for_source_evidence(&native.artifact_plan, &native.artifacts, "generated-root")
-                    .map_err(oven_rustc_error)?;
-            attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries)
-                .map_err(oven_rustc_error)?;
-            bake_trusted_direct_rustc_run(&OvenTrustedDirectRustcTargetRequest {
-                receipt: &prepared.receipt,
-                artifacts: &native.artifacts,
-                artifact_root: &native.artifact_root,
-                artifact_plan: Some(&artifact_plan),
-                rustc: &prepared.rustc,
-                source: &prepared.generator.crate_root_path(),
-                output: &oven_binary_path(prepared, profile),
-                crate_name: &prepared.crate_name,
-                edition: &prepared.rust_edition,
-                source_evidence_key: "generated-root",
-                features: &prepared.receipt.intent.features,
-                prefer_dynamic: false,
-            })
-            .map_err(oven_rustc_error)
-        }
+    if has_caller_owned_project_libraries(&prepared.provider_plan) {
+        let re_materialized = rematerialize_caller_owned_libraries(
+            &prepared.provider_plan,
+            profile,
+            prepared.plan_selection.artifacts(),
+            prepared.plan_selection.output_guard_root(),
+            prepared.plan_selection.artifact_plan(),
+            &prepared.rustc,
+            prepared.generator.output_dir(),
+            registry_authority.as_ref(),
+        )?;
+        replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
     }
+    let mut artifact_plan = prepared
+        .plan_selection
+        .source_artifact_plan("generated-root")
+        .map_err(oven_rustc_error)?;
+    artifact_plan.compile_environment =
+        direct_rustc_compile_environment(prepared.generator.output_dir(), &prepared.generator.crate_root_path())
+            .map_err(|error| CliError::failure(error.to_string()))?;
+    attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries).map_err(oven_rustc_error)?;
+    bake_trusted_direct_rustc_run(&OvenTrustedDirectRustcTargetRequest {
+        receipt: &prepared.receipt,
+        artifacts: prepared.plan_selection.artifacts(),
+        artifact_root: prepared.plan_selection.output_guard_root(),
+        artifact_plan: Some(&artifact_plan),
+        rustc: &prepared.rustc,
+        source: &prepared.generator.crate_root_path(),
+        output: &oven_binary_path(prepared, profile),
+        crate_name: &prepared.crate_name,
+        edition: &prepared.rust_edition,
+        source_evidence_key: "generated-root",
+        features: &prepared.receipt.intent.features,
+        prefer_dynamic: false,
+    })
+    .map_err(oven_rustc_error)
 }
 
 /// Return the caller-owned direct-rustc library artifact path.
@@ -3456,81 +3700,42 @@ fn bake_oven_library(
     })?;
     let mut caller_owned_libraries = selected.caller_owned_libraries.clone();
     let registry_authority = registry_leaf_authority_for_plan_selection(&selected.plan_selection)?;
-    match &selected.plan_selection {
-        OvenDirectRustcPlanSelection::Stored(stored_plan) => {
-            if has_caller_owned_project_libraries(&selected.provider_plan) {
-                let re_materialized = rematerialize_caller_owned_libraries(
-                    &selected.provider_plan,
-                    profile,
-                    &stored_plan.artifacts,
-                    &stored_plan.artifact_root,
-                    &stored_plan.artifact_plan,
-                    &oven.rustc,
-                    &prepared.out_dir,
-                    registry_authority.as_ref(),
-                )?;
-                replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
-            }
-            let mut artifact_plan = trusted_artifact_plan_for_source_evidence(
-                &stored_plan.artifact_plan,
-                &stored_plan.artifacts,
-                "generated-root",
-            )
-            .map_err(oven_rustc_error)?;
-            attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries)
-                .map_err(oven_rustc_error)?;
-            bake_trusted_direct_rustc_library(&OvenTrustedDirectRustcTargetRequest {
-                receipt: &selected.receipt,
-                artifacts: &stored_plan.artifacts,
-                artifact_root: &stored_plan.artifact_root,
-                artifact_plan: Some(&artifact_plan),
-                rustc: &oven.rustc,
-                source: &prepared.generator.crate_root_path(),
-                output: &oven_library_path(prepared, oven, profile),
-                crate_name: &oven.crate_name,
-                edition: &oven.rust_edition,
-                source_evidence_key: "generated-root",
-                features: &selected.receipt.intent.features,
-                prefer_dynamic: false,
-            })
-            .map_err(oven_rustc_error)
-        }
-        OvenDirectRustcPlanSelection::ToolchainLoaf(native) => {
-            if has_caller_owned_project_libraries(&selected.provider_plan) {
-                let re_materialized = rematerialize_caller_owned_libraries(
-                    &selected.provider_plan,
-                    profile,
-                    &native.artifacts,
-                    &native.artifact_root,
-                    &native.artifact_plan,
-                    &oven.rustc,
-                    &prepared.out_dir,
-                    registry_authority.as_ref(),
-                )?;
-                replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
-            }
-            let mut artifact_plan =
-                trusted_artifact_plan_for_source_evidence(&native.artifact_plan, &native.artifacts, "generated-root")
-                    .map_err(oven_rustc_error)?;
-            attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries)
-                .map_err(oven_rustc_error)?;
-            bake_trusted_direct_rustc_library(&OvenTrustedDirectRustcTargetRequest {
-                receipt: &selected.receipt,
-                artifacts: &native.artifacts,
-                artifact_root: &native.artifact_root,
-                artifact_plan: Some(&artifact_plan),
-                rustc: &oven.rustc,
-                source: &prepared.generator.crate_root_path(),
-                output: &oven_library_path(prepared, oven, profile),
-                crate_name: &oven.crate_name,
-                edition: &oven.rust_edition,
-                source_evidence_key: "generated-root",
-                features: &selected.receipt.intent.features,
-                prefer_dynamic: false,
-            })
-            .map_err(oven_rustc_error)
-        }
+    if has_caller_owned_project_libraries(&selected.provider_plan) {
+        let re_materialized = rematerialize_caller_owned_libraries(
+            &selected.provider_plan,
+            profile,
+            selected.plan_selection.artifacts(),
+            selected.plan_selection.output_guard_root(),
+            selected.plan_selection.artifact_plan(),
+            &oven.rustc,
+            &prepared.out_dir,
+            registry_authority.as_ref(),
+        )?;
+        replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
     }
+    let mut artifact_plan = selected
+        .plan_selection
+        .source_artifact_plan("generated-root")
+        .map_err(oven_rustc_error)?;
+    artifact_plan.compile_environment =
+        direct_rustc_compile_environment(prepared.generator.output_dir(), &prepared.generator.crate_root_path())
+            .map_err(|error| CliError::failure(error.to_string()))?;
+    attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries).map_err(oven_rustc_error)?;
+    bake_trusted_direct_rustc_library(&OvenTrustedDirectRustcTargetRequest {
+        receipt: &selected.receipt,
+        artifacts: selected.plan_selection.artifacts(),
+        artifact_root: selected.plan_selection.output_guard_root(),
+        artifact_plan: Some(&artifact_plan),
+        rustc: &oven.rustc,
+        source: &prepared.generator.crate_root_path(),
+        output: &oven_library_path(prepared, oven, profile),
+        crate_name: &oven.crate_name,
+        edition: &oven.rust_edition,
+        source_evidence_key: "generated-root",
+        features: &selected.receipt.intent.features,
+        prefer_dynamic: false,
+    })
+    .map_err(oven_rustc_error)
 }
 
 /// Preserve direct-rustc diagnostics rather than reducing a normal Oven compilation failure to a generic status.
@@ -3547,7 +3752,14 @@ fn oven_rustc_error(error: OvenRustcError) -> CliError {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let output = format!("{rendered}\n{}", report.unstructured_output).trim().to_string();
+            let mut output = format!("{rendered}\n{}", report.unstructured_output).trim().to_string();
+            if let Some(invocation) = report.invocation {
+                if !output.is_empty() {
+                    output.push('\n');
+                }
+                output.push_str("direct rustc invocation: ");
+                output.push_str(&invocation);
+            }
             CliError::failure(if output.is_empty() {
                 "Oven direct-rustc compilation failed without a diagnostic transcript".to_string()
             } else {
@@ -4378,6 +4590,28 @@ fn prepare_library_project(
             oven_toolchain.ok_or_else(|| CliError::failure("normal Oven library build omitted toolchain"))?;
         let store = open_default_oven_store()?;
         let mut profiles = BTreeMap::new();
+        let oven_receipt_source_evidence_start = Instant::now();
+        let mut source_evidence_request = OvenGeneratedProjectRequest::new(
+            &project_root,
+            &project_name,
+            &project_version,
+            target.clone(),
+            toolchain.clone(),
+            "debug",
+            Vec::new(),
+        )
+        .with_generated_source("generated-root", generator.crate_root_path())
+        .with_generated_source_tree("generated-source-tree", generator.output_dir().join("src"));
+        for (name, value) in oven_build_inputs.as_ref().into_iter().flat_map(|inputs| inputs.iter()) {
+            source_evidence_request = source_evidence_request.with_build_unit_input(name.clone(), value.clone());
+        }
+        let generated_source_evidence = generated_project_source_evidence(&source_evidence_request)
+            .map_err(|error| CliError::failure(error.to_string()))?;
+        record_timing(
+            &mut timings_ms,
+            "library_oven_receipt_source_evidence",
+            oven_receipt_source_evidence_start,
+        );
         for profile in ["debug", "release"] {
             let mut receipt_request = OvenGeneratedProjectRequest::new(
                 &project_root,
@@ -4393,8 +4627,8 @@ fn prepare_library_project(
             for (name, value) in oven_build_inputs.as_ref().into_iter().flat_map(|inputs| inputs.iter()) {
                 receipt_request = receipt_request.with_build_unit_input(name.clone(), value.clone());
             }
-            let receipt =
-                receipt_generated_project(&receipt_request).map_err(|error| CliError::failure(error.to_string()))?;
+            let receipt = receipt_generated_project_with_source_evidence(&receipt_request, &generated_source_evidence)
+                .map_err(|error| CliError::failure(error.to_string()))?;
             let receipt_path = if profile == "release" {
                 crate::oven::default_receipt_path(&project_root)
             } else {
@@ -4404,6 +4638,7 @@ fn prepare_library_project(
             let required_registry_dependencies = format_oven_registry_dependency_requirements(
                 oven_inline_rust_dependencies.as_deref().unwrap_or_default(),
             );
+            let oven_select_direct_rustc_plan_start = Instant::now();
             let plan_preparation = select_or_bake_generated_project_plan(
                 oven_plan_mode,
                 &store,
@@ -4423,7 +4658,13 @@ fn prepare_library_project(
                     OVEN_LOAF_MISS_GUIDANCE,
                 ))
             })?;
+            record_timing(
+                &mut timings_ms,
+                "library_oven_select_direct_rustc_plan",
+                oven_select_direct_rustc_plan_start,
+            );
             let plan_selection = plan_preparation.plan_selection;
+            let oven_validate_direct_rustc_plan_start = Instant::now();
             let registry_authority = registry_leaf_authority_for_plan_selection(&plan_selection)?;
             let full_artifact_plan = plan_selection.artifact_plan();
             let artifact_plan = plan_selection
@@ -4441,6 +4682,12 @@ fn prepare_library_project(
                 &artifact_plan,
             );
             let selected_path_authority = compiler_selected_path_authority(full_artifact_plan, Some(&provider_plan));
+            record_timing(
+                &mut timings_ms,
+                "library_oven_validate_direct_rustc_plan",
+                oven_validate_direct_rustc_plan_start,
+            );
+            let oven_prepare_caller_owned_libraries_start = Instant::now();
             let mut caller_owned_libraries = oven_caller_owned_libraries(&provider_plan, profile)?;
             caller_owned_libraries.extend(
                 materialize_declared_rust_libraries_with_selected_path_authority(
@@ -4453,6 +4700,11 @@ fn prepare_library_project(
                     selected_path_authority.as_ref(),
                 )
                 .map_err(oven_rustc_error)?,
+            );
+            record_timing(
+                &mut timings_ms,
+                "library_oven_prepare_caller_owned_libraries",
+                oven_prepare_caller_owned_libraries_start,
             );
             caller_owned_libraries.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
             if caller_owned_libraries
@@ -4496,26 +4748,17 @@ fn prepare_library_project(
                 .profiles
                 .get("release")
                 .ok_or_else(|| CliError::failure("normal Oven library build did not prepare its release selection"))?;
-            match &release.plan_selection {
-                OvenDirectRustcPlanSelection::Stored(selected) => {
-                    let context = oven_vocab_direct_rustc_context_from_plan(
-                        &oven.rustc,
-                        &selected.artifact_plan,
-                        &selected.artifacts,
-                        &selected.artifact_root,
-                    )?;
-                    Some(context)
-                }
-                OvenDirectRustcPlanSelection::ToolchainLoaf(native) => {
-                    let context = oven_vocab_direct_rustc_context_from_plan(
-                        &oven.rustc,
-                        &native.artifact_plan,
-                        &native.artifacts,
-                        &native.artifact_root,
-                    )?;
-                    Some(context)
-                }
-            }
+            let artifact_root = release.plan_selection.vocab_artifact_root().ok_or_else(|| {
+                CliError::failure(
+                    "selected Oven project extension splits a vocabulary auxiliary closure across immutable roots; rebake against a compatible standard-library Loaf",
+                )
+            })?;
+            Some(oven_vocab_direct_rustc_context_from_plan(
+                &oven.rustc,
+                release.plan_selection.artifact_plan(),
+                release.plan_selection.artifacts(),
+                artifact_root,
+            )?)
         } else {
             None
         }
@@ -6002,6 +6245,7 @@ headers = ["interop/include/bridge.h"]
             !project.path().join("Cargo.lock").exists(),
             "a consume-only normal command must not create Cargo publisher state"
         );
+        fs::write(project.path().join("Cargo.lock"), "version = 4\n")?;
 
         let first = select_or_bake_generated_project_plan(
             OvenProjectPlanMode::ExplicitBake,
