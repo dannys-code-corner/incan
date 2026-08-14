@@ -662,7 +662,7 @@ fn compiler_suite_toolchain_data_plans_from_loaf_root(
             message: format!("{} is not a directory", loafs.display()),
         });
     }
-    let committed = crate::oven::loaf::acquire_committed_loaf_generation(&loafs)
+    let committed = crate::oven::loaf::acquire_committed_loaf_generation(loafs)
         .map_err(|error| OvenLegacyCargoError::InvalidInput {
             field: "compiler Loaf data",
             message: error.to_string(),
