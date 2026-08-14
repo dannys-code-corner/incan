@@ -1153,9 +1153,40 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.contains("fail-on-cache-miss: true")
             && workflow.contains("partition: [0, 1, 2, 3]")
             && workflow.matches("timeout-minutes: 20").count() >= 4
-            && workflow.matches("Install WASI target for vocab desugarers").count() == 5
+            && workflow.matches("Install WASI target for vocab desugarers").count() == 6
             && !workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and cap every Oven job at twenty minutes"
+        "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and cap every substantive Oven command at twenty minutes"
+    );
+    let replay_gate = workflow
+        .find("oven-linux-replay:")
+        .and_then(|start| {
+            workflow[start..]
+                .find("\n  oven-release-smoke:")
+                .map(|end| &workflow[start..start + end])
+        })
+        .ok_or("pull-request CI is missing the bounded Linux Oven replay gate")?;
+    let release_gate = workflow
+        .find("oven-release-smoke:")
+        .and_then(|start| {
+            workflow[start..]
+                .find("\n  audit:")
+                .map(|end| &workflow[start..start + end])
+        })
+        .ok_or("pull-request CI is missing the independent Oven release smoke gate")?;
+    assert!(
+        replay_gate.contains("timeout-minutes: 22")
+            && replay_gate.contains("make -s test-oven-partition")
+            && replay_gate.contains(".timing.total_elapsed_ms <= 1200000")
+            && !replay_gate.contains("test-oven-release-smoke"),
+        "the replay job needs a small setup-and-artifact margin while its measured Oven execution remains capped at twenty minutes"
+    );
+    assert!(
+        release_gate.contains("needs:\n      - changes\n      - linux-tool-handoff")
+            && release_gate.contains("timeout-minutes: 20")
+            && release_gate.contains("restore-sdk-provider-store")
+            && release_gate.contains("make -s test-oven-release-smoke")
+            && !release_gate.contains("test-oven-partition"),
+        "normal-command Cargo-guard proof must remain a bounded independent Linux gate rather than extend the heaviest replay worker"
     );
     assert!(
         platform_gate.contains("make -s test-prewarm-sdk")

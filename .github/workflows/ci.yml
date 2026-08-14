@@ -330,7 +330,10 @@ jobs:
       - changes
       - linux-oven-prewarm
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
+    # The measured Oven replay remains capped at twenty minutes below. This small
+    # job-level margin covers checkout, cache handoff, and report upload, which
+    # are outside the replay command and previously cancelled a 19m23s replay.
+    timeout-minutes: 22
     strategy:
       fail-fast: false
       matrix:
@@ -394,14 +397,11 @@ jobs:
           make -s test-oven-partition
           INCAN_TEST_OVEN_PARTITION_INDEX=${{ matrix.partition }}
           INCAN_TEST_OVEN_PARTITION_COUNT=4
-      - name: Bake the release Loafs and guard normal build, run, and test
-        if: matrix.partition == 0
-        run: >-
-          CARGO_NET_OFFLINE=true
-          INCAN_TEST_COMPILER_ALREADY_BUILT=1
-          INCAN_TEST_PREWARM_TOOLCHAIN=stable
-          INCAN_TEST_LOAF_TOOLCHAIN=stable
-          make -s test-oven-release-smoke
+      - name: Enforce bounded Oven replay time
+        run: |
+          jq -e \
+            '.timing.total_elapsed_ms <= 1200000' \
+            "target/oven-pr-linux-partition-${{ matrix.partition }}.json"
       - name: Upload Oven partition report
         if: always()
         uses: actions/upload-artifact@v6
@@ -410,6 +410,53 @@ jobs:
           path: target/oven-pr-linux-partition-${{ matrix.partition }}.json
           if-no-files-found: warn
           retention-days: 1
+
+  oven-release-smoke:
+    name: Oven release Loaf guard
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - linux-tool-handoff
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install WASI target for vocab desugarers
+        run: rustup target add wasm32-wasip1 --toolchain stable
+      - uses: ./.github/actions/install-nightly-toolchain
+        with:
+          toolchain: nightly-2026-03-24
+      - name: Install WASI target for the pinned Loaf baker
+        run: rustup target add wasm32-wasip1 --toolchain nightly-2026-03-24
+      - name: Restore Cargo sources
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
+          restore-keys: |
+            incan-oven-pr-sources-v1-stable-Linux-X64-
+      - name: Fetch locked compiler and Loaf publisher sources
+        run: |
+          make fetch-locked-cargo-sources
+          make fetch-oven-loaf-sources
+      - name: Download prewarmed compiler and reference generators
+        uses: actions/download-artifact@v6
+        with:
+          name: test-linux-tools
+          path: target/debug
+      - name: Restore executable permissions
+        run: chmod +x target/debug/incan target/debug/generate_lang_reference target/debug/generate_feature_inventory
+      - uses: ./.github/actions/restore-sdk-provider-store
+      - name: Bake the release Loafs and guard normal build, run, and test
+        run: >-
+          CARGO_NET_OFFLINE=true
+          INCAN_TEST_COMPILER_ALREADY_BUILT=1
+          INCAN_TEST_PREWARM_TOOLCHAIN=stable
+          INCAN_TEST_LOAF_TOOLCHAIN=stable
+          make -s test-oven-release-smoke
 
   audit:
     name: Security Audit
