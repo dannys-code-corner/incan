@@ -50,6 +50,11 @@ pub const OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION: u32 = 3;
 /// indexes continue to require version 1, so an older executor can never silently omit those `--extern` edges.
 pub const OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION: u32 = 2;
 pub(crate) const OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION_V1: u32 = 1;
+/// Wire schema for the immutable compiler-suite index.
+///
+/// Version 15 records a digest-verified source footprint for every independently admitted root. Consumers use that
+/// receipt-bound evidence to distribute roots without a mutable timing profile or a test-name scheduling table.
+pub const OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION: u32 = 15;
 /// Wire schema for one independently admitted compiler-suite dependency foundation.
 pub const OVEN_COMPILER_TEST_SUITE_FOUNDATION_SCHEMA_VERSION: u32 = 1;
 /// Wire schema for one independently admitted compiler-Loaf data partition.
@@ -381,6 +386,13 @@ pub struct OvenCompilerTestSuiteShardReference {
     pub identity: String,
     /// Complete root identity expected inside that shard payload.
     pub target: OvenCompilerTestSuiteTargetKey,
+    /// Digest-verified byte length of the exact receipt-authorized target source.
+    ///
+    /// A source path may occur in more than one resolved unit, so each immutable shard reference records its own
+    /// footprint even when another reference names the same path. Schema-15 consumers use this only to balance
+    /// independent replay work; it does not authorize a source or replace the receipt digest check before Rustc.
+    #[serde(default)]
+    pub source_bytes: u64,
 }
 
 /// One immutable compiler dependency foundation selected by a schema-10 root shard.
@@ -627,8 +639,9 @@ fn compiler_suite_foundation_plans(
 
 /// Split installed compiler-Loaf directories into deterministic schema-13 suite inputs.
 ///
-/// This reader remains only to execute already-published schema-13 suite entries. New schema-14 entries record one
-/// exact, lease-held compiler Loaf generation instead of copying these directories into the receipt-bound store.
+/// This reader remains only to execute already-published schema-13 suite entries. New schema-14-and-later entries
+/// record one exact, lease-held compiler Loaf generation instead of copying these directories into the receipt-bound
+/// store.
 #[cfg(test)]
 fn compiler_suite_toolchain_data_plans(
     data_root: &Path,
@@ -790,7 +803,8 @@ fn compiler_suite_toolchain_data_plans_from_loaf_root(
     Ok(plans)
 }
 
-/// Validate the compiler-owned standard-library generation that a schema-14 suite will lease at execution time.
+/// Validate the compiler-owned standard-library generation that a schema-14-or-later suite will lease at execution
+/// time.
 ///
 /// The suite index records this immutable generation identity instead of republishing its 1+ GiB contents into the
 /// receipt-bound store.  The same checks that protected schema-13 copied partitions run here before the index is
@@ -1688,6 +1702,11 @@ pub fn prepare_compiler_test_suite(
         shard_references.push(OvenCompilerTestSuiteShardReference {
             identity: manifest.identity,
             target: shard.target_key(),
+            source_bytes: compiler_suite_verified_target_source_bytes(
+                &generated_project,
+                &request.receipt,
+                &shard.target,
+            )?,
         });
         shard_requests.push(shard_request);
     }
@@ -1755,7 +1774,7 @@ pub fn prepare_compiler_test_suite(
     write_provenance(&provenance_path, &provenance)?;
     let cli_foundation_references = foundation_references.clone();
     let payload = OvenCompilerTestSuitePayload {
-        schema_version: 14,
+        schema_version: OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION,
         test_targets: Vec::new(),
         shard_references,
         foundation_references,
@@ -1861,23 +1880,23 @@ fn select_compiler_test_suite_identity(
                 "stored compiler-suite candidate {identity} has an invalid payload: {error}"
             ))
         })?;
-        // A schema-8 monolith remains readable for an already selected execution, but it is not an Alpha-shard
-        // publication hit. A later explicit publisher must be able to replace it rather than silently preserving
-        // the rejected multi-gigabyte retention shape.
-        if matches!(payload.schema_version, 9..=14)
+        // A prior schema remains readable only for an already-selected historical execution. It is never a
+        // publisher reuse hit: a new publisher version must replace it so newly required receipt evidence cannot
+        // be silently absent from a supposedly current immutable suite.
+        if payload.schema_version == OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION
             && payload.test_targets.is_empty()
             && payload.test_artifact_closure.is_none()
             && !payload.shard_references.is_empty()
+            && payload
+                .shard_references
+                .iter()
+                .all(|reference| reference.source_bytes > 0)
             && payload.cli_target.is_some()
             && payload.cli_artifact_closure.is_some()
-            && ((payload.schema_version == 9 && payload.foundation_references.is_empty())
-                || (matches!(payload.schema_version, 10..=14) && !payload.foundation_references.is_empty()))
-            && (payload.schema_version != 13
-                || (payload.toolchain_data_relative_root.is_none() && !payload.toolchain_data_references.is_empty()))
-            && (payload.schema_version != 14
-                || (payload.toolchain_data_relative_root.is_none()
-                    && payload.toolchain_data_references.is_empty()
-                    && payload.toolchain_loaf_generation.is_some()))
+            && !payload.foundation_references.is_empty()
+            && payload.toolchain_data_relative_root.is_none()
+            && payload.toolchain_data_references.is_empty()
+            && payload.toolchain_loaf_generation.is_some()
         {
             identities.push(identity);
         }
@@ -3893,6 +3912,58 @@ fn compiler_suite_target_from_unit(
         binary_dependencies,
         workspace_library_dependencies,
         externs,
+    })
+}
+
+/// Read one target source once more at publication and bind its footprint to the same receipt digest Rustc will
+/// enforce at execution.
+///
+/// This intentionally records a source-derived upper-level scheduling signal rather than a historic duration. A
+/// clean worktree with the same admitted receipt therefore derives the same replay layout without preserving host
+/// performance observations or a mutable test-specific profile.
+fn compiler_suite_verified_target_source_bytes(
+    compiler_root: &Path,
+    receipt: &OvenReceipt,
+    target: &OvenCompilerTestSuiteTarget,
+) -> Result<u64, OvenLegacyCargoError> {
+    let compiler_root = canonical_directory(compiler_root, "compiler root")?;
+    let source = verified_regular_file(
+        &compiler_root.join(&target.source_relative_path),
+        "compiler-suite target source footprint",
+    )?;
+    if !source.starts_with(&compiler_root) {
+        return Err(OvenLegacyCargoError::InvalidInput {
+            field: "compiler-suite target source footprint",
+            message: format!(
+                "target source {} escapes compiler root {}",
+                source.display(),
+                compiler_root.display()
+            ),
+        });
+    }
+    let source_bytes = regular_file_bytes(&source)?;
+    let expected_digest = receipt
+        .sources
+        .supplemental_digests
+        .get(&target.source_evidence_key)
+        .ok_or_else(|| OvenLegacyCargoError::ReceiptMismatch {
+            message: format!(
+                "compiler-suite receipt does not authorize target source `{}`",
+                target.source_relative_path
+            ),
+        })?;
+    let actual_digest = digest_bytes(&source_bytes);
+    if &actual_digest != expected_digest {
+        return Err(OvenLegacyCargoError::ReceiptMismatch {
+            message: format!(
+                "compiler-suite target source `{}` does not match its receipt evidence",
+                target.source_relative_path
+            ),
+        });
+    }
+    u64::try_from(source_bytes.len()).map_err(|_| OvenLegacyCargoError::InvalidInput {
+        field: "compiler-suite target source footprint",
+        message: format!("target source {} exceeds the supported byte range", source.display()),
     })
 }
 
@@ -7468,28 +7539,30 @@ mod tests {
         CargoInvocationOutput, CargoMetadata, CargoMetadataPackage, CargoMetadataResolve, CargoMetadataResolveNode,
         CargoUnitGraph, CargoUnitGraphDependency, CargoUnitGraphTarget, CargoUnitGraphUnit,
         CompilerSuiteArtifactCatalog, InspectionPackageScope, OVEN_COMPILER_TEST_PROFILE,
-        OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION, OvenCompilerTestSuiteArtifactClosure,
-        OvenCompilerTestSuiteFoundationReference, OvenCompilerTestSuitePayload, OvenCompilerTestSuiteShardPayload,
-        OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteTarget, OvenCompilerTestSuiteToolchainDataReference,
-        OvenLegacyCargoDirectDependencyClosure, OvenLegacyCargoInspectionPackage, OvenLegacyCargoInvocationTarget,
-        OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind, artifact_closure,
-        canonicalize_supporting_artifacts, compiler_suite_artifact_catalog, compiler_suite_artifact_index,
-        compiler_suite_bootstrap_selection, compiler_suite_cargo_build_output,
-        compiler_suite_cli_target_from_artifact_index, compiler_suite_dependency_artifact,
-        compiler_suite_dependency_directories, compiler_suite_direct_cli_plan, compiler_suite_direct_target_plan,
-        compiler_suite_direct_target_shard_from_catalog, compiler_suite_direct_target_shard_plan,
-        compiler_suite_foundation_dependencies, compiler_suite_foundation_lock, compiler_suite_foundation_manifest,
-        compiler_suite_foundation_plans, compiler_suite_output_artifact_paths, compiler_suite_target_externs,
-        compiler_suite_target_from_unit, compiler_suite_target_runner, compiler_suite_target_selection_features,
-        compiler_suite_target_selection_groups, compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
-        compiler_suite_toolchain_loaf_generation_reference, compiler_suite_workspace_libraries_for_roots,
-        create_publisher_staging, direct_rustc_compile_environment, direct_rustc_reusable_project_plan_environment,
-        generated_project_direct_dependencies, inspection_package_closure_ids, locked_generated_project,
-        materialized_files_from_directory, prepare_compiler_test_suite, prepare_direct_rustc_plan,
-        publisher_direct_dependencies, publisher_registry_source_catalog,
-        reclaim_unmaterialized_compiler_suite_target_files, run_legacy_cargo_invocation,
-        select_compiler_test_suite_identity, stage_compiler_suite_shard_files, stage_registry_source_directory,
-        stage_self_contained_sdk_provider_tree, validate_compiler_suite_unit_graph, validate_generated_registry_lock,
+        OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION, OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION,
+        OvenCompilerTestSuiteArtifactClosure, OvenCompilerTestSuiteFoundationReference, OvenCompilerTestSuitePayload,
+        OvenCompilerTestSuiteShardPayload, OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteTarget,
+        OvenCompilerTestSuiteToolchainLoafGenerationReference, OvenLegacyCargoDirectDependencyClosure,
+        OvenLegacyCargoInspectionPackage, OvenLegacyCargoInvocationTarget, OvenLegacyCargoPrepareRequest,
+        OvenLegacyCargoPublicationKind, artifact_closure, canonicalize_supporting_artifacts,
+        compiler_suite_artifact_catalog, compiler_suite_artifact_index, compiler_suite_bootstrap_selection,
+        compiler_suite_cargo_build_output, compiler_suite_cli_target_from_artifact_index,
+        compiler_suite_dependency_artifact, compiler_suite_dependency_directories, compiler_suite_direct_cli_plan,
+        compiler_suite_direct_target_plan, compiler_suite_direct_target_shard_from_catalog,
+        compiler_suite_direct_target_shard_plan, compiler_suite_foundation_dependencies,
+        compiler_suite_foundation_lock, compiler_suite_foundation_manifest, compiler_suite_foundation_plans,
+        compiler_suite_output_artifact_paths, compiler_suite_target_externs, compiler_suite_target_from_unit,
+        compiler_suite_target_runner, compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
+        compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
+        compiler_suite_toolchain_loaf_generation_reference, compiler_suite_verified_target_source_bytes,
+        compiler_suite_workspace_libraries_for_roots, create_publisher_staging, direct_rustc_compile_environment,
+        direct_rustc_reusable_project_plan_environment, generated_project_direct_dependencies,
+        inspection_package_closure_ids, locked_generated_project, materialized_files_from_directory,
+        prepare_compiler_test_suite, prepare_direct_rustc_plan, publisher_direct_dependencies,
+        publisher_registry_source_catalog, reclaim_unmaterialized_compiler_suite_target_files,
+        run_legacy_cargo_invocation, select_compiler_test_suite_identity, stage_compiler_suite_shard_files,
+        stage_registry_source_directory, stage_self_contained_sdk_provider_tree, validate_compiler_suite_unit_graph,
+        validate_generated_registry_lock,
     };
     use crate::oven::loaf::{
         OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf, OvenLoafEnvelopeManifest,
@@ -8454,6 +8527,54 @@ checksum = "selected"
     }
 
     #[test]
+    fn compiler_suite_source_footprint_is_bound_to_receipt_evidence() -> Result<(), Box<dyn std::error::Error>> {
+        let compiler_root = tempfile::tempdir()?;
+        fs::create_dir_all(compiler_root.path().join("src"))?;
+        fs::write(
+            compiler_root.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(compiler_root.path().join("Cargo.lock"), "version = 4\n")?;
+        let source_text = "pub fn fixture() {}\n";
+        fs::write(compiler_root.path().join("src/lib.rs"), source_text)?;
+        fs::write(compiler_root.path().join("src/main.rs"), "fn main() {}\n")?;
+        let receipt = receipt_native_compiler_suite(&OvenCompilerSuiteRequest::new(
+            compiler_root.path(),
+            "aarch64-apple-darwin",
+            "rustc fixture",
+            "debug",
+            Vec::new(),
+        ))?;
+        let target = OvenCompilerTestSuiteTarget {
+            package_name: "fixture".to_string(),
+            target_name: "fixture".to_string(),
+            target_kind: "lib".to_string(),
+            runner: "rustc-test".to_string(),
+            source_relative_path: "src/lib.rs".to_string(),
+            source_evidence_key: "compiler-suite-source:src/lib.rs".to_string(),
+            crate_name: "fixture".to_string(),
+            edition: "2024".to_string(),
+            features: Vec::new(),
+            compile_environment: BTreeMap::new(),
+            binary_dependencies: Vec::new(),
+            workspace_library_dependencies: Vec::new(),
+            externs: Vec::new(),
+        };
+
+        assert_eq!(
+            compiler_suite_verified_target_source_bytes(compiler_root.path(), &receipt, &target)?,
+            u64::try_from(source_text.len())?
+        );
+
+        fs::write(compiler_root.path().join("src/lib.rs"), "pub fn changed() {}\n")?;
+        let error = compiler_suite_verified_target_source_bytes(compiler_root.path(), &receipt, &target)
+            .err()
+            .ok_or("receipt-mismatched source footprint unexpectedly succeeded")?;
+        assert!(error.to_string().contains("does not match its receipt evidence"));
+        Ok(())
+    }
+
+    #[test]
     fn compiler_target_plan_keeps_workspace_library_edges_out_of_the_cargo_artifact_closure()
     -> Result<(), Box<dyn std::error::Error>> {
         let compiler_root = tempfile::tempdir()?;
@@ -8872,8 +8993,7 @@ checksum = "selected"
     }
 
     #[test]
-    fn publisher_does_not_reuse_a_schema_eight_monolith_as_a_schema_nine_suite()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn publisher_reuses_only_a_complete_current_schema_suite() -> Result<(), Box<dyn std::error::Error>> {
         let compiler_root = tempfile::tempdir()?;
         fs::create_dir_all(compiler_root.path().join("src"))?;
         fs::write(
@@ -8958,10 +9078,47 @@ checksum = "selected"
             shard_references: vec![OvenCompilerTestSuiteShardReference {
                 identity: "sha256:fixture-shard".to_string(),
                 target: target.key(),
+                source_bytes: 0,
             }],
             foundation_references: Vec::new(),
             toolchain_data_references: Vec::new(),
             toolchain_loaf_generation: None,
+            binary_targets: Vec::new(),
+            test_artifact_closure: None,
+            cli_artifact_closure: Some(empty_closure.clone()),
+            cli_foundation_references: Vec::new(),
+            cli_target: Some(target.clone()),
+            cli_workspace_libraries: Vec::new(),
+            sdk_inventory_relative_path: "providers/sdk-inventory.json".to_string(),
+            sdk_inventory_digest: "fixture".to_string(),
+            toolchain_data_relative_root: None,
+            warning_check_artifacts: empty_artifacts.clone(),
+        };
+        let _ = store.publish(&OvenArtifactPublishRequest {
+            receipt: receipt.clone(),
+            domain: "compiler-suite".to_string(),
+            kind: OvenArtifactKind::CompilerTestSuite,
+            payload: serde_json::to_vec(&schema_nine)?,
+            materialized_files: Vec::new(),
+        })?;
+        assert_eq!(select_compiler_test_suite_identity(&store, &receipt)?, None);
+
+        let schema_fifteen = OvenCompilerTestSuitePayload {
+            schema_version: OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION,
+            test_targets: Vec::new(),
+            shard_references: vec![OvenCompilerTestSuiteShardReference {
+                identity: "sha256:fixture-shard".to_string(),
+                target: target.key(),
+                source_bytes: 1,
+            }],
+            foundation_references: vec![OvenCompilerTestSuiteFoundationReference {
+                identity: "sha256:fixture-foundation".to_string(),
+                label: "foundation-0000".to_string(),
+            }],
+            toolchain_data_references: Vec::new(),
+            toolchain_loaf_generation: Some(OvenCompilerTestSuiteToolchainLoafGenerationReference {
+                generation_identity: "sha256:fixture-generation".to_string(),
+            }),
             binary_targets: Vec::new(),
             test_artifact_closure: None,
             cli_artifact_closure: Some(empty_closure),
@@ -8973,16 +9130,16 @@ checksum = "selected"
             toolchain_data_relative_root: None,
             warning_check_artifacts: empty_artifacts,
         };
-        let schema_nine_manifest = store.publish(&OvenArtifactPublishRequest {
+        let current_manifest = store.publish(&OvenArtifactPublishRequest {
             receipt: receipt.clone(),
             domain: "compiler-suite".to_string(),
             kind: OvenArtifactKind::CompilerTestSuite,
-            payload: serde_json::to_vec(&schema_nine)?,
+            payload: serde_json::to_vec(&schema_fifteen)?,
             materialized_files: Vec::new(),
         })?;
         assert_eq!(
             select_compiler_test_suite_identity(&store, &receipt)?,
-            Some(schema_nine_manifest.identity)
+            Some(current_manifest.identity)
         );
         Ok(())
     }
@@ -9035,21 +9192,21 @@ checksum = "selected"
             supporting_artifacts: Vec::new(),
         };
         let suite = OvenCompilerTestSuitePayload {
-            schema_version: 13,
+            schema_version: OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION,
             test_targets: Vec::new(),
             shard_references: vec![OvenCompilerTestSuiteShardReference {
                 identity: "sha256:fixture-shard".to_string(),
                 target: target.key(),
+                source_bytes: 1,
             }],
             foundation_references: vec![OvenCompilerTestSuiteFoundationReference {
                 identity: "sha256:fixture-foundation".to_string(),
                 label: "foundation-0000".to_string(),
             }],
-            toolchain_data_references: vec![OvenCompilerTestSuiteToolchainDataReference {
-                identity: "sha256:fixture-toolchain-data".to_string(),
-                label: "toolchain-data-0000".to_string(),
-            }],
-            toolchain_loaf_generation: None,
+            toolchain_data_references: Vec::new(),
+            toolchain_loaf_generation: Some(OvenCompilerTestSuiteToolchainLoafGenerationReference {
+                generation_identity: "sha256:fixture-generation".to_string(),
+            }),
             binary_targets: Vec::new(),
             test_artifact_closure: None,
             cli_artifact_closure: Some(empty_closure),

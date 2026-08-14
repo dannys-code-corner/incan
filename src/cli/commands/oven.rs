@@ -34,11 +34,11 @@ use crate::oven::interop::{
     write_interop_execution_receipt,
 };
 use crate::oven::legacy_cargo::{
-    OVEN_COMPILER_TEST_SUITE_FOUNDATION_SCHEMA_VERSION, OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION,
-    OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION_V1, OVEN_COMPILER_TEST_SUITE_TOOLCHAIN_DATA_SCHEMA_VERSION,
-    OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY_ENV, OvenCompilerTestSuiteFoundationPayload,
-    OvenCompilerTestSuiteFoundationReference, OvenCompilerTestSuitePayload, OvenCompilerTestSuiteShardPayload,
-    OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteToolchainDataPayload,
+    OVEN_COMPILER_TEST_SUITE_FOUNDATION_SCHEMA_VERSION, OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION,
+    OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION, OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION_V1,
+    OVEN_COMPILER_TEST_SUITE_TOOLCHAIN_DATA_SCHEMA_VERSION, OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY_ENV,
+    OvenCompilerTestSuiteFoundationPayload, OvenCompilerTestSuiteFoundationReference, OvenCompilerTestSuitePayload,
+    OvenCompilerTestSuiteShardPayload, OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteToolchainDataPayload,
     OvenCompilerTestSuiteToolchainDataReference, OvenCompilerWorkspaceLibrary, OvenCompilerWorkspaceLibraryKey,
     OvenLegacyCargoCompilerSuiteResult, OvenLegacyCargoDirectDependencyClosure, OvenLegacyCargoInspectionSource,
     OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind, legacy_cargo_inspection_sources,
@@ -1779,7 +1779,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     }
     let suite = serde_json::from_slice::<OvenCompilerTestSuitePayload>(&payload)
         .map_err(|error| CliError::failure(format!("stored Oven compiler suite payload is invalid: {error}")))?;
-    if !matches!(suite.schema_version, 8..=14) {
+    if !matches!(suite.schema_version, 8..=OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION) {
         return Err(CliError::failure(format!(
             "stored Oven compiler suite payload schema {} is unsupported",
             suite.schema_version
@@ -1795,6 +1795,12 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             "stored schema-8 compiler suites do not support target, exact-test, or partition selection; republish an indexed Oven suite"
                 .to_string(),
         ));
+    }
+    if options.partition_index.is_some() && suite.schema_version < OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION {
+        return Err(CliError::failure(format!(
+            "stored schema-{} compiler suites do not carry digest-verified source footprints for deterministic partitioning; republish the Oven suite",
+            suite.schema_version
+        )));
     }
     let selected_shard_references = compiler_suite_selected_shard_references(
         &suite.shard_references,
@@ -1861,7 +1867,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             let foundations = select_compiler_suite_foundations(&store, &receipt, &suite.foundation_references)?;
             (shards, foundations)
         }
-        11..=14 => {
+        11..=OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION => {
             if !suite.test_targets.is_empty()
                 || !suite.binary_targets.is_empty()
                 || suite.test_artifact_closure.is_some()
@@ -1886,20 +1892,20 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     } else {
         Vec::new()
     };
-    let (external_toolchain_data_root, _external_toolchain_generation) = if suite.schema_version == 14 {
+    let (external_toolchain_data_root, _external_toolchain_generation) = if suite.schema_version >= 14 {
         let reference = suite.toolchain_loaf_generation.as_ref().ok_or_else(|| {
             CliError::failure(
-                "schema-14 Oven compiler-suite index has no compiler Loaf generation reference".to_string(),
+                "schema-14-or-later Oven compiler-suite index has no compiler Loaf generation reference".to_string(),
             )
         })?;
         if !suite.toolchain_data_references.is_empty() {
             return Err(CliError::failure(
-                "schema-14 Oven compiler-suite index must not retain copied Loaf data partitions".to_string(),
+                "schema-14-or-later Oven compiler-suite index must not retain copied Loaf data partitions".to_string(),
             ));
         }
         let data_root = crate::toolchain_layout::compiler_owned_oven_data_root().ok_or_else(|| {
             CliError::failure(
-                "schema-14 Oven compiler-suite index requires the committed compiler-owned Loaf envelope selected by its receipt"
+                "schema-14-or-later Oven compiler-suite index requires the committed compiler-owned Loaf envelope selected by its receipt"
                     .to_string(),
             )
         })?;
@@ -1908,13 +1914,13 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             .map_err(oven_error)?
             .ok_or_else(|| {
                 CliError::failure(
-                    "schema-14 Oven compiler-suite index requires a committed compiler-owned Loaf generation"
+                    "schema-14-or-later Oven compiler-suite index requires a committed compiler-owned Loaf generation"
                         .to_string(),
                 )
             })?;
         if generation.generation_identity() != reference.generation_identity {
             return Err(CliError::failure(format!(
-                "schema-14 Oven compiler-suite index requires compiler Loaf generation `{}`, but the active toolchain provides `{}`",
+                "schema-14-or-later Oven compiler-suite index requires compiler Loaf generation `{}`, but the active toolchain provides `{}`",
                 reference.generation_identity,
                 generation.generation_identity(),
             )));
@@ -1927,7 +1933,9 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     // focused target need not itself own `incan_stdlib`, so retain the complete receipt-bound shard lease set solely
     // while deriving that shared capability. This does not broaden execution: the prepared-child queue below still
     // contains only `selected_shard_references`. It also avoids a fabricated ambient closure or Cargo recovery path.
-    let warning_check_shards = if matches!(suite.schema_version, 12..=14) && !options.targets.is_empty() {
+    let warning_check_shards = if matches!(suite.schema_version, 12..=OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION)
+        && !options.targets.is_empty()
+    {
         Some(select_compiler_suite_shards(
             &store,
             &receipt,
@@ -1942,7 +1950,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
         8 => suite.test_artifact_closure.as_ref().ok_or_else(|| {
             CliError::failure("stored compiler-suite payload has no direct-rustc test closure".to_string())
         })?,
-        9..=14 => suite.cli_artifact_closure.as_ref().ok_or_else(|| {
+        9..=OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION => suite.cli_artifact_closure.as_ref().ok_or_else(|| {
             CliError::failure("stored indexed compiler-suite payload has no compiler CLI closure".to_string())
         })?,
         _ => unreachable!("schema was validated above"),
@@ -1979,7 +1987,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             "cannot canonicalize stored compiler-suite SDK provider inventory: {error}"
         ))
     })?;
-    let compiler_data_root = if suite.schema_version == 14 {
+    let compiler_data_root = if suite.schema_version >= 14 {
         external_toolchain_data_root
     } else if suite.schema_version == 13 {
         Some(materialize_compiler_suite_toolchain_data(
@@ -1997,7 +2005,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     // map so a full test run does not rebuild (or retain) the same compiler libraries once per test root.
     let mut workspace_library_cache = BTreeMap::new();
     let mut binary_cache = BTreeMap::new();
-    let warning_check_artifacts = if matches!(suite.schema_version, 12..=14) {
+    let warning_check_artifacts = if matches!(suite.schema_version, 12..=OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION) {
         bake_compiler_suite_warning_check_artifacts(
             warning_check_shards,
             &receipt,
@@ -3057,10 +3065,10 @@ fn prepare_compiler_suite_child<'a>(
 
 /// Return whether one indexed compiler-suite schema composes its direct-Rustc plan from leased foundations.
 ///
-/// Schema 14 changes only how children reach the compiler-owned standard-library Loaf family. It retains the
-/// schema-10 foundation contract for Cargo-published third-party artifacts, so it must never bypass this path.
+/// Schema 14 and later change only how children reach the compiler-owned standard-library Loaf family. They retain
+/// the schema-10 foundation contract for Cargo-published third-party artifacts, so they must never bypass this path.
 fn compiler_suite_uses_indexed_foundations(schema_version: u32) -> bool {
-    matches!(schema_version, 10..=14)
+    matches!(schema_version, 10..=OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION)
 }
 
 /// Apply the package-qualified process capabilities owned by the compiler-suite registry.
@@ -3970,8 +3978,10 @@ struct PreparedCompilerSuiteChild<'a> {
 /// Select receipt-bound suite shards by their unique source-relative paths.
 ///
 /// Target selection is intentionally a read-only projection of the admitted suite rather than a new planning
-/// authority. This keeps focused diagnosis representative of the same direct-Rustc roots that a complete Oven run
-/// will execute, while making an unknown or ambiguous source path fail closed.
+/// authority. Partitioned selection uses the publisher-recorded, digest-verified source footprints as a stable
+/// scheduling signal; it never consults prior timings or persists a mutable performance profile. This keeps focused
+/// diagnosis representative of the same direct-Rustc roots that a complete Oven run will execute, while making an
+/// unknown or ambiguous source path fail closed.
 fn compiler_suite_selected_shard_references(
     references: &[OvenCompilerTestSuiteShardReference],
     requested_targets: &[String],
@@ -4004,33 +4014,53 @@ fn compiler_suite_selected_shard_references(
         ));
     }
     if let Some((index, count)) = partition {
+        if count > references.len() {
+            return Err(CliError::failure(format!(
+                "Oven compiler-suite partition count {count} exceeds the {} receipt-bound roots",
+                references.len()
+            )));
+        }
         let mut ordered = references.to_vec();
         ordered.sort_by(|left, right| {
+            right
+                .source_bytes
+                .cmp(&left.source_bytes)
+                .then_with(|| left.target.source_relative_path.cmp(&right.target.source_relative_path))
+                .then_with(|| left.identity.cmp(&right.identity))
+        });
+        let mut partitions = vec![Vec::new(); count];
+        let mut partition_weights = vec![0_u64; count];
+        for reference in ordered {
+            if reference.source_bytes == 0 {
+                return Err(CliError::failure(format!(
+                    "receipt-bound compiler-suite root `{}` has no digest-verified source footprint; republish the Oven suite",
+                    reference.target.source_relative_path
+                )));
+            }
+            let selected_partition = partition_weights
+                .iter()
+                .enumerate()
+                .min_by_key(|(partition_index, weight)| (**weight, *partition_index))
+                .map(|(partition_index, _)| partition_index)
+                .ok_or_else(|| CliError::failure("Oven compiler-suite has no partition capacity".to_string()))?;
+            partition_weights[selected_partition] = partition_weights[selected_partition]
+                .checked_add(reference.source_bytes)
+                .ok_or_else(|| {
+                    CliError::failure("Oven compiler-suite partition source footprint overflowed".to_string())
+                })?;
+            partitions[selected_partition].push(reference);
+        }
+        let mut selected = partitions
+            .get(index)
+            .cloned()
+            .ok_or_else(|| CliError::failure("Oven compiler-suite partition index is unavailable".to_string()))?;
+        selected.sort_by(|left, right| {
             left.target
                 .source_relative_path
                 .cmp(&right.target.source_relative_path)
                 .then_with(|| left.identity.cmp(&right.identity))
         });
-        if count > ordered.len() {
-            return Err(CliError::failure(format!(
-                "Oven compiler-suite partition count {count} exceeds the {} receipt-bound roots",
-                ordered.len()
-            )));
-        }
-        return Ok(ordered
-            .into_iter()
-            .enumerate()
-            // Rotate each complete source-order row across the workers. A plain
-            // `position % count` assignment repeatedly groups roots that are a
-            // multiple of the worker count apart, which creates avoidable
-            // stragglers when related integration roots sort in that pattern.
-            // This remains a deterministic projection of receipt evidence; it
-            // introduces no persisted performance profile or planning state.
-            .filter_map(|(position, reference)| {
-                let assigned_partition = (position + position / count) % count;
-                (assigned_partition == index).then_some(reference)
-            })
-            .collect());
+        return Ok(selected);
     }
     if requested_targets.is_empty() {
         return Ok(references.to_vec());
@@ -4802,23 +4832,35 @@ fn select_compiler_test_suite(
     compiler_root: &Path,
     rustc: &Path,
 ) -> CliResult<OvenStoreExecutionPayload> {
-    let mut selected = store
+    let selected = store
         .select_payloads_matching_for_execution(|manifest| {
             manifest.kind == OvenArtifactKind::CompilerTestSuite
                 && manifest.build_unit_identity == receipt.build_unit_identity
                 && manifest.intent == receipt.intent
         })
         .map_err(oven_error)?;
-    match selected.len() {
-        1 => Ok(selected.remove(0)),
+    let mut current_schema = Vec::new();
+    for candidate in selected {
+        let payload = serde_json::from_slice::<OvenCompilerTestSuitePayload>(&candidate.payload).map_err(|error| {
+            CliError::failure(format!(
+                "stored Oven compiler suite {} has an invalid payload: {error}",
+                candidate.manifest.identity
+            ))
+        })?;
+        if payload.schema_version == OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION {
+            current_schema.push(candidate);
+        }
+    }
+    match current_schema.len() {
+        1 => Ok(current_schema.remove(0)),
         0 => Err(CliError::failure(format!(
-            "no Oven compiler test suite is prepared for this exact receipt. The requested compiler-suite provider/dependency unit is not available for {} with rustc {}.",
+            "no current-schema Oven compiler test suite is prepared for this exact receipt. Republish the explicit Oven suite for {} with rustc {}.",
             compiler_root.display(),
             rustc.display(),
         ))),
         _ => Err(CliError::failure(format!(
-            "multiple Oven compiler test suites are prepared for one build unit: {}",
-            selected
+            "multiple current-schema Oven compiler test suites are prepared for one build unit: {}",
+            current_schema
                 .iter()
                 .map(|entry| entry.manifest.identity.as_str())
                 .collect::<Vec<_>>()
@@ -5535,10 +5577,11 @@ mod tests {
     };
     use crate::cli::{CliResult, OvenLoafEnvelopeArgument, OvenOutputFormat};
     use crate::oven::legacy_cargo::{
-        OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION_V1, OvenCompilerTestSuiteArtifactClosure,
-        OvenCompilerTestSuiteFoundationReference, OvenCompilerTestSuitePayload, OvenCompilerTestSuiteShardPayload,
-        OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteTarget, OvenCompilerTestSuiteToolchainDataReference,
-        OvenCompilerWorkspaceLibrary, OvenCompilerWorkspaceLibraryKey,
+        OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION, OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION_V1,
+        OvenCompilerTestSuiteArtifactClosure, OvenCompilerTestSuiteFoundationReference, OvenCompilerTestSuitePayload,
+        OvenCompilerTestSuiteShardPayload, OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteTarget,
+        OvenCompilerTestSuiteToolchainLoafGenerationReference, OvenCompilerWorkspaceLibrary,
+        OvenCompilerWorkspaceLibraryKey,
     };
     use crate::oven::loaf::{
         OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf, OvenLoafEnvelope,
@@ -5797,21 +5840,21 @@ mod tests {
             externs: Vec::new(),
         };
         let suite = OvenCompilerTestSuitePayload {
-            schema_version: 13,
+            schema_version: OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION,
             test_targets: Vec::new(),
             shard_references: vec![OvenCompilerTestSuiteShardReference {
                 identity: "sha256:fixture-shard".to_string(),
                 target: target.key(),
+                source_bytes: 1,
             }],
             foundation_references: vec![OvenCompilerTestSuiteFoundationReference {
                 identity: "sha256:fixture-foundation".to_string(),
                 label: "foundation-0000".to_string(),
             }],
-            toolchain_data_references: vec![OvenCompilerTestSuiteToolchainDataReference {
-                identity: "sha256:fixture-toolchain-data".to_string(),
-                label: "toolchain-data-0000".to_string(),
-            }],
-            toolchain_loaf_generation: None,
+            toolchain_data_references: Vec::new(),
+            toolchain_loaf_generation: Some(OvenCompilerTestSuiteToolchainLoafGenerationReference {
+                generation_identity: "sha256:fixture-generation".to_string(),
+            }),
             binary_targets: Vec::new(),
             test_artifact_closure: None,
             cli_artifact_closure: Some(OvenCompilerTestSuiteArtifactClosure {
@@ -5844,13 +5887,24 @@ mod tests {
             suite_store.path(),
             OvenStoreLimits::new(10_000_000, 10_000_000, 10_000_000),
         );
+        let mut superseded_suite = suite.clone();
+        superseded_suite.schema_version = OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION - 1;
         store.publish(&OvenArtifactPublishRequest {
-            receipt,
+            receipt: receipt.clone(),
+            domain: "compiler-suite-lsp".to_string(),
+            kind: OvenArtifactKind::CompilerTestSuite,
+            payload: serde_json::to_vec(&superseded_suite)?,
+            materialized_files: Vec::new(),
+        })?;
+        let current_manifest = store.publish(&OvenArtifactPublishRequest {
+            receipt: receipt.clone(),
             domain: "compiler-suite-lsp".to_string(),
             kind: OvenArtifactKind::CompilerTestSuite,
             payload: serde_json::to_vec(&suite)?,
             materialized_files: Vec::new(),
         })?;
+        let selected = super::select_compiler_test_suite(&store, &receipt, compiler_root.path(), &rustc)?;
+        assert_eq!(selected.manifest.identity, current_manifest.identity);
         let tools = tempfile::tempdir()?;
         let cargo_marker = tools.path().join("cargo-started");
         let cargo = tools.path().join("cargo");
@@ -6355,10 +6409,12 @@ mod tests {
             OvenCompilerTestSuiteShardReference {
                 identity: "sha256:first".to_string(),
                 target: target.key(),
+                source_bytes: 1,
             },
             OvenCompilerTestSuiteShardReference {
                 identity: "sha256:second".to_string(),
                 target: second.key(),
+                source_bytes: 1,
             },
         ];
 
@@ -6382,16 +6438,16 @@ mod tests {
     }
 
     #[test]
-    fn compiler_suite_partition_selection_is_disjoint_complete_and_receipt_bound()
+    fn compiler_suite_partition_selection_is_weighted_deterministic_complete_and_receipt_bound()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut target = OvenCompilerTestSuiteTarget {
             package_name: "fixture".to_string(),
             target_name: "root".to_string(),
             target_kind: "test".to_string(),
             runner: "rustc-test".to_string(),
-            source_relative_path: "tests/root_0.rs".to_string(),
-            source_evidence_key: "compiler-suite-source:tests/root_0.rs".to_string(),
-            crate_name: "root_0".to_string(),
+            source_relative_path: "tests/largest.rs".to_string(),
+            source_evidence_key: "compiler-suite-source:tests/largest.rs".to_string(),
+            crate_name: "largest".to_string(),
             edition: "2024".to_string(),
             features: Vec::new(),
             compile_environment: BTreeMap::new(),
@@ -6399,58 +6455,76 @@ mod tests {
             workspace_library_dependencies: Vec::new(),
             externs: Vec::new(),
         };
-        let references = (0..8)
-            .map(|index| {
-                target.target_name = format!("root_{index}");
-                target.source_relative_path = format!("tests/root_{index}.rs");
-                target.source_evidence_key = format!("compiler-suite-source:tests/root_{index}.rs");
-                target.crate_name = format!("root_{index}");
-                OvenCompilerTestSuiteShardReference {
-                    identity: format!("sha256:{index}"),
-                    target: target.key(),
-                }
-            })
-            .rev()
-            .collect::<Vec<_>>();
+        let mut references = [
+            ("largest", "tests/largest.rs", 100_u64),
+            ("medium_one", "tests/medium_one.rs", 30_u64),
+            ("medium_two", "tests/medium_two.rs", 30_u64),
+            ("medium_three", "tests/medium_three.rs", 30_u64),
+            ("shared_one", "tests/shared.rs", 1_u64),
+            ("shared_two", "tests/shared.rs", 1_u64),
+            ("small", "tests/small.rs", 1_u64),
+        ]
+        .into_iter()
+        .map(|(name, source_relative_path, source_bytes)| {
+            target.target_name = name.to_string();
+            target.source_relative_path = source_relative_path.to_string();
+            target.source_evidence_key = format!("compiler-suite-source:{source_relative_path}");
+            target.crate_name = name.to_string();
+            OvenCompilerTestSuiteShardReference {
+                identity: format!("sha256:{name}"),
+                target: target.key(),
+                source_bytes,
+            }
+        })
+        .collect::<Vec<_>>();
+        references.reverse();
 
         let selected = (0..4)
             .map(|index| compiler_suite_selected_shard_references(&references, &[], Some(index), Some(4)))
             .collect::<CliResult<Vec<_>>>()?;
-        assert!(selected.iter().all(|partition| partition.len() == 2));
-        let root_0_partition = selected
+        let mut reordered_references = references.clone();
+        reordered_references.reverse();
+        let selected_from_reordered = (0..4)
+            .map(|index| compiler_suite_selected_shard_references(&reordered_references, &[], Some(index), Some(4)))
+            .collect::<CliResult<Vec<_>>>()?;
+        assert_eq!(selected, selected_from_reordered);
+        let largest_partition = selected
             .iter()
-            .position(|partition| {
-                partition
-                    .iter()
-                    .any(|reference| reference.target.source_relative_path == "tests/root_0.rs")
-            })
-            .ok_or_else(|| "partition selection omitted tests/root_0.rs".to_string())?;
-        let root_4_partition = selected
+            .find(|partition| partition.iter().any(|reference| reference.identity == "sha256:largest"))
+            .ok_or_else(|| "partition selection omitted the largest receipt root".to_string())?;
+        assert_eq!(largest_partition.len(), 1);
+        assert_eq!(largest_partition[0].identity, "sha256:largest");
+        let selected_identities = selected
             .iter()
-            .position(|partition| {
-                partition
-                    .iter()
-                    .any(|reference| reference.target.source_relative_path == "tests/root_4.rs")
-            })
-            .ok_or_else(|| "partition selection omitted tests/root_4.rs".to_string())?;
-        assert_ne!(root_0_partition, root_4_partition);
-        let selected_paths = selected
-            .into_iter()
             .flatten()
-            .map(|reference| reference.target.source_relative_path)
+            .map(|reference| reference.identity.clone())
             .collect::<BTreeSet<_>>();
-        let receipt_paths = references
+        let receipt_identities = references
             .iter()
-            .map(|reference| reference.target.source_relative_path.clone())
+            .map(|reference| reference.identity.clone())
             .collect::<BTreeSet<_>>();
-        assert_eq!(selected_paths, receipt_paths);
+        assert_eq!(selected_identities, receipt_identities);
+        assert_eq!(selected.iter().map(Vec::len).sum::<usize>(), references.len());
+        let shared_identities = selected
+            .iter()
+            .flatten()
+            .filter(|reference| reference.target.source_relative_path == "tests/shared.rs")
+            .map(|reference| reference.identity.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            shared_identities,
+            BTreeSet::from(["sha256:shared_one".to_string(), "sha256:shared_two".to_string()])
+        );
         assert!(compiler_suite_selected_shard_references(&references, &[], Some(0), Some(0)).is_err());
         assert!(compiler_suite_selected_shard_references(&references, &[], Some(4), Some(4)).is_err());
         assert!(compiler_suite_selected_shard_references(&references, &[], Some(0), None).is_err());
         assert!(
-            compiler_suite_selected_shard_references(&references, &["tests/root_0.rs".to_string()], Some(0), Some(4),)
+            compiler_suite_selected_shard_references(&references, &["tests/largest.rs".to_string()], Some(0), Some(4),)
                 .is_err()
         );
+        let mut missing_footprint = references.clone();
+        missing_footprint[0].source_bytes = 0;
+        assert!(compiler_suite_selected_shard_references(&missing_footprint, &[], Some(0), Some(4)).is_err());
         Ok(())
     }
 
@@ -6494,9 +6568,9 @@ mod tests {
     }
 
     #[test]
-    fn compiler_suite_schema_fourteen_composes_its_leased_foundations() {
+    fn compiler_suite_schema_fifteen_composes_its_leased_foundations() {
         assert!(!compiler_suite_uses_indexed_foundations(9));
-        for schema_version in 10..=14 {
+        for schema_version in 10..=OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION {
             assert!(compiler_suite_uses_indexed_foundations(schema_version));
         }
     }
@@ -6613,6 +6687,7 @@ mod tests {
             &[OvenCompilerTestSuiteShardReference {
                 identity: manifest.identity.clone(),
                 target: target.key(),
+                source_bytes: 0,
             }],
             OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION_V1,
         )?;
