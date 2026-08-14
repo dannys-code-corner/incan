@@ -4020,7 +4020,16 @@ fn compiler_suite_selected_shard_references(
         return Ok(ordered
             .into_iter()
             .enumerate()
-            .filter_map(|(position, reference)| (position % count == index).then_some(reference))
+            // Rotate each complete source-order row across the workers. A plain
+            // `position % count` assignment repeatedly groups roots that are a
+            // multiple of the worker count apart, which creates avoidable
+            // stragglers when related integration roots sort in that pattern.
+            // This remains a deterministic projection of receipt evidence; it
+            // introduces no persisted performance profile or planning state.
+            .filter_map(|(position, reference)| {
+                let assigned_partition = (position + position / count) % count;
+                (assigned_partition == index).then_some(reference)
+            })
             .collect());
     }
     if requested_targets.is_empty() {
@@ -6408,6 +6417,23 @@ mod tests {
             .map(|index| compiler_suite_selected_shard_references(&references, &[], Some(index), Some(4)))
             .collect::<CliResult<Vec<_>>>()?;
         assert!(selected.iter().all(|partition| partition.len() == 2));
+        let root_0_partition = selected
+            .iter()
+            .position(|partition| {
+                partition
+                    .iter()
+                    .any(|reference| reference.target.source_relative_path == "tests/root_0.rs")
+            })
+            .ok_or_else(|| "partition selection omitted tests/root_0.rs".to_string())?;
+        let root_4_partition = selected
+            .iter()
+            .position(|partition| {
+                partition
+                    .iter()
+                    .any(|reference| reference.target.source_relative_path == "tests/root_4.rs")
+            })
+            .ok_or_else(|| "partition selection omitted tests/root_4.rs".to_string())?;
+        assert_ne!(root_0_partition, root_4_partition);
         let selected_paths = selected
             .into_iter()
             .flatten()
