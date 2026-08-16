@@ -1053,8 +1053,9 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
     assert!(
         partition_target.contains("INCAN_TEST_OVEN_PARTITION_INDEX")
             && partition_target.contains("INCAN_TEST_OVEN_PARTITION_COUNT")
+            && partition_target.contains("partition_display=$$(( $(INCAN_TEST_OVEN_PARTITION_INDEX) + 1 ))")
             && !partition_target.contains("test-prewarm-oven-loafs"),
-        "a partition replay must require explicit partition coordinates and never silently prewarm or bake"
+        "a partition replay must require explicit zero-based partition coordinates, display one-based progress, and never silently prewarm or bake"
     );
     let workflow = fs::read_to_string(repo_root().join(".github/workflows/ci.yml"))?;
     let linux_tools = workflow
@@ -1111,9 +1112,9 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
         "a rebuilt development compiler executable must not force an SDK provider cache miss"
     );
     assert!(
-        provider_cache_action.contains("actions/cache@v4")
+        provider_cache_action.contains("actions/cache@v5")
             && !provider_cache_action.contains("persist:")
-            && !provider_cache_action.contains("actions/cache/restore@v4"),
+            && !provider_cache_action.contains("actions/cache/restore@v5"),
         "the provider-store action must own one persistent source/toolchain-keyed input cache; the prepared-suite handoff is a separate exact-source replay cache"
     );
     let evidence_workflow = fs::read_to_string(repo_root().join(".github/workflows/oven_evidence.yml"))?;
@@ -1149,7 +1150,7 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.contains("oven-process-containment")
             && workflow.contains("oven-platform-smoke")
             && workflow.contains("oven-linux-replay")
-            && workflow.contains("actions/cache/save@v4")
+            && workflow.contains("actions/cache/save@v5")
             && workflow.contains("fail-on-cache-miss: true")
             && workflow.contains("partition: [0, 1, 2, 3]")
             && workflow.matches("timeout-minutes: 20").count() >= 4

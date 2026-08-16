@@ -289,7 +289,8 @@ test-oven: test-prewarm-oven-loafs
 test-oven-partition:
 	@test -n "$(INCAN_TEST_OVEN_PARTITION_INDEX)" || { echo "INCAN_TEST_OVEN_PARTITION_INDEX is required" >&2; exit 2; }
 	@test -n "$(INCAN_TEST_OVEN_PARTITION_COUNT)" || { echo "INCAN_TEST_OVEN_PARTITION_COUNT is required" >&2; exit 2; }
-	@echo "\033[1mRunning prepared Oven compiler-suite partition $(INCAN_TEST_OVEN_PARTITION_INDEX)/$(INCAN_TEST_OVEN_PARTITION_COUNT)...\033[0m"
+	@partition_display=$$(( $(INCAN_TEST_OVEN_PARTITION_INDEX) + 1 )); \
+		echo "\033[1mRunning prepared Oven compiler-suite partition $$partition_display/$(INCAN_TEST_OVEN_PARTITION_COUNT)...\033[0m"
 	@$(MAKE) --no-print-directory test-oven-replay \
 		INCAN_TEST_OVEN_COMPILER_SUITE_PARTITION_ARGS='--partition-index $(INCAN_TEST_OVEN_PARTITION_INDEX) --partition-count $(INCAN_TEST_OVEN_PARTITION_COUNT)'
 

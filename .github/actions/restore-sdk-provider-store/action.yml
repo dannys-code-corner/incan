@@ -14,7 +14,7 @@ runs:
     - name: Restore and save compiled SDK provider store
       # The compiler independently validates the content-addressed store. The cache accelerates an exact match but
       # never becomes the authority for provider compatibility.
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: target/incan_test_sdk_provider_store
         key: >-
