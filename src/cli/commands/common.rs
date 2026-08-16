@@ -2011,6 +2011,7 @@ impl CompilationSession {
         Ok(cached.entry(used_module_paths).or_insert(plan).clone())
     }
 
+    /// Return the number of provider projections cached by this compilation session.
     #[cfg(test)]
     pub(crate) fn provider_plan_cache_entry_count(&self) -> CliResult<usize> {
         self.provider_plans_by_modules

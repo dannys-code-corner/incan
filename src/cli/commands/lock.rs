@@ -108,16 +108,19 @@ thread_local! {
     };
 }
 
+/// Reset project-lock collection metrics for the current test thread.
 #[cfg(test)]
 pub(crate) fn reset_project_lock_collection_metrics() {
     PROJECT_LOCK_COLLECTION_METRICS.set(ProjectLockCollectionMetrics::default());
 }
 
+/// Return the current project-lock collection metrics for this test thread.
 #[cfg(test)]
 fn project_lock_collection_metrics() -> ProjectLockCollectionMetrics {
     PROJECT_LOCK_COLLECTION_METRICS.get()
 }
 
+/// Apply one update to the project-lock collection metrics for this test thread.
 #[cfg(test)]
 fn update_project_lock_collection_metrics(update: impl FnOnce(&mut ProjectLockCollectionMetrics)) {
     let mut metrics = PROJECT_LOCK_COLLECTION_METRICS.get();
@@ -125,12 +128,14 @@ fn update_project_lock_collection_metrics(update: impl FnOnce(&mut ProjectLockCo
     PROJECT_LOCK_COLLECTION_METRICS.set(metrics);
 }
 
+/// Return the context-collection and session-discovery counts for this test thread.
 #[cfg(test)]
 pub(crate) fn project_lock_collection_counts() -> (usize, usize) {
     let metrics = project_lock_collection_metrics();
     (metrics.context_collections, metrics.session_discoveries)
 }
 
+/// Record one project-lock context collection for this test thread.
 #[cfg(test)]
 fn record_project_lock_context_collection() {
     update_project_lock_collection_metrics(|metrics| {
@@ -138,6 +143,7 @@ fn record_project_lock_context_collection() {
     });
 }
 
+/// Record one project-lock compilation-session discovery for this test thread.
 #[cfg(test)]
 fn record_project_lock_session_discovery() {
     update_project_lock_collection_metrics(|metrics| {
@@ -145,6 +151,7 @@ fn record_project_lock_session_discovery() {
     });
 }
 
+/// Record one project-lock authority snapshot read for this test thread.
 #[cfg(test)]
 fn record_project_lock_authority_snapshot_read() {
     update_project_lock_collection_metrics(|metrics| {
@@ -152,6 +159,7 @@ fn record_project_lock_authority_snapshot_read() {
     });
 }
 
+/// Record one project-lock provider-plan projection for this test thread.
 #[cfg(test)]
 fn record_project_lock_provider_plan_projection() {
     update_project_lock_collection_metrics(|metrics| {
@@ -996,6 +1004,7 @@ impl PreparedOvenProjectRegistrySourceAuthorities {
     }
 }
 
+/// Build the diagnostic for a completed project Loaf that does not cover the requested inspection surface.
 #[cfg(feature = "rust_inspect")]
 fn project_inspection_selection_mismatch(requested_surface: &str) -> CliError {
     CliError::failure(format!(
@@ -1441,6 +1450,7 @@ pub(crate) struct OvenLockValidationRequest<'a> {
     pub sdk_profile_override: Option<&'a str>,
 }
 
+/// Validate strict Oven lock policy without a pre-existing command compilation session.
 pub(crate) fn validate_oven_lock_policy(
     project_root: &Path,
     manifest: Option<&ProjectManifest>,
@@ -1472,6 +1482,7 @@ pub(crate) fn validate_oven_lock_policy_with_session(
     validate_oven_lock_policy_impl(request, Some(session))
 }
 
+/// Validate strict Oven lock policy using an optional command-owned compilation session.
 fn validate_oven_lock_policy_impl(
     request: OvenLockValidationRequest<'_>,
     command_session: Option<&CompilationSession>,
@@ -1706,6 +1717,7 @@ pub(crate) struct PublishedOvenProjectLock {
 }
 
 impl PublishedOvenProjectLock {
+    /// Return the exact normal and test dependency surface used to publish the canonical lock.
     pub(crate) fn dependency_surface(&self) -> &ResolvedDependencies {
         &self.dependency_surface
     }

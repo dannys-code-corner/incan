@@ -995,6 +995,7 @@ impl OvenPackagedProviderExecutionPlan {
         }
     }
 
+    /// Return the composed direct-Rustc plan for this packaged-provider closure.
     fn artifact_plan(&self) -> &OvenRustcArtifactPlan {
         match self {
             Self::Extensions(packages) => &packages.artifact_plan,
@@ -1002,6 +1003,7 @@ impl OvenPackagedProviderExecutionPlan {
         }
     }
 
+    /// Return the merged artifact manifest for this packaged-provider closure.
     fn artifacts(&self) -> &OvenRustcArtifactManifest {
         match self {
             Self::Extensions(packages) => &packages.artifacts,
@@ -1009,6 +1011,7 @@ impl OvenPackagedProviderExecutionPlan {
         }
     }
 
+    /// Return the immutable root used for caller-output containment checks.
     fn output_guard_root(&self) -> &Path {
         match self {
             Self::Extensions(packages) => &packages.output_guard_root,
@@ -1016,6 +1019,7 @@ impl OvenPackagedProviderExecutionPlan {
         }
     }
 
+    /// Return the root containing the complete vocabulary auxiliary closure, when one exists.
     fn vocab_artifact_root(&self) -> Option<&Path> {
         match self {
             Self::Extensions(packages) => packages.vocab_artifact_root.as_deref(),
@@ -1023,6 +1027,7 @@ impl OvenPackagedProviderExecutionPlan {
         }
     }
 
+    /// Return the registry-leaf authority assembled for the selected package fragments.
     fn registry_leaf_authority(&self) -> Option<OvenRegistryLeafAuthority> {
         match self {
             Self::Extensions(packages) => packages.registry_leaf_authority.clone(),
@@ -1031,6 +1036,7 @@ impl OvenPackagedProviderExecutionPlan {
     }
 }
 
+/// Restore package-fragment dependency paths under their owning roots, then normalize the resulting search list.
 fn retain_packaged_provider_fragment_dependency_search_paths<'a>(
     plan: &mut OvenRustcArtifactPlan,
     fragments: impl IntoIterator<Item = (&'a Path, &'a [String])>,
@@ -2144,12 +2150,14 @@ enum RustExternBuildFailureKind {
     FeatureGatedBackingPath,
 }
 
+/// Return whether a declaration's decorators include `rust.extern`.
 fn has_rust_extern_decorator(decorators: &[Spanned<Decorator>]) -> bool {
     decorators
         .iter()
         .any(|d| d.node.path.segments.join(".") == "rust.extern")
 }
 
+/// Collect source contexts for Rust extern declarations in Rust-backed modules.
 fn collect_rust_extern_contexts(modules: &[ParsedModule]) -> Vec<RustExternDeclContext> {
     let mut contexts = Vec::new();
     for module in modules {
@@ -2376,6 +2384,7 @@ fn collect_library_rust_abi(
 }
 
 #[allow(dead_code)]
+/// Classify a supported Rust compiler failure that mentions the declared item or its backing module.
 fn classify_rust_extern_build_failure(
     stderr: &str,
     item_name: &str,
@@ -2404,6 +2413,7 @@ fn classify_rust_extern_build_failure(
 }
 
 #[allow(dead_code)]
+/// Render deduplicated Incan diagnostics for recognized Rust extern build failures.
 fn format_rust_extern_wrapped_diagnostics(stderr: &str, contexts: &[RustExternDeclContext]) -> Option<String> {
     let mut rendered = String::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -2468,6 +2478,7 @@ fn resolve_library_project_root(file_path: Option<&str>) -> CliResult<PathBuf> {
     env::current_dir().map_err(|e| CliError::failure(format!("failed to determine current directory: {e}")))
 }
 
+/// Resolve and require the project's canonical `src/lib.incn` entrypoint.
 fn validate_library_entrypoint(manifest: &ProjectManifest) -> CliResult<PathBuf> {
     let lib_entry = manifest.project_root().join("src").join("lib.incn");
     if !lib_entry.is_file() {
@@ -2479,6 +2490,7 @@ fn validate_library_entrypoint(manifest: &ProjectManifest) -> CliResult<PathBuf>
     Ok(lib_entry)
 }
 
+/// Return the generated module key for canonicalized source path segments.
 fn module_key(path_segments: &[String]) -> String {
     canonicalize_source_module_segments(path_segments).join("_")
 }
@@ -6304,6 +6316,7 @@ fn project_inspection_test_dependency_roots(
     Ok(roots)
 }
 
+/// Publish and lease the receipt-bound project inspection authority for the selected execution plan.
 fn publish_project_inspection_authority(
     store: &OvenStore,
     project_root: &Path,
@@ -10300,6 +10313,7 @@ impl ProjectSourceAuthorityDigester {
             .unwrap_or_default()
     }
 
+    /// Record one cache-miss project-tree scan for this canonical root.
     #[cfg(test)]
     fn record_project_scan(&mut self, canonical_root: &Path) {
         *self
@@ -10308,6 +10322,7 @@ impl ProjectSourceAuthorityDigester {
             .or_default() += 1;
     }
 
+    /// Ignore cache-miss scan accounting outside tests.
     #[cfg(not(test))]
     fn record_project_scan(&mut self, _canonical_root: &Path) {}
 
@@ -12412,6 +12427,7 @@ pub fn inspect_rust(path: &Path, lib_mode: bool, format: RustInspectionFormat) -
     Ok(ExitCode::SUCCESS)
 }
 
+/// Copy a pending desugarer artifact into its declared path beneath the output directory.
 fn package_desugarer_artifact(out_dir: &Path, artifact: Option<&PendingDesugarerArtifact>) -> CliResult<()> {
     let Some(artifact) = artifact else {
         return Ok(());

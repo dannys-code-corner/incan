@@ -102,6 +102,7 @@ impl TestFileCandidates {
         self.paths.is_empty()
     }
 
+    /// Return whether one candidate path belongs to the selected project authority.
     fn path_belongs_to_authority(&self, path: &Path, authority_root: &Path) -> bool {
         self.authority_by_path
             .get(path)
@@ -154,6 +155,7 @@ pub(crate) fn discover_test_file_candidates(path: &Path) -> TestFileCandidates {
     }
 
     impl CandidateCollector<'_> {
+        /// Collect test candidates below one path while preserving its active manifest authority.
         fn collect(&mut self, path: &Path, active_manifest_root: Option<&Path>) {
             if path.is_file() {
                 let is_named = is_named_test_file(path);
