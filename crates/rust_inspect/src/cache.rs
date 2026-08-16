@@ -4366,7 +4366,22 @@ impl RustMetadataCache {
         canonical_path: &str,
         progress: &(dyn Fn(String) + Sync),
     ) -> Result<Arc<RustItemMetadata>, RustMetadataError> {
-        self.get_or_extract_complete_inner(manifest_dir, canonical_path, progress)
+        self.get_or_extract_complete_inner(manifest_dir, canonical_path, progress, true)
+            .map(|access| access.metadata)
+    }
+
+    /// Return complete metadata while deferring persistence until the owning compiler phase flushes once.
+    ///
+    /// A typechecking pass can promote hundreds of source-derived records to complete metadata. Rewriting the full
+    /// growing cache snapshot after each promotion is quadratic in the number of discovered records, so the compiler
+    /// uses this method and calls [`Self::persist_manifest_dir`] after its final lookup.
+    pub fn get_or_extract_complete_deferred_persist(
+        &self,
+        manifest_dir: &Path,
+        canonical_path: &str,
+        progress: &(dyn Fn(String) + Sync),
+    ) -> Result<Arc<RustItemMetadata>, RustMetadataError> {
+        self.get_or_extract_complete_inner(manifest_dir, canonical_path, progress, false)
             .map(|access| access.metadata)
     }
 
@@ -4376,6 +4391,7 @@ impl RustMetadataCache {
         manifest_dir: &Path,
         canonical_path: &str,
         progress: &(dyn Fn(String) + Sync),
+        persist_immediately: bool,
     ) -> Result<CacheAccess, RustMetadataError> {
         let root = manifest_dir.canonicalize()?;
         let timing_enabled = rust_inspect_timing_enabled();
@@ -4427,7 +4443,7 @@ impl RustMetadataCache {
                     let metadata = Arc::new(metadata);
                     inner.failed_items.remove(&key_item);
                     insert_complete_cached_item(&mut inner, &root, Arc::clone(&metadata));
-                    if let Err(err) = persist_item_to_disk_cache(&inner, &root) {
+                    if persist_immediately && let Err(err) = persist_item_to_disk_cache(&inner, &root) {
                         tracing::warn!(
                             root = %root.display(),
                             query = %canonical_path,
@@ -4453,7 +4469,7 @@ impl RustMetadataCache {
             .unwrap_or_else(|| RustMetadataError::CrateNotFound(crate_name_for_path(canonical_path).to_string()));
         if let Some(negative) = NegativeLookup::from_error(&err) {
             inner.failed_items.insert(key_item, negative);
-            if let Err(persist_err) = persist_negative_to_disk_cache(&inner, &root) {
+            if persist_immediately && let Err(persist_err) = persist_negative_to_disk_cache(&inner, &root) {
                 tracing::warn!(
                     root = %root.display(),
                     query = %canonical_path,
@@ -4481,7 +4497,7 @@ impl RustMetadataCache {
     /// Persist the in-memory cache snapshot for one manifest root.
     ///
     /// Prewarm uses deferred extraction so callers can batch writes until every requested item has been visited.
-    pub(crate) fn persist_manifest_dir(&self, manifest_dir: &Path) -> Result<(), RustMetadataError> {
+    pub fn persist_manifest_dir(&self, manifest_dir: &Path) -> Result<(), RustMetadataError> {
         let root = manifest_dir.canonicalize()?;
         let mut inner = self.inner.lock().map_err(|e| RustMetadataError::LoadWorkspace {
             path: root.clone(),
@@ -4628,14 +4644,10 @@ impl RustMetadataCache {
                     meta.canonical_path = canonical_path.to_owned();
                     let arc = Arc::new(meta);
                     insert_cached_item(&mut inner, &root, Arc::clone(&arc));
-                    if let Err(err) = persist_item_to_disk_cache(&inner, &root) {
-                        tracing::warn!(
-                            root = %root.display(),
-                            query = %canonical_path,
-                            error = %err,
-                            "failed to persist rust-inspect disk cache after fast source/generated hit"
-                        );
-                    }
+                    // The typechecker can discover hundreds of source-derived metadata records in one pass. Each
+                    // snapshot contains all prior records, so rewriting it here turns a linear walk into repeated
+                    // growing JSON serializations. The owning preparation phase flushes this shared cache once after
+                    // typechecking, just as `Inspector::prewarm` does for its explicit query batch.
                     return Ok(Some(CacheLookupHit {
                         metadata: arc,
                         alias_used: candidate != canonical_path,

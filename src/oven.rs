@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::library_manifest::digest_cargo_path_source_tree_with_cache;
 use crate::manifest::{DependencySource, DependencySpec, GitReference, ProjectManifest};
 
 pub(crate) mod compiler_suite_env;
@@ -36,6 +37,7 @@ pub mod store;
 /// changed local runtime or declared dependency source necessarily selects a different build unit.
 pub fn digest_dependency_specs(dependencies: &[DependencySpec]) -> Result<String, OvenError> {
     let mut records = Vec::with_capacity(dependencies.len());
+    let mut resolved_path_packages = BTreeMap::new();
     for dependency in dependencies {
         let mut features = dependency.features.clone();
         features.sort();
@@ -47,7 +49,19 @@ pub fn digest_dependency_specs(dependencies: &[DependencySpec]) -> Result<String
                 GitReference::Tag(tag) => format!("git:{url}:tag:{tag}"),
                 GitReference::Rev(revision) => format!("git:{url}:rev:{revision}"),
             },
-            DependencySource::Path { path } => format!("path-tree:{}", digest_source_tree(path)?),
+            // A path dependency is selected by its recursive Cargo-semantic source closure, not by compiler output
+            // or unrelated repository files. Sharing the package memo also avoids rescanning a common sibling reached
+            // through several top-level dependencies.
+            DependencySource::Path { path } => {
+                let digest =
+                    digest_cargo_path_source_tree_with_cache(path, &mut resolved_path_packages).map_err(|error| {
+                        OvenError::InvalidProjectSource {
+                            path: path.clone(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                format!("path-tree:{digest}")
+            }
         };
         records.push(format!(
             "{}|{}|{}|{}|{}|{}|{}",
@@ -70,15 +84,27 @@ pub const OVEN_RECEIPT_SCHEMA_VERSION: u32 = 3;
 pub const DEFAULT_RECEIPT_RELATIVE_PATH: &str = ".incan/oven/receipt.json";
 
 /// Default aggregate physical allocation retained by an everyday Alpha Oven store.
-pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+///
+/// A project bake retains independent debug and release plans. Eight GiB keeps both real project closures bounded
+/// without allowing the publisher's private target to grow without limit.
+pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 /// Default physical allocation cap for one compatibility domain.
-pub const DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
+///
+/// A checked IncQL/DataFusion debug plan retains 1.21 GiB while its following release publisher needs a bounded
+/// transient closure. Six GiB covers that serialized two-profile hand-off with practical headroom; callers may
+/// still choose a stricter explicit limit.
+pub const DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 /// Default logical artifact-byte cap for one compatibility domain.
-pub const DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES: u64 = 768 * 1024 * 1024;
+/// The same two IncQL/DataFusion profiles retain 2.11 GiB of logical artifacts. Three GiB preserves a bounded
+/// reusable closure without denying the ordinary debug/release pair.
+pub const DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 /// Aggregate physical allowance for the complete compiler-suite Loaf and repository-test closure.
 pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// Physical allowance for the compiler-suite compatibility domain.
-pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+///
+/// The retained suite currently measures about 3.6 GiB and a compatible publisher staging tree reaches 1.44 GiB.
+/// Six GiB keeps the aggregate domain bounded while allowing one complete replacement with practical headroom.
+pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 /// Logical artifact-byte allowance for the compiler-suite compatibility domain.
 ///
 /// The complete LSP closure measures 3,271,283,026 logical bytes on Linux;
@@ -404,6 +430,9 @@ pub enum OvenError {
     /// A generated source input could not be read or did not satisfy the Alpha regular-file closure rules.
     #[error("invalid Oven generated source {path}: {message}")]
     InvalidGeneratedSource { path: PathBuf, message: String },
+    /// An authored project source input could not be read or did not satisfy the Alpha regular-file closure rules.
+    #[error("invalid Oven project source {path}: {message}")]
+    InvalidProjectSource { path: PathBuf, message: String },
     /// Receipt JSON could not be serialized.
     #[error("failed to serialize Oven receipt: {0}")]
     Serialize(String),
@@ -1155,6 +1184,111 @@ pub fn digest_source_tree(root: &Path) -> Result<String, OvenError> {
     Ok(digest_bytes(&payload))
 }
 
+/// Hash authored project inputs while excluding compiler- and tool-owned mutable output trees.
+///
+/// This intentionally differs from [`digest_source_tree`], whose callers supply an exact generated-source closure
+/// and therefore need every regular file represented. A path dependency instead names an authored project root;
+/// its `.incan`, `.ralph-cache`, `target`, and `.git` directories are not inputs to the dependency's semantics.
+/// Excluding them makes the identity stable across valid local reuse without overlooking any authored file outside
+/// those reserved output locations.
+pub(crate) fn digest_project_source_tree(root: &Path) -> Result<String, OvenError> {
+    let metadata = fs::symlink_metadata(root).map_err(|error| OvenError::InvalidProjectSource {
+        path: root.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(OvenError::InvalidProjectSource {
+            path: root.to_path_buf(),
+            message: "must be a directory without symlink indirection".to_string(),
+        });
+    }
+    let mut records = BTreeMap::new();
+    collect_project_source_tree(root, root, &mut records)?;
+    if records.is_empty() {
+        return Err(OvenError::InvalidProjectSource {
+            path: root.to_path_buf(),
+            message: "must contain at least one authored regular file".to_string(),
+        });
+    }
+    let payload = serde_json::to_vec(&records).map_err(|error| OvenError::Serialize(error.to_string()))?;
+    Ok(digest_bytes(&payload))
+}
+
+/// Whether a directory is compiler, VCS, or test-runner output rather than authored dependency source.
+fn is_mutable_project_output_directory(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".git" | ".incan" | ".ralph-cache" | "target")
+    )
+}
+
+/// Collect authored project files without descending into reserved mutable output directories.
+fn collect_project_source_tree(
+    root: &Path,
+    current: &Path,
+    records: &mut BTreeMap<String, String>,
+) -> Result<(), OvenError> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| OvenError::InvalidProjectSource {
+            path: current.to_path_buf(),
+            message: error.to_string(),
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| OvenError::InvalidProjectSource {
+            path: current.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| OvenError::InvalidProjectSource {
+            path: path.clone(),
+            message: error.to_string(),
+        })?;
+        if metadata.is_dir() && is_mutable_project_output_directory(&path) {
+            continue;
+        }
+        if metadata.file_type().is_symlink() {
+            return Err(OvenError::InvalidProjectSource {
+                path,
+                message: "symlinks are not allowed in an authored project source closure".to_string(),
+            });
+        }
+        if metadata.is_dir() {
+            collect_project_source_tree(root, &path, records)?;
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(OvenError::InvalidProjectSource {
+                path,
+                message: "may contain only regular files and directories".to_string(),
+            });
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| OvenError::InvalidProjectSource {
+                path: path.clone(),
+                message: "escaped the declared project source root".to_string(),
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let digest =
+            fs::read(&path)
+                .map(|bytes| digest_bytes(&bytes))
+                .map_err(|error| OvenError::InvalidProjectSource {
+                    path: path.clone(),
+                    message: error.to_string(),
+                })?;
+        if records.insert(relative.clone(), digest).is_some() {
+            return Err(OvenError::InvalidProjectSource {
+                path,
+                message: format!("duplicate portable source path `{relative}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Recursively collect one generated source tree with sorted portable paths and no link traversal.
 fn collect_generated_source_tree(
     root: &Path,
@@ -1287,7 +1421,7 @@ pub(crate) fn digest_bytes(content: &[u8]) -> String {
 }
 
 /// Write, sync, and atomically replace a receipt from a same-directory staged file.
-fn write_receipt_staged(payload: &[u8], staged_path: &Path, path: &Path, parent: &Path) -> io::Result<()> {
+pub(crate) fn write_receipt_staged(payload: &[u8], staged_path: &Path, path: &Path, parent: &Path) -> io::Result<()> {
     let mut staged = OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -1323,6 +1457,8 @@ struct BuildUnitIdentityInput<'a> {
 mod tests {
     use std::fs;
     use std::path::Path;
+
+    use crate::manifest::{DependencySource, DependencySpec};
 
     use super::{
         OvenCompilerSuiteRequest, OvenGeneratedProjectRequest, OvenImportRequest, OvenReceipt, default_receipt_path,
@@ -1383,6 +1519,119 @@ mod tests {
 
         assert_ne!(first.identity, second.identity);
         assert_eq!(first.sources.supplemental_digests.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn path_dependency_identity_ignores_mutable_project_output_but_tracks_authored_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        fs::create_dir_all(project.path().join("src"))?;
+        fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+        )?;
+        fs::write(project.path().join("src/lib.rs"), "pub fn value() -> i32 { 1 }\n")?;
+        let dependency = DependencySpec {
+            crate_name: "fixture".to_string(),
+            version: None,
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Path {
+                path: project.path().to_path_buf(),
+            },
+            optional: false,
+            package: None,
+        };
+        let initial = super::digest_dependency_specs(std::slice::from_ref(&dependency))?;
+
+        fs::write(
+            project.path().join("target"),
+            "an authored file, not an output directory",
+        )?;
+        assert_ne!(
+            initial,
+            super::digest_dependency_specs(std::slice::from_ref(&dependency))?
+        );
+        fs::remove_file(project.path().join("target"))?;
+
+        for directory in [".git", ".incan/oven", ".ralph-cache/loafs", "target/debug"] {
+            fs::create_dir_all(project.path().join(directory))?;
+            fs::write(project.path().join(directory).join("mutable"), "not authored")?;
+        }
+        assert_eq!(
+            initial,
+            super::digest_dependency_specs(std::slice::from_ref(&dependency))?
+        );
+
+        fs::write(project.path().join("native-schema.json"), "{\"version\": 1}\n")?;
+        assert_ne!(
+            initial,
+            super::digest_dependency_specs(std::slice::from_ref(&dependency))?
+        );
+        fs::remove_file(project.path().join("native-schema.json"))?;
+
+        fs::write(project.path().join("src/lib.rs"), "pub fn value() -> i32 { 2 }\n")?;
+        assert_ne!(initial, super::digest_dependency_specs(&[dependency])?);
+        Ok(())
+    }
+
+    #[test]
+    fn path_dependency_identity_tracks_recursive_sibling_path_source() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let first = temp.path().join("source-a");
+        let second = temp.path().join("source-b");
+        let write_packages = |workspace: &Path| -> Result<(), Box<dyn std::error::Error>> {
+            let foo = workspace.join("foo");
+            let bar = workspace.join("bar");
+            for package in [&foo, &bar] {
+                fs::create_dir_all(package.join("src"))?;
+            }
+            fs::write(
+                foo.join("Cargo.toml"),
+                "[package]\nname = \"foo\"\nversion = \"0.1.0\"\n\n[dependencies]\nbar = { path = \"../bar\" }\n",
+            )?;
+            fs::write(foo.join("src/lib.rs"), "pub fn value() -> i32 { bar::value() }\n")?;
+            fs::write(
+                bar.join("Cargo.toml"),
+                "[package]\nname = \"bar\"\nversion = \"0.1.0\"\n",
+            )?;
+            fs::write(bar.join("src/lib.rs"), "pub fn value() -> i32 { 1 }\n")?;
+            fs::write(bar.join("native-schema.json"), "{\"version\": 1}\n")?;
+            Ok(())
+        };
+        write_packages(&first)?;
+        write_packages(&second)?;
+        let dependency = |workspace: &Path| DependencySpec {
+            crate_name: "foo".to_string(),
+            version: None,
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Path {
+                path: workspace.join("foo"),
+            },
+            optional: false,
+            package: None,
+        };
+        let first_dependency = dependency(&first);
+        let second_dependency = dependency(&second);
+        let stable = super::digest_dependency_specs(std::slice::from_ref(&first_dependency))?;
+        assert_eq!(
+            stable,
+            super::digest_dependency_specs(std::slice::from_ref(&second_dependency))?
+        );
+
+        let second_bar = second.join("bar");
+        fs::write(second_bar.join("native-schema.json"), "{\"version\": 2}\n")?;
+        let source_changed = super::digest_dependency_specs(std::slice::from_ref(&second_dependency))?;
+        assert_ne!(stable, source_changed);
+
+        fs::create_dir_all(second_bar.join("target/debug"))?;
+        fs::write(second_bar.join("target/debug/cache"), "mutable output")?;
+        assert_eq!(
+            source_changed,
+            super::digest_dependency_specs(std::slice::from_ref(&second_dependency))?
+        );
         Ok(())
     }
 

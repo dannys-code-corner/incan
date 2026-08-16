@@ -17,8 +17,9 @@ use incan_vocab::{
 
 pub use artifact::{ProviderArtifactDigestError, digest_provider_artifact};
 pub(crate) use artifact::{
-    ProviderSemanticToolchainDependency, digest_provider_semantic_artifact_with_context_and_cache,
-    digest_provider_source_inputs, digest_toolchain_source_tree_with_cache,
+    ProviderSemanticToolchainDependency, digest_cargo_path_source_tree_with_cache,
+    digest_provider_semantic_artifact_with_context_and_cache, digest_provider_source_inputs,
+    digest_toolchain_source_tree_with_cache,
 };
 pub use model::*;
 pub use type_refs::resolved_type_from_manifest_type_ref;

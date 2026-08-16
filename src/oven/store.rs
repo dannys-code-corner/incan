@@ -63,6 +63,10 @@ pub enum OvenArtifactKind {
     Engine,
     /// Project-specific plan, overlay, or small composition payload.
     ProjectPayload,
+    /// Completed project-native output selected before frontend work on an exact authored-source match.
+    ProjectOutput,
+    /// Project-level Rust inspection authority selected only through a source-current completed project output.
+    ProjectInspectionAuthority,
     /// Verified direct-rustc artifact plan consumed by a later executor stage.
     DirectRustcPlan,
     /// Publisher-prepared compiler test executable and matching CLI, executed later without Cargo.
@@ -270,7 +274,9 @@ pub enum OvenStoreError {
     CapacityBlocked { domain: String, message: String },
     /// The named legacy publisher holds private staging capacity, so an unrelated publication cannot safely grow
     /// the same bounded store.
-    #[error("Oven store legacy_cargo publisher staging is active at {path}; retry publication after it completes")]
+    #[error(
+        "Oven store internal compatibility publisher staging is active at {path}; retry publication after it completes"
+    )]
     LegacyPublisherStagingActive { path: PathBuf },
 }
 
@@ -1241,7 +1247,7 @@ impl OvenStore {
     ) -> Result<(), OvenStoreError> {
         if requests.is_empty() {
             return Err(OvenStoreError::InvalidInput {
-                field: "legacy_cargo publication batch",
+                field: "internal compatibility publication batch",
                 message: "must contain at least one immutable artifact".to_string(),
             });
         }
@@ -1263,7 +1269,7 @@ impl OvenStore {
         })?;
         if !staging.starts_with(&publisher_root) {
             return Err(OvenStoreError::InvalidInput {
-                field: "legacy_cargo staging",
+                field: "internal compatibility publisher staging",
                 message: format!(
                     "{} must remain below the private publisher root {}",
                     staging.display(),
@@ -1271,7 +1277,7 @@ impl OvenStore {
                 ),
             });
         }
-        let mut observed_physical = unique_directory_physical_bytes(&staging)?;
+        let mut observed_physical = unique_publisher_staging_physical_bytes(&staging)?;
         observed_physical = observed_physical.saturating_add(
             self.collect_entries_for_admission()?
                 .iter()
@@ -1283,7 +1289,7 @@ impl OvenStore {
             let manifest = self.manifest_for_publication(request)?;
             observed_physical = observed_physical.saturating_add(round_physical(
                 u64::try_from(request.payload.len()).map_err(|_| OvenStoreError::InvalidInput {
-                    field: "legacy_cargo publication payload",
+                    field: "internal compatibility publication payload",
                     message: "length does not fit supported physical accounting".to_string(),
                 })?,
             ));
@@ -1580,7 +1586,7 @@ impl OvenStore {
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(OvenStoreError::Integrity {
                 identity: staging.display().to_string(),
-                message: "legacy publisher staging root must be a regular directory".to_string(),
+                message: "internal compatibility publisher staging root must be a regular directory".to_string(),
             });
         }
         let lock_path = staging.join(LEGACY_CARGO_PUBLISHER_LOCK_FILE);
@@ -1607,7 +1613,8 @@ impl OvenStore {
                     if metadata.file_type().is_symlink() || !metadata.is_dir() {
                         return Err(OvenStoreError::Integrity {
                             identity: path.display().to_string(),
-                            message: "legacy publisher staging may contain only owned directories".to_string(),
+                            message: "internal compatibility publisher staging may contain only owned directories"
+                                .to_string(),
                         });
                     }
                     fs::remove_dir_all(&path).map_err(|source| OvenStoreError::Io { path, source })?;
@@ -1736,7 +1743,10 @@ fn entry_directory_name_for_kind(identity: &str, kind: OvenArtifactKind) -> Stri
     let directory = entry_directory_name(identity);
     if matches!(
         kind,
-        OvenArtifactKind::DirectRustcPlan | OvenArtifactKind::ProjectPayload
+        OvenArtifactKind::DirectRustcPlan
+            | OvenArtifactKind::ProjectPayload
+            | OvenArtifactKind::ProjectOutput
+            | OvenArtifactKind::ProjectInspectionAuthority
     ) {
         format!("{directory}.loaf")
     } else {
@@ -1748,7 +1758,10 @@ fn entry_directory_name_for_kind(identity: &str, kind: OvenArtifactKind) -> Stri
 fn manifest_file_name(kind: OvenArtifactKind) -> &'static str {
     if matches!(
         kind,
-        OvenArtifactKind::DirectRustcPlan | OvenArtifactKind::ProjectPayload
+        OvenArtifactKind::DirectRustcPlan
+            | OvenArtifactKind::ProjectPayload
+            | OvenArtifactKind::ProjectOutput
+            | OvenArtifactKind::ProjectInspectionAuthority
     ) {
         LOAF_MANIFEST_FILE
     } else {
@@ -2548,16 +2561,96 @@ fn directory_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
         })
 }
 
-/// Measure a private publisher tree by inode so its own hard-linked preparation files are not charged twice.
 #[cfg(unix)]
-fn unique_directory_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
-    directory_unique_physical_bytes(path, &mut BTreeSet::new())
+/// Measure private publisher staging without following Cargo-created symlinks.
+///
+/// Store entries remain link-free, but the disposable publisher target may contain executable aliases. Count the
+/// link allocation without traversing it, so admission remains bounded to Oven-owned staging.
+fn unique_publisher_staging_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
+    publisher_staging_physical_bytes(path, &mut BTreeSet::new())
 }
 
-/// Hosts without inode identity retain conservative per-path staging accounting.
 #[cfg(not(unix))]
-fn unique_directory_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
-    directory_physical_bytes(path)
+/// Measure private publisher staging on hosts without inode identity.
+fn unique_publisher_staging_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
+    publisher_staging_physical_bytes(path)
+}
+
+/// Walk one Unix publisher staging root, counting regular allocations once and link allocations without traversal.
+#[cfg(unix)]
+fn publisher_staging_physical_bytes(path: &Path, seen_files: &mut BTreeSet<(u64, u64)>) -> Result<u64, OvenStoreError> {
+    use std::os::unix::fs::MetadataExt;
+
+    fs::read_dir(path)
+        .map_err(|source| OvenStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .try_fold(0_u64, |total, child| {
+            let child = child.map_err(|source| OvenStoreError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            let child_path = child.path();
+            let metadata = fs::symlink_metadata(&child_path).map_err(|source| OvenStoreError::Io {
+                path: child_path.clone(),
+                source,
+            })?;
+            let bytes = if metadata.file_type().is_symlink() {
+                round_physical(metadata.len())
+            } else if metadata.is_dir() {
+                publisher_staging_physical_bytes(&child_path, seen_files)?
+            } else if metadata.is_file() {
+                let identity = (metadata.dev(), metadata.ino());
+                if seen_files.insert(identity) {
+                    physical_file_bytes(&metadata)
+                } else {
+                    0
+                }
+            } else {
+                return Err(OvenStoreError::Integrity {
+                    identity: child_path.display().to_string(),
+                    message: "publisher staging may contain only regular files, directories, and transient symlinks"
+                        .to_string(),
+                });
+            };
+            Ok(total.saturating_add(bytes))
+        })
+}
+
+/// Walk one non-Unix publisher staging root while keeping symlink targets outside the measured closure.
+#[cfg(not(unix))]
+fn publisher_staging_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
+    fs::read_dir(path)
+        .map_err(|source| OvenStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .try_fold(0_u64, |total, child| {
+            let child = child.map_err(|source| OvenStoreError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            let child_path = child.path();
+            let metadata = fs::symlink_metadata(&child_path).map_err(|source| OvenStoreError::Io {
+                path: child_path.clone(),
+                source,
+            })?;
+            let bytes = if metadata.file_type().is_symlink() {
+                round_physical(metadata.len())
+            } else if metadata.is_dir() {
+                publisher_staging_physical_bytes(&child_path)?
+            } else if metadata.is_file() {
+                physical_file_bytes(&metadata)
+            } else {
+                return Err(OvenStoreError::Integrity {
+                    identity: child_path.display().to_string(),
+                    message: "publisher staging may contain only regular files, directories, and transient symlinks"
+                        .to_string(),
+                });
+            };
+            Ok(total.saturating_add(bytes))
+        })
 }
 
 /// Attribute each hard-linked immutable file allocation to the first stable entry identity that references it.
@@ -3299,6 +3392,39 @@ mod tests {
 
         let result = store.ensure_legacy_cargo_batch_physical_capacity(&staging, &[publication]);
         assert!(matches!(result, Err(OvenStoreError::CapacityBlocked { .. })));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_publisher_preflight_counts_a_transient_symlink_without_following_its_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let staging = temp
+            .path()
+            .join(LEGACY_CARGO_STAGING_DIRECTORY)
+            .join(".legacy-cargo-fixture");
+        let staged_source = staging.join("native/staged.rlib");
+        let retained_target = temp.path().join("outside/protoc-helper");
+        let transient_link = staging.join("target/build/protoc-helper");
+        fs::create_dir_all(staged_source.parent().ok_or("staged parent missing")?)?;
+        fs::create_dir_all(transient_link.parent().ok_or("transient link parent missing")?)?;
+        fs::create_dir_all(retained_target.parent().ok_or("retained target parent missing")?)?;
+        fs::write(&staged_source, b"retained Rust artifact")?;
+        fs::write(&retained_target, vec![b'x'; 2 * 1024 * 1024])?;
+        symlink(&retained_target, &transient_link)?;
+        let mut publication = request(project.path(), "engine-one", b"plan")?;
+        publication.materialized_files = vec![OvenArtifactMaterializedFile {
+            source_path: staged_source,
+            relative_path: "native/staged.rlib".to_string(),
+        }];
+
+        store.ensure_legacy_cargo_batch_physical_capacity(&staging, &[publication])?;
         Ok(())
     }
 

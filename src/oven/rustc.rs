@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
+use super::legacy_cargo::{
+    OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION, OvenProjectExtensionPayload, OvenProjectRegistrySourceDependency,
+};
 use super::process::{isolate_process_group, terminate_process_group};
 use super::{OVEN_COMPILER_TEST_PROFILE, OvenBuildIntent, OvenReceipt, digest_bytes, digest_source_tree};
 use crate::manifest::{DependencySource, DependencySpec};
@@ -29,12 +32,7 @@ use crate::oven::store::{OvenArtifactKind, OvenStore, OvenStoreError, OvenStoreE
 pub const OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION: u32 = 9;
 /// Fixed supporting-artifact path for the publisher lock that owns sealed registry sources.
 pub const OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH: &str = "registry-sources/Cargo.lock";
-/// Prefix reserved for compiler-owned runtime crates supplied by the release-version standard-library Loaf family.
-///
-/// Cargo gives compiler workspace dependencies generated-package-specific artifact names. Project-extension
-/// composition replaces every `incan_*` runtime artifact with its selected base counterpart after validating the
-/// common target, toolchain, profile, and complete manifests; user and registry dependencies remain byte-exact
-/// artifacts.
+/// Crate-name prefix reserved for the runtime family owned by one Incan release Loaf.
 pub const OVEN_COMPILER_RUNTIME_CRATE_PREFIX: &str = "incan_";
 /// Schema version for caller-owned native-output reuse evidence.
 const OVEN_DIRECT_RUSTC_OUTPUT_RECEIPT_SCHEMA_VERSION: u32 = 2;
@@ -242,6 +240,142 @@ pub struct OvenRustcRegistrySourcePackage {
     pub features: Vec<String>,
     /// Immutable source identity and artifact-root-relative location.
     pub source: OvenRustcRegistrySource,
+}
+
+/// Wire schema for one project-level Rust inspection authority.
+pub(crate) const OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION: u32 = 1;
+
+/// Exact immutable source owner named by a project inspection authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "owner", rename_all = "snake_case")]
+pub(crate) enum OvenProjectInspectionSourceOwner {
+    /// The small project authority entry materializes this source fragment itself.
+    Authority,
+    /// One exact constituent supplies the source tree at the catalog's relative root.
+    Constituent { index: usize },
+}
+
+/// One exact immutable constituent of a project inspection authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum OvenProjectInspectionConstituent {
+    /// A compiler-shipped release Loaf retained by its immutable toolchain generation.
+    ReleaseLoaf {
+        loaf_identity: String,
+        build_unit_identity: String,
+        receipt: OvenReceipt,
+    },
+    /// A receipt-bound entry in the bounded project store.
+    Stored {
+        identity: String,
+        artifact_kind: OvenArtifactKind,
+        receipt: OvenReceipt,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base_loaf_identity: Option<String>,
+    },
+}
+
+/// One canonical registry source and the exact immutable root that owns its bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OvenProjectInspectionSource {
+    pub package: OvenRustcRegistrySourcePackage,
+    pub owner: OvenProjectInspectionSourceOwner,
+}
+
+/// One exact normal or dev registry root selected for project Rust inspection.
+///
+/// The locked package identity proves which source tree Cargo selected at the explicit bake boundary. The requested
+/// feature contract remains separate because two source-identical root edges can expose different Rust APIs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OvenProjectInspectionRootDependency {
+    pub alias: String,
+    pub package: String,
+    pub version: String,
+    pub registry: String,
+    pub checksum: String,
+    pub requested_features: Vec<String>,
+    pub default_features: bool,
+}
+
+/// Exact project-owned dependency envelope used only by generated native tests.
+///
+/// The envelope promotes the canonical normal and dev dependency surface into one checked debug executable closure at
+/// the explicit project-bake boundary. Its dependency digest is deliberately independent of authored test bytes, so
+/// unchanged dependency declarations reuse the same Loaf while every generated harness remains caller-owned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OvenProjectInspectionTestDependencyEnvelope {
+    pub constituent_index: usize,
+    pub dependency_surface_digest: String,
+    pub dependency_roots: BTreeMap<String, OvenProjectInspectionTestDependencyRoot>,
+}
+
+/// Exact per-root evidence admitted by the generated native-test dependency envelope.
+///
+/// Registry roots retain Cargo's locked package/source identity as well as the declared edge digest. Path and Git
+/// roots carry their complete portable declaration/source digest; for paths that digest includes the source tree,
+/// never its machine-local spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub(crate) enum OvenProjectInspectionTestDependencyRoot {
+    Registry {
+        dependency_digest: String,
+        locked: OvenProjectInspectionRootDependency,
+    },
+    Path {
+        dependency_digest: String,
+    },
+    Git {
+        dependency_digest: String,
+    },
+}
+
+/// Singular source authority published once by an explicit project bake.
+///
+/// The authority owns one canonical publisher lock and exact normal/dev root-edge records. Its source catalog is a
+/// composition of named immutable constituents plus only those bounded source fragments absent from every
+/// constituent; normal commands never union independent locks or search the store by dependency compatibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OvenProjectInspectionAuthorityPayload {
+    pub schema_version: u32,
+    pub project_identity: String,
+    pub source_authority_digest: String,
+    pub compiler_version: String,
+    pub registry_lock_digest: String,
+    #[serde(default)]
+    pub registry_source_dependencies: Vec<OvenProjectInspectionRootDependency>,
+    #[serde(default)]
+    pub dev_registry_source_dependencies: Vec<OvenProjectInspectionRootDependency>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_dependency_envelope: Option<OvenProjectInspectionTestDependencyEnvelope>,
+    #[serde(default)]
+    pub constituents: Vec<OvenProjectInspectionConstituent>,
+    #[serde(default)]
+    pub registry_sources: Vec<OvenProjectInspectionSource>,
+}
+
+/// Exact authority entry named by a source-current completed project output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OvenProjectInspectionAuthorityRef {
+    pub identity: String,
+    pub receipt_identity: String,
+    pub build_unit_identity: String,
+}
+
+/// Source-current singular project authority with every bounded-store constituent leased in one batch.
+pub(crate) struct OvenLoadedProjectInspectionAuthority {
+    pub(crate) identity: String,
+    pub(crate) artifact_root: PathBuf,
+    pub(crate) payload: OvenProjectInspectionAuthorityPayload,
+    pub(crate) stored_constituents: Vec<OvenStoreExecutionPayload>,
+    _authority_lease: OvenStoreLease,
+    lineage_leases: Vec<OvenStoreLease>,
+}
+
+impl OvenLoadedProjectInspectionAuthority {
+    /// Retain completed-output leases for the complete inspection command.
+    pub(crate) fn retain_lineage_leases(&mut self, leases: Vec<OvenStoreLease>) {
+        self.lineage_leases = leases;
+    }
 }
 
 /// One registry leaf and the immutable Loaf root that seals its relative artifact path.
@@ -579,6 +713,98 @@ pub(crate) fn validate_sealed_registry_leaf(
     profile: &str,
 ) -> Result<(), OvenRustcError> {
     let _ = select_sealed_registry_leaf(dependency, authority, profile)?;
+    Ok(())
+}
+
+/// Verify a registry dependency against the exact materialized extern already selected for its alias.
+///
+/// This is the execution-time boundary for every selected plan shape. The plan has already fixed an alias to one
+/// immutable artifact path; validating that path's sealed leaf avoids repeating a highest-compatible-version choice
+/// that could disagree when the catalog contains two semver-compatible package versions.
+pub(crate) fn validate_selected_sealed_registry_leaf(
+    dependency: &DependencySpec,
+    selected_artifact: &Path,
+    authority: Option<&OvenRegistryLeafAuthority>,
+    profile: &str,
+) -> Result<(), OvenRustcError> {
+    let authority = authority.ok_or_else(|| OvenRustcError::InvalidInput {
+        field: "Oven registry Rust dependency",
+        message: format!(
+            "`{}` has no receipt-bound Loaf registry catalog",
+            dependency.package.as_deref().unwrap_or(&dependency.crate_name)
+        ),
+    })?;
+    let selected_artifact = verified_regular_file(selected_artifact, "selected registry artifact")?;
+    let selected_artifact = fs::canonicalize(&selected_artifact).map_err(|source| OvenRustcError::Io {
+        path: selected_artifact,
+        source,
+    })?;
+    let mut path_matches = Vec::new();
+    for entry in &authority.entries {
+        let artifact_path = safe_artifact_path(
+            &entry.artifact_root,
+            &entry.leaf.artifact.relative_path,
+            "sealed registry leaf",
+        )?;
+        if artifact_path == selected_artifact {
+            path_matches.push(entry);
+        }
+    }
+    let [selected] = path_matches.as_slice() else {
+        return Err(OvenRustcError::InvalidInput {
+            field: "Oven registry Rust dependency",
+            message: format!(
+                "selected extern `{}` has {} exact receipt-bound registry leaf records",
+                selected_artifact.display(),
+                path_matches.len()
+            ),
+        });
+    };
+    let package = dependency.package.as_deref().unwrap_or(&dependency.crate_name);
+    let requirement_text = dependency
+        .version
+        .as_deref()
+        .ok_or_else(|| OvenRustcError::InvalidInput {
+            field: "Oven registry Rust dependency",
+            message: format!("`{package}` has no declared version requirement"),
+        })?;
+    let requirement = VersionReq::parse(requirement_text).map_err(|error| OvenRustcError::InvalidInput {
+        field: "Oven registry Rust dependency",
+        message: format!("`{package}` has invalid version requirement `{requirement_text}`: {error}"),
+    })?;
+    let available_features = selected.leaf.features.iter().collect::<BTreeSet<_>>();
+    let requested_features = dependency.features.iter().collect::<BTreeSet<_>>();
+    if selected.leaf.package != package
+        || !Version::parse(&selected.leaf.version).is_ok_and(|version| requirement.matches(&version))
+        || !requested_features.is_subset(&available_features)
+    {
+        return Err(OvenRustcError::InvalidInput {
+            field: "Oven registry Rust dependency",
+            message: format!(
+                "selected extern `{}` does not satisfy `{package}` requirement `{requirement_text}` and its requested features",
+                selected_artifact.display()
+            ),
+        });
+    }
+    let relative_path = Path::new(&selected.leaf.artifact.relative_path);
+    let selected_profile = relative_path
+        .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "deps"))
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str());
+    if let Some(selected_profile) = selected_profile
+        && selected_profile != profile
+    {
+        return Err(OvenRustcError::InvalidInput {
+            field: "Oven registry Rust dependency",
+            message: format!(
+                "selected extern `{}` was baked for profile `{}`, not `{profile}`",
+                selected_artifact.display(),
+                selected_profile
+            ),
+        });
+    }
     Ok(())
 }
 
@@ -1824,10 +2050,6 @@ pub enum OvenRustcError {
 }
 
 /// Return the compiler-owned crate name encoded by one Cargo artifact filename.
-///
-/// Artifact manifests retain relative paths and digests, not package metadata. Compiler workspace crates reserve the
-/// `incan_` crate namespace, so the filename is the narrow stable evidence that a supporting artifact belongs to the
-/// release-version runtime rather than to a registry or caller dependency.
 fn compiler_runtime_name_from_artifact_path(relative_path: &str) -> Option<&str> {
     let filename = Path::new(relative_path).file_name()?.to_str()?;
     let crate_and_digest = filename.strip_prefix("lib")?.split_once('-')?.0;
@@ -1836,52 +2058,64 @@ fn compiler_runtime_name_from_artifact_path(relative_path: &str) -> Option<&str>
         .map(|_| crate_and_digest)
 }
 
-/// Index every compiler-owned artifact declared by an immutable standard-library Loaf.
+/// Index the unique host/target runtime family declared by an immutable standard-library Loaf.
 ///
-/// A compiler runtime artifact must be unique within one target/profile Loaf. Ambiguous artifact names would make a
-/// project extension choose an arbitrary build-script or target output, so selection fails before publication or
-/// normal execution.
+/// Vocabulary auxiliary targets are deliberately excluded: the same `incan_vocab` crate can occur for the host and
+/// Wasm target, while this index owns only the normal generated-program ABI family.
 fn compiler_runtime_artifacts_by_name(
     base: &OvenRustcArtifactManifest,
 ) -> Result<BTreeMap<String, OvenRustcSupportingArtifact>, OvenRustcError> {
-    let mut artifacts = BTreeMap::new();
-    for artifact in base.composition_artifacts()? {
-        let Some(crate_name) = compiler_runtime_name_from_artifact_path(&artifact.relative_path) else {
+    let main_search_paths = base
+        .dependency_search_paths
+        .iter()
+        .chain(&base.native_search_paths)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let artifacts = base
+        .externs
+        .iter()
+        .map(|artifact| OvenRustcSupportingArtifact {
+            relative_path: artifact.relative_path.clone(),
+            digest: artifact.digest.clone(),
+        })
+        .chain(base.supporting_artifacts.iter().filter_map(|artifact| {
+            main_search_paths
+                .iter()
+                .any(|search_path| artifact_is_below_search_path(&artifact.relative_path, search_path))
+                .then_some(artifact.clone())
+        }));
+    let mut indexed = BTreeMap::new();
+    for artifact in artifacts {
+        let Some(crate_name) = compiler_runtime_name_from_artifact_path(&artifact.relative_path).map(str::to_string)
+        else {
             continue;
         };
-        if artifacts.insert(crate_name.to_string(), artifact.clone()).is_some() {
+        if indexed.insert(crate_name.clone(), artifact).is_some() {
             return Err(OvenRustcError::InvalidInput {
                 field: "project extension base",
                 message: format!("declares multiple compiler runtime artifacts for `{crate_name}`"),
             });
         }
     }
-    Ok(artifacts)
+    Ok(indexed)
 }
 
-/// Replace one compiler-owned direct external with the selected base artifact.
+/// Replace one compiler-owned direct extern with the exact selected release artifact.
 fn replace_compiler_runtime_extern(
     artifact: &mut OvenRustcArtifactExtern,
     base_artifacts: &BTreeMap<String, OvenRustcSupportingArtifact>,
 ) -> Result<(), OvenRustcError> {
-    if !artifact.crate_name.starts_with(OVEN_COMPILER_RUNTIME_CRATE_PREFIX) {
+    let Some(base_artifact) = base_artifacts.get(&artifact.crate_name) else {
+        // The `incan_` prefix alone does not confer compiler ownership. A caller crate such as `incan_partner`
+        // remains project-owned unless the selected release Loaf declares that exact runtime crate identity.
         return Ok(());
-    }
-    let base_artifact = base_artifacts
-        .get(&artifact.crate_name)
-        .ok_or_else(|| OvenRustcError::InvalidInput {
-            field: "project extension base",
-            message: format!(
-                "does not declare compiler runtime artifact `{}` required by the project plan",
-                artifact.crate_name
-            ),
-        })?;
+    };
     artifact.relative_path = base_artifact.relative_path.clone();
     artifact.digest = base_artifact.digest.clone();
     Ok(())
 }
 
-/// Replace one compiler-owned supporting artifact with the selected base artifact.
+/// Replace one compiler-owned supporting artifact with the exact selected release artifact.
 fn replace_compiler_runtime_supporting_artifact(
     artifact: &mut OvenRustcSupportingArtifact,
     base_artifacts: &BTreeMap<String, OvenRustcSupportingArtifact>,
@@ -1889,35 +2123,626 @@ fn replace_compiler_runtime_supporting_artifact(
     let Some(crate_name) = compiler_runtime_name_from_artifact_path(&artifact.relative_path) else {
         return Ok(());
     };
-    let base_artifact = base_artifacts
-        .get(crate_name)
-        .ok_or_else(|| OvenRustcError::InvalidInput {
-            field: "project extension base",
-            message: format!("does not declare compiler runtime artifact `{crate_name}` required by the project plan"),
-        })?;
+    let Some(base_artifact) = base_artifacts.get(crate_name) else {
+        // Preserve a caller-owned `incan_*` artifact that is absent from the selected release family.
+        return Ok(());
+    };
     *artifact = base_artifact.clone();
     Ok(())
 }
 
+/// Return the base artifacts required to execute its main and vocabulary closures.
+///
+/// A release Loaf can also retain registry source authority and provenance used by its own publisher. Those files
+/// do not become inputs to every project extension. The project plan keeps its own locked registry catalog, while
+/// this projection carries only files reachable through base search paths. Vocabulary root externs remain declared
+/// by their auxiliary roles and are therefore excluded from the supporting list to avoid duplicate path ownership.
+fn compiler_runtime_execution_support(
+    base: &OvenRustcArtifactManifest,
+) -> Result<Vec<OvenRustcSupportingArtifact>, OvenRustcError> {
+    let auxiliary_extern_paths = base
+        .vocab_auxiliary_targets
+        .iter()
+        .flat_map(|auxiliary| auxiliary.externs.iter().map(|artifact| artifact.relative_path.as_str()))
+        .collect::<BTreeSet<_>>();
+    let search_paths = base
+        .dependency_search_paths
+        .iter()
+        .chain(&base.native_search_paths)
+        .chain(
+            base.vocab_auxiliary_targets
+                .iter()
+                .flat_map(|auxiliary| auxiliary.dependency_search_paths.iter()),
+        )
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    Ok(base
+        .composition_artifacts()?
+        .into_iter()
+        .filter(|artifact| {
+            !auxiliary_extern_paths.contains(artifact.relative_path.as_str())
+                && search_paths
+                    .iter()
+                    .any(|search_path| artifact_is_below_search_path(&artifact.relative_path, search_path))
+        })
+        .collect())
+}
+
+/// Verify that every registry package shared with the release uses the release's exact semantic coordinate.
+fn validate_release_registry_cohort(
+    project: &OvenRustcArtifactManifest,
+    base: &OvenRustcArtifactManifest,
+) -> Result<(), OvenRustcError> {
+    for package in &project.registry_sources {
+        let candidates = base
+            .registry_sources
+            .iter()
+            .filter(|candidate| {
+                candidate.package == package.package
+                    && candidate.version == package.version
+                    && candidate.source.registry == package.source.registry
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            continue;
+        }
+        if !candidates.iter().any(|candidate| candidate.source == package.source) {
+            let release_candidates = base
+                .registry_sources
+                .iter()
+                .filter(|candidate| {
+                    candidate.package == package.package
+                        && candidate.version == package.version
+                        && candidate.source.registry == package.source.registry
+                })
+                .map(|candidate| {
+                    format!(
+                        "{} features={:?} checksum={}",
+                        candidate.version, candidate.features, candidate.source.checksum
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension release cohort",
+                message: format!(
+                    "registry package `{}` {} checksum={} does not match the selected release source identity ({release_candidates})",
+                    package.package, package.version, package.source.checksum
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Return whether two registry leaves differ only in their independently published artifact bytes.
+fn same_registry_leaf_semantics(left: &OvenRustcRegistryLeaf, right: &OvenRustcRegistryLeaf) -> bool {
+    left.package == right.package
+        && left.version == right.version
+        && left.crate_name == right.crate_name
+        && left.source == right.source
+        && left.features == right.features
+}
+
+/// Replace project source-catalog facts with the exact selected release record for each shared coordinate.
+fn canonicalize_release_registry_sources(
+    project: &mut OvenRustcArtifactManifest,
+    base: &OvenRustcArtifactManifest,
+) -> Result<(), OvenRustcError> {
+    for package in &mut project.registry_sources {
+        let project_features = package.features.iter().collect::<BTreeSet<_>>();
+        let candidates = base
+            .registry_sources
+            .iter()
+            .filter(|candidate| {
+                candidate.package == package.package
+                    && candidate.version == package.version
+                    && candidate.source == package.source
+                    && project_features.is_subset(&candidate.features.iter().collect())
+            })
+            .collect::<Vec<_>>();
+        match candidates.as_slice() {
+            [] => {}
+            [release] => *package = (*release).clone(),
+            _ => {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "project extension release cohort",
+                    message: format!(
+                        "registry source `{}` {} matches more than one selected release record",
+                        package.package, package.version
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Replace a declared project artifact by its exact release-cohort copy.
+fn replace_declared_release_artifact(
+    manifest: &mut OvenRustcArtifactManifest,
+    project_path: &str,
+    release: &OvenRustcArtifactExtern,
+) {
+    if let Some(artifact) = manifest
+        .externs
+        .iter_mut()
+        .find(|artifact| artifact.relative_path == project_path)
+    {
+        artifact.relative_path = release.relative_path.clone();
+        artifact.digest = release.digest.clone();
+    }
+    if let Some(artifact) = manifest
+        .supporting_artifacts
+        .iter_mut()
+        .find(|artifact| artifact.relative_path == project_path)
+    {
+        artifact.relative_path = release.relative_path.clone();
+        artifact.digest = release.digest.clone();
+    }
+}
+
+/// Validate one stored project extension against the exact installed release Loaf it names.
+///
+/// Both Rust-inspection source selection and final execution call this boundary. A payload may not become source
+/// authority merely because its complete plan has a valid shape: the publisher plan, selected base, partition, and
+/// retained extension paths must all describe the same immutable closure.
+pub(crate) fn validate_project_extension_payload_against_base(
+    payload: &OvenProjectExtensionPayload,
+    base_loaf_identity: &str,
+    base_build_unit_identity: &str,
+    base: &OvenRustcArtifactManifest,
+) -> Result<OvenRustcArtifactPartition, OvenRustcError> {
+    validate_project_extension_payload_shape(payload, &base.intent)?;
+    if payload.base_loaf_identity != base_loaf_identity || payload.base_build_unit_identity != base_build_unit_identity
+    {
+        return Err(OvenRustcError::InvalidInput {
+            field: "project extension base",
+            message: "does not name the exact installed release Loaf and build unit".to_string(),
+        });
+    }
+    let recomposed = payload.publisher_plan.with_release_cohort_from_base(base)?;
+    if recomposed != payload.complete_plan {
+        return Err(OvenRustcError::InvalidInput {
+            field: "project extension release cohort",
+            message: "effective plan does not match its sealed publisher plan and exact release cohort".to_string(),
+        });
+    }
+    let partition = payload.complete_plan.partition_against_base(base)?;
+    if payload.extension_paths != partition.extension_paths.iter().cloned().collect::<Vec<_>>() {
+        return Err(OvenRustcError::InvalidInput {
+            field: "project extension fragment",
+            message: "does not retain the exact delta derived from its selected base".to_string(),
+        });
+    }
+    if partition.base_paths.is_empty() || partition.extension_paths.is_empty() {
+        return Err(OvenRustcError::InvalidInput {
+            field: "project extension fragment",
+            message: "must contain both a base fragment and a project-specific fragment".to_string(),
+        });
+    }
+    Ok(partition)
+}
+
+/// Validate one stored project extension without reading or hashing its materialized artifact bytes.
+///
+/// Exact base recomposition remains a later validation step once the compiler-owned release Loaf is resolved. This
+/// boundary rejects malformed stored constituents immediately after their exact identity and lease are acquired.
+fn validate_project_extension_payload_shape(
+    payload: &OvenProjectExtensionPayload,
+    intent: &OvenBuildIntent,
+) -> Result<(), OvenRustcError> {
+    if payload.schema_version != OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION {
+        return Err(OvenRustcError::InvalidInput {
+            field: "project extension payload",
+            message: format!(
+                "schema {} is incompatible with current schema {OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION}",
+                payload.schema_version
+            ),
+        });
+    }
+    if payload.base_loaf_identity.trim().is_empty() || payload.base_build_unit_identity.trim().is_empty() {
+        return Err(OvenRustcError::InvalidInput {
+            field: "project extension base",
+            message: "must name one exact release Loaf and build unit".to_string(),
+        });
+    }
+    payload.publisher_plan.validate_shape(intent)?;
+    payload.complete_plan.validate_shape(intent)?;
+    validate_project_registry_source_dependencies(
+        &payload.registry_source_dependencies,
+        &payload.complete_plan.registry_sources,
+    )?;
+    validate_project_registry_source_dependencies(
+        &payload.dev_registry_source_dependencies,
+        &payload.complete_plan.registry_sources,
+    )?;
+    let declared = payload.complete_plan.declared_artifact_paths()?;
+    let mut prior = None::<String>;
+    for path in &payload.extension_paths {
+        let normalized = normalized_relative_path(path, "project extension artifact")?;
+        if prior.as_deref().is_some_and(|prior| prior >= normalized.as_str()) || !declared.contains(&normalized) {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension fragment",
+                message: "must be strictly sorted and contain only artifacts declared by the complete plan".to_string(),
+            });
+        }
+        prior = Some(normalized);
+    }
+    Ok(())
+}
+
+/// Validate the explicit baker's alias-to-source authority against the complete immutable source catalog.
+fn validate_project_registry_source_dependencies(
+    dependencies: &[OvenProjectRegistrySourceDependency],
+    sources: &[OvenRustcRegistrySourcePackage],
+) -> Result<(), OvenRustcError> {
+    let mut previous_alias = None;
+    for dependency in dependencies {
+        validate_rust_identifier(&dependency.alias)?;
+        if dependency.package.trim().is_empty()
+            || dependency.version.trim().is_empty()
+            || Version::parse(&dependency.version).is_err()
+            || !dependency.registry.starts_with("registry+")
+            || dependency.checksum.trim().is_empty()
+        {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension registry dependencies",
+                message: format!(
+                    "dependency alias `{}` has an incomplete or invalid locked source identity",
+                    dependency.alias
+                ),
+            });
+        }
+        if previous_alias.is_some_and(|previous| previous >= dependency.alias.as_str()) {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension registry dependencies",
+                message: "must be strictly sorted by unique dependency alias".to_string(),
+            });
+        }
+        previous_alias = Some(dependency.alias.as_str());
+        let matches = sources
+            .iter()
+            .filter(|source| {
+                source.package == dependency.package
+                    && source.version == dependency.version
+                    && source.source.registry == dependency.registry
+                    && source.source.checksum == dependency.checksum
+            })
+            .count();
+        if matches != 1 {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension registry dependencies",
+                message: format!(
+                    "dependency alias `{}` has {matches} exact records in the sealed registry source catalog",
+                    dependency.alias
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Validate one singular project inspection authority before publication or selection.
+pub(crate) fn validate_project_inspection_authority_payload(
+    payload: &OvenProjectInspectionAuthorityPayload,
+) -> Result<(), OvenRustcError> {
+    if payload.schema_version != OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION {
+        return Err(OvenRustcError::InvalidInput {
+            field: "project inspection authority",
+            message: format!(
+                "schema {} is incompatible with current schema {OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION}",
+                payload.schema_version
+            ),
+        });
+    }
+    if payload.project_identity.trim().is_empty()
+        || payload.source_authority_digest.trim().is_empty()
+        || payload.compiler_version.trim().is_empty()
+        || payload.registry_lock_digest.trim().is_empty()
+    {
+        return Err(OvenRustcError::InvalidInput {
+            field: "project inspection authority",
+            message: "must bind project, source, compiler, and canonical registry-lock identities".to_string(),
+        });
+    }
+    let mut seen_constituents = Vec::new();
+    let mut seen_constituent_identities = BTreeSet::new();
+    let mut saw_stored_constituent = false;
+    let mut release_identities = BTreeSet::new();
+    for constituent in &payload.constituents {
+        match constituent {
+            OvenProjectInspectionConstituent::ReleaseLoaf {
+                loaf_identity,
+                build_unit_identity,
+                ..
+            } if loaf_identity.trim().is_empty() || build_unit_identity.trim().is_empty() => {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "project inspection authority constituent",
+                    message: "release Loaf identity and build-unit identity must be non-empty".to_string(),
+                });
+            }
+            OvenProjectInspectionConstituent::ReleaseLoaf {
+                loaf_identity, receipt, ..
+            } => {
+                if saw_stored_constituent
+                    || !release_identities.insert(loaf_identity.as_str())
+                    || !seen_constituent_identities.insert(loaf_identity.as_str())
+                {
+                    return Err(OvenRustcError::InvalidInput {
+                        field: "project inspection authority constituents",
+                        message: "release Loafs must be unique and precede every store-owned constituent".to_string(),
+                    });
+                }
+                receipt
+                    .verify_identity()
+                    .map_err(|error| OvenRustcError::InvalidInput {
+                        field: "project inspection authority release receipt",
+                        message: error.to_string(),
+                    })?;
+            }
+            OvenProjectInspectionConstituent::Stored {
+                identity,
+                artifact_kind,
+                receipt,
+                base_loaf_identity,
+            } => {
+                saw_stored_constituent = true;
+                receipt
+                    .verify_identity()
+                    .map_err(|error| OvenRustcError::InvalidInput {
+                        field: "project inspection authority constituent receipt",
+                        message: error.to_string(),
+                    })?;
+                if identity.trim().is_empty()
+                    || !seen_constituent_identities.insert(identity.as_str())
+                    || !matches!(
+                        artifact_kind,
+                        OvenArtifactKind::DirectRustcPlan | OvenArtifactKind::ProjectPayload
+                    )
+                    || matches!(artifact_kind, OvenArtifactKind::DirectRustcPlan) && base_loaf_identity.is_some()
+                    || matches!(artifact_kind, OvenArtifactKind::ProjectPayload) && base_loaf_identity.is_none()
+                {
+                    return Err(OvenRustcError::InvalidInput {
+                        field: "project inspection authority constituent",
+                        message: "stored constituent has inconsistent identity, kind, or base evidence".to_string(),
+                    });
+                }
+                if let Some(base_loaf_identity) = base_loaf_identity
+                    && !release_identities.contains(base_loaf_identity.as_str())
+                {
+                    return Err(OvenRustcError::InvalidInput {
+                        field: "project inspection authority constituent",
+                        message: "project extension must follow and name one exact release-Loaf constituent"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        if seen_constituents.contains(constituent) {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project inspection authority constituents",
+                message: "must not repeat an immutable constituent".to_string(),
+            });
+        }
+        seen_constituents.push(constituent.clone());
+    }
+
+    if let Some(envelope) = &payload.test_dependency_envelope {
+        if envelope.dependency_surface_digest.trim().is_empty() {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project inspection test dependency envelope",
+                message: "must bind a non-empty canonical dependency-surface digest".to_string(),
+            });
+        }
+        let Some(constituent) = payload.constituents.get(envelope.constituent_index) else {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project inspection test dependency envelope",
+                message: "must name one exact immutable constituent".to_string(),
+            });
+        };
+        let receipt = match constituent {
+            OvenProjectInspectionConstituent::ReleaseLoaf { receipt, .. } => receipt,
+            OvenProjectInspectionConstituent::Stored {
+                artifact_kind: OvenArtifactKind::DirectRustcPlan,
+                receipt,
+                base_loaf_identity: None,
+                ..
+            } => receipt,
+            OvenProjectInspectionConstituent::Stored {
+                artifact_kind: OvenArtifactKind::ProjectPayload,
+                receipt,
+                base_loaf_identity: Some(_),
+                ..
+            } => receipt,
+            _ => {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "project inspection test dependency envelope",
+                    message: "must name the exact release Loaf, one self-contained direct plan, or one base-partitioned project constituent"
+                        .to_string(),
+                });
+            }
+        };
+        if receipt.intent.profile != "debug" {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project inspection test dependency envelope",
+                message: "must name a debug-profile dependency constituent".to_string(),
+            });
+        }
+        for (alias, root) in &envelope.dependency_roots {
+            validate_rust_identifier(alias)?;
+            let (dependency_digest, locked) = match root {
+                OvenProjectInspectionTestDependencyRoot::Registry {
+                    dependency_digest,
+                    locked,
+                } => (dependency_digest, Some(locked)),
+                OvenProjectInspectionTestDependencyRoot::Path { dependency_digest }
+                | OvenProjectInspectionTestDependencyRoot::Git { dependency_digest } => (dependency_digest, None),
+            };
+            if dependency_digest.trim().is_empty() {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "project inspection test dependency envelope root",
+                    message: format!("dependency alias `{alias}` has no portable root digest"),
+                });
+            }
+            if let Some(locked) = locked
+                && (locked.alias != *alias
+                    || !payload
+                        .registry_source_dependencies
+                        .iter()
+                        .chain(&payload.dev_registry_source_dependencies)
+                        .any(|candidate| candidate == locked))
+            {
+                return Err(OvenRustcError::InvalidInput {
+                    field: "project inspection test dependency envelope root",
+                    message: format!(
+                        "registry dependency alias `{alias}` does not name one exact normal/dev publisher root"
+                    ),
+                });
+            }
+        }
+    }
+
+    let mut catalog = Vec::with_capacity(payload.registry_sources.len());
+    let mut prior_key: Option<(String, String, String, String)> = None;
+    for source in &payload.registry_sources {
+        let package = &source.package;
+        let key = (
+            package.package.clone(),
+            package.version.clone(),
+            package.source.registry.clone(),
+            package.source.checksum.clone(),
+        );
+        if prior_key.as_ref().is_some_and(|prior| prior >= &key)
+            || package.package.trim().is_empty()
+            || Version::parse(&package.version).is_err()
+            || !package.source.registry.starts_with("registry+")
+            || package.source.checksum.trim().is_empty()
+            || package.source.digest.trim().is_empty()
+            || normalized_relative_path(&package.source.relative_root, "registry source root").is_err()
+        {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project inspection authority source catalog",
+                message: "must be strictly sorted and contain complete portable source identities".to_string(),
+            });
+        }
+        if let OvenProjectInspectionSourceOwner::Constituent { index } = source.owner
+            && index >= payload.constituents.len()
+        {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project inspection authority source owner",
+                message: format!("references missing constituent index {index}"),
+            });
+        }
+        prior_key = Some(key);
+        catalog.push(package.clone());
+    }
+    validate_project_inspection_root_dependencies(&payload.registry_source_dependencies, &catalog)?;
+    validate_project_inspection_root_dependencies(&payload.dev_registry_source_dependencies, &catalog)?;
+    let normal_by_alias = payload
+        .registry_source_dependencies
+        .iter()
+        .map(|dependency| (dependency.alias.as_str(), dependency))
+        .collect::<BTreeMap<_, _>>();
+    for dependency in &payload.dev_registry_source_dependencies {
+        if normal_by_alias
+            .get(dependency.alias.as_str())
+            .is_some_and(|normal| *normal != dependency)
+        {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project inspection authority dependencies",
+                message: format!(
+                    "normal and dev dependency alias `{}` resolve to conflicting exact root edges",
+                    dependency.alias
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Validate feature-bound root edges against the singular authority's exact source catalog.
+fn validate_project_inspection_root_dependencies(
+    dependencies: &[OvenProjectInspectionRootDependency],
+    sources: &[OvenRustcRegistrySourcePackage],
+) -> Result<(), OvenRustcError> {
+    let mut previous_alias = None;
+    for dependency in dependencies {
+        validate_rust_identifier(&dependency.alias)?;
+        let mut features = dependency.requested_features.clone();
+        features.sort();
+        features.dedup();
+        if dependency.package.trim().is_empty()
+            || Version::parse(&dependency.version).is_err()
+            || !dependency.registry.starts_with("registry+")
+            || dependency.checksum.trim().is_empty()
+            || features != dependency.requested_features
+            || previous_alias.is_some_and(|previous| previous >= dependency.alias.as_str())
+        {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project inspection authority dependencies",
+                message: "must be strictly alias-sorted and contain complete locked source and feature evidence"
+                    .to_string(),
+            });
+        }
+        previous_alias = Some(dependency.alias.as_str());
+        let matches = sources
+            .iter()
+            .filter(|source| {
+                source.package == dependency.package
+                    && source.version == dependency.version
+                    && source.source.registry == dependency.registry
+                    && source.source.checksum == dependency.checksum
+                    && dependency
+                        .requested_features
+                        .iter()
+                        .all(|feature| source.features.contains(feature))
+            })
+            .count();
+        if matches != 1 {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project inspection authority dependencies",
+                message: format!(
+                    "dependency alias `{}` has {matches} exact feature-compatible records in the sealed source catalog",
+                    dependency.alias
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl OvenRustcArtifactManifest {
+    /// Return the exact compiler-runtime crate names sealed by this release artifact manifest.
+    ///
+    /// The `incan_` prefix alone does not establish compiler ownership. Consumers must derive runtime ownership from
+    /// the selected release Loaf so caller crates with similar names remain caller-owned.
+    pub(crate) fn compiler_runtime_crate_names(&self) -> Result<BTreeSet<String>, OvenRustcError> {
+        self.validate_shape(&self.intent)?;
+        Ok(compiler_runtime_artifacts_by_name(self)?.into_keys().collect())
+    }
+
     /// Return the complete artifact file set declared by this immutable plan without reading artifact bytes.
     pub(crate) fn declared_artifact_paths(&self) -> Result<BTreeSet<String>, OvenRustcError> {
         self.validate_shape(&self.intent)?;
         Ok(expected_artifacts(self)?.into_keys().collect())
     }
 
-    /// Replace generated-project compiler runtime artifacts with exact artifacts from the selected base.
+    /// Return the physical release artifacts required by its main, native, and vocabulary search closures.
+    pub(crate) fn release_execution_artifacts(&self) -> Result<Vec<OvenRustcSupportingArtifact>, OvenRustcError> {
+        compiler_runtime_execution_support(self)
+    }
+
+    /// Replace a generated project's release-owned dependency cohort with the exact selected release-base family.
     ///
-    /// Cargo derives a different filename and digest for a path dependency when the generated package identity
-    /// changes. Those artifacts are one compiler runtime, not a project-local copy: the selected release Loaf owns
-    /// its target/toolchain/profile-compatible closure. This method substitutes every compiler-owned `incan_*`
-    /// input, then retains the rest of the base closure as support. The latter is required because runtime metadata
-    /// may name host-side proc macros or transitive rlibs that direct Rustc must find under the base's verified
-    /// search paths. User and registry artifacts remain byte-exact project-extension inputs and are still
-    /// partitioned normally afterwards.
-    pub(crate) fn with_compiler_runtime_family_from_base(&self, base: &Self) -> Result<Self, OvenRustcError> {
+    /// Cargo gives path dependencies and even locked registry units publisher-local bytes. The selected release Loaf
+    /// owns one ABI cohort: exact `incan_*` artifacts plus every registry unit whose package, version, features,
+    /// source, target, profile, and toolchain match the sealed release catalog. Project-only registry and path
+    /// dependencies remain byte-exact extension inputs. Vocabulary auxiliaries retain their isolated roles.
+    pub(crate) fn with_release_cohort_from_base(&self, base: &Self) -> Result<Self, OvenRustcError> {
         self.validate_shape(&self.intent)?;
         base.validate_shape(&self.intent)?;
+        validate_release_registry_cohort(self, base)?;
         let project_runtime_indexes = self
             .externs
             .iter()
@@ -1927,7 +2752,7 @@ impl OvenRustcArtifactManifest {
         let [project_runtime_index] = project_runtime_indexes.as_slice() else {
             return Err(OvenRustcError::InvalidInput {
                 field: "project extension runtime",
-                message: "must declare exactly one `incan_stdlib` root external".to_string(),
+                message: "must declare exactly one `incan_stdlib` root extern".to_string(),
             });
         };
         let base_runtimes = base
@@ -1938,7 +2763,7 @@ impl OvenRustcArtifactManifest {
         let [base_runtime] = base_runtimes.as_slice() else {
             return Err(OvenRustcError::InvalidInput {
                 field: "project extension base",
-                message: "must declare exactly one `incan_stdlib` root external".to_string(),
+                message: "must declare exactly one `incan_stdlib` root extern".to_string(),
             });
         };
         let mut composed = self.clone();
@@ -1950,13 +2775,66 @@ impl OvenRustcArtifactManifest {
         for artifact in &mut composed.supporting_artifacts {
             replace_compiler_runtime_supporting_artifact(artifact, &base_compiler_artifacts)?;
         }
-        for auxiliary in &mut composed.vocab_auxiliary_targets {
-            for artifact in &mut auxiliary.externs {
-                replace_compiler_runtime_extern(artifact, &base_compiler_artifacts)?;
+        canonicalize_release_registry_sources(&mut composed, base)?;
+        let mut leaf_replacements = Vec::new();
+        for (index, project_leaf) in composed.registry_leaves.iter().enumerate() {
+            let candidates = base
+                .registry_leaves
+                .iter()
+                .filter(|candidate| {
+                    candidate.package == project_leaf.package
+                        && candidate.source.registry == project_leaf.source.registry
+                })
+                .collect::<Vec<_>>();
+            if candidates.is_empty() {
+                continue;
+            }
+            let Some(release_leaf) = candidates.into_iter().find(|candidate| {
+                same_registry_leaf_semantics(candidate, project_leaf)
+                    && composed.registry_sources.iter().any(|project_source| {
+                        base.registry_sources.iter().any(|release_source| {
+                            project_source == release_source
+                                && release_source.package == candidate.package
+                                && release_source.version == candidate.version
+                                && release_source.source == candidate.source
+                        })
+                    })
+            }) else {
+                continue;
+            };
+            leaf_replacements.push((
+                index,
+                project_leaf.artifact.relative_path.clone(),
+                (*release_leaf).clone(),
+            ));
+        }
+        for (index, project_path, release_leaf) in leaf_replacements {
+            replace_declared_release_artifact(&mut composed, &project_path, &release_leaf.artifact);
+            composed.registry_leaves[index] = release_leaf;
+        }
+        let release_artifacts = base
+            .release_execution_artifacts()?
+            .into_iter()
+            .map(|artifact| (artifact.relative_path.clone(), artifact))
+            .collect::<BTreeMap<_, _>>();
+        for artifact in &mut composed.externs {
+            if let Some(release) = release_artifacts.get(&artifact.relative_path) {
+                artifact.digest = release.digest.clone();
             }
         }
+        for artifact in &mut composed.supporting_artifacts {
+            if let Some(release) = release_artifacts.get(&artifact.relative_path) {
+                artifact.digest = release.digest.clone();
+            }
+        }
+        for leaf in &mut composed.registry_leaves {
+            if let Some(release) = release_artifacts.get(&leaf.artifact.relative_path) {
+                leaf.artifact.digest = release.digest.clone();
+            }
+        }
+        composed.vocab_auxiliary_targets = base.vocab_auxiliary_targets.clone();
         let mut declared = expected_artifacts(&composed)?;
-        for artifact in base.composition_artifacts()? {
+        for artifact in base.release_execution_artifacts()? {
             if artifact.relative_path == base_runtime.relative_path {
                 continue;
             }
@@ -1964,9 +2842,9 @@ impl OvenRustcArtifactManifest {
                 Some(digest) if digest == &artifact.digest => {}
                 Some(digest) => {
                     return Err(OvenRustcError::InvalidInput {
-                        field: "project extension base",
+                        field: "project extension release support",
                         message: format!(
-                            "base artifact `{}` conflicts with project artifact digest {digest}; base and extension cannot share one relative path",
+                            "release-base artifact `{}` conflicts with project artifact digest {digest}",
                             artifact.relative_path
                         ),
                     });
@@ -1977,6 +2855,16 @@ impl OvenRustcArtifactManifest {
                 }
             }
         }
+        composed
+            .dependency_search_paths
+            .extend(base.dependency_search_paths.iter().cloned());
+        composed.dependency_search_paths.sort();
+        composed.dependency_search_paths.dedup();
+        composed
+            .native_search_paths
+            .extend(base.native_search_paths.iter().cloned());
+        composed.native_search_paths.sort();
+        composed.native_search_paths.dedup();
         composed.supporting_artifacts.sort_by(|left, right| {
             left.relative_path
                 .cmp(&right.relative_path)
@@ -1984,6 +2872,19 @@ impl OvenRustcArtifactManifest {
         });
         composed.validate_shape(&self.intent)?;
         Ok(composed)
+    }
+
+    /// Verify that this project plan already uses the exact release cohort selected from its base.
+    pub(crate) fn validate_release_cohort_from_base(&self, base: &Self) -> Result<(), OvenRustcError> {
+        if self.with_release_cohort_from_base(base)? != *self {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension release cohort",
+                message:
+                    "does not use the exact runtime, registry, and vocabulary cohort from its selected release base"
+                        .to_string(),
+            });
+        }
+        Ok(())
     }
 
     /// Partition this complete publisher closure against one already selected base Loaf.
@@ -3147,6 +4048,310 @@ pub fn select_direct_rustc_plan_identity(store: &OvenStore, receipt: &OvenReceip
         })
 }
 
+/// Load the one project inspection authority named by a source-current completed output.
+///
+/// Selection never searches by dependency compatibility. The authority entry is exact, and all of its store-owned
+/// constituents are acquired in one batch before any source is projected. Release-Loaf constituents are resolved
+/// separately by the caller against the active immutable toolchain generation.
+pub(crate) fn load_project_inspection_authority(
+    store: &OvenStore,
+    authority_ref: &OvenProjectInspectionAuthorityRef,
+    project_identity: &str,
+    source_authority_digest: &str,
+    compiler_version: &str,
+) -> Result<OvenLoadedProjectInspectionAuthority, OvenRustcError> {
+    let (manifest, artifact_root, bytes, authority_lease) = store
+        .select_payload_for_execution(&authority_ref.identity)
+        .map_err(|error| OvenRustcError::PlanSelection {
+            receipt_identity: authority_ref.receipt_identity.clone(),
+            message: format!(
+                "source-current project output cannot select exact project inspection authority `{}`: {error}",
+                authority_ref.identity
+            ),
+        })?;
+    if manifest.kind != OvenArtifactKind::ProjectInspectionAuthority
+        || manifest.receipt_identity != authority_ref.receipt_identity
+        || manifest.build_unit_identity != authority_ref.build_unit_identity
+    {
+        return Err(OvenRustcError::InvalidStoredPlan {
+            identity: manifest.identity,
+            message: "project inspection authority differs from its exact kind, receipt, or build-unit reference"
+                .to_string(),
+        });
+    }
+    let payload = serde_json::from_slice::<OvenProjectInspectionAuthorityPayload>(&bytes).map_err(|error| {
+        OvenRustcError::InvalidStoredPlan {
+            identity: manifest.identity.clone(),
+            message: format!("payload is not a project inspection authority: {error}"),
+        }
+    })?;
+    validate_project_inspection_authority_payload(&payload)?;
+    if payload.project_identity != project_identity
+        || payload.source_authority_digest != source_authority_digest
+        || payload.compiler_version != compiler_version
+    {
+        return Err(OvenRustcError::InvalidStoredPlan {
+            identity: manifest.identity,
+            message: "project inspection authority does not match the selected output's project, source, or compiler evidence"
+                .to_string(),
+        });
+    }
+    if !payload.registry_sources.is_empty() {
+        let lock = artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+        let lock_bytes = fs::read(&lock).map_err(|source| OvenRustcError::Io {
+            path: lock.clone(),
+            source,
+        })?;
+        let actual = digest_bytes(&lock_bytes);
+        if actual != payload.registry_lock_digest {
+            return Err(OvenRustcError::ArtifactDigestMismatch {
+                path: lock,
+                expected: payload.registry_lock_digest.clone(),
+                actual,
+            });
+        }
+    }
+
+    let stored_refs = payload
+        .constituents
+        .iter()
+        .filter_map(|constituent| match constituent {
+            OvenProjectInspectionConstituent::Stored { identity, .. } => Some(identity.clone()),
+            OvenProjectInspectionConstituent::ReleaseLoaf { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    let stored_constituents = if stored_refs.is_empty() {
+        Vec::new()
+    } else {
+        store.select_payloads_for_execution(&stored_refs)?
+    };
+    let mut selected_index = 0;
+    for constituent in &payload.constituents {
+        let OvenProjectInspectionConstituent::Stored {
+            identity,
+            artifact_kind,
+            receipt,
+            base_loaf_identity,
+        } = constituent
+        else {
+            continue;
+        };
+        let selected = stored_constituents
+            .get(selected_index)
+            .ok_or_else(|| OvenRustcError::PlanSelection {
+                receipt_identity: receipt.identity.clone(),
+                message: format!("project inspection authority lost constituent `{identity}` during batch selection"),
+            })?;
+        selected_index += 1;
+        if selected.manifest.identity != *identity
+            || selected.manifest.kind != *artifact_kind
+            || selected.manifest.receipt_identity != receipt.identity
+            || selected.manifest.build_unit_identity != receipt.build_unit_identity
+            || selected.manifest.intent != receipt.intent
+        {
+            return Err(OvenRustcError::InvalidStoredPlan {
+                identity: identity.clone(),
+                message: "project inspection constituent differs from its sealed identity, receipt, kind, or intent"
+                    .to_string(),
+            });
+        }
+        match artifact_kind {
+            OvenArtifactKind::DirectRustcPlan => {
+                let plan = serde_json::from_slice::<OvenRustcArtifactManifest>(&selected.payload).map_err(|error| {
+                    OvenRustcError::InvalidStoredPlan {
+                        identity: identity.clone(),
+                        message: format!("direct-plan constituent payload is invalid: {error}"),
+                    }
+                })?;
+                plan.validate_shape(&receipt.intent)?;
+            }
+            OvenArtifactKind::ProjectPayload => {
+                let extension =
+                    serde_json::from_slice::<OvenProjectExtensionPayload>(&selected.payload).map_err(|error| {
+                        OvenRustcError::InvalidStoredPlan {
+                            identity: identity.clone(),
+                            message: format!("project-extension constituent payload is invalid: {error}"),
+                        }
+                    })?;
+                validate_project_extension_payload_shape(&extension, &receipt.intent)?;
+                let base_build_unit_matches = payload.constituents.iter().any(|candidate| {
+                    matches!(
+                        candidate,
+                        OvenProjectInspectionConstituent::ReleaseLoaf {
+                            loaf_identity,
+                            build_unit_identity,
+                            ..
+                        } if loaf_identity == &extension.base_loaf_identity
+                            && build_unit_identity == &extension.base_build_unit_identity
+                    )
+                });
+                if base_loaf_identity.as_deref() != Some(extension.base_loaf_identity.as_str())
+                    || !base_build_unit_matches
+                {
+                    return Err(OvenRustcError::InvalidStoredPlan {
+                        identity: identity.clone(),
+                        message: "project-extension constituent has different release-Loaf or build-unit evidence"
+                            .to_string(),
+                    });
+                }
+            }
+            unsupported => {
+                return Err(OvenRustcError::InvalidStoredPlan {
+                    identity: identity.clone(),
+                    message: format!("unsupported project inspection constituent kind {unsupported:?}"),
+                });
+            }
+        }
+    }
+    Ok(OvenLoadedProjectInspectionAuthority {
+        identity: manifest.identity,
+        artifact_root,
+        payload,
+        stored_constituents,
+        _authority_lease: authority_lease,
+        lineage_leases: Vec::new(),
+    })
+}
+
+/// Check a generated inspection batch against the exact normal/dev roots sealed by one project authority.
+pub(crate) fn project_inspection_authority_supports_dependencies(
+    payload: &OvenProjectInspectionAuthorityPayload,
+    dependencies: &[DependencySpec],
+) -> bool {
+    if validate_project_inspection_authority_payload(payload).is_err() {
+        return false;
+    }
+    let catalog = payload
+        .registry_sources
+        .iter()
+        .map(|source| &source.package)
+        .collect::<Vec<_>>();
+    let mut aliases = BTreeSet::new();
+    dependencies
+        .iter()
+        .filter(|dependency| matches!(dependency.source, DependencySource::Registry))
+        .all(|dependency| {
+            let alias = dependency.crate_name.replace('-', "_");
+            if !aliases.insert(alias.clone()) {
+                return false;
+            }
+            let Some(requirement) = dependency
+                .version
+                .as_deref()
+                .and_then(|version| VersionReq::parse(version).ok())
+            else {
+                return false;
+            };
+            let package = dependency.package.as_deref().unwrap_or(&dependency.crate_name);
+            let requested_features = {
+                let mut features = dependency.features.clone();
+                features.sort();
+                features.dedup();
+                features
+            };
+            let matches = payload
+                .registry_source_dependencies
+                .iter()
+                .chain(&payload.dev_registry_source_dependencies)
+                .filter(|record| {
+                    record.alias == alias
+                        && record.package == package
+                        && Version::parse(&record.version).is_ok_and(|version| requirement.matches(&version))
+                        && record.requested_features == requested_features
+                        && record.default_features == dependency.default_features
+                        && catalog.iter().any(|source| {
+                            source.package == record.package
+                                && source.version == record.version
+                                && source.source.registry == record.registry
+                                && source.source.checksum == record.checksum
+                        })
+                })
+                .collect::<Vec<_>>();
+            matches.len() == 1 || matches.len() == 2 && matches[0] == matches[1]
+        })
+}
+
+/// Check one generated native-test batch against the exact per-root dependency evidence in its singular authority.
+///
+/// The caller canonicalizes normal/dev duplicates first. This function then admits only a true subset: every named
+/// alias must retain the same package/source/version/features/defaults, and path roots must still hash to the sealed
+/// source identity. It never searches another Loaf when one root is absent or stale.
+pub(crate) fn project_inspection_test_dependency_envelope_supports_dependencies(
+    payload: &OvenProjectInspectionAuthorityPayload,
+    dependencies: &[DependencySpec],
+) -> Result<bool, OvenRustcError> {
+    validate_project_inspection_authority_payload(payload)?;
+    let Some(envelope) = payload.test_dependency_envelope.as_ref() else {
+        return Ok(false);
+    };
+    let mut aliases = BTreeSet::new();
+    for dependency in dependencies {
+        let alias = dependency.crate_name.replace('-', "_");
+        if !aliases.insert(alias.clone()) {
+            return Ok(false);
+        }
+        let Some(root) = envelope.dependency_roots.get(&alias) else {
+            return Ok(false);
+        };
+        let actual = crate::oven::digest_dependency_specs(std::slice::from_ref(dependency)).map_err(|error| {
+            OvenRustcError::InvalidInput {
+                field: "project inspection test dependency root",
+                message: error.to_string(),
+            }
+        })?;
+        let (expected, source_matches) = match root {
+            OvenProjectInspectionTestDependencyRoot::Registry { dependency_digest, .. } => (
+                dependency_digest,
+                matches!(dependency.source, DependencySource::Registry),
+            ),
+            OvenProjectInspectionTestDependencyRoot::Path { dependency_digest } => (
+                dependency_digest,
+                matches!(dependency.source, DependencySource::Path { .. }),
+            ),
+            OvenProjectInspectionTestDependencyRoot::Git { dependency_digest } => (
+                dependency_digest,
+                matches!(dependency.source, DependencySource::Git { .. }),
+            ),
+        };
+        if !source_matches || actual != *expected {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Check whether one sealed registry-source catalog covers every selected direct registry dependency.
+///
+/// This is shared by compiler-shipped and project-owned Loaf selection. It intentionally validates sources only;
+/// callers still need a separately selected receipt-bound plan before linking any artifact.
+pub(crate) fn registry_source_dependencies_supported_by_catalog(
+    sources: &[OvenRustcRegistrySourcePackage],
+    dependencies: &[&DependencySpec],
+) -> bool {
+    dependencies.iter().all(|dependency| {
+        let Some(requirement) = dependency
+            .version
+            .as_deref()
+            .and_then(|version| VersionReq::parse(version).ok())
+        else {
+            return false;
+        };
+        let package = dependency.package.as_deref().unwrap_or(&dependency.crate_name);
+        let required_features = dependency.features.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let matching = sources
+            .iter()
+            .filter(|source| {
+                source.package == package
+                    && Version::parse(&source.version).is_ok_and(|version| requirement.matches(&version))
+                    && required_features
+                        .iter()
+                        .all(|feature| source.features.iter().any(|selected| selected == *feature))
+            })
+            .count();
+        matching == 1
+    })
+}
+
 /// Select a stored plan only when it matches the requested reusable build unit and return its closure with a live
 /// lease.
 fn select_stored_direct_rustc_plan(
@@ -3632,6 +4837,7 @@ pub(crate) fn trusted_artifact_plan_for_source_evidence(
 }
 
 /// Return the direct extern names exposed to one receipt-authorized source root.
+#[cfg(test)]
 pub(crate) fn direct_rustc_source_extern_names(
     artifacts: &OvenRustcArtifactManifest,
     source_evidence_key: &str,
@@ -4759,20 +5965,30 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenCallerOwnedRustcLibrary, OvenDirectRustcTestRequest,
-        OvenRegistryLeafAuthority, OvenRustcArtifactExtern, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
-        OvenRustcError, OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcSupportingArtifact,
+        OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION, OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+        OvenCallerOwnedRustcLibrary, OvenDirectRustcTestRequest, OvenProjectInspectionAuthorityPayload,
+        OvenProjectInspectionConstituent, OvenProjectInspectionRootDependency, OvenProjectInspectionSource,
+        OvenProjectInspectionSourceOwner, OvenProjectInspectionTestDependencyEnvelope,
+        OvenProjectInspectionTestDependencyRoot, OvenRegistryLeafAuthority, OvenRustcArtifactExtern,
+        OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcAuxiliaryTarget, OvenRustcError,
+        OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcRegistrySourcePackage, OvenRustcSupportingArtifact,
         OvenSelectedPathRustcAuthority, OvenStoredDirectRustcRunRequest, OvenStoredDirectRustcTestRequest,
         OvenTrustedDirectRustcTargetRequest, OvenTrustedRustcArtifactRoot, OvenTrustedRustdocTestRequest,
         apply_oven_profile, attach_caller_owned_rustc_libraries, bake_direct_rustc_test, bake_stored_direct_rustc_run,
         bake_stored_direct_rustc_test, bake_trusted_direct_rustc_dylib, bake_trusted_direct_rustc_library,
         bake_trusted_direct_rustc_proc_macro, bake_trusted_direct_rustc_run, bake_trusted_direct_rustc_test,
         combined_process_output, is_host_native_unix_target, materialize_declared_rust_libraries,
-        materialize_declared_rust_libraries_with_selected_path_authority, resolve_sealed_registry_leaf,
+        materialize_declared_rust_libraries_with_selected_path_authority,
+        project_inspection_authority_supports_dependencies,
+        project_inspection_test_dependency_envelope_supports_dependencies, resolve_sealed_registry_leaf,
         run_trusted_rustdoc_test, rustc_dynamic_library_environment, rustc_host_target,
-        select_direct_rustc_plan_identity,
+        select_direct_rustc_plan_identity, validate_project_extension_payload_against_base,
+        validate_project_inspection_authority_payload,
     };
     use crate::manifest::{DependencySource, DependencySpec};
+    use crate::oven::legacy_cargo::{
+        OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION, OvenProjectExtensionPayload, OvenProjectRegistrySourceDependency,
+    };
     use crate::oven::native_test::run_native_test_batch_all;
     use crate::oven::store::{OvenArtifactKind, OvenArtifactPublishRequest, OvenStore, OvenStoreLimits};
     use crate::oven::{
@@ -5324,6 +6540,67 @@ mod tests {
     }
 
     #[test]
+    fn validates_the_exact_selected_registry_extern_instead_of_reselecting_highest_semver()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let registry = tempfile::tempdir()?;
+        let dependency_directory = registry.path().join("target/debug/deps");
+        fs::create_dir_all(&dependency_directory)?;
+        let mut leaves = Vec::new();
+        let mut artifacts = BTreeMap::new();
+        for version in ["1.2.0", "1.8.0"] {
+            let relative_path = format!("target/debug/deps/libshared-{version}.rlib");
+            let artifact = registry.path().join(&relative_path);
+            let bytes = format!("sealed shared {version}").into_bytes();
+            fs::write(&artifact, &bytes)?;
+            artifacts.insert(version, fs::canonicalize(&artifact)?);
+            leaves.push(OvenRustcRegistryLeaf {
+                package: "shared".to_string(),
+                version: version.to_string(),
+                crate_name: "shared".to_string(),
+                features: vec!["default".to_string()],
+                source: fixture_registry_source(),
+                artifact: OvenRustcArtifactExtern {
+                    crate_name: "shared".to_string(),
+                    relative_path,
+                    digest: digest_bytes(&bytes),
+                },
+            });
+        }
+        let authority = OvenRegistryLeafAuthority::new(registry.path().to_path_buf(), leaves);
+        let dependency = DependencySpec {
+            crate_name: "shared_old".to_string(),
+            version: Some("1".to_string()),
+            features: vec!["default".to_string()],
+            default_features: true,
+            source: DependencySource::Registry,
+            optional: false,
+            package: Some("shared".to_string()),
+        };
+
+        assert_eq!(
+            super::select_sealed_registry_leaf(&dependency, Some(&authority), "debug")?
+                .leaf
+                .version,
+            "1.8.0",
+            "the compatibility catalog retains its existing highest-semver behavior"
+        );
+        super::validate_selected_sealed_registry_leaf(
+            &dependency,
+            artifacts.get("1.2.0").ok_or("old artifact missing")?,
+            Some(&authority),
+            "debug",
+        )?;
+        let wrong_profile = super::validate_selected_sealed_registry_leaf(
+            &dependency,
+            artifacts.get("1.2.0").ok_or("old artifact missing")?,
+            Some(&authority),
+            "release",
+        );
+        assert!(matches!(wrong_profile, Err(OvenRustcError::InvalidInput { .. })));
+        Ok(())
+    }
+
+    #[test]
     fn aggregates_compatible_registry_catalogs_without_losing_the_leaf_root() -> Result<(), Box<dyn std::error::Error>>
     {
         let narrow = tempfile::tempdir()?;
@@ -5562,7 +6839,7 @@ mod tests {
     }
 
     #[test]
-    fn project_extension_replaces_the_complete_compiler_runtime_family_with_base_artifacts()
+    fn project_extension_replaces_the_complete_release_execution_cohort_with_base_artifacts()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
         let receipt = intent(root.path())?;
@@ -5582,6 +6859,11 @@ mod tests {
                     relative_path: "deps/libproject_dependency.rlib".to_string(),
                     digest: "sha256:project-dependency".to_string(),
                 },
+                OvenRustcArtifactExtern {
+                    crate_name: "incan_partner".to_string(),
+                    relative_path: "deps/libincan_partner-project.rlib".to_string(),
+                    digest: "sha256:project-partner".to_string(),
+                },
             ],
             entrypoint_externs: BTreeMap::new(),
             registry_leaves: Vec::new(),
@@ -5596,6 +6878,14 @@ mod tests {
                 OvenRustcSupportingArtifact {
                     relative_path: "deps/libincan_derive-project.dylib".to_string(),
                     digest: "sha256:project-derive".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_partner_helper-project.rlib".to_string(),
+                    digest: "sha256:project-partner-helper".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "registry-sources/shared/Cargo.toml".to_string(),
+                    digest: "sha256:shared-source".to_string(),
                 },
             ],
         };
@@ -5613,7 +6903,15 @@ mod tests {
             registry_leaves: Vec::new(),
             registry_sources: Vec::new(),
             compile_environment: BTreeMap::new(),
-            vocab_auxiliary_targets: Vec::new(),
+            vocab_auxiliary_targets: vec![OvenRustcAuxiliaryTarget {
+                target: "wasm32-wasip1".to_string(),
+                dependency_search_paths: vec!["vocab/deps".to_string()],
+                externs: vec![OvenRustcArtifactExtern {
+                    crate_name: "incan_vocab".to_string(),
+                    relative_path: "vocab/deps/libincan_vocab-release.rlib".to_string(),
+                    digest: "sha256:release-vocab".to_string(),
+                }],
+            }],
             supporting_artifacts: vec![
                 OvenRustcSupportingArtifact {
                     relative_path: "deps/libincan_core-release.rlib".to_string(),
@@ -5624,15 +6922,42 @@ mod tests {
                     digest: "sha256:release-derive".to_string(),
                 },
                 OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_stdlib_system-release.rlib".to_string(),
+                    digest: "sha256:release-system".to_string(),
+                },
+                OvenRustcSupportingArtifact {
                     relative_path: "deps/libbase_runtime_dependency.rlib".to_string(),
                     digest: "sha256:base-runtime-dependency".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "vocab/deps/libvocab_dependency.rlib".to_string(),
+                    digest: "sha256:vocab-dependency".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "registry-sources/shared/Cargo.toml".to_string(),
+                    digest: "sha256:shared-source".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "registry-sources/base-only/Cargo.toml".to_string(),
+                    digest: "sha256:base-only-source".to_string(),
                 },
             ],
         };
 
-        let composed = project.with_compiler_runtime_family_from_base(&base)?;
+        assert_eq!(
+            base.compiler_runtime_crate_names()?,
+            BTreeSet::from([
+                "incan_core".to_string(),
+                "incan_derive".to_string(),
+                "incan_stdlib".to_string(),
+                "incan_stdlib_system".to_string(),
+            ])
+        );
+        let composed = project.with_release_cohort_from_base(&base)?;
         assert_eq!(composed.externs[0].relative_path, "deps/libincan_stdlib-release.rlib");
         assert_eq!(composed.externs[1], project.externs[1]);
+        assert_eq!(composed.externs[2], project.externs[2]);
+        assert_eq!(composed.vocab_auxiliary_targets, base.vocab_auxiliary_targets);
         assert_eq!(
             composed.supporting_artifacts,
             vec![
@@ -5648,7 +6973,29 @@ mod tests {
                     relative_path: "deps/libincan_derive-release.dylib".to_string(),
                     digest: "sha256:release-derive".to_string(),
                 },
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_partner_helper-project.rlib".to_string(),
+                    digest: "sha256:project-partner-helper".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libincan_stdlib_system-release.rlib".to_string(),
+                    digest: "sha256:release-system".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "registry-sources/shared/Cargo.toml".to_string(),
+                    digest: "sha256:shared-source".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "vocab/deps/libvocab_dependency.rlib".to_string(),
+                    digest: "sha256:vocab-dependency".to_string(),
+                },
             ]
+        );
+        assert!(
+            composed
+                .supporting_artifacts
+                .iter()
+                .all(|artifact| artifact.relative_path != "registry-sources/base-only/Cargo.toml")
         );
         let partition = composed.partition_against_base(&base)?;
         assert_eq!(
@@ -5658,20 +7005,311 @@ mod tests {
                 "deps/libincan_core-release.rlib".to_string(),
                 "deps/libincan_derive-release.dylib".to_string(),
                 "deps/libincan_stdlib-release.rlib".to_string(),
+                "deps/libincan_stdlib_system-release.rlib".to_string(),
+                "registry-sources/shared/Cargo.toml".to_string(),
+                "vocab/deps/libincan_vocab-release.rlib".to_string(),
+                "vocab/deps/libvocab_dependency.rlib".to_string(),
             ])
         );
         assert_eq!(
             partition.extension_paths,
-            BTreeSet::from(["deps/libproject_dependency.rlib".to_string()])
+            BTreeSet::from([
+                "deps/libincan_partner-project.rlib".to_string(),
+                "deps/libincan_partner_helper-project.rlib".to_string(),
+                "deps/libproject_dependency.rlib".to_string(),
+            ])
         );
-        assert!(partition.extension_paths.iter().all(|path| !path.contains("libincan_")));
+        assert!(partition.extension_paths.contains("deps/libincan_partner-project.rlib"));
 
         let mut incomplete_base = base.clone();
-        incomplete_base
-            .supporting_artifacts
-            .retain(|artifact| !artifact.relative_path.contains("libincan_core-"));
-        let incomplete = project.with_compiler_runtime_family_from_base(&incomplete_base);
+        incomplete_base.externs.clear();
+        let incomplete = project.with_release_cohort_from_base(&incomplete_base);
         assert!(matches!(incomplete, Err(OvenRustcError::InvalidInput { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn project_extension_canonicalizes_the_locked_release_registry_cohort() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let receipt = intent(root.path())?;
+        let source = OvenRustcRegistrySource {
+            registry: "registry+https://github.com/rust-lang/crates.io-index".to_string(),
+            checksum: "serde-checksum".to_string(),
+            relative_root: "registry-sources/serde".to_string(),
+            digest: "sha256:serde-source".to_string(),
+        };
+        let registry_source = OvenRustcRegistrySourcePackage {
+            package: "serde".to_string(),
+            version: "1.0.228".to_string(),
+            features: vec!["derive".to_string()],
+            source: source.clone(),
+        };
+        let release_registry_source = OvenRustcRegistrySourcePackage {
+            features: vec!["default".to_string(), "derive".to_string()],
+            ..registry_source.clone()
+        };
+        let release_serde = OvenRustcArtifactExtern {
+            crate_name: "serde".to_string(),
+            relative_path: "deps/libserde-shared.rlib".to_string(),
+            digest: "sha256:release-serde".to_string(),
+        };
+        let project_serde = OvenRustcArtifactExtern {
+            digest: "sha256:publisher-local-serde".to_string(),
+            ..release_serde.clone()
+        };
+        let leaf = |features: &[&str], artifact| OvenRustcRegistryLeaf {
+            package: "serde".to_string(),
+            version: "1.0.228".to_string(),
+            crate_name: "serde".to_string(),
+            features: features.iter().map(|feature| (*feature).to_string()).collect(),
+            source: source.clone(),
+            artifact,
+        };
+        let mut project = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent.clone(),
+            dependency_search_paths: vec!["deps".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![
+                OvenRustcArtifactExtern {
+                    crate_name: "incan_stdlib".to_string(),
+                    relative_path: "deps/libincan_stdlib-project.rlib".to_string(),
+                    digest: "sha256:project-stdlib".to_string(),
+                },
+                project_serde.clone(),
+                OvenRustcArtifactExtern {
+                    crate_name: "project_only".to_string(),
+                    relative_path: "deps/libproject_only.rlib".to_string(),
+                    digest: "sha256:project-only".to_string(),
+                },
+            ],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: vec![leaf(&["derive"], project_serde)],
+            registry_sources: vec![registry_source.clone()],
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libserde_derive-shared.dylib".to_string(),
+                    digest: "sha256:publisher-local-derive".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "registry-sources/serde/Cargo.toml".to_string(),
+                    digest: "sha256:serde-manifest".to_string(),
+                },
+            ],
+        };
+        let base = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent,
+            dependency_search_paths: vec!["deps".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![
+                OvenRustcArtifactExtern {
+                    crate_name: "incan_stdlib".to_string(),
+                    relative_path: "deps/libincan_stdlib-release.rlib".to_string(),
+                    digest: "sha256:release-stdlib".to_string(),
+                },
+                release_serde.clone(),
+            ],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: vec![leaf(&["derive"], release_serde.clone())],
+            registry_sources: vec![release_registry_source.clone()],
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![
+                OvenRustcSupportingArtifact {
+                    relative_path: "deps/libserde_derive-shared.dylib".to_string(),
+                    digest: "sha256:release-derive".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "registry-sources/serde/Cargo.toml".to_string(),
+                    digest: "sha256:serde-manifest".to_string(),
+                },
+            ],
+        };
+
+        let composed = project.with_release_cohort_from_base(&base)?;
+        assert_eq!(composed.registry_leaves[0].artifact, release_serde);
+        assert_eq!(composed.registry_leaves[0].features, ["derive"]);
+        assert_eq!(composed.registry_sources[0], release_registry_source);
+        assert_eq!(
+            composed
+                .supporting_artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == "deps/libserde_derive-shared.dylib")
+                .map(|artifact| artifact.digest.as_str()),
+            Some("sha256:release-derive")
+        );
+        let partition = composed.partition_against_base(&base)?;
+        assert!(partition.base_paths.contains("deps/libserde-shared.rlib"));
+        assert!(partition.base_paths.contains("deps/libserde_derive-shared.dylib"));
+        assert!(partition.extension_paths.contains("deps/libproject_only.rlib"));
+
+        let mut project_with_distinct_leaf_features = project.clone();
+        let feature_artifact = OvenRustcArtifactExtern {
+            crate_name: "serde".to_string(),
+            relative_path: "deps/libserde-project-feature.rlib".to_string(),
+            digest: "sha256:project-feature-serde".to_string(),
+        };
+        project_with_distinct_leaf_features.externs[1] = feature_artifact.clone();
+        project_with_distinct_leaf_features.registry_leaves[0]
+            .features
+            .push("rc".to_string());
+        project_with_distinct_leaf_features.registry_leaves[0].artifact = feature_artifact.clone();
+        project_with_distinct_leaf_features.registry_sources[0]
+            .features
+            .push("rc".to_string());
+        let feature_distinct = project_with_distinct_leaf_features.with_release_cohort_from_base(&base)?;
+        assert_eq!(feature_distinct.registry_leaves[0].artifact, feature_artifact);
+        assert!(
+            feature_distinct
+                .partition_against_base(&base)?
+                .extension_paths
+                .contains("deps/libserde-project-feature.rlib")
+        );
+
+        let mut project_with_alternate = project.clone();
+        project_with_alternate
+            .registry_sources
+            .push(OvenRustcRegistrySourcePackage {
+                package: "serde".to_string(),
+                version: "2.0.0".to_string(),
+                features: vec!["alloc".to_string()],
+                source: OvenRustcRegistrySource {
+                    registry: source.registry.clone(),
+                    checksum: "project-serde-v2-checksum".to_string(),
+                    relative_root: "registry-sources/serde-v2".to_string(),
+                    digest: "sha256:project-serde-v2-source".to_string(),
+                },
+            });
+        project_with_alternate
+            .supporting_artifacts
+            .push(OvenRustcSupportingArtifact {
+                relative_path: "registry-sources/serde-v2/Cargo.toml".to_string(),
+                digest: "sha256:project-serde-v2-manifest".to_string(),
+            });
+        let composed_with_alternate = project_with_alternate.with_release_cohort_from_base(&base)?;
+        assert!(composed_with_alternate.registry_sources.iter().any(|package| {
+            package.package == "serde"
+                && package.version == "2.0.0"
+                && package.source.checksum == "project-serde-v2-checksum"
+        }));
+        assert!(
+            composed_with_alternate
+                .partition_against_base(&base)?
+                .extension_paths
+                .contains("registry-sources/serde-v2/Cargo.toml")
+        );
+
+        project.registry_sources[0].features.push("rc".to_string());
+        let feature_extended = project.with_release_cohort_from_base(&base)?;
+        assert_eq!(feature_extended.registry_sources[0].features, ["derive", "rc"]);
+        project.registry_sources[0].source.checksum = "mismatched-checksum".to_string();
+        let mismatch = project.with_release_cohort_from_base(&base);
+        assert!(matches!(mismatch, Err(OvenRustcError::InvalidInput { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn project_extension_source_authority_requires_the_same_recomposed_payload_as_execution()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let receipt = intent(root.path())?;
+        let source = OvenRustcRegistrySource {
+            registry: "registry+https://github.com/rust-lang/crates.io-index".to_string(),
+            checksum: "project-only-checksum".to_string(),
+            relative_root: "registry-sources/project-only".to_string(),
+            digest: "sha256:project-only-source".to_string(),
+        };
+        let registry_source = OvenRustcRegistrySourcePackage {
+            package: "project-only".to_string(),
+            version: "1.0.0".to_string(),
+            features: vec!["default".to_string()],
+            source,
+        };
+        let mut publisher = empty_manifest(&receipt);
+        publisher.dependency_search_paths = vec!["deps".to_string()];
+        publisher.externs = vec![OvenRustcArtifactExtern {
+            crate_name: "incan_stdlib".to_string(),
+            relative_path: "deps/libincan_stdlib-project.rlib".to_string(),
+            digest: "sha256:project-stdlib".to_string(),
+        }];
+        publisher.registry_sources = vec![registry_source];
+        publisher.supporting_artifacts = vec![OvenRustcSupportingArtifact {
+            relative_path: "registry-sources/project-only/Cargo.toml".to_string(),
+            digest: "sha256:project-only-manifest".to_string(),
+        }];
+        let mut base = empty_manifest(&receipt);
+        base.dependency_search_paths = vec!["deps".to_string()];
+        base.externs = vec![OvenRustcArtifactExtern {
+            crate_name: "incan_stdlib".to_string(),
+            relative_path: "deps/libincan_stdlib-release.rlib".to_string(),
+            digest: "sha256:release-stdlib".to_string(),
+        }];
+        let complete = publisher.with_release_cohort_from_base(&base)?;
+        let partition = complete.partition_against_base(&base)?;
+        let payload = OvenProjectExtensionPayload {
+            schema_version: OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION,
+            base_loaf_identity: "sha256:release-loaf".to_string(),
+            base_build_unit_identity: "sha256:release-unit".to_string(),
+            publisher_plan: publisher,
+            complete_plan: complete,
+            registry_source_dependencies: vec![OvenProjectRegistrySourceDependency {
+                alias: "project_only".to_string(),
+                package: "project-only".to_string(),
+                version: "1.0.0".to_string(),
+                registry: "registry+https://github.com/rust-lang/crates.io-index".to_string(),
+                checksum: "project-only-checksum".to_string(),
+            }],
+            dev_registry_source_dependencies: Vec::new(),
+            extension_paths: partition.extension_paths.iter().cloned().collect(),
+        };
+        assert_eq!(
+            validate_project_extension_payload_against_base(
+                &payload,
+                "sha256:release-loaf",
+                "sha256:release-unit",
+                &base,
+            )?,
+            partition
+        );
+
+        let mut malformed_fragment = payload.clone();
+        malformed_fragment
+            .extension_paths
+            .push("undeclared/artifact.rlib".to_string());
+        let Err(error) = super::validate_project_extension_payload_shape(&malformed_fragment, &receipt.intent) else {
+            return Err(std::io::Error::other("malformed stored extension fragment was accepted").into());
+        };
+        assert!(error.to_string().contains("strictly sorted"));
+
+        let mut malformed_dev_root = payload.clone();
+        malformed_dev_root.dev_registry_source_dependencies = vec![OvenProjectRegistrySourceDependency {
+            alias: "missing_dev".to_string(),
+            package: "missing-dev".to_string(),
+            version: "1.0.0".to_string(),
+            registry: "registry+https://github.com/rust-lang/crates.io-index".to_string(),
+            checksum: "missing-dev-checksum".to_string(),
+        }];
+        let Err(error) = super::validate_project_extension_payload_shape(&malformed_dev_root, &receipt.intent) else {
+            return Err(std::io::Error::other("malformed stored extension dev root was accepted").into());
+        };
+        assert!(error.to_string().contains("exact records"));
+
+        let mut mismatched = payload;
+        mismatched.complete_plan.registry_sources[0]
+            .features
+            .push("payload-only-drift".to_string());
+        let Err(error) = validate_project_extension_payload_against_base(
+            &mismatched,
+            "sha256:release-loaf",
+            "sha256:release-unit",
+            &base,
+        ) else {
+            return Err(std::io::Error::other("mismatched source-authority payload was accepted").into());
+        };
+        assert!(matches!(error, OvenRustcError::InvalidInput { .. }));
         Ok(())
     }
 
@@ -6928,6 +8566,207 @@ mod tests {
             vocab_auxiliary_targets: Vec::new(),
             supporting_artifacts: Vec::new(),
         }
+    }
+
+    #[test]
+    fn release_only_project_inspection_authority_binds_root_features_and_orders_constituents()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let receipt = intent(project.path())?;
+        let source = OvenRustcRegistrySourcePackage {
+            package: "serde_json".to_string(),
+            version: "1.0.140".to_string(),
+            features: vec!["preserve_order".to_string(), "std".to_string()],
+            source: OvenRustcRegistrySource {
+                registry: "registry+https://github.com/rust-lang/crates.io-index".to_string(),
+                checksum: "serde-json-checksum".to_string(),
+                relative_root: "registry-sources/serde_json-1.0.140".to_string(),
+                digest: digest_bytes(b"serde_json source"),
+            },
+        };
+        let root = OvenProjectInspectionRootDependency {
+            alias: "serde_json".to_string(),
+            package: source.package.clone(),
+            version: source.version.clone(),
+            registry: source.source.registry.clone(),
+            checksum: source.source.checksum.clone(),
+            requested_features: vec!["preserve_order".to_string()],
+            default_features: false,
+        };
+        let mut payload = OvenProjectInspectionAuthorityPayload {
+            schema_version: OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION,
+            project_identity: "sha256:project".to_string(),
+            source_authority_digest: "sha256:source".to_string(),
+            compiler_version: "0.5.0-dev.46".to_string(),
+            registry_lock_digest: digest_bytes(b"lock"),
+            registry_source_dependencies: vec![root.clone()],
+            dev_registry_source_dependencies: Vec::new(),
+            test_dependency_envelope: None,
+            constituents: vec![OvenProjectInspectionConstituent::ReleaseLoaf {
+                loaf_identity: "sha256:release-loaf".to_string(),
+                build_unit_identity: "sha256:release-unit".to_string(),
+                receipt: receipt.clone(),
+            }],
+            registry_sources: vec![OvenProjectInspectionSource {
+                package: source,
+                owner: OvenProjectInspectionSourceOwner::Constituent { index: 0 },
+            }],
+        };
+        validate_project_inspection_authority_payload(&payload)?;
+
+        let matching = DependencySpec {
+            crate_name: "serde_json".to_string(),
+            version: Some("1".to_string()),
+            features: vec!["preserve_order".to_string()],
+            default_features: false,
+            source: DependencySource::Registry,
+            optional: false,
+            package: None,
+        };
+        assert!(project_inspection_authority_supports_dependencies(
+            &payload,
+            std::slice::from_ref(&matching)
+        ));
+        let mut wrong_features = matching.clone();
+        wrong_features.features = vec!["raw_value".to_string()];
+        assert!(!project_inspection_authority_supports_dependencies(
+            &payload,
+            &[wrong_features]
+        ));
+        let mut wrong_defaults = matching.clone();
+        wrong_defaults.default_features = true;
+        assert!(!project_inspection_authority_supports_dependencies(
+            &payload,
+            &[wrong_defaults]
+        ));
+
+        let debug_receipt = import_frozen_project(&OvenImportRequest::new(
+            project.path(),
+            "aarch64-apple-darwin",
+            "rustc 1.96.0",
+            "debug",
+            Vec::new(),
+        ))?;
+        payload.constituents.push(OvenProjectInspectionConstituent::Stored {
+            identity: "sha256:test-dependency-extension".to_string(),
+            artifact_kind: OvenArtifactKind::ProjectPayload,
+            receipt: debug_receipt.clone(),
+            base_loaf_identity: Some("sha256:release-loaf".to_string()),
+        });
+        payload.test_dependency_envelope = Some(OvenProjectInspectionTestDependencyEnvelope {
+            constituent_index: 1,
+            dependency_surface_digest: digest_bytes(b"normal+dev dependency surface"),
+            dependency_roots: BTreeMap::from([(
+                "serde_json".to_string(),
+                OvenProjectInspectionTestDependencyRoot::Registry {
+                    dependency_digest: crate::oven::digest_dependency_specs(std::slice::from_ref(&matching))?,
+                    locked: root,
+                },
+            )]),
+        });
+        validate_project_inspection_authority_payload(&payload)?;
+        assert!(project_inspection_test_dependency_envelope_supports_dependencies(
+            &payload,
+            std::slice::from_ref(&matching)
+        )?);
+        let mut missing = matching.clone();
+        missing.crate_name = "missing_alias".to_string();
+        assert!(!project_inspection_test_dependency_envelope_supports_dependencies(
+            &payload,
+            &[missing]
+        )?);
+
+        let mut direct_plan_payload = payload.clone();
+        direct_plan_payload.constituents[1] = OvenProjectInspectionConstituent::Stored {
+            identity: "sha256:test-dependency-direct-plan".to_string(),
+            artifact_kind: OvenArtifactKind::DirectRustcPlan,
+            receipt: debug_receipt.clone(),
+            base_loaf_identity: None,
+        };
+        validate_project_inspection_authority_payload(&direct_plan_payload)?;
+        if let OvenProjectInspectionConstituent::Stored { base_loaf_identity, .. } =
+            &mut direct_plan_payload.constituents[1]
+        {
+            *base_loaf_identity = Some("sha256:invalid-direct-plan-base".to_string());
+        }
+        let Err(error) = validate_project_inspection_authority_payload(&direct_plan_payload) else {
+            return Err("authority accepted base-Loaf evidence on a self-contained direct-plan constituent".into());
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("inconsistent identity, kind, or base evidence")
+        );
+
+        let path_package = tempfile::tempdir()?;
+        fs::write(
+            path_package.path().join("Cargo.toml"),
+            "[package]\nname = \"dev_fixture\"\nversion = \"0.1.0\"\n",
+        )?;
+        fs::create_dir(path_package.path().join("src"))?;
+        fs::write(path_package.path().join("src/lib.rs"), "pub fn fixture() {}\n")?;
+        let path_dependency = DependencySpec {
+            crate_name: "dev_fixture".to_string(),
+            version: Some("0.1.0".to_string()),
+            features: vec!["test-support".to_string()],
+            default_features: false,
+            source: DependencySource::Path {
+                path: path_package.path().to_path_buf(),
+            },
+            optional: false,
+            package: None,
+        };
+        payload
+            .test_dependency_envelope
+            .as_mut()
+            .ok_or("test dependency role disappeared")?
+            .dependency_roots
+            .insert(
+                "dev_fixture".to_string(),
+                OvenProjectInspectionTestDependencyRoot::Path {
+                    dependency_digest: crate::oven::digest_dependency_specs(std::slice::from_ref(&path_dependency))?,
+                },
+            );
+        assert!(project_inspection_test_dependency_envelope_supports_dependencies(
+            &payload,
+            std::slice::from_ref(&path_dependency)
+        )?);
+        fs::write(path_package.path().join("src/lib.rs"), "pub fn changed() {}\n")?;
+        assert!(!project_inspection_test_dependency_envelope_supports_dependencies(
+            &payload,
+            &[path_dependency]
+        )?);
+
+        payload
+            .test_dependency_envelope
+            .as_mut()
+            .ok_or("test dependency role disappeared")?
+            .constituent_index = 0;
+        let Err(error) = validate_project_inspection_authority_payload(&payload) else {
+            return Err("authority accepted a non-debug release Loaf as its project test dependency envelope".into());
+        };
+        assert!(error.to_string().contains("debug-profile"));
+        if let OvenProjectInspectionConstituent::ReleaseLoaf { receipt, .. } = &mut payload.constituents[0] {
+            *receipt = debug_receipt;
+        }
+        validate_project_inspection_authority_payload(&payload)?;
+        payload.test_dependency_envelope = None;
+        let _ = payload.constituents.pop();
+
+        payload.constituents.insert(
+            0,
+            OvenProjectInspectionConstituent::Stored {
+                identity: "sha256:direct-plan".to_string(),
+                artifact_kind: OvenArtifactKind::DirectRustcPlan,
+                receipt,
+                base_loaf_identity: None,
+            },
+        );
+        let Err(error) = validate_project_inspection_authority_payload(&payload) else {
+            return Err("authority accepted a release Loaf after a store-owned constituent".into());
+        };
+        assert!(error.to_string().contains("precede"));
+        Ok(())
     }
 
     #[test]

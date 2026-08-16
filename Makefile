@@ -297,7 +297,7 @@ test-oven-partition:
 # short `/tmp` scratch directory instead of inheriting an arbitrarily deep worktree `TMPDIR`.
 .PHONY: test-oven-replay
 test-oven-replay:
-	@echo "\033[1mRunning complete compiler suite through Oven...\033[0m"
+	@echo "\033[1mRunning prepared compiler-suite replay through Oven...\033[0m"
 	@set -e; \
 		mkdir -p "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)"; \
 		suite_output="$$(mktemp -d "$(INCAN_TEST_OVEN_COMPILER_SUITE_OUTPUT_ROOT)/oven-compiler-suite-output.XXXXXX")"; \
@@ -379,6 +379,9 @@ test-prewarm-oven-release-loafs: test-prewarm-sdk
 	@test -x "$(INCAN_TEST_OVEN_RELEASE_COMPILER_BIN)"
 	@mkdir -p "$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin"
 	@cp "$(INCAN_TEST_OVEN_RELEASE_COMPILER_BIN)" "$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan"
+	@if [ "$$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then \
+		codesign --force --sign - "$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan"; \
+	fi
 	@$(TEST_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_LOAF_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
 		INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
 		INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
@@ -438,7 +441,7 @@ test-oven-release-smoke: test-prewarm-oven-release-loafs
 			run_project_incan oven bake --project "$$project_root" --format json > "$$smoke_root/$$fixture-bake-first.json"; \
 			test "$$(grep -Fc '"action": "toolchain_loaf"' "$$smoke_root/$$fixture-bake-first.json")" -eq 2; \
 			run_project_incan oven bake --project "$$project_root" --format json > "$$smoke_root/$$fixture-bake-second.json"; \
-			test "$$(grep -Fc '"action": "toolchain_loaf"' "$$smoke_root/$$fixture-bake-second.json")" -eq 2; \
+			test "$$(grep -Fc '"action": "reused"' "$$smoke_root/$$fixture-bake-second.json")" -eq 2; \
 			if [ "$$fixture" = oven_release_app_bake ]; then \
 				(cd "$$project_root" && run_project_incan build src/main.incn); \
 				(cd "$$project_root" && run_project_incan run src/main.incn); \

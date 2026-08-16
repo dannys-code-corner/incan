@@ -22,7 +22,8 @@ use crate::cli::{
     CliError, CliResult, ExitCode, OvenInteropAdapterArgument, OvenLoafEnvelopeArgument, OvenOutputFormat,
 };
 use crate::oven::compiler_suite_env::{
-    OVEN_COMPILER_SUITE_CAPABILITY_ENV, OVEN_COMPILER_SUITE_FIXTURE_CARGO_LOG_ENV,
+    OVEN_COMPILER_SUITE_CAPABILITY_ENV, OVEN_COMPILER_SUITE_EXPLICIT_BAKE_CARGO_ENV,
+    OVEN_COMPILER_SUITE_EXPLICIT_BAKE_HOME_ENV, OVEN_COMPILER_SUITE_FIXTURE_CARGO_LOG_ENV,
     OVEN_COMPILER_SUITE_FIXTURE_CARGO_REAL_ENV, OVEN_COMPILER_SUITE_FIXTURE_RUSTC_REAL_ENV,
     OVEN_COMPILER_SUITE_RUSTC_ENV, OVEN_COMPILER_SUITE_VOCAB_CAPABILITY_ENV, OvenCompilerSuiteCapability,
     OvenCompilerSuiteTargetCapabilities,
@@ -49,15 +50,15 @@ use crate::oven::loaf::{
     LoafTemporaryDirectory, OVEN_LOAF_ENV, OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OvenLoafBakerContext,
     OvenLoafEnvelope, OvenLoafEnvelopeManifest, OvenLoafEnvelopeMember, OvenLoafFixtureAction, OvenLoafMemberRole,
     OvenLoafPreparation, acquire_committed_loaf_generation, acquire_exclusive_loaf_generation_lock,
-    commit_loaf_generation, loaf_directory_byte_counts, loaf_envelope_inspection_packages,
+    commit_loaf_generation, digest_runtime_crate_source, loaf_directory_byte_counts, loaf_envelope_inspection_packages,
     loaf_envelope_specifications, loaf_raw_disk_bytes, prepare_loaf_from_generated_project,
     retire_unreferenced_loaf_generations, validate_stored_loaf_for_reuse,
 };
 use crate::oven::native_test::{
     OvenNativeTestCaseCounts, OvenNativeTestCaseTiming, OvenNativeTestCommandTiming, OvenNativeTestRequest,
     run_native_test_batch_all_in_directory_with_timeout,
-    run_native_test_batch_all_in_directory_with_timeout_and_threads, run_native_test_exact_in_directory_with_timeout,
-    run_native_tests,
+    run_native_test_batch_all_in_directory_with_timeout_and_threads, run_native_tests,
+    run_native_tests_exact_in_directory_with_timeout,
 };
 use crate::oven::rustc::{
     OvenCallerOwnedRustcLibrary, OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenStoredDirectRustcRunRequest,
@@ -80,8 +81,9 @@ use crate::oven::{
     import_frozen_project, receipt_native_compiler_suite, write_receipt,
 };
 use crate::oven_interop::{CapabilityRequirement, LockedInteropTarget};
+use crate::provider::FeatureSelection;
 #[cfg(feature = "rust_inspect")]
-use crate::rust_inspect::{OvenInspectionRegistrySource, write_oven_inspection_source_authority};
+use crate::rust_inspect::{OvenInspectionRegistrySource, write_sealed_oven_inspection_source_authority};
 use crate::version::INCAN_VERSION;
 
 /// Environment override for aggregate physical allocation policy.
@@ -309,11 +311,11 @@ pub struct OvenCompilerLibtestsRunCommandOptions {
     /// not a second suite definition: every requested path must match one indexed source root in the receipt-bound
     /// payload.
     pub targets: Vec<String>,
-    /// One exact test selected from one receipt-bound target for a diagnostic Oven run.
+    /// Exact tests selected from one receipt-bound target for a diagnostic Oven run.
     ///
     /// Exact selection is deliberately narrow: it preserves the stored target's ordinary direct-rustc build,
-    /// receipt, environment, working directory, and timeout supervisor while avoiding a second complete-root replay
-    /// merely to attribute one known expensive case.
+    /// receipt, environment, working directory, and timeout supervisor while running every requested case
+    /// sequentially from one materialized libtest binary.
     pub exact_names: Vec<String>,
     /// Zero-based index of a deterministic receipt-index partition.
     ///
@@ -322,7 +324,7 @@ pub struct OvenCompilerLibtestsRunCommandOptions {
     pub partition_index: Option<usize>,
     /// Number of deterministic receipt-index partitions.
     pub partition_count: Option<usize>,
-    /// Explicit Cargo executable for the two roots whose tests verify Cargo compatibility.
+    /// Explicit Cargo executable for compiler-suite roots that deliberately exercise the Loaf baker.
     ///
     /// The suite creates a logged proxy and grants it only through its package-qualified capability registry. It is
     /// never available to normal Incan commands or used as an Oven execution fallback.
@@ -398,8 +400,12 @@ pub struct OvenRunCommandOptions {
 /// library or executable profile, reuses a selected closure when available, and otherwise delegates one bounded
 /// compatibility publication to the normal Oven store. Normal build, run, and test remain consumers: they neither
 /// discover nor launch Cargo.
-pub fn oven_bake_project(project: PathBuf, format: OvenOutputFormat) -> CliResult<ExitCode> {
-    let report = super::build::bake_oven_project_targets(&project)?;
+pub fn oven_bake_project(
+    project: PathBuf,
+    package_features: FeatureSelection,
+    format: OvenOutputFormat,
+) -> CliResult<ExitCode> {
+    let report = super::build::bake_oven_project_targets(&project, &package_features)?;
     match format {
         OvenOutputFormat::Text => {
             for profile in &report.profiles {
@@ -526,7 +532,7 @@ pub fn oven_legacy_cargo_prepare(options: OvenLegacyCargoPrepareCommandOptions) 
     .map_err(oven_error)?;
     match options.format {
         OvenOutputFormat::Text => println!(
-            "Prepared Oven direct-rustc plan {} through the explicit legacy_cargo publisher.",
+            "Prepared Oven direct-rustc plan {} through the internal compatibility publisher.",
             result.plan_identity
         ),
         OvenOutputFormat::Json => print_json(&result)?,
@@ -871,6 +877,8 @@ struct OvenLoafEnvelopeEvidence {
     sdk_inventory_digest: String,
     rustc_identity: String,
     lock_digest: String,
+    /// Complete source evidence for the runtime crates compiled into every standard-library Loaf.
+    runtime_source_digest: String,
     fixture_digest: String,
 }
 
@@ -899,6 +907,10 @@ fn loaf_envelope_compatibility_map(evidence: &OvenLoafEnvelopeEvidence) -> BTree
         ),
         ("rustc_identity".to_string(), evidence.rustc_identity.clone()),
         ("lock_digest".to_string(), evidence.lock_digest.clone()),
+        (
+            "runtime_source_digest".to_string(),
+            evidence.runtime_source_digest.clone(),
+        ),
         ("fixture_digest".to_string(), evidence.fixture_digest.clone()),
     ])
 }
@@ -944,11 +956,42 @@ fn loaf_envelope_evidence(
         sdk_inventory_digest: read_digest(sdk_inventory, "SDK inventory")?,
         rustc_identity: rustc_identity(rustc).map_err(oven_error)?,
         lock_digest: read_digest(&lock_path, "lock input")?,
+        runtime_source_digest: loaf_runtime_source_digest(compiler_root)?,
         fixture_digest: digest_bytes(
             &serde_json::to_vec(&(fixture_evidence, inspection_packages))
                 .map_err(|error| CliError::failure(format!("could not encode Loaf fixture evidence: {error}")))?,
         ),
     })
+}
+
+/// Hash the complete compiler-runtime source closure that the Loaf fixture links into its sealed artifacts.
+///
+/// The executable digest is provenance only: rebuilding the same release binary must not invalidate an otherwise
+/// compatible envelope. The runtime crates are different: changing their source without selecting a new envelope
+/// could pair an updated compiler with stale `incan_stdlib` or support-crate archives. Keep this evidence portable by
+/// recording named content digests rather than checkout paths.
+fn loaf_runtime_source_digest(compiler_root: &Path) -> CliResult<String> {
+    let mut records = BTreeMap::new();
+    let manifest = compiler_root.join("Cargo.toml");
+    let manifest_bytes = fs::read(&manifest).map_err(|error| {
+        CliError::failure(format!(
+            "could not read Loaf runtime manifest {}: {error}",
+            manifest.display()
+        ))
+    })?;
+    records.insert("Cargo.toml".to_string(), digest_bytes(&manifest_bytes));
+    for (label, relative) in [
+        ("incan_core", "crates/incan_core"),
+        ("incan_derive", "crates/incan_derive"),
+        ("incan_stdlib", "crates/incan_stdlib"),
+    ] {
+        let root = compiler_root.join(relative);
+        let digest = digest_runtime_crate_source(&root).map_err(CliError::failure)?;
+        records.insert(label.to_string(), digest);
+    }
+    let bytes = serde_json::to_vec(&records)
+        .map_err(|error| CliError::failure(format!("could not encode Loaf runtime source evidence: {error}")))?;
+    Ok(digest_bytes(&bytes))
 }
 
 /// Return the one checked compiler lock used by both envelope identity and cold fixture publication.
@@ -1278,7 +1321,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
                 source_digest: source.source_digest.clone(),
             })
             .collect();
-        write_oven_inspection_source_authority(&authority_dir, sources).map_err(|error| {
+        write_sealed_oven_inspection_source_authority(&authority_dir, sources).map_err(|error| {
             CliError::failure(format!(
                 "could not write explicit baker Rust inspection authority: {error}"
             ))
@@ -1318,7 +1361,16 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
                 specification.label
             ))
         })?;
-        let source = project_root.join("main.incn");
+        // Project-output authority hashes the conventional `src/` tree. The fixture must use that shape so its
+        // deliberate first Oven miss still reaches receipt creation.
+        let source_root = project_root.join("src");
+        fs::create_dir_all(&source_root).map_err(|error| {
+            CliError::failure(format!(
+                "could not create checked Loaf fixture source directory {}: {error}",
+                source_root.display()
+            ))
+        })?;
+        let source = source_root.join("main.incn");
         fs::write(&source, specification.source).map_err(|error| {
             CliError::failure(format!(
                 "could not write checked Loaf fixture {}: {error}",
@@ -1808,12 +1860,11 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
         options.partition_index,
         options.partition_count,
     )?;
-    if options.partition_index.is_some() && !options.exact_names.is_empty() {
-        return Err(CliError::failure(
-            "Oven compiler-suite exact-test selection cannot be combined with receipt partition selection".to_string(),
-        ));
-    }
-    let exact_test_name = compiler_suite_exact_test_selection(&options.exact_names, selected_shard_references.len())?;
+    let (selected_shard_references, exact_test_names) = compiler_suite_exact_test_selection(
+        &options.exact_names,
+        selected_shard_references,
+        options.partition_index.is_some(),
+    )?;
     // Indexed schemas acquire every shard and foundation lease before their first child starts. Keeping both values
     // alive through the complete command prevents policy pruning from removing a later root or its foundation while
     // an earlier compiler test executes.
@@ -2249,7 +2300,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
                 prepared_children,
                 &receipt,
                 &rustc,
-                exact_test_name.as_deref(),
+                exact_test_names.as_deref(),
             )?;
             Ok((
                 suite_report,
@@ -2288,7 +2339,7 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
                 &root.target_kind,
                 &root.source_relative_path,
             )
-            .legacy_cargo_fixture
+            .cargo_fixture
         })
         .map(|root| {
             format!(
@@ -2300,6 +2351,15 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     let success = suite_report.failed.is_empty()
         && native_test_case_totals.unreported_roots == 0
         && native_test_case_totals.reported_roots + suite_report.doctest_targets == planned_target_count;
+    let selection = compiler_suite_selection_report(
+        exact_test_names.as_deref(),
+        &options.targets,
+        options.partition_index,
+        options.partition_count,
+        planned_target_count,
+    );
+    let complete_root_success = success && selection.complete_root_evidence;
+    let complete_suite_success = success && selection.complete_suite_evidence;
     let timing = CompilerSuiteTimingReport {
         receipt_and_selection_elapsed_ms,
         shared_setup_elapsed_ms,
@@ -2311,6 +2371,9 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
     let report_path = output_directory.join("compiler-suite-report.json");
     let report = serde_json::json!({
         "success": success,
+        "complete_root_success": complete_root_success,
+        "complete_suite_success": complete_suite_success,
+        "selection": selection.clone(),
         "receipt": receipt_path.display().to_string(),
         "report_path": report_path.display().to_string(),
         "native_test_count": suite_report.native_test_count,
@@ -2340,8 +2403,13 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             print_json(&report)?;
             return Ok(ExitCode::FAILURE);
         }
+        let selection_context = match selection.mode {
+            "complete-suite" => "complete compiler workspace native suite",
+            "selected-complete-roots" => "selected complete-root replay (not complete-suite evidence)",
+            _ => "partial exact diagnostic (not complete-root or complete-suite evidence)",
+        };
         return Err(CliError::failure(format!(
-            "compiler workspace native tests failed after Oven direct-Rustc harness execution: {} passed, {} failed, {} ignored across {} reported libtest root(s): {} green, {} failing, with {} root(s) lacking a terminal libtest summary. The explicit compatibility fixture launched Cargo {} time(s).\n{}",
+            "Oven {selection_context} failed: {} passed, {} failed, {} ignored across {} reported libtest root(s): {} green, {} failing, with {} root(s) lacking a terminal libtest summary. The explicit compatibility fixture launched Cargo {} time(s).\n{}",
             native_test_case_totals.passed,
             native_test_case_totals.failed,
             native_test_case_totals.ignored,
@@ -2354,8 +2422,8 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
         )));
     }
     match options.format {
-        OvenOutputFormat::Text => println!(
-            "Oven executed {} compiler workspace native test(s): {} passed, {} failed, {} ignored across {} reported root(s): {} green and {} failing, plus {} doctest target(s), through its stored direct-Rustc target plan. The explicit compatibility fixture launched Cargo {} time(s) (receipt {}).",
+        OvenOutputFormat::Text if selection.complete_suite_evidence => println!(
+            "Oven executed the complete compiler workspace suite: {} native test(s), with {} passed, {} failed, and {} ignored across {} reported root(s): {} green and {} failing, plus {} doctest target(s), through its stored direct-Rustc target plan. The explicit compatibility fixture launched Cargo {} time(s) (receipt {}).",
             suite_report.native_test_count,
             native_test_case_totals.passed,
             native_test_case_totals.failed,
@@ -2364,6 +2432,31 @@ pub fn oven_run_compiler_libtests(options: OvenCompilerLibtestsRunCommandOptions
             native_test_case_totals.green_roots,
             native_test_case_totals.failed_roots,
             suite_report.doctest_targets,
+            fixture_cargo_invocations,
+            receipt_path.display(),
+        ),
+        OvenOutputFormat::Text if selection.complete_root_evidence => println!(
+            "Oven executed {} selected complete compiler-suite root(s): {} native test(s), with {} passed, {} failed, and {} ignored across {} reported root(s): {} green and {} failing, plus {} doctest target(s), through stored direct-Rustc target plans. Selection: {}. This is complete-root evidence for the selected roots, not complete compiler workspace suite evidence. The explicit compatibility fixture launched Cargo {} time(s) (receipt {}).",
+            selection.selected_root_count,
+            suite_report.native_test_count,
+            native_test_case_totals.passed,
+            native_test_case_totals.failed,
+            native_test_case_totals.ignored,
+            native_test_case_totals.reported_roots,
+            native_test_case_totals.green_roots,
+            native_test_case_totals.failed_roots,
+            suite_report.doctest_targets,
+            compiler_suite_selection_context(&selection),
+            fixture_cargo_invocations,
+            receipt_path.display(),
+        ),
+        OvenOutputFormat::Text => println!(
+            "Oven exact diagnostic executed {} selected native test(s): {} passed, {} failed, and {} ignored from one receipt-bound root through its stored direct-Rustc target plan. Selected names: {}. This partial diagnostic is neither complete-root nor complete-suite evidence. The explicit compatibility fixture launched Cargo {} time(s) (receipt {}).",
+            selection.selected_case_count,
+            native_test_case_totals.passed,
+            native_test_case_totals.failed,
+            native_test_case_totals.ignored,
+            selection.normalized_exact_names.join(", "),
             fixture_cargo_invocations,
             receipt_path.display(),
         ),
@@ -2862,7 +2955,9 @@ fn bake_planned_compiler_suite_binaries(
 struct CompilerSuiteFixtureCargoProxy {
     executable: PathBuf,
     real: PathBuf,
+    /// Fallback compiler only when the named publisher did not select one from its receipt.
     real_rustc: PathBuf,
+    home: PathBuf,
     log: PathBuf,
 }
 
@@ -2922,6 +3017,14 @@ fn prepare_compiler_suite_fixture_cargo_proxy(
             real_rustc.display()
         )));
     }
+    let home = user_home()
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| {
+            CliError::failure(
+                "explicit compiler-suite fixture Cargo requires a readable HOME for its offline source cache",
+            )
+        })?;
     let root = output_directory.join("fixture-cargo");
     fs::create_dir_all(&root).map_err(|error| {
         CliError::failure(format!(
@@ -2934,7 +3037,7 @@ fn prepare_compiler_suite_fixture_cargo_proxy(
     let proxy = concat!(
         "#!/bin/sh\n",
         "printf '%s\\n' \"$*\" >> \"$INCAN_INTERNAL_OVEN_FIXTURE_CARGO_LOG\"\n",
-        "export RUSTC=\"$INCAN_INTERNAL_OVEN_FIXTURE_RUSTC_REAL\"\n",
+        "if [ -z \"${RUSTC:-}\" ]; then export RUSTC=\"$INCAN_INTERNAL_OVEN_FIXTURE_RUSTC_REAL\"; fi\n",
         "exec \"$INCAN_INTERNAL_OVEN_FIXTURE_CARGO_REAL\" \"$@\"\n",
     );
     fs::write(&executable, proxy).map_err(|error| {
@@ -2959,6 +3062,7 @@ fn prepare_compiler_suite_fixture_cargo_proxy(
         executable: compiler_suite_environment_path(&executable)?,
         real,
         real_rustc,
+        home: compiler_suite_environment_path(&home)?,
         log: compiler_suite_environment_path(&log)?,
     })
 }
@@ -3002,7 +3106,6 @@ fn prepare_compiler_suite_child<'a>(
     let prefer_dynamic = target.target_kind == "proc-macro"
         || compiler_suite_workspace_outputs_include_dylib(&workspace_library_outputs);
     let mut target_environment = environment.clone();
-    apply_compiler_suite_target_capabilities(target, &mut target_environment, fixture_cargo)?;
     let mut binary_compile_environment = BTreeMap::new();
     let child_state_root = compiler_suite_child_state_root(output_directory, target);
     // A parallel child may itself invoke `incan`. Give that nested command an isolated mutable home while it reads
@@ -3029,6 +3132,9 @@ fn prepare_compiler_suite_child<'a>(
             .display()
             .to_string(),
     );
+    // Apply the exceptional baker capability only after child-local state has been installed. The capability may
+    // replace HOME with the caller-approved offline Cargo source cache; ordinary roots retain this child-owned home.
+    apply_compiler_suite_target_capabilities(target, &mut target_environment, fixture_cargo)?;
     for dependency in &target.binary_dependencies {
         let output = binary_outputs.get(dependency).ok_or_else(|| {
             CliError::failure(format!(
@@ -3085,7 +3191,7 @@ fn apply_compiler_suite_target_capabilities(
     if !capabilities.generated_rust_closure {
         compiler_suite_remove_generated_rust_closure(environment);
     }
-    if capabilities.legacy_cargo_fixture {
+    if capabilities.cargo_fixture {
         let fixture_cargo = fixture_cargo.ok_or_else(|| {
             CliError::failure(format!(
                 "compiler-suite root `{}` exercises Cargo compatibility and requires explicit --fixture-cargo",
@@ -3105,6 +3211,27 @@ fn apply_compiler_suite_target_capabilities(
             OVEN_COMPILER_SUITE_FIXTURE_CARGO_LOG_ENV.to_string(),
             fixture_cargo.log.display().to_string(),
         );
+        // Only a package-qualified explicit-bake root receives the caller's offline Cargo source cache. The baker
+        // copies and digests the sources it uses; ordinary roots remain in their child-owned homes without Cargo.
+        environment.insert("HOME".to_string(), fixture_cargo.home.display().to_string());
+    }
+    if capabilities.explicit_bake_cargo {
+        let fixture_cargo = fixture_cargo.ok_or_else(|| {
+            CliError::failure(format!(
+                "compiler-suite root `{}` explicitly bakes a Loaf and requires --fixture-cargo",
+                target.source_relative_path
+            ))
+        })?;
+        // Do not set `CARGO` here. The test helper receives the three values below and installs them only on its
+        // explicit `incan oven bake` child; all normal command probes retain the scheduler's Cargo guard.
+        environment.insert(
+            OVEN_COMPILER_SUITE_EXPLICIT_BAKE_CARGO_ENV.to_string(),
+            fixture_cargo.real.display().to_string(),
+        );
+        environment.insert(
+            OVEN_COMPILER_SUITE_EXPLICIT_BAKE_HOME_ENV.to_string(),
+            fixture_cargo.home.display().to_string(),
+        );
     }
     Ok(())
 }
@@ -3122,7 +3249,7 @@ fn run_prepared_compiler_suite_children(
     children: Vec<PreparedCompilerSuiteChild<'_>>,
     receipt: &OvenReceipt,
     rustc: &Path,
-    exact_test_name: Option<&str>,
+    exact_test_names: Option<&[String]>,
 ) -> CliResult<CompilerSuiteChildrenReport> {
     let child_count = children.len();
     if child_count == 0 {
@@ -3153,7 +3280,7 @@ fn run_prepared_compiler_suite_children(
                             return;
                         };
                         let result =
-                            run_prepared_compiler_suite_child(child, receipt, rustc, libtest_threads, exact_test_name)
+                            run_prepared_compiler_suite_child(child, receipt, rustc, libtest_threads, exact_test_names)
                                 .map_err(|error| error.to_string());
                         if let Ok(mut results) = results.lock() {
                             results.push(result);
@@ -3208,7 +3335,7 @@ fn run_prepared_compiler_suite_child(
     receipt: &OvenReceipt,
     rustc: &Path,
     libtest_threads: usize,
-    exact_test_name: Option<&str>,
+    exact_test_names: Option<&[String]>,
 ) -> CliResult<CompilerSuiteChildrenReport> {
     let mut artifacts = child.closure.manifest_for_target(child.target, child.intent.clone());
     for (name, value) in &child.binary_compile_environment {
@@ -3249,10 +3376,10 @@ fn run_prepared_compiler_suite_child(
             let direct_rustc_bake_elapsed_ms = bake_started.elapsed().as_millis();
             let working_directory =
                 compiler_suite_target_working_directory(child.compiler_root, &child.source, child.target)?;
-            let report = match exact_test_name {
-                Some(exact_test_name) => run_native_test_exact_in_directory_with_timeout(
+            let report = match exact_test_names {
+                Some(exact_test_names) => run_native_tests_exact_in_directory_with_timeout(
                     &bake.output,
-                    exact_test_name,
+                    exact_test_names,
                     &child.environment,
                     Some(&working_directory),
                     Some(OVEN_COMPILER_TEST_ROOT_TIMEOUT),
@@ -3279,7 +3406,7 @@ fn run_prepared_compiler_suite_child(
                 )]
             };
             Ok(CompilerSuiteChildrenReport {
-                native_test_count: if exact_test_name.is_some() {
+                native_test_count: if exact_test_names.is_some() {
                     report
                         .case_counts
                         .as_ref()
@@ -3822,6 +3949,93 @@ struct CompilerSuiteChildPhaseTimings {
     root_execution_elapsed_ms: u128,
 }
 
+/// Explicit coverage boundary for one compiler-suite report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CompilerSuiteSelectionReport {
+    /// `complete-suite`, `selected-complete-roots`, or `exact-diagnostic`.
+    mode: &'static str,
+    /// Deterministically normalized exact names; empty for every non-exact run.
+    normalized_exact_names: Vec<String>,
+    /// Number of exact cases requested from the selected root; zero for a complete-root run.
+    selected_case_count: usize,
+    /// Deterministically normalized paths from explicit `--target` arguments.
+    requested_target_paths: Vec<String>,
+    /// Zero-based receipt-index partition when the caller requested one.
+    partition_index: Option<usize>,
+    /// Total receipt-index partition count paired with `partition_index`.
+    partition_count: Option<usize>,
+    /// Number of receipt-bound roots selected by target, partition, or complete-suite selection.
+    selected_root_count: usize,
+    /// Whether a green invocation can serve as complete-root evidence for every selected root.
+    complete_root_evidence: bool,
+    /// Whether a green invocation covers the complete compiler workspace suite.
+    complete_suite_evidence: bool,
+}
+
+/// Describe the exact, target, partition, or full-suite boundary of one invocation.
+fn compiler_suite_selection_report(
+    exact_test_names: Option<&[String]>,
+    requested_target_paths: &[String],
+    partition_index: Option<usize>,
+    partition_count: Option<usize>,
+    selected_root_count: usize,
+) -> CompilerSuiteSelectionReport {
+    let requested_target_paths = requested_target_paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    match exact_test_names {
+        Some(exact_test_names) => CompilerSuiteSelectionReport {
+            mode: "exact-diagnostic",
+            normalized_exact_names: exact_test_names.to_vec(),
+            selected_case_count: exact_test_names.len(),
+            requested_target_paths,
+            partition_index,
+            partition_count,
+            selected_root_count,
+            complete_root_evidence: false,
+            complete_suite_evidence: false,
+        },
+        None if requested_target_paths.is_empty() && partition_index.is_none() => CompilerSuiteSelectionReport {
+            mode: "complete-suite",
+            normalized_exact_names: Vec::new(),
+            selected_case_count: 0,
+            requested_target_paths,
+            partition_index,
+            partition_count,
+            selected_root_count,
+            complete_root_evidence: true,
+            complete_suite_evidence: true,
+        },
+        None => CompilerSuiteSelectionReport {
+            mode: "selected-complete-roots",
+            normalized_exact_names: Vec::new(),
+            selected_case_count: 0,
+            requested_target_paths,
+            partition_index,
+            partition_count,
+            selected_root_count,
+            complete_root_evidence: true,
+            complete_suite_evidence: false,
+        },
+    }
+}
+
+/// Render the requested target or partition boundary for selected-root terminal output.
+fn compiler_suite_selection_context(selection: &CompilerSuiteSelectionReport) -> String {
+    if !selection.requested_target_paths.is_empty() {
+        return format!("target path(s) {}", selection.requested_target_paths.join(", "));
+    }
+    match (selection.partition_index, selection.partition_count) {
+        (Some(index), Some(count)) => format!("zero-based partition {index} of {count}"),
+        _ => "all receipt-bound roots".to_string(),
+    }
+}
+
 /// Complete native-test coverage for one compiler-suite invocation.
 #[derive(Debug, Default)]
 struct CompilerSuiteChildrenReport {
@@ -4094,35 +4308,77 @@ fn compiler_suite_selected_shard_references(
         .collect())
 }
 
-/// Validate the deliberately narrow compiler-suite exact-test diagnostic selection.
+/// Resolve and validate the deliberately narrow compiler-suite exact-test diagnostic selection.
 ///
-/// A full suite remains the correctness gate. Exact execution exists only to attribute one known case without
-/// needlessly rewalking a complete expensive root, so it must name exactly one receipt-bound target and one exact
-/// inventory name. This does not create a separate suite definition or relax ordinary coverage.
+/// A full suite remains the correctness gate. Exact execution exists only to attribute known cases without
+/// needlessly recompiling the same expensive root, so every name must select one receipt-bound target. This does not
+/// create a separate suite definition or relax ordinary coverage. Cargo can publish Rustc and Rustdoc roots for the
+/// same source target; in that one companion case, exact execution selects the unique native libtest root.
 fn compiler_suite_exact_test_selection(
     requested: &[String],
-    selected_target_count: usize,
-) -> CliResult<Option<String>> {
-    match requested {
-        [] => Ok(None),
-        [name] => {
-            let name = name.trim();
-            if name.is_empty() {
-                return Err(CliError::failure(
-                    "Oven compiler-suite exact-test selection cannot be empty".to_string(),
-                ));
-            }
-            if selected_target_count != 1 {
-                return Err(CliError::failure(
-                    "Oven compiler-suite --exact requires exactly one receipt-bound --target".to_string(),
-                ));
-            }
-            Ok(Some(name.to_string()))
-        }
-        _ => Err(CliError::failure(
-            "Oven compiler-suite --exact accepts exactly one test name".to_string(),
-        )),
+    mut selected_targets: Vec<OvenCompilerTestSuiteShardReference>,
+    partition_selected: bool,
+) -> CliResult<(Vec<OvenCompilerTestSuiteShardReference>, Option<Vec<String>>)> {
+    if requested.is_empty() {
+        return Ok((selected_targets, None));
     }
+    if partition_selected {
+        return Err(CliError::failure(
+            "Oven compiler-suite exact-test selection cannot be combined with receipt partition selection".to_string(),
+        ));
+    }
+    if let Some(rustc_index) = compiler_suite_exact_rustc_companion_index(&selected_targets) {
+        let rustc_target = selected_targets.swap_remove(rustc_index);
+        selected_targets.clear();
+        selected_targets.push(rustc_target);
+    }
+    let [selected_target] = selected_targets.as_slice() else {
+        return Err(CliError::failure(
+            "Oven compiler-suite --exact requires exactly one receipt-bound --target".to_string(),
+        ));
+    };
+    if selected_target.target.runner != "rustc-test" {
+        return Err(CliError::failure(format!(
+            "Oven compiler-suite --exact requires a receipt-bound rustc-test target; `{}` uses `{}`",
+            selected_target.target.source_relative_path, selected_target.target.runner
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    for name in requested {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CliError::failure(
+                "Oven compiler-suite exact-test selection cannot be empty".to_string(),
+            ));
+        }
+        if !seen.insert(name.to_string()) {
+            return Err(CliError::failure(format!(
+                "Oven compiler-suite exact-test selection `{name}` is duplicated"
+            )));
+        }
+    }
+    Ok((selected_targets, Some(seen.into_iter().collect())))
+}
+
+/// Return the native member of one Rustc/Rustdoc companion pair for the same Cargo target.
+fn compiler_suite_exact_rustc_companion_index(
+    selected_targets: &[OvenCompilerTestSuiteShardReference],
+) -> Option<usize> {
+    let [first, second] = selected_targets else {
+        return None;
+    };
+    let (rustc_index, rustdoc_index) = match (first.target.runner.as_str(), second.target.runner.as_str()) {
+        ("rustc-test", "rustdoc-test") => (0, 1),
+        ("rustdoc-test", "rustc-test") => (1, 0),
+        _ => return None,
+    };
+    let rustc_target = &selected_targets[rustc_index].target;
+    let rustdoc_target = &selected_targets[rustdoc_index].target;
+    (rustc_target.package_name == rustdoc_target.package_name
+        && rustc_target.target_name == rustdoc_target.target_name
+        && rustc_target.target_kind == rustdoc_target.target_kind
+        && rustc_target.source_relative_path == rustdoc_target.source_relative_path)
+        .then_some(rustc_index)
 }
 
 /// Resolve every shard named by a schema-9 compiler-suite index before baking the compiler CLI or starting a child.
@@ -5567,21 +5823,22 @@ mod tests {
         compiler_suite_directory, compiler_suite_environment, compiler_suite_environment_path,
         compiler_suite_exact_test_selection, compiler_suite_file, compiler_suite_libtest_threads,
         compiler_suite_remove_generated_rust_closure, compiler_suite_selected_shard_references,
-        compiler_suite_temporary_directory, compiler_suite_uses_indexed_foundations,
-        compiler_suite_workspace_library_dependency_closure, default_rustup_home, default_store_root,
-        loaf_envelope_default_limits, loaf_envelope_evidence, native_test_failure_summary, oven_import,
-        oven_publish_direct_rustc_plan, oven_run, oven_test, parse_named_path, prepare_compiler_suite_child,
-        resolve_limits_with_environment_and_defaults, reuse_complete_loaf_envelope,
-        run_compiler_suite_children_with_leases_retained, run_prepared_compiler_suite_children,
-        select_compiler_suite_shards, write_compiler_suite_report, write_native_test_failure_transcript,
+        compiler_suite_selection_context, compiler_suite_selection_report, compiler_suite_temporary_directory,
+        compiler_suite_uses_indexed_foundations, compiler_suite_workspace_library_dependency_closure,
+        default_rustup_home, default_store_root, loaf_envelope_default_limits, loaf_envelope_evidence,
+        native_test_failure_summary, oven_import, oven_publish_direct_rustc_plan, oven_run, oven_test,
+        parse_named_path, prepare_compiler_suite_child, resolve_limits_with_environment_and_defaults,
+        reuse_complete_loaf_envelope, run_compiler_suite_children_with_leases_retained,
+        run_prepared_compiler_suite_children, select_compiler_suite_shards, write_compiler_suite_report,
+        write_native_test_failure_transcript,
     };
     use crate::cli::{CliResult, OvenLoafEnvelopeArgument, OvenOutputFormat};
     use crate::oven::legacy_cargo::{
         OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION, OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION_V1,
         OvenCompilerTestSuiteArtifactClosure, OvenCompilerTestSuiteFoundationReference, OvenCompilerTestSuitePayload,
         OvenCompilerTestSuiteShardPayload, OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteTarget,
-        OvenCompilerTestSuiteToolchainLoafGenerationReference, OvenCompilerWorkspaceLibrary,
-        OvenCompilerWorkspaceLibraryKey,
+        OvenCompilerTestSuiteTargetKey, OvenCompilerTestSuiteToolchainLoafGenerationReference,
+        OvenCompilerWorkspaceLibrary, OvenCompilerWorkspaceLibraryKey,
     };
     use crate::oven::loaf::{
         OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf, OvenLoafEnvelope,
@@ -5656,12 +5913,25 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn complete_envelope_reuses_changed_compiler_executable_without_cargo() -> Result<(), Box<dyn std::error::Error>> {
+    fn complete_envelope_reuses_nonsemantic_churn_without_cargo() -> Result<(), Box<dyn std::error::Error>> {
         let output = tempfile::tempdir()?;
         let scratch = tempfile::tempdir()?;
         let compiler_root = tempfile::tempdir()?;
         let tools = tempfile::tempdir()?;
+        fs::write(
+            compiler_root.path().join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\n",
+        )?;
         fs::write(compiler_root.path().join("Cargo.lock"), "version = 4\n")?;
+        for crate_name in ["incan_core", "incan_derive", "incan_stdlib"] {
+            let crate_root = compiler_root.path().join("crates").join(crate_name);
+            fs::create_dir_all(crate_root.join("src"))?;
+            fs::write(
+                crate_root.join("Cargo.toml"),
+                format!("[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\n"),
+            )?;
+            fs::write(crate_root.join("src/lib.rs"), "pub fn fixture() {}\n")?;
+        }
         let sdk_inventory = compiler_root.path().join("sdk-inventory.json");
         fs::write(&sdk_inventory, "sealed sdk inventory")?;
         let cargo_marker = tools.path().join("cargo-started");
@@ -5687,6 +5957,21 @@ mod tests {
             &rustc,
         )?;
         let second_evidence = loaf_envelope_evidence(
+            OvenLoafEnvelope::Release,
+            compiler_root.path(),
+            &compiler_two,
+            &sdk_inventory,
+            &rustc,
+        )?;
+        let nested_output = compiler_root
+            .path()
+            .join("crates/incan_stdlib/stdlib/components/stdlib-data/target/incan_lock/rust_inspect");
+        fs::create_dir_all(&nested_output)?;
+        fs::write(
+            nested_output.join(".incan_rust_inspect_cache.json"),
+            "mutable cache output\n",
+        )?;
+        let output_churn_evidence = loaf_envelope_evidence(
             OvenLoafEnvelope::Release,
             compiler_root.path(),
             &compiler_two,
@@ -5769,7 +6054,7 @@ mod tests {
             output.path(),
             scratch.path(),
             OvenLoafEnvelope::Release,
-            &second_evidence,
+            &output_churn_evidence,
             OvenStoreLimits::new(1024 * 1024, 1024 * 1024, 1024 * 1024),
             Instant::now(),
         )?
@@ -5787,6 +6072,45 @@ mod tests {
         assert_ne!(
             first_evidence.compiler_executable_digest, second_evidence.compiler_executable_digest,
             "the regression requires distinct compiler executable provenance"
+        );
+        assert_eq!(
+            first_evidence.runtime_source_digest, second_evidence.runtime_source_digest,
+            "executable provenance must not affect runtime-source compatibility"
+        );
+        assert_eq!(
+            first_evidence.runtime_source_digest, output_churn_evidence.runtime_source_digest,
+            "nested runtime-crate target output must not invalidate authored runtime source"
+        );
+        assert!(
+            !cargo_marker.exists(),
+            "exact reuse after nonsemantic output churn must not start the explicit publisher"
+        );
+        fs::write(
+            compiler_root.path().join("crates/incan_stdlib/src/lib.rs"),
+            "pub fn changed_runtime() {}\n",
+        )?;
+        let changed_runtime_evidence = loaf_envelope_evidence(
+            OvenLoafEnvelope::Release,
+            compiler_root.path(),
+            &compiler_two,
+            &sdk_inventory,
+            &rustc,
+        )?;
+        assert_ne!(
+            first_evidence.runtime_source_digest, changed_runtime_evidence.runtime_source_digest,
+            "a changed runtime source must not reuse stale compiled standard-library artifacts"
+        );
+        assert!(
+            reuse_complete_loaf_envelope(
+                output.path(),
+                scratch.path(),
+                OvenLoafEnvelope::Release,
+                &changed_runtime_evidence,
+                OvenStoreLimits::new(1024 * 1024, 1024 * 1024, 1024 * 1024),
+                Instant::now(),
+            )?
+            .is_none(),
+            "runtime-source drift must force the explicit baker path"
         );
         assert!(
             !cargo_marker.exists(),
@@ -5808,6 +6132,15 @@ mod tests {
         fs::write(compiler_root.path().join("Cargo.lock"), "version = 4\n")?;
         fs::write(compiler_root.path().join("src/lib.rs"), "pub fn fixture() {}\n")?;
         fs::write(compiler_root.path().join("src/main.rs"), "fn main() {}\n")?;
+        for crate_name in ["incan_core", "incan_derive", "incan_stdlib"] {
+            let crate_root = compiler_root.path().join("crates").join(crate_name);
+            fs::create_dir_all(crate_root.join("src"))?;
+            fs::write(
+                crate_root.join("Cargo.toml"),
+                format!("[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\n"),
+            )?;
+            fs::write(crate_root.join("src/lib.rs"), "pub fn fixture() {}\n")?;
+        }
         let sdk_inventory = compiler_root.path().join("sdk-inventory.json");
         fs::write(&sdk_inventory, "not read on exact suite reuse")?;
         let rustc = resolve_active_rustc()?;
@@ -6528,16 +6861,171 @@ mod tests {
         Ok(())
     }
 
+    fn exact_selection_reference(runner: &str) -> OvenCompilerTestSuiteShardReference {
+        OvenCompilerTestSuiteShardReference {
+            identity: format!("sha256:{runner}"),
+            target: OvenCompilerTestSuiteTargetKey {
+                package_name: "incan".to_string(),
+                target_name: "incan".to_string(),
+                target_kind: "lib".to_string(),
+                runner: runner.to_string(),
+                source_relative_path: "src/lib.rs".to_string(),
+            },
+            source_bytes: 1,
+        }
+    }
+
     #[test]
-    fn compiler_suite_exact_selection_requires_one_target_and_one_name() -> Result<(), Box<dyn std::error::Error>> {
+    fn compiler_suite_exact_selection_requires_one_target_and_unique_nonempty_names()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let rustc_test = exact_selection_reference("rustc-test");
+        let requested = ["selected::second".to_string(), " selected::first ".to_string()];
+        let (selected, names) = compiler_suite_exact_test_selection(&requested, vec![rustc_test.clone()], false)?;
+        assert_eq!(selected, std::slice::from_ref(&rustc_test));
         assert_eq!(
-            compiler_suite_exact_test_selection(&[" selected::case ".to_string()], 1)?,
-            Some("selected::case".to_string())
+            names,
+            Some(vec!["selected::first".to_string(), "selected::second".to_string()])
         );
-        assert_eq!(compiler_suite_exact_test_selection(&[], 0)?, None);
-        assert!(compiler_suite_exact_test_selection(&["selected::case".to_string()], 0).is_err());
-        assert!(compiler_suite_exact_test_selection(&[" ".to_string()], 1).is_err());
-        assert!(compiler_suite_exact_test_selection(&["first".to_string(), "second".to_string()], 1).is_err());
+        assert_eq!(
+            compiler_suite_exact_test_selection(&[], vec![rustc_test.clone()], false)?,
+            (vec![rustc_test.clone()], None)
+        );
+        assert!(compiler_suite_exact_test_selection(&["selected::case".to_string()], Vec::new(), false).is_err());
+        let mut second_rustc_test = rustc_test.clone();
+        second_rustc_test.identity = "sha256:second-rustc-test".to_string();
+        second_rustc_test.target.target_name = "other".to_string();
+        assert!(
+            compiler_suite_exact_test_selection(
+                &["selected::case".to_string()],
+                vec![rustc_test.clone(), second_rustc_test],
+                false,
+            )
+            .is_err()
+        );
+        assert!(compiler_suite_exact_test_selection(&[" ".to_string()], vec![rustc_test.clone()], false).is_err());
+        assert!(
+            compiler_suite_exact_test_selection(
+                &["selected::case".to_string(), " selected::case ".to_string()],
+                vec![rustc_test.clone()],
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            compiler_suite_exact_test_selection(
+                &["selected::case".to_string(), " ".to_string()],
+                vec![rustc_test],
+                false,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiler_suite_exact_selection_chooses_the_native_cargo_target_companion()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let rustc_test = exact_selection_reference("rustc-test");
+        let rustdoc_test = exact_selection_reference("rustdoc-test");
+        let references = vec![rustdoc_test.clone(), rustc_test.clone()];
+        let path_selected =
+            compiler_suite_selected_shard_references(&references, &["src/lib.rs".to_string()], None, None)?;
+        assert_eq!(path_selected, references);
+        assert_eq!(
+            compiler_suite_exact_test_selection(&[], path_selected.clone(), false)?,
+            (path_selected.clone(), None),
+            "a complete-root source selection must retain both Cargo companions"
+        );
+
+        let (selected, names) =
+            compiler_suite_exact_test_selection(&["selected::case".to_string()], path_selected, false)?;
+
+        assert_eq!(selected, [rustc_test]);
+        assert_eq!(names, Some(vec!["selected::case".to_string()]));
+        Ok(())
+    }
+
+    #[test]
+    fn compiler_suite_exact_selection_rejects_noncompanion_and_partition_selections() {
+        let rustc_test = exact_selection_reference("rustc-test");
+        let mut unrelated_rustdoc = exact_selection_reference("rustdoc-test");
+        unrelated_rustdoc.target.target_name = "other".to_string();
+        let unrelated = compiler_suite_exact_test_selection(
+            &["selected::case".to_string()],
+            vec![rustc_test.clone(), unrelated_rustdoc],
+            false,
+        );
+        assert!(matches!(
+            unrelated,
+            Err(error) if error.to_string().contains("requires exactly one receipt-bound --target")
+        ));
+
+        let partition = compiler_suite_exact_test_selection(&["selected::case".to_string()], vec![rustc_test], true);
+        assert!(matches!(
+            partition,
+            Err(error) if error.to_string().contains("cannot be combined with receipt partition selection")
+        ));
+    }
+
+    #[test]
+    fn compiler_suite_exact_selection_rejects_a_rustdoc_target_before_preparation() {
+        let rustdoc = exact_selection_reference("rustdoc-test");
+        let error = compiler_suite_exact_test_selection(&["documented_example".to_string()], vec![rustdoc], false);
+
+        assert!(
+            matches!(error, Err(error) if error.to_string().contains("requires a receipt-bound rustc-test target"))
+        );
+    }
+
+    #[test]
+    fn compiler_suite_selection_report_distinguishes_full_selected_root_and_exact_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let names = vec!["selected::first".to_string(), "selected::second".to_string()];
+        let diagnostic = compiler_suite_selection_report(
+            Some(&names),
+            &[" tests/integration_tests.rs ".to_string()],
+            None,
+            None,
+            1,
+        );
+        let selected =
+            compiler_suite_selection_report(None, &["tests/integration_tests.rs".to_string()], None, None, 1);
+        let partition = compiler_suite_selection_report(None, &[], Some(2), Some(4), 9);
+        let complete = compiler_suite_selection_report(None, &[], None, None, 37);
+
+        assert_eq!(diagnostic.mode, "exact-diagnostic");
+        assert_eq!(diagnostic.normalized_exact_names, names);
+        assert_eq!(diagnostic.selected_case_count, 2);
+        assert_eq!(diagnostic.requested_target_paths, ["tests/integration_tests.rs"]);
+        assert_eq!(diagnostic.selected_root_count, 1);
+        assert!(!diagnostic.complete_root_evidence);
+        assert!(!diagnostic.complete_suite_evidence);
+        assert_eq!(selected.mode, "selected-complete-roots");
+        assert!(selected.complete_root_evidence);
+        assert!(!selected.complete_suite_evidence);
+        assert_eq!(
+            compiler_suite_selection_context(&selected),
+            "target path(s) tests/integration_tests.rs"
+        );
+        assert_eq!(partition.mode, "selected-complete-roots");
+        assert!(partition.complete_root_evidence);
+        assert!(!partition.complete_suite_evidence);
+        assert_eq!(partition.selected_root_count, 9);
+        assert_eq!(
+            compiler_suite_selection_context(&partition),
+            "zero-based partition 2 of 4"
+        );
+        assert_eq!(complete.mode, "complete-suite");
+        assert!(complete.normalized_exact_names.is_empty());
+        assert_eq!(complete.selected_case_count, 0);
+        assert_eq!(complete.selected_root_count, 37);
+        assert!(complete.complete_root_evidence);
+        assert!(complete.complete_suite_evidence);
+        let serialized = serde_json::to_value(&diagnostic)?;
+        assert_eq!(serialized["mode"], "exact-diagnostic");
+        assert_eq!(serialized["selected_case_count"], 2);
+        assert_eq!(serialized["complete_root_evidence"], false);
+        assert_eq!(serialized["complete_suite_evidence"], false);
         Ok(())
     }
 
@@ -6558,11 +7046,11 @@ mod tests {
             ),
         )?;
         assert_eq!(limits.max_physical_bytes, DEFAULT_OVEN_MAX_PHYSICAL_BYTES);
-        assert_eq!(limits.max_physical_bytes, 3 * 1024 * 1024 * 1024);
+        assert_eq!(limits.max_physical_bytes, 8 * 1024 * 1024 * 1024);
         assert_eq!(limits.max_domain_physical_bytes, DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES);
-        assert_eq!(limits.max_domain_physical_bytes, 1024 * 1024 * 1024);
+        assert_eq!(limits.max_domain_physical_bytes, 6 * 1024 * 1024 * 1024);
         assert_eq!(limits.max_domain_logical_bytes, DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES);
-        assert_eq!(limits.max_domain_logical_bytes, 768 * 1024 * 1024);
+        assert_eq!(limits.max_domain_logical_bytes, 3 * 1024 * 1024 * 1024);
         assert!(limits.max_domain_physical_bytes <= limits.max_physical_bytes);
         Ok(())
     }
@@ -6587,7 +7075,7 @@ mod tests {
             limits.max_domain_physical_bytes,
             DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES
         );
-        assert_eq!(limits.max_domain_physical_bytes, 3 * 1024 * 1024 * 1024);
+        assert_eq!(limits.max_domain_physical_bytes, 6 * 1024 * 1024 * 1024);
         assert_eq!(
             limits.max_domain_logical_bytes,
             DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_LOGICAL_BYTES
@@ -7017,6 +7505,38 @@ mod tests {
             !OvenCompilerSuiteTargetCapabilities::for_target("incan", "test", "tests/toolchain_installer_tests.rs")
                 .generated_rust_closure
         );
+        assert!(
+            OvenCompilerSuiteTargetCapabilities::for_target(
+                "incan",
+                "test",
+                "tests/generated_rust_callability_artifact_tests.rs"
+            )
+            .cargo_fixture
+        );
+        assert!(
+            OvenCompilerSuiteTargetCapabilities::for_target("incan", "test", "tests/cli_integration.rs")
+                .explicit_bake_cargo
+        );
+        assert!(
+            OvenCompilerSuiteTargetCapabilities::for_target("incan", "test", "tests/integration_tests.rs")
+                .explicit_bake_cargo
+        );
+        assert!(
+            !OvenCompilerSuiteTargetCapabilities::for_target(
+                "incan",
+                "test",
+                "tests/generated_rust_native_consumer_tests.rs"
+            )
+            .explicit_bake_cargo
+        );
+        assert!(
+            !OvenCompilerSuiteTargetCapabilities::for_target(
+                "incan",
+                "test",
+                "tests/generated_rust_native_consumer_tests.rs"
+            )
+            .cargo_fixture
+        );
 
         let mut environment = BTreeMap::from([
             ("INCAN_OVEN_COMPILER_SUITE_RUSTC".to_string(), "rustc".to_string()),
@@ -7071,10 +7591,12 @@ mod tests {
             executable: PathBuf::from("/fixture/proxy/cargo"),
             real: PathBuf::from("/fixture/real/cargo"),
             real_rustc: PathBuf::from("/fixture/real/rustc"),
+            home: PathBuf::from("/fixture/home"),
             log: PathBuf::from("/fixture/invocations.log"),
         };
         apply_compiler_suite_target_capabilities(&target, &mut environment, Some(&fixture))?;
         assert_eq!(environment.get("CARGO"), Some(&"/fixture/proxy/cargo".to_string()));
+        assert_eq!(environment.get("HOME"), Some(&"/fixture/home".to_string()));
         assert_eq!(
             environment.get(crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_FIXTURE_RUSTC_REAL_ENV),
             Some(&"/fixture/real/rustc".to_string())
@@ -7084,8 +7606,77 @@ mod tests {
         target.target_name = "cli_integration".to_string();
         target.source_relative_path = "tests/cli_integration.rs".to_string();
         let mut ordinary_environment = BTreeMap::new();
-        apply_compiler_suite_target_capabilities(&target, &mut ordinary_environment, None)?;
+        assert!(apply_compiler_suite_target_capabilities(&target, &mut ordinary_environment, None).is_err());
         assert!(!ordinary_environment.contains_key("CARGO"));
+        apply_compiler_suite_target_capabilities(&target, &mut ordinary_environment, Some(&fixture))?;
+        assert_eq!(
+            ordinary_environment.get(crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_EXPLICIT_BAKE_CARGO_ENV),
+            Some(&"/fixture/real/cargo".to_string())
+        );
+        assert_eq!(
+            ordinary_environment.get(crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_EXPLICIT_BAKE_HOME_ENV),
+            Some(&"/fixture/home".to_string())
+        );
+        assert!(
+            !ordinary_environment.contains_key("RUSTC"),
+            "the explicit Cargo publisher must retain the suite-selected consumer Rustc"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compiler_suite_fixture_cargo_preserves_the_receipt_selected_rustc() -> Result<(), Box<dyn std::error::Error>> {
+        let output = tempfile::tempdir()?;
+        let tools = tempfile::tempdir()?;
+        let cargo = tools.path().join("cargo");
+        let rustc = tools.path().join("rustc");
+        let marker = tools.path().join("observed-rustc");
+        write_executable(
+            &cargo,
+            &format!("#!/bin/sh\nprintf '%s\\n' \"$RUSTC\" >> \"{}\"\n", marker.display()),
+        )?;
+        write_executable(&rustc, "#!/bin/sh\nexit 0\n")?;
+
+        let fixture = super::prepare_compiler_suite_fixture_cargo_proxy(output.path(), &cargo)?;
+        let mut explicit = Command::new(&fixture.executable);
+        explicit
+            .env(
+                crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_FIXTURE_CARGO_REAL_ENV,
+                &fixture.real,
+            )
+            .env(
+                crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_FIXTURE_RUSTC_REAL_ENV,
+                &fixture.real_rustc,
+            )
+            .env(
+                crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_FIXTURE_CARGO_LOG_ENV,
+                &fixture.log,
+            )
+            .env("RUSTC", "/receipt-selected/rustc");
+        assert!(explicit.status()?.success());
+
+        let mut fallback = Command::new(&fixture.executable);
+        fallback
+            .env(
+                crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_FIXTURE_CARGO_REAL_ENV,
+                &fixture.real,
+            )
+            .env(
+                crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_FIXTURE_RUSTC_REAL_ENV,
+                &fixture.real_rustc,
+            )
+            .env(
+                crate::oven::compiler_suite_env::OVEN_COMPILER_SUITE_FIXTURE_CARGO_LOG_ENV,
+                &fixture.log,
+            )
+            .env_remove("RUSTC");
+        assert!(fallback.status()?.success());
+
+        assert_eq!(
+            fs::read_to_string(marker)?,
+            format!("/receipt-selected/rustc\n{}\n", fixture.real_rustc.display())
+        );
         Ok(())
     }
 
@@ -7288,6 +7879,18 @@ fn planned_suite_child_uses_sdk_inventory() -> Result<(), String> {
     }
     Ok(())
 }
+
+#[test]
+fn planned_suite_second_exact_case_keeps_cargo_guarded() -> Result<(), String> {
+    if std::env::var_os("CARGO").is_some() || std::env::var_os("CARGO_MANIFEST_PATH").is_some() {
+        return Err("exact native execution inherited Cargo process state".to_string());
+    }
+    let inventory = std::env::var("INCAN_SDK_INVENTORY").map_err(|error| format!("SDK inventory: {error}"))?;
+    if !std::path::Path::new(&inventory).is_file() {
+        return Err("second exact case did not retain the sealed SDK inventory".to_string());
+    }
+    Ok(())
+}
 "#,
         )?;
         let rustc = resolve_active_rustc()?;
@@ -7474,15 +8077,29 @@ fn planned_suite_child_uses_sdk_inventory() -> Result<(), String> {
             compiler_suite_child_state_root(output.path(), &sibling),
             "distinct parallel roots must not share mutable state"
         );
-        let report = run_prepared_compiler_suite_children(vec![prepared_child], &receipt, &rustc, None)?;
+        let exact_test_names = vec![
+            "planned_suite_child_uses_sdk_inventory".to_string(),
+            "planned_suite_second_exact_case_keeps_cargo_guarded".to_string(),
+        ];
+        let report =
+            run_prepared_compiler_suite_children(vec![prepared_child], &receipt, &rustc, Some(&exact_test_names))?;
 
-        assert_eq!(report.native_test_count, 1);
+        assert_eq!(report.native_test_count, 2);
         assert_eq!(report.doctest_targets, 0);
         assert!(
             report.failed.is_empty(),
             "stored-suite child failures: {:?}",
             report.failed
         );
+        assert_eq!(report.native_test_roots.len(), 1);
+        let counts = report.native_test_roots[0]
+            .case_counts
+            .as_ref()
+            .ok_or("multi-exact run did not report aggregate libtest counts")?;
+        assert_eq!(counts.passed, 2);
+        assert_eq!(counts.failed, 0);
+        assert_eq!(counts.ignored, 0);
+        assert_eq!(report.native_test_roots[0].inventory_count, 2);
         assert!(
             !cargo_marker.exists(),
             "the Cargo guard was executed, so a direct-rustc planned suite child attempted a Cargo launch"

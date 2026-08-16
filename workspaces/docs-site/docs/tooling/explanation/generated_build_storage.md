@@ -2,7 +2,7 @@
 
 Normal `incan build`, `incan run`, and `incan test` generate caller-owned Rust source, verify a receipt, select one bounded Oven-native closure, and consume it through direct `rustc`. They do not launch Cargo or inspect a generated Cargo target directory. The store is policy-bounded rather than merely inspectable: admission prunes inactive least-recently-used entries, rejects an oversized single compatibility domain, and never deletes an active lease.
 
-`incan oven` exposes the receipt and store-maintenance boundary. The hidden `incan oven legacy-cargo bake-loafs` command may prepare a supported typed envelope for a toolchain, but it is never a normal-command fallback. Its receipt, bounded store-owned direct-`rustc` closure, explicit test and binary-run commands, and native test inventory are documented in [Oven Alpha](oven_alpha.md). The generated-Cargo detail retained below is legacy historical material, not normal execution architecture.
+`incan oven` exposes the receipt and store-maintenance boundary. The internal release publisher may prepare a supported typed envelope for a toolchain, but it is never a normal-command fallback. Its receipt, bounded store-owned direct-`rustc` closure, explicit test and binary-run commands, and native test inventory are documented in [Oven Alpha](oven_alpha.md). The generated-Cargo detail retained below is historical material, not normal execution architecture.
 
 !!! note "Historical generated-Cargo audit"
     The remaining sections preserve the measurements and ownership model that preceded Oven Alpha. Commands and CI topology described there are evidence for the retired normal backend unless a paragraph explicitly identifies a current publisher or compiler-development use.

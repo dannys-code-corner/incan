@@ -3797,6 +3797,22 @@ def main() -> None:
     }
 
     #[test]
+    fn streaming_hash_helpers_import_io_error_for_reader_chunk_failures() -> Result<(), Box<dyn std::error::Error>> {
+        let streaming_module = read_stdlib_program("crates/incan_stdlib/stdlib/hash/_streaming.incn")?;
+        let streaming_code = IrCodegen::new().try_generate(&streaming_module)?;
+
+        assert!(
+            streaming_code.contains("pub use crate::__incan_std::io::IoError;"),
+            "std.hash._streaming must import the IoError carried by BinaryReader chunks; got:\n{streaming_code}"
+        );
+        assert!(
+            streaming_code.contains("FallibleIterator::<\n                Vec<u8>,\n                IoError,"),
+            "streaming reader helpers must preserve their fallible chunk type; got:\n{streaming_code}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_rust_imports_do_not_use_crate_prefix() {
         let code = generate(
             r#"

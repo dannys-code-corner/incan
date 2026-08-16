@@ -276,7 +276,7 @@ pub struct ProjectGenerator {
     pub(super) package_license: Option<String>,
     /// Whether this is a binary (true) or library (false)
     pub(super) is_binary: bool,
-    /// Enabled stdlib feature flags for the generated project (for example `json`, `async`, `web`).
+    /// Enabled stdlib feature flags for the generated project, including compiler-required runtime support.
     pub(super) stdlib_features: Vec<String>,
     /// Resolved Rust crate dependencies.
     pub(super) dependencies: Vec<DependencySpec>,
@@ -320,6 +320,16 @@ pub struct ProjectGenerator {
     pub(super) public_namespace_facades: Option<BTreeMap<Vec<String>, BTreeSet<String>>>,
 }
 
+/// Runtime features required by compiler-emitted Rust independently of user-selected namespace features.
+///
+/// The compiler writes the checked `std.async` and `std.json` facades into every generated crate. Their Rust
+/// imports require the matching runtime modules even when the project's authored imports do not name those
+/// namespaces. It can also synthesize `OrdinalKey` bridges whose helpers are cfg-gated behind `ordinal`.
+///
+/// Keep this baseline narrower than the full-stdlib Loaf envelope: project output does not emit the `std.web`
+/// facade unless the project explicitly requires it.
+const GENERATED_PROJECT_RUNTIME_FEATURES: &[&str] = &["async", "json", "ordinal"];
+
 /// Cargo profile used for `incan run`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunProfile {
@@ -339,7 +349,10 @@ impl ProjectGenerator {
             package_version: None,
             package_license: None,
             is_binary,
-            stdlib_features: Vec::new(),
+            stdlib_features: GENERATED_PROJECT_RUNTIME_FEATURES
+                .iter()
+                .map(|feature| (*feature).to_string())
+                .collect(),
             dependencies: Vec::new(),
             dev_dependencies: Vec::new(),
             include_dev_dependencies: false,
@@ -410,6 +423,11 @@ impl ProjectGenerator {
             .map(|feature| feature.trim().to_string())
             .filter(|feature| !feature.is_empty())
             .collect();
+        normalized.extend(
+            GENERATED_PROJECT_RUNTIME_FEATURES
+                .iter()
+                .map(|feature| (*feature).to_string()),
+        );
         normalized.sort();
         normalized.dedup();
         self.stdlib_features = normalized;

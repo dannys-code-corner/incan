@@ -13870,6 +13870,23 @@ def main() -> None:
 }
 
 #[test]
+fn test_inline_module_resolves_module_local_testing_marker_imports() {
+    let source = r#"
+module tests:
+  from std.testing import fixture, test
+
+  @fixture(autouse=true)
+  def seed() -> int:
+    return 40
+
+  @test
+  def decorated(seed: int) -> None:
+    assert seed == 40
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
 fn test_async_fixture_records_frontend_metadata() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 import std.async

@@ -24,6 +24,81 @@ fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::e
     run_incan_with_env(current_dir, args, &[])
 }
 
+/// Publish a public-library provider before a separate consumer selects its package Loaf. This is intentionally
+/// distinct from normal `build --lib`: only the explicit Oven command may create the provider handoff.
+fn run_explicit_oven_bake(current_dir: &Path) -> Result<Output, Box<dyn std::error::Error>> {
+    run_explicit_oven_bake_with_home(current_dir, None)
+}
+
+/// Bake one project while sharing a caller-selected standalone Oven home with its later workspace replay.
+fn run_explicit_oven_bake_with_home(
+    current_dir: &Path,
+    standalone_incan_home: Option<&Path>,
+) -> Result<Output, Box<dyn std::error::Error>> {
+    let mut command = configured_incan_command(current_dir, &["oven", "bake", "--project", "."]);
+    if !support::oven_compiler_suite_is_active()
+        && let Some(incan_home) = standalone_incan_home
+    {
+        command.env("INCAN_HOME", incan_home);
+    }
+    support::configure_explicit_oven_bake_command(&mut command)?;
+    let timing = support::command_timing_started();
+    let output = command.output()?;
+    support::report_command_timing("incan oven bake --project .", timing);
+    Ok(output)
+}
+
+/// Copy one checked package handoff without following a symlink outside its fixture. The relocation test needs both the
+/// public library output and its immutable package Loaf collection.
+fn copy_fixture_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_symlink() {
+            return Err(format!("fixture handoff contains symlink {}", entry.path().display()).into());
+        }
+        if file_type.is_dir() {
+            copy_fixture_directory(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), target)?;
+        } else {
+            return Err(format!("fixture handoff contains unsupported path {}", entry.path().display()).into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn fixture_handoff_copy_rejects_symlinks() -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir()?;
+    let source = temp.path().join("source");
+    let outside = temp.path().join("outside");
+    let destination = temp.path().join("destination");
+    fs::create_dir_all(&source)?;
+    fs::create_dir_all(&outside)?;
+    fs::write(outside.join("artifact"), "must not be copied")?;
+    symlink(&outside, source.join("linked-handoff"))?;
+
+    let result = copy_fixture_directory(&source, &destination);
+    let Err(error) = result else {
+        return Err("fixture handoff copy followed a symlink".into());
+    };
+    assert!(
+        error.to_string().contains("fixture handoff contains symlink"),
+        "unexpected symlink rejection: {error}"
+    );
+    assert!(
+        !destination.join("linked-handoff").exists(),
+        "fixture handoff copy materialized a symlink target"
+    );
+    Ok(())
+}
+
 /// Run a CLI command with a Cargo executable that records and rejects any launch.
 #[cfg(unix)]
 fn run_incan_with_failing_cargo_guard(
@@ -35,15 +110,9 @@ fn run_incan_with_failing_cargo_guard(
     run_incan_with_failing_cargo_guard_and_env(current_dir, args, guard_dir, marker, &[])
 }
 
-/// Run a guarded CLI command with explicit child-only environment handoffs.
+/// Install one Cargo executable that records and rejects any launch.
 #[cfg(unix)]
-fn run_incan_with_failing_cargo_guard_and_env(
-    current_dir: &Path,
-    args: &[&str],
-    guard_dir: &Path,
-    marker: &Path,
-    envs: &[(&str, &Path)],
-) -> Result<Output, Box<dyn std::error::Error>> {
+fn install_failing_cargo_guard(guard_dir: &Path, marker: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     use std::os::unix::fs::PermissionsExt;
 
     fs::create_dir_all(guard_dir)?;
@@ -55,6 +124,19 @@ fn run_incan_with_failing_cargo_guard_and_env(
     let mut permissions = fs::metadata(&guard)?.permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&guard, permissions)?;
+    Ok(guard)
+}
+
+/// Run a guarded CLI command with explicit child-only environment handoffs.
+#[cfg(unix)]
+fn run_incan_with_failing_cargo_guard_and_env(
+    current_dir: &Path,
+    args: &[&str],
+    guard_dir: &Path,
+    marker: &Path,
+    envs: &[(&str, &Path)],
+) -> Result<Output, Box<dyn std::error::Error>> {
+    let _guard = install_failing_cargo_guard(guard_dir, marker)?;
     let mut paths = vec![guard_dir.to_path_buf()];
     if let Some(inherited) = std::env::var_os("PATH") {
         paths.extend(std::env::split_paths(&inherited));
@@ -115,7 +197,10 @@ fn configured_incan_command(current_dir: &Path, args: &[&str]) -> Command {
                 "INCAN_GENERATED_CARGO_TARGET_DIR",
                 support::generated_cargo_target_dir(),
             )
-            .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store());
+            .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store())
+            // Explicit provider bakes must not contend with a developer's ambient store when this test binary runs
+            // outside the suite.
+            .env("INCAN_HOME", current_dir.join(".incan-test"));
     }
     command
 }
@@ -563,8 +648,8 @@ impl<W: Write + ?Sized> ExecutableCommand for W {
     )?;
     let main_arg = main_path.to_str().ok_or("non-utf8 main path")?;
 
-    let lock_output = run_incan(tmp.path(), &["lock", main_arg])?;
-    assert_success(&lock_output, "incan lock for direct std-I/O trait interop");
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake_output, "explicit Oven bake for direct std-I/O trait interop");
     let build_output = run_incan(tmp.path(), &["build", main_arg, "--locked"])?;
     assert_success(&build_output, "incan build for direct std-I/O trait interop");
 
@@ -675,6 +760,11 @@ impl Processor {
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for Rust trait-object method argument borrowing",
+    );
     let output = run_incan(tmp.path(), &["run"])?;
     assert_success(&output, "Rust trait-object method argument borrowing");
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3");
@@ -765,6 +855,11 @@ pub use writer::Writer;
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for Rust concrete-reference argument borrowing",
+    );
     let output = run_incan(tmp.path(), &["run"])?;
     assert_success(&output, "Rust concrete-reference argument borrowing");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n1\n");
@@ -1102,10 +1197,10 @@ pub def numbers() -> NumberStream:
         producer_src.join("lib.incn"),
         "pub from facade import NumberStream, StreamError, numbers\n",
     )?;
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
     assert_success(
         &producer_build,
-        "producer build --lib for fallible iterator package boundary",
+        "explicit Oven bake for fallible iterator package boundary",
     );
 
     let consumer_root = tmp.path().join("fallible_consumer");
@@ -1144,6 +1239,11 @@ def main() -> None:
         Err(error) => println(error.message())
 "#,
     )?;
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for the fallible iterator package consumer",
+    );
     let consumer_run = run_incan(&consumer_root, &["run"])?;
     assert_success(
         &consumer_run,
@@ -1193,10 +1293,10 @@ pub from facade import unique
 "#,
     )?;
 
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
     assert_success(
         &producer_build,
-        "producer build --lib for Set constructor package boundary",
+        "explicit Oven bake for Set constructor package boundary",
     );
 
     let consumer_root = tmp.path().join("set_consumer");
@@ -1237,6 +1337,12 @@ def test_set_constructor_boundaries() -> None:
 "#,
     )?;
 
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for the Set constructor package consumer",
+    );
+
     let consumer_run = run_incan(&consumer_root, &["run"])?;
     assert_success(
         &consumer_run,
@@ -1264,22 +1370,6 @@ def main() -> None:
   println("serde trait metadata is available")
 "#,
     )?;
-    let output_dir = tmp.path().join("generated");
-    let main_arg = main_path.to_string_lossy();
-    let output_arg = output_dir.to_string_lossy();
-    let output = run_incan(tmp.path(), &["build", &main_arg, &output_arg])?;
-    assert_success(&output, "incan build with compiled std.serde.json artifact");
-
-    assert!(
-        !output_dir.join("src/__incan_std").exists(),
-        "compiled std.serde.json must not be materialized into the consumer"
-    );
-    let cargo_toml = fs::read_to_string(output_dir.join("Cargo.toml"))?;
-    assert!(
-        cargo_toml.contains("[dependencies.incan_stdlib_data]"),
-        "consumer must link the compiled stdlib data provider:\n{cargo_toml}"
-    );
-
     let tests_dir = tmp.path().join("tests");
     fs::create_dir_all(&tests_dir)?;
     fs::write(
@@ -1295,17 +1385,25 @@ def test_artifact_path() -> None:
     Err(_) => pass
 "#,
     )?;
-    let minimal_test = run_incan(tmp.path(), &["test", "--sdk-profile", "minimal"])?;
-    assert_failure(&minimal_test, "incan test with disabled SDK components");
-    let minimal_test_output = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&minimal_test.stdout),
-        String::from_utf8_lossy(&minimal_test.stderr)
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for compiled SDK provider test projection",
     );
+    let output_dir = tmp.path().join("generated");
+    let main_arg = main_path.to_string_lossy();
+    let output_arg = output_dir.to_string_lossy();
+    let output = run_incan(tmp.path(), &["build", &main_arg, &output_arg])?;
+    assert_success(&output, "incan build with compiled std.serde.json artifact");
+
     assert!(
-        minimal_test_output.contains("disabled")
-            && (minimal_test_output.contains("stdlib-system") || minimal_test_output.contains("stdlib-testing")),
-        "minimal test projection should identify its disabled component:\n{minimal_test_output}"
+        !output_dir.join("src/__incan_std").exists(),
+        "compiled std.serde.json must not be materialized into the consumer"
+    );
+    let cargo_toml = fs::read_to_string(output_dir.join("Cargo.toml"))?;
+    assert!(
+        cargo_toml.contains("[dependencies.incan_stdlib_data]"),
+        "consumer must link the compiled stdlib data provider:\n{cargo_toml}"
     );
 
     let test_output = run_incan(tmp.path(), &["test"])?;
@@ -1361,11 +1459,8 @@ pub def encode_item(item: Item) -> str:
 "#,
     )?;
 
-    let provider_build = run_incan(&provider_root, &["build", "--lib"])?;
-    assert_success(
-        &provider_build,
-        "multi-module JSON provider library with a direct Serialize import",
-    );
+    let provider_build = run_explicit_oven_bake(&provider_root)?;
+    assert_success(&provider_build, "explicit Oven bake for the multi-module JSON provider");
     let generated_encoder = fs::read_to_string(provider_root.join("target/lib/src/codec.rs"))?;
     assert!(
         generated_encoder.contains("__incan_std::serde::json::Serialize::to_json(&item)"),
@@ -1401,6 +1496,12 @@ def test_compiled_json_provider() -> None:
   assert_eq(encode_item(Item(value="ok")), "{\"value\":\"ok\"}")
 "#,
     )?;
+
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for the multi-module JSON package consumer",
+    );
 
     let consumer_run = run_incan(&consumer_root, &["run"])?;
     assert_success(&consumer_run, "consumer of the compiled multi-module JSON provider");
@@ -1655,7 +1756,10 @@ itoa = "1"
         "workspace members must not receive authoritative lockfiles"
     );
     for (name, _) in [("alpha", "1.2.3"), ("zebra", "4.5.6")] {
-        let build_output = run_incan(&root.path().join("packages").join(name), &["build", "--locked"])?;
+        let member_root = root.path().join("packages").join(name);
+        let bake_output = run_explicit_oven_bake(&member_root)?;
+        assert_success(&bake_output, &format!("explicit Oven bake for workspace member {name}"));
+        let build_output = run_incan(&member_root, &["build", "--locked"])?;
         assert_success(
             &build_output,
             &format!("incan build --locked from workspace member {name}"),
@@ -1782,9 +1886,6 @@ fn rooted_workspace_semantic_lock_is_relocation_stable_issue906() -> Result<(), 
 name = "root_lib"
 version = "0.1.0"
 
-[project.scripts]
-library = "src/lib.incn"
-
 [workspace]
 members = ["consumer"]
 default-members = ["root_lib", "consumer"]
@@ -1799,6 +1900,7 @@ root_lib = { path = "." }
         for relative in ["Cargo.toml", "root_lib.incnlib", "src/lib.rs"] {
             fs::copy(prebuilt_artifact.join(relative), artifact.join(relative))?;
         }
+        copy_fixture_directory(&prebuilt_artifact.join("oven"), &artifact.join("oven"))?;
         let consumer = root.join("consumer");
         fs::create_dir_all(consumer.join("src"))?;
         fs::write(
@@ -1833,15 +1935,13 @@ root_lib = { workspace = true }
 name = "root_lib"
 version = "0.1.0"
 
-[project.scripts]
-library = "src/lib.incn"
 "#,
     )?;
     fs::write(producer.join("src/lib.incn"), "pub def answer() -> int:\n  return 42\n")?;
-    let library_output = run_incan(&producer, &["build", "--lib"])?;
+    let library_output = run_explicit_oven_bake(&producer)?;
     assert_success(
         &library_output,
-        "standalone root library build before workspace activation",
+        "standalone root library explicit Oven bake before workspace activation",
     );
 
     let first = create_locked_workspace(&temp.path().join("first/root_lib"), &producer.join("target/lib"))?;
@@ -1919,6 +2019,11 @@ itoa = "1"
         "from rust::itoa import Buffer\n\n\ndef main() -> None:\n  println(\"direct dependency\")\n",
     )?;
 
+    let bake_output = run_explicit_oven_bake(&consumer)?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for rooted workspace member with a direct Rust dependency",
+    );
     let output = run_incan(&consumer, &["build", "--no-locked"])?;
     assert_success(&output, "rooted workspace member build with a direct Rust dependency");
     Ok(())
@@ -1931,25 +2036,13 @@ fn rooted_workspace_cold_lock_and_selected_member_preserve_identity_issues908_90
     let root = tempfile::tempdir()?;
     fs::create_dir_all(root.path().join("src"))?;
     fs::write(
-        root.path().join("incan.toml"),
-        r#"[project]
-name = "root_lib"
-version = "0.1.0"
-
-[project.scripts]
-library = "src/lib.incn"
-"#,
-    )?;
-    fs::write(
         root.path().join("src/lib.incn"),
         "from std.json import JsonValue\n\n\npub def answer() -> int:\n  return 42\n",
     )?;
-
-    let warmup = run_incan(root.path(), &["build", "--lib"])?;
-    assert_success(&warmup, "standalone SDK and library artifact warmup");
-    fs::remove_dir_all(root.path().join("target"))?;
-    // A normal Oven build does not write `incan.lock`; remove a historical lock if an older fixture run left one.
-    let _ = fs::remove_file(root.path().join("incan.lock"));
+    fs::write(
+        root.path().join("src/main.incn"),
+        "def main() -> None:\n  println(\"root executable\")\n",
+    )?;
 
     fs::write(
         root.path().join("incan.toml"),
@@ -1958,7 +2051,7 @@ name = "root_lib"
 version = "0.1.0"
 
 [project.scripts]
-library = "src/lib.incn"
+main = "src/main.incn"
 
 [workspace]
 members = ["consumer"]
@@ -2013,7 +2106,7 @@ def test_workspace_rust_dependency_is_available() -> None:
     let incan_home = root.path().join(".incan-home");
     let provider_store = support::cold_sdk_provider_store_or(&incan_home.join("cache/providers/sdk-v2"));
     let generated_target = support::generated_cargo_target_dir_or(&incan_home.join("generated-target"));
-    let configure = |cwd: &Path, args: &[&str]| {
+    let configure = |cwd: &Path, args: &[&str]| -> Result<Command, Box<dyn std::error::Error>> {
         let mut command = Command::new(incan_binary());
         command
             .args(args)
@@ -2033,32 +2126,57 @@ def test_workspace_rust_dependency_is_available() -> None:
                 .env_remove("INCAN_SDK_INVENTORY")
                 .env_remove("INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE");
         }
-        command
+        if args == ["oven", "bake", "--project", "."] {
+            support::configure_explicit_oven_bake_command(&mut command)?;
+        }
+        Ok(command)
     };
     let run = |cwd: &Path, args: &[&str]| -> Result<Output, Box<dyn std::error::Error>> {
-        Ok(configure(cwd, args).output()?)
+        Ok(configure(cwd, args)?.output()?)
     };
 
     assert!(!root.path().join("target").exists());
     assert!(!incan_home.exists());
     assert!(!root.path().join("incan.lock").exists());
 
-    // The same cold fixture covers both #908/#909's missing selected-root artifact and #931's bounded Oven
-    // admission/fixed-point contract. It deliberately uses a fresh INCAN_HOME after the standalone warmup above.
-    // This fixture deliberately prepares a missing library while the Oven suite is also compiling independent roots.
-    // Keep the watchdog tight on ordinary developer hosts, but give constrained hosted runners enough headroom that
-    // scheduler contention is not misreported as a rooted-workspace correctness failure.
+    // The same cold fixture covers both #908/#909's selected-root artifact and #931's bounded Oven
+    // admission/fixed-point contract. The explicit package bake is the only permitted provider publication step.
+    // The one cold publication now covers both library and executable profiles. Keep a bounded watchdog, but give
+    // sealed or low-core runners enough headroom that the deliberately consolidated journey is not killed between
+    // its library and executable halves.
     let artifact_preparation_timeout = std::thread::available_parallelism()
         .map(|parallelism| {
-            if parallelism.get() <= 4 {
-                std::time::Duration::from_secs(3 * 60)
+            if support::oven_compiler_suite_is_active() || parallelism.get() <= 4 {
+                std::time::Duration::from_secs(6 * 60)
             } else {
-                std::time::Duration::from_secs(90)
+                std::time::Duration::from_secs(3 * 60)
             }
         })
-        .unwrap_or_else(|_| std::time::Duration::from_secs(3 * 60));
+        .unwrap_or_else(|_| std::time::Duration::from_secs(6 * 60));
+    let (provider_bake_output, timed_out) = run_command_with_timeout(
+        configure(root.path(), &["oven", "bake", "--project", "."])?,
+        "rooted workspace explicit provider bake",
+        artifact_preparation_timeout,
+    )?;
+    assert!(
+        !timed_out,
+        "rooted workspace provider bake exceeded its bounded preparation window\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&provider_bake_output.stdout),
+        String::from_utf8_lossy(&provider_bake_output.stderr)
+    );
+    assert_success(&provider_bake_output, "cold rooted workspace provider publication");
+
+    let lock_path = root.path().join("incan.lock");
+    assert!(
+        lock_path.is_file(),
+        "the explicit project bake must publish the canonical workspace lock before sealing its completed Loaf"
+    );
+    let first_lock = fs::read(&lock_path)?;
+    let parsed = incan::lockfile::IncanLock::load(&lock_path)?;
+    assert!(!parsed.deps_fingerprint.is_empty());
+
     let (first_lock_output, timed_out) = run_command_with_timeout(
-        configure(root.path(), &["lock"]),
+        configure(root.path(), &["lock"])?,
         "cold rooted workspace lock",
         artifact_preparation_timeout,
     )?;
@@ -2068,14 +2186,14 @@ def test_workspace_rust_dependency_is_available() -> None:
         String::from_utf8_lossy(&first_lock_output.stdout),
         String::from_utf8_lossy(&first_lock_output.stderr)
     );
-    assert_success(&first_lock_output, "cold rooted workspace lock publication");
-    let lock_path = root.path().join("incan.lock");
-    let first_lock = fs::read(&lock_path)?;
-    let parsed = incan::lockfile::IncanLock::load(&lock_path)?;
-    assert!(!parsed.deps_fingerprint.is_empty());
+    assert_success(
+        &first_lock_output,
+        "rooted workspace lock fixed point after explicit bake",
+    );
+    assert_eq!(first_lock, fs::read(&lock_path)?);
     assert!(
         root.path().join("target/lib/root_lib.incnlib").is_file(),
-        "the initial lock must prepare its missing root library artifact"
+        "the explicit provider bake must materialize the selected root library artifact"
     );
     if support::oven_compiler_suite_is_active() {
         assert!(
@@ -2104,7 +2222,75 @@ def test_workspace_rust_dependency_is_available() -> None:
     }
 
     let second_lock_output = run(root.path(), &["lock"])?;
-    assert_success(&second_lock_output, "cold rooted workspace lock fixed point");
+    assert_success(&second_lock_output, "second rooted workspace lock fixed point");
+    assert_eq!(first_lock, fs::read(&lock_path)?);
+
+    let cargo_guard_dir = root.path().join("cargo-reuse-guard");
+    let cargo_marker = root.path().join("cargo-reuse-invoked");
+    let cargo_guard = install_failing_cargo_guard(&cargo_guard_dir, &cargo_marker)?;
+    for projection in [
+        root.path().join("target/lib/oven/package-loafs.json"),
+        root.path().join("target/lib/oven/debug/libroot_lib.rlib"),
+        root.path().join("target/lib/oven/release/libroot_lib.rlib"),
+        root.path().join("target/lib/src/lib.rs"),
+        root.path().join("target/incan/root_lib/oven/debug/root_lib"),
+        root.path().join("target/incan/root_lib/oven/release/root_lib"),
+        root.path().join("target/incan/root_lib/src/main.rs"),
+    ] {
+        fs::remove_file(&projection)?;
+    }
+    let mut second_bake = configure(root.path(), &["oven", "bake", "--project", "."])?;
+    let mut guarded_path = vec![cargo_guard_dir];
+    if let Some(inherited) = std::env::var_os("PATH") {
+        guarded_path.extend(std::env::split_paths(&inherited));
+    }
+    second_bake
+        .env("CARGO", &cargo_guard)
+        .env("PATH", std::env::join_paths(&guarded_path)?)
+        .env("INCAN_SDK_INVENTORY", root.path().join("missing-sdk-inventory.json"))
+        .env_remove("INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE");
+    let (second_bake_output, timed_out) = run_command_with_timeout(
+        second_bake,
+        "rooted workspace unchanged explicit bake reuse",
+        artifact_preparation_timeout,
+    )?;
+    assert!(
+        !timed_out,
+        "unchanged rooted workspace bake exceeded its reuse window\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second_bake_output.stdout),
+        String::from_utf8_lossy(&second_bake_output.stderr)
+    );
+    assert_success(&second_bake_output, "unchanged rooted workspace project-bake reuse");
+    let second_bake_stdout = String::from_utf8_lossy(&second_bake_output.stdout);
+    assert_eq!(
+        second_bake_stdout.matches("Reused Oven library").count(),
+        2,
+        "unchanged debug and release profiles must both reuse their completed Loafs:\n{second_bake_stdout}"
+    );
+    assert_eq!(
+        second_bake_stdout.matches("Reused Oven executable").count(),
+        2,
+        "unchanged mixed projects must reuse both executable profiles without frontend work:\n{second_bake_stdout}"
+    );
+    for restored in [
+        root.path().join("target/lib/oven/package-loafs.json"),
+        root.path().join("target/lib/oven/debug/libroot_lib.rlib"),
+        root.path().join("target/lib/oven/release/libroot_lib.rlib"),
+        root.path().join("target/lib/src/lib.rs"),
+        root.path().join("target/incan/root_lib/oven/debug/root_lib"),
+        root.path().join("target/incan/root_lib/oven/release/root_lib"),
+        root.path().join("target/incan/root_lib/src/main.rs"),
+    ] {
+        assert!(
+            restored.is_file(),
+            "unchanged bake did not restore {}",
+            restored.display()
+        );
+    }
+    assert!(
+        !cargo_marker.exists(),
+        "unchanged explicit project bake launched Cargo instead of reusing its sealed Loafs"
+    );
     assert_eq!(first_lock, fs::read(&lock_path)?);
 
     let library_output = run(root.path(), &["build", "--lib", "--member", "root_lib"])?;
@@ -2120,6 +2306,11 @@ def test_workspace_rust_dependency_is_available() -> None:
     );
     assert!(root.path().join("target/lib/root_lib.incnlib").is_file());
 
+    let consumer_bake_output = run(&consumer, &["oven", "bake", "--project", "."])?;
+    assert_success(
+        &consumer_bake_output,
+        "explicit Oven bake for rooted workspace consumer",
+    );
     let consumer_output = run(&consumer, &["run", "src/main.incn", "--locked"])?;
     assert_success(&consumer_output, "consumer of the freshly rebuilt root library");
     assert_eq!(first_lock, fs::read(&lock_path)?);
@@ -2143,6 +2334,90 @@ def test_workspace_rust_dependency_is_available() -> None:
         "rooted workspace selected-member test with an inherited Rust dependency",
     );
     assert_eq!(first_lock, fs::read(&lock_path)?);
+
+    let mut rejected_features = configure(
+        root.path(),
+        &["build", "--lib", "--member", "root_lib", "--cargo-features", "sentinel"],
+    )?;
+    rejected_features
+        .env("CARGO", &cargo_guard)
+        .env("PATH", std::env::join_paths(&guarded_path)?);
+    let rejected_features = rejected_features.output()?;
+    assert_failure(
+        &rejected_features,
+        "completed library output with unsupported Cargo feature controls",
+    );
+    assert!(
+        String::from_utf8_lossy(&rejected_features.stderr).contains("do not accept Cargo feature controls"),
+        "completed-output selection bypassed the normal Cargo-feature rejection:\n{}",
+        String::from_utf8_lossy(&rejected_features.stderr)
+    );
+    assert!(!cargo_marker.exists());
+
+    let fresh_lock = fs::read_to_string(&lock_path)?;
+    let stale_lock = fresh_lock.replace("deps-fingerprint = \"sha256:", "deps-fingerprint = \"sha256:stale");
+    assert_ne!(
+        fresh_lock, stale_lock,
+        "the regression must corrupt canonical lock authority"
+    );
+    fs::write(&lock_path, &stale_lock)?;
+    for (description, args) in [
+        (
+            "strict completed library build",
+            vec!["build", "--lib", "--member", "root_lib", "--locked"],
+        ),
+        (
+            "strict completed library JSON report",
+            vec!["build", "--lib", "--member", "root_lib", "--locked", "--report", "json"],
+        ),
+        (
+            "strict completed executable run",
+            vec!["run", "src/main.incn", "--member", "root_lib", "--locked"],
+        ),
+    ] {
+        let mut command = configure(root.path(), &args)?;
+        command
+            .env("CARGO", &cargo_guard)
+            .env("PATH", std::env::join_paths(&guarded_path)?);
+        let output = command.output()?;
+        assert_failure(&output, description);
+        let diagnostic = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            diagnostic.contains("workspace incan.lock is out of date"),
+            "{description} did not preserve strict-lock diagnostic precedence:\n{diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains("no receipt-compatible Loaf"),
+            "{description} inspected stale completed outputs before strict lock authority:\n{diagnostic}"
+        );
+        assert_eq!(fs::read_to_string(&lock_path)?, stale_lock);
+        assert!(!cargo_marker.exists(), "{description} launched Cargo");
+    }
+
+    let mut non_strict = configure(root.path(), &["build", "--lib", "--member", "root_lib"])?;
+    non_strict
+        .env("CARGO", &cargo_guard)
+        .env("PATH", std::env::join_paths(&guarded_path)?);
+    let non_strict = non_strict.output()?;
+    assert_success(
+        &non_strict,
+        "non-strict completed library build with stale canonical lock",
+    );
+    let non_strict_diagnostic = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&non_strict.stdout),
+        String::from_utf8_lossy(&non_strict.stderr)
+    );
+    assert!(
+        non_strict_diagnostic.contains("workspace incan.lock is out of date; continuing without using it"),
+        "non-strict stale-lock build did not expose its tolerated-stale authority decision:\n{non_strict_diagnostic}"
+    );
+    assert_eq!(fs::read_to_string(&lock_path)?, stale_lock);
+    assert!(!cargo_marker.exists(), "non-strict stale-lock build launched Cargo");
     Ok(())
 }
 
@@ -2156,9 +2431,6 @@ fn locked_build_synthesizes_unreferenced_selected_workspace_member_cargo_root() 
         r#"[project]
 name = "root_lib"
 version = "0.1.0"
-
-[project.scripts]
-library = "src/lib.incn"
 
 [workspace]
 members = ["leaf", "sibling"]
@@ -2199,9 +2471,6 @@ default-members = ["root_lib", "leaf", "sibling"]
 name = "leaf"
 version = "0.2.0"
 
-[project.scripts]
-library = "src/lib.incn"
-
 [rust-dependencies.json_alias]
 package = "serde_json"
 version = "1"
@@ -2228,9 +2497,6 @@ path = "../vendor/foo-v1"
 name = "sibling"
 version = "0.3.0"
 
-[project.scripts]
-library = "src/lib.incn"
-
 [rust-dependencies.new_flags]
 package = "bitflags"
 version = "=2.11.0"
@@ -2245,10 +2511,10 @@ path = "../vendor/foo-v2"
         "from std.regex import Regex as StdRegex\nfrom rust::new_flags import bitflags\nfrom rust::foo_new import value\n\n\npub def sibling_value() -> int:\n  return 3\n",
     )?;
 
-    let lock_output = run_incan(root.path(), &["lock"])?;
+    let bake_output = run_explicit_oven_bake_with_home(&leaf, Some(&root.path().join(".incan-test")))?;
     assert_success(
-        &lock_output,
-        "canonical lock for an unreferenced workspace library member",
+        &bake_output,
+        "explicit Oven bake for the selected unreferenced workspace member",
     );
     let canonical = incan::lockfile::IncanLock::load(&root.path().join("incan.lock"))?;
     let member_roots = canonical
@@ -2259,117 +2525,32 @@ path = "../vendor/foo-v2"
         .collect::<Vec<_>>();
     assert!(member_roots.contains(&"leaf"));
     assert!(member_roots.contains(&"sibling"));
-
     let _ = fs::remove_dir_all(root.path().join("target"));
     let _ = fs::remove_dir_all(leaf.join("target"));
-    let locked_build = run_incan(
-        root.path(),
-        &["build", "--lib", "--member", "leaf", "--locked", "--report", "json"],
-    )?;
+    let locked_build = run_incan(root.path(), &["build", "--lib", "--member", "leaf", "--locked"])?;
     assert_success(
         &locked_build,
         "target-free locked build of an unreferenced selected workspace member",
     );
 
-    let report = parse_json_stdout(&locked_build)?;
-    let member_report = &report["results"][0]["report"];
-    let rust_dependencies = member_report["dependencies"]["rust"]
+    let inspect = run_incan(&leaf, &["workspace", "inspect", "--format", "json"])?;
+    assert_success(&inspect, "inspect selected member dependency authority");
+    let inspect = parse_json_stdout(&inspect)?;
+    let leaf_member = inspect["members"]
         .as_array()
-        .ok_or("selected member report had no Rust dependency array")?;
+        .and_then(|members| members.iter().find(|member| member["name"] == "leaf"))
+        .ok_or("workspace inspection omitted the selected leaf member")?;
+    let rust_dependencies = leaf_member["effective_dependencies"]["rust"]
+        .as_object()
+        .ok_or("selected member inspection had no effective Rust dependency map")?;
+    assert!(rust_dependencies.contains_key("json_alias"));
+    assert!(rust_dependencies.contains_key("old_flags"));
+    assert!(rust_dependencies.contains_key("foo_old"));
     assert!(
-        rust_dependencies
-            .iter()
-            .any(|dependency| dependency["crate_name"] == "json_alias")
-    );
-    assert!(
-        rust_dependencies
-            .iter()
-            .any(|dependency| dependency["crate_name"] == "old_flags")
-    );
-    assert!(
-        rust_dependencies
-            .iter()
-            .any(|dependency| dependency["crate_name"] == "foo_old")
-    );
-    assert!(
-        rust_dependencies
-            .iter()
-            .all(|dependency| dependency["crate_name"] != "new_flags"),
-        "the sibling's direct Rust dependency leaked into the selected Oven report"
-    );
-    let stdlib_features = member_report["dependencies"]["stdlib_features"]
-        .as_array()
-        .ok_or("selected member report had no stdlib feature array")?;
-    assert!(stdlib_features.iter().any(|feature| feature == "json"));
-    assert!(
-        stdlib_features.iter().all(|feature| feature != "regex"),
-        "the sibling provider requirement leaked into the selected Oven report"
+        !rust_dependencies.contains_key("new_flags"),
+        "the sibling's direct Rust dependency leaked into selected-member authority"
     );
     assert!(leaf.join("target/lib/oven/release/libleaf.rlib").is_file());
-    Ok(())
-}
-
-#[test]
-fn stale_workspace_lock_cannot_authorize_selected_library_projection() -> Result<(), Box<dyn std::error::Error>> {
-    let root = tempfile::tempdir()?;
-    fs::write(
-        root.path().join("incan.toml"),
-        "[workspace]\nmembers = [\"leaf\"]\ndefault-members = [\"leaf\"]\n",
-    )?;
-    let leaf = root.path().join("leaf");
-    fs::create_dir_all(leaf.join("src"))?;
-    fs::write(
-        leaf.join("incan.toml"),
-        r#"[project]
-name = "leaf"
-version = "0.1.0"
-
-[project.scripts]
-library = "src/lib.incn"
-
-[rust-dependencies]
-bitflags = "=1.3.2"
-"#,
-    )?;
-    fs::write(
-        leaf.join("src/lib.incn"),
-        "from rust::bitflags import bitflags\n\n\npub def value() -> int:\n  return 1\n",
-    )?;
-
-    let lock_output = run_incan(root.path(), &["lock"])?;
-    assert_success(&lock_output, "fresh canonical workspace lock");
-    let lock_path = root.path().join("incan.lock");
-    let fresh = fs::read_to_string(&lock_path)?;
-
-    let stale = fresh.replace("deps-fingerprint = \"sha256:", "deps-fingerprint = \"sha256:stale");
-    assert_ne!(
-        fresh, stale,
-        "the regression must corrupt canonical projection authority"
-    );
-    fs::write(&lock_path, &stale)?;
-
-    let non_strict = run_incan(root.path(), &["build", "--lib", "--member", "leaf"])?;
-    assert_success(
-        &non_strict,
-        "non-strict selected library build with stale canonical lock",
-    );
-    assert_eq!(
-        fs::read_to_string(&lock_path)?,
-        stale,
-        "a tolerated stale canonical lock must never be rewritten by a selected member build"
-    );
-    assert!(
-        leaf.join("target/lib/oven/release/libleaf.rlib").is_file(),
-        "the tolerated stale-lock build must materialize the selected library itself"
-    );
-
-    let strict = run_incan(root.path(), &["build", "--lib", "--member", "leaf", "--locked"])?;
-    assert_failure(&strict, "strict selected library build with stale canonical lock");
-    assert!(
-        String::from_utf8_lossy(&strict.stderr).contains("workspace incan.lock is out of date"),
-        "strict stale rejection must occur before projection:\n{}",
-        String::from_utf8_lossy(&strict.stderr)
-    );
     Ok(())
 }
 
@@ -4151,6 +4332,8 @@ def main() -> None:
     )?;
     let source_arg = source_path.to_str().ok_or("source path was not valid UTF-8")?;
 
+    let bake = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake, "explicit Oven bake for std Result and contextual f32 interop");
     let build = run_incan(tmp.path(), &["build", source_arg, "--offline"])?;
     assert_success(
         &build,
@@ -5728,8 +5911,10 @@ output = "fixture_bridge"
     )?;
     fs::write(tmp.path().join("interop/lib/libfixture.a"), b"fixture archive")?;
     let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
+    let incan_home = tmp.path().join(".incan-home");
+    let incan_home = incan_home.to_str().ok_or("Incan home was not valid UTF-8")?;
 
-    let lock_output = run_incan(tmp.path(), &["lock", main_arg])?;
+    let lock_output = run_incan_with_env(tmp.path(), &["lock", main_arg], &[("INCAN_HOME", incan_home)])?;
     assert_success(&lock_output, "incan lock with declared Oven interop requirements");
     let lock: toml::Value = toml::from_str(&fs::read_to_string(tmp.path().join("incan.lock"))?)?;
     let target = lock["semantic"]["oven"]["interop"]
@@ -5760,7 +5945,11 @@ output = "fixture_bridge"
         tmp.path().join("interop/src/bridge.c"),
         "int bridge(void) { return 8; }\n",
     )?;
-    let stale = run_incan(tmp.path(), &["build", main_arg, "--locked"])?;
+    let stale = run_incan_with_env(
+        tmp.path(),
+        &["build", main_arg, "--locked"],
+        &[("INCAN_HOME", incan_home)],
+    )?;
     assert_failure(&stale, "locked build after declared interop input drift");
     assert!(
         String::from_utf8_lossy(&stale.stderr).contains("incan.lock is out of date"),
@@ -6251,61 +6440,56 @@ pub def exported_value() -> int:
 "#,
     )?;
 
-    let first = run_incan(tmp.path(), &["build", "--lib"])?;
-    assert_success(&first, "first incan build --lib with Oven direct-rustc materialization");
+    let bake = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake, "explicit Oven bake for library direct-rustc materialization");
     assert!(
         tmp.path()
             .join("target/lib/oven/debug/libcli_library_preheat_project.rlib")
             .is_file(),
-        "normal build --lib must materialize a caller-owned direct-rustc debug artifact"
+        "explicit Oven bake must materialize a caller-owned direct-rustc debug artifact"
     );
     assert!(
         tmp.path()
             .join("target/lib/oven/release/libcli_library_preheat_project.rlib")
             .is_file(),
-        "normal build --lib must materialize a caller-owned direct-rustc release artifact"
+        "explicit Oven bake must materialize a caller-owned direct-rustc release artifact"
+    );
+    assert!(
+        tmp.path().join("incan.lock").is_file(),
+        "explicit Oven bake must publish the canonical project lock"
     );
     assert!(
         !tmp.path().join("target/incan_lock/Cargo.toml").exists(),
-        "normal Oven builds may use the compiler-owned lock directory, but must not create a Cargo workspace there"
+        "explicit Oven bake must not leave a generated Cargo workspace in the compiler-owned lock directory"
     );
 
-    // The explicit-lock case is the same project in its next meaningful
-    // state. Remove the selected artifact before rebuilding so this proves
-    // materialization from the committed lock rather than merely observing
-    // the first build's output.
-    let lib_path = tmp.path().join("src").join("lib.incn");
-    let lock = run_incan(
-        tmp.path(),
-        &[
-            "lock",
-            lib_path.to_str().ok_or("library source path was not valid UTF-8")?,
-        ],
-    )?;
-    assert_success(&lock, "incan lock for the existing library artifact fixture");
-    let lock_stderr = String::from_utf8_lossy(&lock.stderr);
-    assert!(
-        !lock_stderr.contains("preheating Cargo dependencies"),
-        "normal path-dependency lock generation must not preheat a Cargo graph, got:\n{lock_stderr}"
-    );
-    assert!(
-        !tmp.path().join("target/incan_lock/Cargo.toml").exists(),
-        "normal path-dependency lock generation must not create a generated Cargo workspace"
-    );
-    fs::remove_dir_all(tmp.path().join("target").join("incan_lock"))?;
+    // Remove only caller-owned projections, then prove one normal locked command can restore both profiles from the
+    // completed project Loafs. A separate normal build and lock walk would retrace the publication path needlessly.
+    let debug_artifact = tmp
+        .path()
+        .join("target/lib/oven/debug/libcli_library_preheat_project.rlib");
     let release_artifact = tmp
         .path()
         .join("target/lib/oven/release/libcli_library_preheat_project.rlib");
+    fs::remove_file(&debug_artifact)?;
     fs::remove_file(&release_artifact)?;
+    let lock_projection = tmp.path().join("target/incan_lock");
+    if lock_projection.exists() {
+        fs::remove_dir_all(lock_projection)?;
+    }
 
-    let locked_build = run_incan(tmp.path(), &["build", "--lib"])?;
+    let locked_build = run_incan(tmp.path(), &["build", "--lib", "--locked"])?;
     assert_success(
         &locked_build,
-        "incan build --lib should materialize the selected direct-rustc artifact from incan.lock",
+        "normal locked build --lib should restore direct-rustc artifacts from completed project Loafs",
+    );
+    assert!(
+        debug_artifact.is_file(),
+        "the normal locked replay must recreate the debug library artifact"
     );
     assert!(
         release_artifact.is_file(),
-        "the explicit-lock rebuild must recreate the selected release artifact"
+        "the normal locked replay must recreate the release library artifact"
     );
     assert!(
         !tmp.path().join("target/incan_lock/Cargo.toml").exists(),
@@ -6729,11 +6913,8 @@ pub def accept_extended(value: Extended) -> Extended:
         r#"pub from defs import accept_extended, make_base
 "#,
     )?;
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
-    assert_success(
-        &producer_build,
-        "producer build --lib for public union widening issue741",
-    );
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
+    assert_success(&producer_build, "explicit Oven bake for public union widening issue741");
 
     let consumer_root = tmp.path().join("union_consumer");
     let consumer_main = write_minimal_project(
@@ -6754,6 +6935,11 @@ def main() -> None:
     return
 "#,
     )?;
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for public union widening consumer issue741",
+    );
     let consumer_build = run_incan(
         &consumer_root,
         &[
@@ -6823,11 +7009,8 @@ pub def combine(first: Value, second: Option[Value] = None) -> Value:
         r#"pub from defs import accept_optional, combine, fallback, lit
 "#,
     )?;
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
-    assert_success(
-        &producer_build,
-        "producer build --lib for optional union helper issue745",
-    );
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
+    assert_success(&producer_build, "explicit Oven bake for optional union helper issue745");
 
     let consumer_root = tmp.path().join("consumer");
     let consumer_main = write_minimal_project(
@@ -6850,6 +7033,11 @@ def main() -> None:
     return
 "#,
     )?;
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for optional union helper consumer issue745",
+    );
     let consumer_build = run_incan(
         &consumer_root,
         &[
@@ -6939,10 +7127,10 @@ pub def desc(expr: ColumnExpr) -> ColumnExpr:
         r#"pub from surface import ColumnExpr, ColumnRefExpr, Frame, NumberColumnExpr, NumberValueOrColumn, SortExpr, add, col, desc, frame
 "#,
     )?;
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
     assert_success(
         &producer_build,
-        "producer build --lib for dependency-owned union boundary issue755",
+        "explicit Oven bake for dependency-owned union boundary issue755",
     );
 
     let consumer_root = tmp.path().join("union_consumer");
@@ -6972,6 +7160,11 @@ def main() -> None:
     return
 "#,
     )?;
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for dependency-owned union consumer issue755",
+    );
     let consumer_build = run_incan(
         &consumer_root,
         &[
@@ -7141,6 +7334,24 @@ edition = "2021"
 
     let default_lock_output = run_incan(tmp.path(), &["lock"])?;
     assert_success(&default_lock_output, "default incan lock");
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake_output, "explicit Oven bake for all declared project entrypoints");
+
+    let main_after_default_lock = run_incan(
+        tmp.path(),
+        &[
+            "run",
+            "--locked",
+            main_path.to_str().ok_or("main path was not valid UTF-8")?,
+        ],
+    )?;
+    assert_success(&main_after_default_lock, "incan run --locked main after default lock");
+    assert_no_stale_warning(&main_after_default_lock, "incan run --locked main after default lock");
+    assert_eq!(
+        String::from_utf8_lossy(&main_after_default_lock.stdout).trim(),
+        "1",
+        "the conventional main target must replay its own sealed executable"
+    );
 
     let locked_test_after_default_lock = run_incan(tmp.path(), &["test", "--locked"])?;
     assert_success(
@@ -7162,6 +7373,62 @@ edition = "2021"
     )?;
     assert_success(&extra_after_default_lock, "incan run --locked extra after default lock");
     assert_no_stale_warning(&extra_after_default_lock, "incan run --locked extra after default lock");
+    assert_eq!(
+        String::from_utf8_lossy(&extra_after_default_lock.stdout).trim(),
+        "2",
+        "the declared extra target must replay its own sealed executable"
+    );
+
+    let main_report_output = run_incan(
+        tmp.path(),
+        &[
+            "build",
+            "--locked",
+            "--report",
+            "json",
+            main_path.to_str().ok_or("main path was not valid UTF-8")?,
+        ],
+    )?;
+    assert_success(&main_report_output, "sealed main build report after one explicit bake");
+    let main_report = parse_json_stdout(&main_report_output)?;
+    let extra_report_output = run_incan(
+        tmp.path(),
+        &[
+            "build",
+            "--locked",
+            "--report",
+            "json",
+            extra_path.to_str().ok_or("extra path was not valid UTF-8")?,
+        ],
+    )?;
+    assert_success(
+        &extra_report_output,
+        "sealed extra build report after one explicit bake",
+    );
+    let extra_report = parse_json_stdout(&extra_report_output)?;
+    assert_eq!(
+        main_report["entrypoint"],
+        serde_json::json!(main_path.to_string_lossy()),
+        "main replay report selected the wrong entrypoint"
+    );
+    assert_eq!(
+        extra_report["entrypoint"],
+        serde_json::json!(extra_path.to_string_lossy()),
+        "extra replay report selected the wrong entrypoint"
+    );
+    let binary_path = |report: &serde_json::Value| {
+        report["artifacts"]
+            .as_array()
+            .and_then(|artifacts| artifacts.iter().find(|artifact| artifact["kind"] == "binary"))
+            .and_then(|artifact| artifact["path"].as_str())
+            .map(str::to_string)
+    };
+    let main_binary = binary_path(&main_report).ok_or("main report had no binary artifact")?;
+    let extra_binary = binary_path(&extra_report).ok_or("extra report had no binary artifact")?;
+    assert_ne!(
+        main_binary, extra_binary,
+        "distinct declared scripts must retain distinct caller-visible native outputs"
+    );
 
     let extra_lock_output = run_incan(
         tmp.path(),
@@ -7703,6 +7970,11 @@ impl DeviceTrait for Device {
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for grouped generic Rust interop scenarios",
+    );
     let output = run_incan(
         tmp.path(),
         &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
@@ -7774,6 +8046,8 @@ impl Tokenizer {
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake_output, "explicit Oven bake for a Rust Into-bound method argument");
     let output = run_incan(
         tmp.path(),
         &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
@@ -9189,10 +9463,10 @@ pub safe_cast = alias cast
 "#,
     )?;
 
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
     assert_success(
         &producer_build,
-        "producer build --lib for public type-token contracts issue750",
+        "explicit Oven bake for public type-token contracts issue750",
     );
 
     let producer_tests = producer_root.join("tests");
@@ -9250,6 +9524,12 @@ def main() -> None:
     println(registered_cast_at(1))
 "#,
     )?;
+
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for type-token contracts consumer issue750",
+    );
 
     let consumer_run = run_incan(
         &consumer_root,
@@ -9338,6 +9618,8 @@ edition = "2021"
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake_output, "explicit Oven bake for combined Rust and source imports");
     let build_output = run_incan(
         tmp.path(),
         &["build", main_path.to_str().ok_or("main path was not valid UTF-8")?],
@@ -9450,6 +9732,11 @@ def main() -> None:
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for inline f-string Rust interop variants",
+    );
     let build_output = run_incan(
         tmp.path(),
         &["build", main_path.to_str().ok_or("main path was not valid UTF-8")?],
@@ -9526,6 +9813,11 @@ def main() -> None:
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for a static str const in a Rust String field",
+    );
     let build_output = run_incan(
         tmp.path(),
         &["build", main_path.to_str().ok_or("main path was not valid UTF-8")?],
@@ -10262,10 +10554,10 @@ pub policy = partial models.Policy(family="cross-package", enabled=true)
 "#,
     )?;
 
-    let provider_output = run_incan(&provider_root, &["build", "--lib"])?;
+    let provider_output = run_explicit_oven_bake(&provider_root)?;
     assert_success(
         &provider_output,
-        "provider build for qualified partial constructor metadata issue699",
+        "explicit Oven bake for qualified partial constructor metadata issue699",
     );
 
     let consumer_root = tmp.path().join("consumer");
@@ -10287,6 +10579,12 @@ def main() -> None:
     assert DEFAULT_POLICY.enabled
 "#,
     )?;
+
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for qualified partial constructor consumer issue699",
+    );
 
     let consumer_output = run_incan(
         &consumer_root,
@@ -11249,6 +11547,11 @@ def main() -> None:
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for metadata-free Into-bound tokenizer encode",
+    );
     let build_output = run_incan(
         tmp.path(),
         &["build", main_path.to_str().ok_or("main path was not valid UTF-8")?],

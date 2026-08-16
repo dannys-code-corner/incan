@@ -43,7 +43,21 @@ static OVEN_PROJECT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub const OVEN_DIRECT_INSPECTION_MARKER: &str = ".incan_oven_direct_rust_project";
 /// Compiler-authored source authority consumed by the direct Oven inspection loader.
 pub const OVEN_DIRECT_INSPECTION_AUTHORITY_FILE: &str = ".incan_oven_rust_sources.json";
-const OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION: u32 = 1;
+const OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION: u32 = 2;
+
+/// How a compiler-authored direct-inspection projection establishes its registry-source integrity boundary.
+///
+/// A standalone projection verifies the complete tree itself. A projection installed from the current Oven selection
+/// relies on the selected, leased Loaf's verification instead: normal consumers already validate the receipt, plan,
+/// artifact-root containment, and file shape there. Rehashing every retained Rust source tree again would turn a
+/// prepared build into a multi-gigabyte integrity scan. Explicit `incan oven inspect` remains the full-closure audit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum OvenInspectionSourceValidation {
+    #[default]
+    FullTreeDigest,
+    SealedOvenSelection,
+}
 
 /// Exact registry source selected from one leased Loaf or the explicit baker's locked metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,13 +82,45 @@ pub struct OvenInspectionRegistrySource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct OvenInspectionSourceAuthority {
     schema_version: u32,
+    #[serde(default)]
+    source_validation: OvenInspectionSourceValidation,
     sources: Vec<OvenInspectionRegistrySource>,
 }
 
-/// Write the exact source authority beside one compiler-authored direct inspection projection.
+/// Write a standalone direct-inspection authority that verifies every source tree before loading it.
+///
+/// This is deliberately the conservative default for callers outside the Oven selection path.
 pub fn write_oven_inspection_source_authority(
     manifest_dir: &Path,
+    sources: Vec<OvenInspectionRegistrySource>,
+) -> Result<PathBuf, RustMetadataError> {
+    write_oven_inspection_source_authority_with_validation(
+        manifest_dir,
+        sources,
+        OvenInspectionSourceValidation::FullTreeDigest,
+    )
+}
+
+/// Write authority from the current selected Oven Loaf or publisher closure.
+///
+/// The caller must have obtained `sources` from the current receipt-bound selection or the baker's freshly verified
+/// locked source closure. This avoids repeating that same full-tree validation inside the metadata loader.
+pub fn write_sealed_oven_inspection_source_authority(
+    manifest_dir: &Path,
+    sources: Vec<OvenInspectionRegistrySource>,
+) -> Result<PathBuf, RustMetadataError> {
+    write_oven_inspection_source_authority_with_validation(
+        manifest_dir,
+        sources,
+        OvenInspectionSourceValidation::SealedOvenSelection,
+    )
+}
+
+/// Serialize deterministic inspection authority using the caller's declared validation boundary.
+fn write_oven_inspection_source_authority_with_validation(
+    manifest_dir: &Path,
     mut sources: Vec<OvenInspectionRegistrySource>,
+    source_validation: OvenInspectionSourceValidation,
 ) -> Result<PathBuf, RustMetadataError> {
     for source in &mut sources {
         source.features.sort();
@@ -98,6 +144,7 @@ pub fn write_oven_inspection_source_authority(
     });
     let authority = OvenInspectionSourceAuthority {
         schema_version: OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION,
+        source_validation,
         sources,
     };
     let path = manifest_dir.join(OVEN_DIRECT_INSPECTION_AUTHORITY_FILE);
@@ -439,6 +486,7 @@ impl RustWorkspace {
             if !path.is_file() {
                 return Ok(OvenInspectionSourceAuthority {
                     schema_version: OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION,
+                    source_validation: OvenInspectionSourceValidation::FullTreeDigest,
                     sources: Vec::new(),
                 });
             }
@@ -449,7 +497,7 @@ impl RustWorkspace {
                         message: format!("invalid Oven Rust source authority: {error}"),
                     }
                 })?;
-            if authority.schema_version != OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION {
+            if !(1..=OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION).contains(&authority.schema_version) {
                 return Err(RustMetadataError::LoadWorkspace {
                     path,
                     message: format!(
@@ -478,15 +526,17 @@ impl RustWorkspace {
                         message: "sealed Oven registry source has no Cargo.toml".to_string(),
                     });
                 }
-                let actual_digest = digest_oven_source_tree(&root)?;
-                if actual_digest != source.source_digest {
-                    return Err(RustMetadataError::LoadWorkspace {
-                        path: root,
-                        message: format!(
-                            "sealed Oven registry source digest is {actual_digest}, expected {}",
-                            source.source_digest
-                        ),
-                    });
+                if authority.source_validation == OvenInspectionSourceValidation::FullTreeDigest {
+                    let actual_digest = digest_oven_source_tree(&root)?;
+                    if actual_digest != source.source_digest {
+                        return Err(RustMetadataError::LoadWorkspace {
+                            path: root,
+                            message: format!(
+                                "sealed Oven registry source digest is {actual_digest}, expected {}",
+                                source.source_digest
+                            ),
+                        });
+                    }
                 }
                 let key = (
                     source.package.clone(),
@@ -972,7 +1022,7 @@ mod tests {
 
     use super::{
         OVEN_DIRECT_INSPECTION_MARKER, OvenInspectionRegistrySource, RustWorkspace, digest_oven_source_tree,
-        write_oven_inspection_source_authority,
+        write_oven_inspection_source_authority, write_sealed_oven_inspection_source_authority,
     };
 
     use tempfile::tempdir;
@@ -1277,6 +1327,57 @@ mod tests {
             Err(error) => error,
         };
         assert!(digest_error.to_string().contains("expected"));
+        Ok(())
+    }
+
+    #[test]
+    fn selected_oven_authority_uses_the_existing_selection_boundary_without_rehashing_sources()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = tempdir()?;
+        let source = tempdir()?;
+        fs::create_dir_all(workspace.path().join("src"))?;
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"root\"\nversion = \"1.0.0\"\n\n[dependencies]\ndemo = \"1\"\n",
+        )?;
+        fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n")?;
+        fs::write(
+            workspace.path().join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"root\"\nversion = \"1.0.0\"\ndependencies = [\"demo\"]\n\n[[package]]\nname = \"demo\"\nversion = \"1.0.0\"\nsource = \"registry+https://example.invalid/index\"\nchecksum = \"locked-checksum\"\n",
+        )?;
+        fs::create_dir_all(source.path().join("src"))?;
+        fs::write(
+            source.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\n",
+        )?;
+        fs::write(source.path().join("src/lib.rs"), "pub fn original() {}\n")?;
+        let source_digest = digest_oven_source_tree(source.path())?;
+        write_sealed_oven_inspection_source_authority(
+            workspace.path(),
+            vec![OvenInspectionRegistrySource {
+                package: "demo".to_string(),
+                version: "1.0.0".to_string(),
+                registry: "registry+https://example.invalid/index".to_string(),
+                checksum: "locked-checksum".to_string(),
+                features: Vec::new(),
+                source_root: source.path().to_path_buf(),
+                source_digest,
+            }],
+        )?;
+
+        fs::write(
+            source.path().join("src/lib.rs"),
+            "pub fn changed_after_selection() {}\n",
+        )?;
+        let payload = RustWorkspace::oven_project_json_payload(workspace.path())?;
+        let graph: serde_json::Value = serde_json::from_slice(&payload)?;
+        let crates = graph["crates"].as_array().ok_or("direct Oven graph omitted crates")?;
+        assert_eq!(
+            crates.len(),
+            2,
+            "the selected source remains available through its locked identity"
+        );
+        assert_eq!(crates[1]["display_name"], "demo");
         Ok(())
     }
 }

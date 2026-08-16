@@ -19,7 +19,7 @@ fn incan_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/incan")
 }
 
-fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
+fn configured_incan_command(current_dir: &Path, args: &[&str]) -> Result<Command, Box<dyn std::error::Error>> {
     let mut command = Command::new(incan_binary());
     command
         .args(args)
@@ -44,7 +44,21 @@ fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::e
             command.env("OVEN_CARGO_GUARD_LOG", log);
         }
     }
+    Ok(command)
+}
+
+/// Run a normal command with any scheduler-granted baker capability removed.
+///
+/// The consumer phase remains Cargo-guarded even when this root first performs its one explicit producer bake.
+fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
+    let mut command = configured_incan_command(current_dir, args)?;
+    command.env_remove("CARGO");
     Ok(command.output()?)
+}
+
+/// Run the one explicit producer bake that owns the package-qualified Cargo fixture capability.
+fn run_explicit_oven_bake(current_dir: &Path) -> Result<Output, Box<dyn std::error::Error>> {
+    Ok(configured_incan_command(current_dir, &["oven", "bake", "--project", "."])?.output()?)
 }
 
 fn assert_cargo_guard_was_not_called() -> Result<(), Box<dyn std::error::Error>> {
@@ -103,8 +117,8 @@ fn write_producer(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 fn build_producer(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let producer = write_producer(root)?;
-    let output = run_incan(&producer, &["build", "--lib"])?;
-    assert_success(&output, "producer incan build --lib");
+    let output = run_explicit_oven_bake(&producer)?;
+    assert_success(&output, "explicit producer Oven bake");
     Ok(producer)
 }
 

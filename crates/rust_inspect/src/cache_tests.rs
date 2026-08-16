@@ -284,9 +284,10 @@ fn complete_disk_cache_reuses_stable_negative_lookup() -> Result<(), Box<dyn std
     Ok(())
 }
 
-/// A complete semantic function extraction must persist its own completeness evidence for a later compiler process.
+/// A deferred complete extraction must flush its completeness evidence once for a later compiler process.
 #[test]
-fn complete_function_extraction_round_trips_without_reopening_workspace() -> Result<(), Box<dyn std::error::Error>> {
+fn deferred_complete_function_extraction_flushes_without_reopening_workspace()
+-> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     fs::create_dir_all(tmp.path().join("src"))?;
     fs::write(
@@ -301,8 +302,13 @@ fn complete_function_extraction_round_trips_without_reopening_workspace() -> Res
     let query = "probe::transform";
 
     let first = RustMetadataCache::new();
-    let extracted = first.get_or_extract_complete(root.as_path(), query, &|_| ())?;
+    let extracted = first.get_or_extract_complete_deferred_persist(root.as_path(), query, &|_| ())?;
     assert!(matches!(extracted.kind, RustItemKind::Function(_)));
+    assert!(
+        !disk_cache_path(root.as_path()).is_file(),
+        "a deferred complete lookup must not rewrite the cache snapshot by itself"
+    );
+    first.persist_manifest_dir(root.as_path())?;
     drop(first);
 
     let second = RustMetadataCache::new();
@@ -1460,6 +1466,16 @@ fn dependency_source_metadata_resolves_public_globs_through_local_aliases_withou
     assert_eq!(type_info.fields.len(), 1);
     assert_eq!(type_info.fields[0].name, "blocks");
     assert_eq!(type_info.fields[0].type_display, "u64");
+    assert!(
+        !disk_cache_path(&root).is_file(),
+        "fast metadata discovery must defer its cache snapshot until the owning preparation batch finishes"
+    );
+    cache.persist_manifest_dir(&root)?;
+    let snapshot = fs::read_to_string(disk_cache_path(&root))?;
+    assert!(
+        snapshot.contains("rustix::fs::StatVfs"),
+        "the final batch flush must retain source-derived metadata for the next process"
+    );
 
     let dep = dep.canonicalize()?;
     let inner = cache

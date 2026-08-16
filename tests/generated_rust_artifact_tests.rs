@@ -24,7 +24,7 @@ fn incan_binary() -> PathBuf {
     manifest_dir.join("target").join("debug").join("incan")
 }
 
-fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
+fn configured_incan_command(current_dir: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(incan_binary());
     command
         .args(args)
@@ -39,7 +39,21 @@ fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::e
             )
             .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store());
     }
+    command
+}
+
+/// Normal commands must not inherit the suite's narrowly granted baker proxy.
+fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
+    let mut command = configured_incan_command(current_dir, args);
+    command.env_remove("CARGO");
     Ok(command.output()?)
+}
+
+/// Publish a provider closure only through Oven's explicit project bake boundary.
+fn run_explicit_oven_bake(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
+    let mut bake_args = vec!["oven", "bake", "--project", "."];
+    bake_args.extend_from_slice(args);
+    Ok(configured_incan_command(current_dir, &bake_args).output()?)
 }
 
 fn assert_success(output: &Output, context: &str) {
@@ -239,8 +253,8 @@ license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
     write_fixture(&src_dir.join("widgets.incn"), "library_widgets.incn")?;
     write_fixture(&src_dir.join("lib.incn"), "library_lib.incn")?;
 
-    let output = run_incan(&project_root, &["build", "--lib"])?;
-    assert_success(&output, "incan build --lib artifact");
+    let output = run_explicit_oven_bake(&project_root, &[])?;
+    assert_success(&output, "explicit Oven bake for the public library artifact");
 
     let artifact_root = project_root.join("target").join("lib");
     assert_required_files(&artifact_root, "library_required_files.txt")?;
@@ -408,6 +422,12 @@ def main() -> None:
     let manifest_path = library_root.join("target/lib/feature_library.incnlib");
     let generated_library_path = library_root.join("target/lib/src/lib.rs");
 
+    let default_bake = run_explicit_oven_bake(&library_root, &[])?;
+    assert_success(
+        &default_bake,
+        "explicit Oven bake for the default provider feature projection",
+    );
+
     let disabled_output_dir = consumer_root.join("out_disabled");
     let disabled_output_arg = disabled_output_dir
         .to_str()
@@ -433,6 +453,11 @@ def main() -> None:
         ("beta", "\"beta\".to_string()", "\"alpha\".to_string()"),
         ("alpha", "\"alpha\".to_string()", "\"beta\".to_string()"),
     ] {
+        let provider_bake = run_explicit_oven_bake(&library_root, &["--no-default-features", "--features", feature])?;
+        assert_success(
+            &provider_bake,
+            &format!("explicit Oven bake for provider feature {feature}"),
+        );
         fs::write(
             &main_path,
             format!(

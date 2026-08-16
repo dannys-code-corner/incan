@@ -642,7 +642,7 @@ mod tests {
         assert_dependency_contract(
             &toml,
             &["incan_derive", "incan_stdlib"],
-            &[],
+            &["async", "json", "ordinal"],
             &["axum", "incan_web_macros", "inventory", "serde", "serde_json", "tokio"],
         )
     }
@@ -657,7 +657,7 @@ mod tests {
         assert_dependency_contract(
             &toml,
             &["incan_derive", "incan_stdlib", "serde"],
-            &["json"],
+            &["async", "json", "ordinal"],
             &["axum", "incan_web_macros", "inventory", "serde_json", "tokio"],
         )
     }
@@ -682,7 +682,7 @@ mod tests {
         assert_dependency_contract(
             &toml,
             &["incan_derive", "incan_stdlib"],
-            &["json", "ordinal"],
+            &["async", "json", "ordinal"],
             &["xxhash-rust"],
         )
     }
@@ -696,7 +696,7 @@ mod tests {
         assert_dependency_contract(
             &toml,
             &["incan_derive", "incan_stdlib"],
-            &["async"],
+            &["async", "json", "ordinal"],
             &["axum", "incan_web_macros", "inventory", "serde", "serde_json", "tokio"],
         )
     }
@@ -725,7 +725,7 @@ mod tests {
         assert_dependency_contract(
             &toml,
             &["axum", "incan_derive", "incan_stdlib", "incan_web_macros", "inventory"],
-            &["web"],
+            &["async", "json", "ordinal", "web"],
             &["serde", "serde_json", "tokio"],
         )
     }

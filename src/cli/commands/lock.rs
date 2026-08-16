@@ -3,6 +3,8 @@
 //! Handles creating and validating `incan.lock` files that pin dependency versions for reproducible builds.
 //! Used by both `incan lock` and the build pipeline.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 #[cfg(test)]
@@ -12,6 +14,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::process::{Command, Stdio};
+#[cfg(feature = "rust_inspect")]
+use std::sync::Arc;
 #[cfg(test)]
 use std::thread;
 #[cfg(test)]
@@ -22,6 +26,8 @@ use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 use crate::backend::ProjectGenerator;
+#[cfg(feature = "rust_inspect")]
+use crate::backend::project::runner::resolved_cargo_executable;
 #[cfg(test)]
 use crate::backend::project::runner::{cargo_command, configure_cargo_target, sanitize_cargo_environment};
 use crate::cli::prelude::ParsedModule;
@@ -36,28 +42,34 @@ use crate::lockfile::{
     semantic_lock_state, workspace_semantic_lock_state,
 };
 use crate::manifest::{DependencySpec, ProjectManifest};
+use crate::oven::legacy_cargo::OvenLegacyCargoInspectionPackage;
 #[cfg(feature = "rust_inspect")]
-use crate::oven::legacy_cargo::OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY_ENV;
+use crate::oven::legacy_cargo::{OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY_ENV, explicit_project_bake_inspection_sources};
 #[cfg(feature = "rust_inspect")]
-use crate::oven::loaf::{OvenToolchainLoaf, resolve_toolchain_loaf_for_registry_sources};
+use crate::oven::loaf::{
+    OvenLoafSelection, OvenToolchainLoaf, resolve_toolchain_loaf, resolve_toolchain_loaf_by_identity,
+    resolve_toolchain_loaf_for_registry_sources,
+};
 #[cfg(feature = "rust_inspect")]
-use crate::oven::rustc::OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH;
+use crate::oven::rustc::{
+    OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenLoadedProjectInspectionAuthority, OvenProjectInspectionConstituent,
+    OvenProjectInspectionSourceOwner, project_inspection_authority_supports_dependencies,
+    project_inspection_test_dependency_envelope_supports_dependencies, validate_project_extension_payload_against_base,
+};
 #[cfg(feature = "rust_inspect")]
 use crate::oven::rustc::{resolve_active_rustc, rustc_host_target, rustc_identity};
 #[cfg(feature = "rust_inspect")]
 use crate::oven::{OvenGeneratedProjectRequest, receipt_generated_project};
-use crate::provider::{
-    FeatureSelection, PackageFeaturePlan, ProviderPlan, SDK_PROVIDER_BUILD_ENV, SdkComponentSelection,
-};
+use crate::provider::{FeatureSelection, ProviderPlan, SDK_PROVIDER_BUILD_ENV};
 use crate::workspace::WorkspaceGraph;
 use incan_core::lang::stdlib;
 
 use super::common::{
     CargoPolicy, CompilationSession, INTERNAL_CARGO_LOCK_PAYLOAD_PATH_ENV, ProjectRequirements, build_source_map,
     cargo_command_flags, collect_modules_detailed_with_session, collect_project_requirements,
-    collect_rust_dependency_uses, discover_active_sdk_inventory, enforce_project_toolchain_constraint,
-    extend_requirements_with_provider_plan, format_dependency_error, merge_project_requirement_dependencies,
-    provider_used_module_paths, resolve_sdk_component_selection, semantic_sdk_path_dependencies,
+    collect_rust_dependency_uses, enforce_project_toolchain_constraint, extend_requirements_with_provider_plan,
+    format_dependency_error, merge_project_requirement_dependencies, provider_used_module_paths,
+    semantic_sdk_path_dependencies,
 };
 #[cfg(feature = "rust_inspect")]
 use super::common::{
@@ -74,6 +86,78 @@ const LIBRARY_DEPENDENCY_PREHEAT_FINGERPRINT_FILE: &str = ".incan_library_depend
 #[cfg(test)]
 #[allow(dead_code)]
 const LIBRARY_DEPENDENCY_PREHEAT_LOCK_FILE: &str = ".incan_library_dependency_preheat.lock";
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ProjectLockCollectionMetrics {
+    context_collections: usize,
+    session_discoveries: usize,
+    authority_snapshot_reads: usize,
+    provider_plan_projections: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static PROJECT_LOCK_COLLECTION_METRICS: Cell<ProjectLockCollectionMetrics> = const {
+        Cell::new(ProjectLockCollectionMetrics {
+            context_collections: 0,
+            session_discoveries: 0,
+            authority_snapshot_reads: 0,
+            provider_plan_projections: 0,
+        })
+    };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_project_lock_collection_metrics() {
+    PROJECT_LOCK_COLLECTION_METRICS.set(ProjectLockCollectionMetrics::default());
+}
+
+#[cfg(test)]
+fn project_lock_collection_metrics() -> ProjectLockCollectionMetrics {
+    PROJECT_LOCK_COLLECTION_METRICS.get()
+}
+
+#[cfg(test)]
+fn update_project_lock_collection_metrics(update: impl FnOnce(&mut ProjectLockCollectionMetrics)) {
+    let mut metrics = PROJECT_LOCK_COLLECTION_METRICS.get();
+    update(&mut metrics);
+    PROJECT_LOCK_COLLECTION_METRICS.set(metrics);
+}
+
+#[cfg(test)]
+pub(crate) fn project_lock_collection_counts() -> (usize, usize) {
+    let metrics = project_lock_collection_metrics();
+    (metrics.context_collections, metrics.session_discoveries)
+}
+
+#[cfg(test)]
+fn record_project_lock_context_collection() {
+    update_project_lock_collection_metrics(|metrics| {
+        metrics.context_collections += 1;
+    });
+}
+
+#[cfg(test)]
+fn record_project_lock_session_discovery() {
+    update_project_lock_collection_metrics(|metrics| {
+        metrics.session_discoveries += 1;
+    });
+}
+
+#[cfg(test)]
+fn record_project_lock_authority_snapshot_read() {
+    update_project_lock_collection_metrics(|metrics| {
+        metrics.authority_snapshot_reads += 1;
+    });
+}
+
+#[cfg(test)]
+fn record_project_lock_provider_plan_projection() {
+    update_project_lock_collection_metrics(|metrics| {
+        metrics.provider_plan_projections += 1;
+    });
+}
 
 /// Inputs needed to preheat generated-library dependencies into the real generated-library Cargo target domain.
 #[cfg(test)]
@@ -137,66 +221,71 @@ pub fn lock_project(
         cargo_all_features,
     }
     .normalized();
-    if let Some(workspace) =
-        WorkspaceGraph::discover(manifest.project_root()).map_err(|error| CliError::failure(error.to_string()))?
-    {
-        return lock_workspace(
-            &workspace,
-            entry_file.map(PathBuf::as_path),
-            &cargo_features,
-            package_features,
-            sdk_profile_override,
-        );
-    }
-    let context = collect_project_lock_context(
+    let _ = collect_and_publish_project_lock(
         &manifest,
         entry_file.map(PathBuf::as_path),
         &cargo_features,
         package_features,
         sdk_profile_override,
-        None,
-    )?
-    .ok_or_else(|| CliError::failure("incan lock requires a FILE argument or at least one [project.scripts] entry"))?;
-
-    generate_oven_lockfile(
-        manifest.project_root(),
-        &context.resolved,
-        &context.project_requirements,
-        &cargo_features,
-        &context.semantic,
-        None,
     )?;
 
     Ok(ExitCode::SUCCESS)
 }
 
-/// Generate the one canonical RFC 077 lockfile for every effective workspace member.
-fn lock_workspace(
-    workspace: &WorkspaceGraph,
+/// Collect and publish the one canonical project or workspace lock, retaining the exact immutable inputs for its
+/// explicit Oven publisher.
+fn collect_and_publish_project_lock(
+    manifest: &ProjectManifest,
     entry_file: Option<&Path>,
     cargo_features: &CargoFeatureSelection,
     package_features: &FeatureSelection,
     sdk_profile_override: Option<&str>,
-) -> CliResult<ExitCode> {
-    let lock_path = workspace.root().join("incan.lock");
-    let publication_lock = crate::lockfile::acquire_publication_lock(&lock_path)
-        .map_err(|error| CliError::failure(format!("failed to acquire workspace lock publication guard: {error}")))?;
-    let context = collect_workspace_lock_context(
-        workspace,
+) -> CliResult<ProjectLockContext> {
+    if let Some(workspace) =
+        WorkspaceGraph::discover(manifest.project_root()).map_err(|error| CliError::failure(error.to_string()))?
+    {
+        let lock_path = workspace.root().join("incan.lock");
+        let publication_lock = crate::lockfile::acquire_publication_lock(&lock_path).map_err(|error| {
+            CliError::failure(format!("failed to acquire workspace lock publication guard: {error}"))
+        })?;
+        let context = collect_workspace_lock_context(
+            &workspace,
+            entry_file,
+            cargo_features,
+            package_features,
+            sdk_profile_override,
+            None,
+        )?;
+        generate_oven_lockfile(
+            workspace.root(),
+            &context.resolved,
+            &context.project_requirements,
+            cargo_features,
+            &context.semantic,
+            Some(&publication_lock),
+        )?;
+        return Ok(context);
+    }
+
+    let context = collect_project_lock_context(
+        manifest,
         entry_file,
         cargo_features,
         package_features,
         sdk_profile_override,
-    )?;
+        None,
+        None,
+    )?
+    .ok_or_else(|| CliError::failure("incan lock requires a FILE argument or at least one [project.scripts] entry"))?;
     generate_oven_lockfile(
-        workspace.root(),
+        manifest.project_root(),
         &context.resolved,
         &context.project_requirements,
         cargo_features,
         &context.semantic,
-        Some(&publication_lock),
+        None,
     )?;
-    Ok(ExitCode::SUCCESS)
+    Ok(context)
 }
 
 /// Resolve the canonical dependency context and lock payload for a project build.
@@ -334,6 +423,10 @@ pub(crate) struct RustInspectWorkspaceRequest<'a> {
     pub force_direct_prewarm: bool,
     /// Receipt inputs used to select the exact immutable Loaf that owns registry inspection sources.
     pub oven_source_authority: Option<OvenRustInspectSourceAuthorityRequest<'a>>,
+    /// Command-local source authority selected once from source-current completed project outputs.
+    pub prepared_project_source_authorities: Option<Arc<PreparedOvenProjectRegistrySourceAuthorities>>,
+    /// Permit one locked source-authority acquisition only at `incan oven bake`'s explicit publisher boundary.
+    pub explicit_oven_bake: bool,
 }
 
 /// Receipt-compatible Loaf inputs required before a normal direct Oven metadata prewarm.
@@ -353,6 +446,20 @@ pub(crate) struct OvenRustInspectSourceAuthorityRequest<'a> {
 pub(crate) struct PreparedRustInspectWorkspace {
     manifest_dir: PathBuf,
     _source_loaf: Option<OvenToolchainLoaf>,
+    _project_source_authorities: Option<Arc<PreparedOvenProjectRegistrySourceAuthorities>>,
+}
+
+/// Command-local source authority shared by every parallel native-test unit.
+///
+/// The completed-output, authority, constituent, and compiler-release leases stay live for this value's lifetime. A
+/// batch performs only an in-memory exact-root check and projects the one already validated source catalog and lock.
+#[cfg(feature = "rust_inspect")]
+pub(crate) struct PreparedOvenProjectRegistrySourceAuthorities {
+    authority: OvenLoadedProjectInspectionAuthority,
+    sources: Vec<crate::rust_inspect::OvenInspectionRegistrySource>,
+    registry_lock_source: Option<PathBuf>,
+    test_dependency_plan: Option<crate::cli::commands::build::OvenDirectRustcPlanSelection>,
+    _release_loafs: Vec<OvenToolchainLoaf>,
 }
 
 #[cfg(feature = "rust_inspect")]
@@ -385,6 +492,8 @@ pub(crate) fn prepare_rust_inspect_workspace(
         direct_oven_inspection,
         force_direct_prewarm,
         oven_source_authority,
+        prepared_project_source_authorities,
+        explicit_oven_bake,
     } = request;
     if rust_inspect_query_paths.is_empty() && !prepare_when_empty {
         return Ok(None);
@@ -404,6 +513,7 @@ pub(crate) fn prepare_rust_inspect_workspace(
         &cargo_policy_flags,
     )?;
     let mut source_loaf = None;
+    let mut project_source_authorities = None;
     if direct_oven_inspection {
         if std::env::var_os(crate::oven::loaf::OVEN_LOAF_ENV).is_some_and(|value| value == "1") {
             let source = std::env::var_os(OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY_ENV)
@@ -437,37 +547,69 @@ pub(crate) fn prepare_rust_inspect_workspace(
             let receipt = receipt_generated_project(&receipt_request).map_err(|error| {
                 CliError::failure(format!("failed to receipt Oven Rust inspection source: {error}"))
             })?;
-            let selected = resolve_toolchain_loaf_for_registry_sources(
-                &receipt,
-                authority_request.registry_dependencies,
-            )
-            .map_err(|error| CliError::failure(error.to_string()))?
-            .ok_or_else(|| {
-                CliError::failure(
-                    "Oven Alpha has no receipt-compatible Loaf containing the requested Rust inspection sources",
-                )
-            })?;
-            let sources = selected
-                .artifacts
-                .registry_sources
-                .iter()
-                .map(|package| crate::rust_inspect::OvenInspectionRegistrySource {
-                    package: package.package.clone(),
-                    version: package.version.clone(),
-                    registry: package.source.registry.clone(),
-                    checksum: package.source.checksum.clone(),
-                    features: package.features.clone(),
-                    source_root: selected.artifact_root.join(&package.source.relative_root),
-                    source_digest: package.source.digest.clone(),
-                })
-                .collect();
-            crate::rust_inspect::write_oven_inspection_source_authority(&rust_inspect_manifest_dir, sources)
-                .map_err(|error| CliError::failure(format!("failed to install Loaf Rust source authority: {error}")))?;
-            let sealed_lock = selected.artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
-            if sealed_lock.is_file() {
-                install_oven_registry_lock(&sealed_lock, &rust_inspect_manifest_dir.join("Cargo.lock"))?;
+            let command_authority_available = prepared_project_source_authorities.is_some();
+            let command_authority_installed = if let Some(prepared) = prepared_project_source_authorities.as_ref() {
+                let installed = prepared
+                    .install_for_dependencies(&rust_inspect_manifest_dir, authority_request.registry_dependencies)?;
+                if installed {
+                    project_source_authorities = Some(Arc::clone(prepared));
+                }
+                installed
+            } else {
+                false
+            };
+            if normal_inspection_requires_installed_project_authority(
+                project_root,
+                explicit_oven_bake,
+                command_authority_available,
+                command_authority_installed,
+            ) {
+                let detail = if command_authority_available {
+                    "the source-current project inspection authority could not authorize this inspection batch"
+                } else {
+                    "no source-current project inspection authority is available"
+                };
+                return Err(CliError::failure(format!(
+                    "Oven Alpha {detail}; rerun `incan oven bake --project .`"
+                )));
             }
-            source_loaf = Some(selected);
+            if command_authority_installed {
+                // The command-local context owns every output, entry, and base-Loaf lease through this workspace.
+            } else if explicit_oven_bake {
+                let release_loaf = resolve_toolchain_loaf(&receipt, OvenLoafSelection::CompilerOwnedProviderSuperset)
+                    .map_err(|error| CliError::failure(error.to_string()))?;
+                let release_registry_lock = release_loaf
+                    .as_ref()
+                    .map(|loaf| loaf.artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH));
+                acquire_explicit_project_inspection_sources(
+                    &rust_inspect_manifest_dir,
+                    authority_request.features,
+                    authority_request.registry_dependencies,
+                    release_registry_lock.as_deref(),
+                )?;
+                source_loaf = release_loaf;
+            } else if let Some(selected) =
+                resolve_toolchain_loaf_for_registry_sources(&receipt, authority_request.registry_dependencies)
+                    .map_err(|error| CliError::failure(error.to_string()))?
+            {
+                install_oven_inspection_source_authority(
+                    &rust_inspect_manifest_dir,
+                    &selected.artifacts.registry_sources,
+                    &selected.artifact_root,
+                    None,
+                    None,
+                )?;
+                install_required_oven_registry_lock(
+                    !selected.artifacts.registry_sources.is_empty(),
+                    &selected.artifact_root,
+                    &rust_inspect_manifest_dir.join("Cargo.lock"),
+                )?;
+                source_loaf = Some(selected);
+            } else {
+                return Err(CliError::failure(
+                    "Oven Alpha has no receipt-compatible Loaf containing the requested Rust inspection sources",
+                ));
+            }
         }
         mark_oven_direct_rust_inspection(&rust_inspect_manifest_dir)?;
     }
@@ -480,7 +622,460 @@ pub(crate) fn prepare_rust_inspect_workspace(
     Ok(Some(PreparedRustInspectWorkspace {
         manifest_dir: rust_inspect_manifest_dir,
         _source_loaf: source_loaf,
+        _project_source_authorities: project_source_authorities,
     }))
+}
+
+/// Return whether a normal direct-inspection consumer must refuse generic release-source selection.
+///
+/// A prepared command authority is direct evidence that the caller belongs to a manifest-backed project, including
+/// projects with a custom source root or scripts outside `src`. Conventional source paths retain the earlier defensive
+/// check for callers that have not yet propagated that authority. Explicit baking and true standalone files may still
+/// select release-owned inspection sources.
+#[cfg(feature = "rust_inspect")]
+fn normal_inspection_requires_installed_project_authority(
+    project_root: &Path,
+    explicit_oven_bake: bool,
+    command_authority_available: bool,
+    command_authority_installed: bool,
+) -> bool {
+    let conventional_project =
+        project_root.join("src/lib.incn").is_file() || project_root.join("src/main.incn").is_file();
+    !explicit_oven_bake && !command_authority_installed && (command_authority_available || conventional_project)
+}
+
+/// Install one sealed registry-source catalog into a direct Oven inspection workspace.
+#[cfg(feature = "rust_inspect")]
+fn install_oven_inspection_source_authority(
+    manifest_dir: &Path,
+    packages: &[crate::oven::rustc::OvenRustcRegistrySourcePackage],
+    artifact_root: &Path,
+    extension_paths: Option<&BTreeSet<String>>,
+    base_source_authority: Option<(&Path, &[crate::oven::rustc::OvenRustcRegistrySourcePackage])>,
+) -> CliResult<()> {
+    let sources = oven_inspection_sources(packages, artifact_root, extension_paths, base_source_authority)?;
+    crate::rust_inspect::write_sealed_oven_inspection_source_authority(manifest_dir, sources)
+        .map(|_| ())
+        .map_err(|error| CliError::failure(format!("failed to install Oven Rust source authority: {error}")))
+}
+
+/// Resolve a sealed registry catalog to immutable source roots without writing caller-owned projection state.
+#[cfg(feature = "rust_inspect")]
+fn oven_inspection_sources(
+    packages: &[crate::oven::rustc::OvenRustcRegistrySourcePackage],
+    artifact_root: &Path,
+    extension_paths: Option<&BTreeSet<String>>,
+    base_source_authority: Option<(&Path, &[crate::oven::rustc::OvenRustcRegistrySourcePackage])>,
+) -> CliResult<Vec<crate::rust_inspect::OvenInspectionRegistrySource>> {
+    packages
+        .iter()
+        .map(|package| {
+            let extension_owns_source = extension_paths.is_some_and(|paths| {
+                let prefix = format!("{}/", package.source.relative_root);
+                paths.iter().any(|path| path.starts_with(&prefix))
+            });
+            let source_root = if extension_paths.is_none() || extension_owns_source {
+                artifact_root.join(&package.source.relative_root)
+            } else {
+                let (base_root, base_packages) = base_source_authority.ok_or_else(|| {
+                    CliError::failure(format!(
+                        "stored Oven project extension omits sealed source `{}` {} without an exact base Loaf authority",
+                        package.package, package.version
+                    ))
+                })?;
+                let mut matching = base_packages.iter().filter(|base| {
+                    base.package == package.package
+                        && base.version == package.version
+                        && base.source.registry == package.source.registry
+                        && base.source.checksum == package.source.checksum
+                        && base.source.digest == package.source.digest
+                });
+                let Some(base) = matching.next() else {
+                    return Err(CliError::failure(format!(
+                        "stored Oven project extension source `{}` {} is absent from its required base Loaf",
+                        package.package, package.version
+                    )));
+                };
+                if matching.next().is_some() {
+                    return Err(CliError::failure(format!(
+                        "stored Oven project extension source `{}` {} is ambiguous in its required base Loaf",
+                        package.package, package.version
+                    )));
+                }
+                base_root.join(&base.source.relative_root)
+            };
+            Ok(crate::rust_inspect::OvenInspectionRegistrySource {
+                package: package.package.clone(),
+                version: package.version.clone(),
+                registry: package.source.registry.clone(),
+                checksum: package.source.checksum.clone(),
+                features: package.features.clone(),
+                source_root,
+                source_digest: package.source.digest.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Resolve one exact project authority and all named constituents once for the complete test command.
+#[cfg(feature = "rust_inspect")]
+pub(crate) fn prepare_project_registry_source_authorities(
+    mut authority: OvenLoadedProjectInspectionAuthority,
+) -> CliResult<Arc<PreparedOvenProjectRegistrySourceAuthorities>> {
+    struct ResolvedSourceOwner {
+        root: PathBuf,
+        catalog: Vec<crate::oven::rustc::OvenRustcRegistrySourcePackage>,
+    }
+
+    let mut release_loafs = Vec::new();
+    let mut owners = Vec::with_capacity(authority.payload.constituents.len());
+    let mut stored_index = 0;
+    let mut test_dependency_stored_index = None;
+    let mut test_dependency_release_identity = None;
+    for (constituent_index, constituent) in authority.payload.constituents.iter().enumerate() {
+        match constituent {
+            OvenProjectInspectionConstituent::ReleaseLoaf {
+                loaf_identity,
+                build_unit_identity,
+                receipt,
+            } => {
+                let loaf = resolve_toolchain_loaf_by_identity(receipt, loaf_identity)
+                    .map_err(|error| CliError::failure(error.to_string()))?
+                    .ok_or_else(|| {
+                        CliError::failure(format!(
+                            "project inspection authority requires release Loaf `{loaf_identity}`, but the active toolchain does not provide it"
+                        ))
+                    })?;
+                if loaf.loaf_build_unit_identity != *build_unit_identity || loaf.artifacts.intent != receipt.intent {
+                    return Err(CliError::failure(format!(
+                        "project inspection authority release Loaf `{loaf_identity}` has different build-unit or intent evidence"
+                    )));
+                }
+                owners.push(ResolvedSourceOwner {
+                    root: loaf.artifact_root.clone(),
+                    catalog: loaf.artifacts.registry_sources.clone(),
+                });
+                if authority
+                    .payload
+                    .test_dependency_envelope
+                    .as_ref()
+                    .is_some_and(|envelope| envelope.constituent_index == constituent_index)
+                {
+                    test_dependency_release_identity = Some(loaf.loaf_identity.clone());
+                }
+                release_loafs.push(loaf);
+            }
+            OvenProjectInspectionConstituent::Stored {
+                artifact_kind,
+                base_loaf_identity,
+                ..
+            } => {
+                if authority
+                    .payload
+                    .test_dependency_envelope
+                    .as_ref()
+                    .is_some_and(|envelope| envelope.constituent_index == constituent_index)
+                {
+                    test_dependency_stored_index = Some(stored_index);
+                }
+                let selected = authority.stored_constituents.get(stored_index).ok_or_else(|| {
+                    CliError::failure("project inspection authority lost a store constituent during preparation")
+                })?;
+                stored_index += 1;
+                let catalog = match artifact_kind {
+                    crate::oven::store::OvenArtifactKind::DirectRustcPlan => {
+                        serde_json::from_slice::<crate::oven::rustc::OvenRustcArtifactManifest>(&selected.payload)
+                            .map_err(|error| {
+                                CliError::failure(format!(
+                                    "project inspection direct-plan constituent is invalid: {error}"
+                                ))
+                            })?
+                            .registry_sources
+                    }
+                    crate::oven::store::OvenArtifactKind::ProjectPayload => {
+                        let payload = serde_json::from_slice::<crate::oven::legacy_cargo::OvenProjectExtensionPayload>(
+                            &selected.payload,
+                        )
+                        .map_err(|error| {
+                            CliError::failure(format!("project inspection extension constituent is invalid: {error}"))
+                        })?;
+                        let base_identity = base_loaf_identity.as_deref().ok_or_else(|| {
+                            CliError::failure("project inspection extension constituent omitted its release Loaf")
+                        })?;
+                        let base = release_loafs
+                            .iter()
+                            .find(|loaf| loaf.loaf_identity == base_identity)
+                            .ok_or_else(|| {
+                                CliError::failure(format!(
+                                    "project inspection extension requires unlisted release Loaf `{base_identity}`"
+                                ))
+                            })?;
+                        validate_project_extension_payload_against_base(
+                            &payload,
+                            &base.loaf_identity,
+                            &base.loaf_build_unit_identity,
+                            &base.artifacts,
+                        )
+                        .map_err(|error| CliError::failure(error.to_string()))?;
+                        payload.complete_plan.registry_sources
+                    }
+                    unsupported => {
+                        return Err(CliError::failure(format!(
+                            "project inspection authority names unsupported constituent kind {unsupported:?}"
+                        )));
+                    }
+                };
+                owners.push(ResolvedSourceOwner {
+                    root: selected.artifact_root.clone(),
+                    catalog,
+                });
+            }
+        }
+    }
+
+    let mut sources = Vec::with_capacity(authority.payload.registry_sources.len());
+    for source in &authority.payload.registry_sources {
+        let (root, catalog) = match source.owner {
+            OvenProjectInspectionSourceOwner::Authority => {
+                (authority.artifact_root.as_path(), std::slice::from_ref(&source.package))
+            }
+            OvenProjectInspectionSourceOwner::Constituent { index } => {
+                let owner = owners.get(index).ok_or_else(|| {
+                    CliError::failure(format!(
+                        "project inspection source references missing constituent index {index}"
+                    ))
+                })?;
+                (owner.root.as_path(), owner.catalog.as_slice())
+            }
+        };
+        let matches = catalog
+            .iter()
+            .filter(|candidate| {
+                candidate.package == source.package.package
+                    && candidate.version == source.package.version
+                    && candidate.features == source.package.features
+                    && candidate.source == source.package.source
+            })
+            .count();
+        if matches != 1 {
+            return Err(CliError::failure(format!(
+                "project inspection source `{}` {} has {matches} exact records in its named owner",
+                source.package.package, source.package.version
+            )));
+        }
+        sources.push(crate::rust_inspect::OvenInspectionRegistrySource {
+            package: source.package.package.clone(),
+            version: source.package.version.clone(),
+            registry: source.package.source.registry.clone(),
+            checksum: source.package.source.checksum.clone(),
+            features: source.package.features.clone(),
+            source_root: root.join(&source.package.source.relative_root),
+            source_digest: source.package.source.digest.clone(),
+        });
+    }
+    let registry_lock_source = if sources.is_empty() {
+        None
+    } else {
+        let path = authority.artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            CliError::failure(format!(
+                "project inspection authority lacks its sealed Cargo.lock at {}: {error}",
+                path.display()
+            ))
+        })?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(CliError::failure(format!(
+                "project inspection authority registry lock is not a regular file at {}",
+                path.display()
+            )));
+        }
+        Some(path)
+    };
+    let test_dependency_plan = if let Some(stored_index) = test_dependency_stored_index {
+        let constituent_index = authority
+            .payload
+            .test_dependency_envelope
+            .as_ref()
+            .ok_or_else(|| CliError::failure("project inspection authority lost its test dependency role"))?
+            .constituent_index;
+        let receipt = match authority.payload.constituents.get(constituent_index) {
+            Some(OvenProjectInspectionConstituent::Stored { receipt, .. }) => receipt.clone(),
+            _ => {
+                return Err(CliError::failure(
+                    "project inspection authority test dependency role no longer names a stored constituent",
+                ));
+            }
+        };
+        let selected = authority.stored_constituents.remove(stored_index);
+        Some(crate::cli::commands::build::project_test_dependency_plan_from_constituent(selected, &receipt)?)
+    } else if let Some(identity) = test_dependency_release_identity {
+        let index = release_loafs
+            .iter()
+            .position(|loaf| loaf.loaf_identity == identity)
+            .ok_or_else(|| CliError::failure("project inspection authority lost its role-bearing release Loaf"))?;
+        Some(
+            crate::cli::commands::build::OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(
+                release_loafs.remove(index),
+            )),
+        )
+    } else {
+        if authority.payload.test_dependency_envelope.is_some() {
+            return Err(CliError::failure(
+                "project inspection authority test dependency role did not resolve to its exact constituent",
+            ));
+        }
+        None
+    };
+    Ok(Arc::new(PreparedOvenProjectRegistrySourceAuthorities {
+        authority,
+        sources,
+        registry_lock_source,
+        test_dependency_plan,
+        _release_loafs: release_loafs,
+    }))
+}
+
+#[cfg(feature = "rust_inspect")]
+impl PreparedOvenProjectRegistrySourceAuthorities {
+    /// Return the exact role-bearing dependency envelope after validating this generated batch's complete surface.
+    pub(crate) fn test_dependency_plan(
+        &self,
+        dependencies: &[DependencySpec],
+    ) -> CliResult<Option<&crate::cli::commands::build::OvenDirectRustcPlanSelection>> {
+        if self.authority.payload.test_dependency_envelope.is_none() {
+            return Ok(None);
+        }
+        let promoted = crate::cli::commands::build::promoted_oven_test_dependencies(&ResolvedDependencies {
+            dependencies: dependencies.to_vec(),
+            dev_dependencies: Vec::new(),
+        })?;
+        if !project_inspection_authority_supports_dependencies(&self.authority.payload, &promoted) {
+            return Err(project_inspection_selection_mismatch("this test dependency subset"));
+        }
+        if !project_inspection_test_dependency_envelope_supports_dependencies(&self.authority.payload, &promoted)
+            .map_err(|error| CliError::failure(error.to_string()))?
+        {
+            return Err(CliError::failure(
+                "Oven Alpha project inspection authority has a missing, stale, or incompatible test dependency root; rerun `incan oven bake --project .`",
+            ));
+        }
+        self.test_dependency_plan.as_ref().map(Some).ok_or_else(|| {
+            CliError::failure(
+                "project inspection authority lost its exact test dependency plan while retaining its role",
+            )
+        })
+    }
+
+    /// Bind generated test receipts to the exact project authority selected once for this command.
+    pub(crate) fn authority_identity(&self) -> &str {
+        &self.authority.identity
+    }
+
+    /// Project the one complete exact authority for one generated test batch.
+    fn install_for_dependencies(&self, manifest_dir: &Path, dependencies: &[DependencySpec]) -> CliResult<bool> {
+        let registry_dependency_count = dependencies
+            .iter()
+            .filter(|dependency| matches!(dependency.source, crate::manifest::DependencySource::Registry))
+            .count();
+        if registry_dependency_count == 0 {
+            // The exact project/output/authority leases are still the conventional project's command authority. No
+            // registry projection is needed, but this must not fall through to generic compatibility selection.
+            return Ok(true);
+        }
+        if !project_inspection_authority_supports_dependencies(&self.authority.payload, dependencies) {
+            return Err(project_inspection_selection_mismatch(
+                "the requested normal and dev registry dependencies",
+            ));
+        }
+        crate::rust_inspect::write_sealed_oven_inspection_source_authority(manifest_dir, self.sources.clone())
+            .map_err(|error| CliError::failure(format!("failed to install Oven Rust source authority: {error}")))?;
+        if let Some(lock) = self.registry_lock_source.as_deref() {
+            install_oven_registry_lock(lock, &manifest_dir.join("Cargo.lock"))?;
+        }
+        Ok(true)
+    }
+}
+
+#[cfg(feature = "rust_inspect")]
+fn project_inspection_selection_mismatch(requested_surface: &str) -> CliError {
+    CliError::failure(format!(
+        "Oven Alpha project inspection authority does not cover {requested_surface}. The command selected registry roots outside the completed project Loaf's baked dependency surface. A command-local `--sdk-profile` or package-feature selection cannot reuse a Loaf baked for different roots. Use the baked selection; for a different SDK profile, persist it in `[sdk]` in `incan.toml` and rebake; for different package features, rerun `incan oven bake --project .` with the same feature flags."
+    ))
+}
+
+/// Resolve the exact direct registry roots whose source trees must be available while checking one project.
+/// Translate declared registry dependencies into the exact root selectors shared by source inspection and the
+/// explicit Oven publisher. Keeping this conversion here gives both phases one package/rename/version boundary.
+pub(crate) fn inspection_packages_for_dependencies(
+    dependencies: &[DependencySpec],
+) -> CliResult<Vec<OvenLegacyCargoInspectionPackage>> {
+    let mut packages = dependencies
+        .iter()
+        .filter(|dependency| matches!(dependency.source, crate::manifest::DependencySource::Registry))
+        .map(|dependency| {
+            let package = dependency.package.as_deref().unwrap_or(&dependency.crate_name);
+            let version_requirement = dependency.version.as_deref().ok_or_else(|| {
+                CliError::failure(format!(
+                    "Oven inspection source declaration for `{package}` is missing its locked version requirement"
+                ))
+            })?;
+            Ok(OvenLegacyCargoInspectionPackage {
+                package: package.to_string(),
+                version_requirement: version_requirement.to_string(),
+            })
+        })
+        .collect::<CliResult<Vec<_>>>()?;
+    packages.sort();
+    packages.dedup();
+    Ok(packages)
+}
+
+/// Acquire source authority only while the user explicitly publishes a project Loaf.
+///
+/// This is deliberately a metadata-only, locked/offline Cargo invocation. Its copied, digested source trees drive
+/// the immediate direct inspection pass; the following project publisher seals the same checked package closure into
+/// the receipt-bound plan. Normal build, run, and test never reach this helper.
+#[cfg(feature = "rust_inspect")]
+fn acquire_explicit_project_inspection_sources(
+    manifest_dir: &Path,
+    features: &[String],
+    dependencies: &[DependencySpec],
+    release_registry_lock: Option<&Path>,
+) -> CliResult<()> {
+    let authority_root = manifest_dir.join("oven-inspection-authority");
+    fs::create_dir_all(&authority_root).map_err(|error| {
+        CliError::failure(format!(
+            "failed to create explicit Oven inspection-source authority at {}: {error}",
+            authority_root.display()
+        ))
+    })?;
+    let packages = inspection_packages_for_dependencies(dependencies)?;
+    let cargo = resolved_cargo_executable()
+        .map_err(|error| CliError::failure(format!("cannot resolve Cargo for explicit Oven bake: {error}")))?;
+    let sources = explicit_project_bake_inspection_sources(
+        &cargo,
+        &manifest_dir.join("Cargo.toml"),
+        features,
+        &packages,
+        &authority_root,
+        release_registry_lock,
+    )
+    .map_err(|error| CliError::failure(error.to_string()))?;
+    let sources = sources
+        .into_iter()
+        .map(|source| crate::rust_inspect::OvenInspectionRegistrySource {
+            package: source.package,
+            version: source.version,
+            registry: source.registry,
+            checksum: source.checksum,
+            features: source.features,
+            source_root: source.source_root,
+            source_digest: source.source_digest,
+        })
+        .collect();
+    crate::rust_inspect::write_sealed_oven_inspection_source_authority(manifest_dir, sources)
+        .map(|_| ())
+        .map_err(|error| CliError::failure(format!("failed to install explicit Oven inspection authority: {error}")))
 }
 
 /// Install a sealed registry lock as writable caller-owned inspection state.
@@ -510,6 +1105,35 @@ fn install_oven_registry_lock(source: &Path, destination: &Path) -> CliResult<()
             source.display()
         ))
     })
+}
+
+/// Require the exact checked graph whenever a Loaf supplies registry source authority.
+///
+/// The Rust-inspection loader may otherwise see the copied source directories while resolving their dependencies
+/// against ambient state. A missing lock is an invalid Loaf, not permission to consult Cargo or a local registry.
+#[cfg(feature = "rust_inspect")]
+fn install_required_oven_registry_lock(
+    has_registry_sources: bool,
+    artifact_root: &Path,
+    destination: &Path,
+) -> CliResult<()> {
+    if !has_registry_sources {
+        return Ok(());
+    }
+    let sealed_lock = artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+    let metadata = fs::symlink_metadata(&sealed_lock).map_err(|error| {
+        CliError::failure(format!(
+            "selected Oven Loaf declares registry sources but lacks its sealed Cargo.lock at {}: {error}",
+            sealed_lock.display()
+        ))
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(CliError::failure(format!(
+            "selected Oven Loaf declares registry sources but its sealed Cargo.lock is not a regular file at {}",
+            sealed_lock.display()
+        )));
+    }
+    install_oven_registry_lock(&sealed_lock, destination)
 }
 
 /// Prepare the rust-inspect workspace needed before metadata-backed typechecking.
@@ -618,6 +1242,8 @@ pub(crate) fn prepare_rust_inspect_typecheck_workspace(
             build_unit_inputs: &oven_build_inputs,
             registry_dependencies: &lock_resolution.resolved.dependencies,
         }),
+        prepared_project_source_authorities: None,
+        explicit_oven_bake: false,
     })?;
     Ok(manifest_dir.map(|workspace| PreparedRustInspectTypecheckWorkspace {
         manifest_dir: workspace.manifest_dir,
@@ -698,6 +1324,7 @@ pub(crate) fn resolve_lock_context(request: LockResolutionRequest<'_>) -> CliRes
             cargo_features,
             package_features.unwrap_or(&default_package_features),
             sdk_profile_override,
+            None,
             None,
         )?
     } else {
@@ -804,6 +1431,16 @@ pub(crate) fn resolve_lock_context(request: LockResolutionRequest<'_>) -> CliRes
 ///
 /// This derives the same manifest/source/semantic fingerprint from the active SDK inventory and parser-visible
 /// dependency metadata without launching Cargo to make missing state appear.
+pub(crate) struct OvenLockValidationRequest<'a> {
+    pub project_root: &'a Path,
+    pub manifest: Option<&'a ProjectManifest>,
+    pub entry_file: &'a Path,
+    pub cargo_features: &'a CargoFeatureSelection,
+    pub cargo_policy: &'a CargoPolicy,
+    pub package_features: &'a FeatureSelection,
+    pub sdk_profile_override: Option<&'a str>,
+}
+
 pub(crate) fn validate_oven_lock_policy(
     project_root: &Path,
     manifest: Option<&ProjectManifest>,
@@ -813,6 +1450,41 @@ pub(crate) fn validate_oven_lock_policy(
     package_features: &FeatureSelection,
     sdk_profile_override: Option<&str>,
 ) -> CliResult<()> {
+    validate_oven_lock_policy_impl(
+        OvenLockValidationRequest {
+            project_root,
+            manifest,
+            entry_file,
+            cargo_features,
+            cargo_policy,
+            package_features,
+            sdk_profile_override,
+        },
+        None,
+    )
+}
+
+/// Validate strict lock policy using the compilation session already owned by the invoking command.
+pub(crate) fn validate_oven_lock_policy_with_session(
+    request: OvenLockValidationRequest<'_>,
+    session: &CompilationSession,
+) -> CliResult<()> {
+    validate_oven_lock_policy_impl(request, Some(session))
+}
+
+fn validate_oven_lock_policy_impl(
+    request: OvenLockValidationRequest<'_>,
+    command_session: Option<&CompilationSession>,
+) -> CliResult<()> {
+    let OvenLockValidationRequest {
+        project_root,
+        manifest,
+        entry_file,
+        cargo_features,
+        cargo_policy,
+        package_features,
+        sdk_profile_override,
+    } = request;
     if !cargo_policy.locked && !cargo_policy.frozen {
         return Ok(());
     }
@@ -829,6 +1501,7 @@ pub(crate) fn validate_oven_lock_policy(
             cargo_features,
             package_features,
             sdk_profile_override,
+            command_session,
         )?;
         let mut resolved = context.resolved;
         merge_project_requirement_dependencies(&mut resolved, &context.project_requirements)?;
@@ -858,6 +1531,7 @@ pub(crate) fn validate_oven_lock_policy(
         package_features,
         sdk_profile_override,
         None,
+        command_session,
     )?
     .ok_or_else(|| CliError::failure("incan lock requires a FILE argument or at least one [project.scripts] entry"))?;
     let mut resolved = context.resolved;
@@ -939,6 +1613,7 @@ fn resolve_workspace_lock_payload(request: WorkspaceLockResolutionRequest<'_>) -
         cargo_features,
         package_features,
         sdk_profile_override,
+        None,
     )?;
     let mut resolved = context.resolved;
     let requirements = context.project_requirements;
@@ -1015,18 +1690,46 @@ fn resolve_workspace_lock_payload(request: WorkspaceLockResolutionRequest<'_>) -
     })
 }
 
-/// Fully collected dependency inputs that define a manifest project's lock freshness surface.
+/// Fully collected dependency inputs that define a project or workspace lock's freshness surface.
 struct ProjectLockContext {
     resolved: ResolvedDependencies,
     project_requirements: ProjectRequirements,
     semantic: SemanticLockState,
 }
 
-/// The complete dependency inputs for a canonical workspace-root lockfile.
-struct WorkspaceLockContext {
-    resolved: ResolvedDependencies,
-    project_requirements: ProjectRequirements,
-    semantic: SemanticLockState,
+/// Canonical lock publication retained by one explicit project bake.
+///
+/// The dependency surface is the exact normal and test closure used to publish `incan.lock`. Keeping it behind this
+/// immutable projection prevents source-authority publication from rediscovering the same project graph.
+pub(crate) struct PublishedOvenProjectLock {
+    dependency_surface: ResolvedDependencies,
+}
+
+impl PublishedOvenProjectLock {
+    pub(crate) fn dependency_surface(&self) -> &ResolvedDependencies {
+        &self.dependency_surface
+    }
+}
+
+/// Publish the canonical project or workspace lock and retain its exact dependency surface for inspection authority.
+///
+/// Test-only imports and provider requirements are included in the same whole-project walk used by `incan lock`.
+/// The explicit baker passes this returned surface forward instead of entering the collector a second time.
+pub(crate) fn publish_oven_project_lock(
+    project_root: &Path,
+    entrypoint: &Path,
+    package_features: &FeatureSelection,
+) -> CliResult<PublishedOvenProjectLock> {
+    let manifest = ProjectManifest::discover(project_root)
+        .map_err(|error| CliError::failure(error.to_string()))?
+        .ok_or_else(|| CliError::failure("explicit Oven project bake requires an incan.toml project"))?;
+    enforce_project_toolchain_constraint(&manifest)?;
+    let cargo_features = CargoFeatureSelection::default().normalized();
+    let context =
+        collect_and_publish_project_lock(&manifest, Some(entrypoint), &cargo_features, package_features, None)?;
+    Ok(PublishedOvenProjectLock {
+        dependency_surface: context.resolved,
+    })
 }
 
 /// Collect every member's effective dependency inputs before lock generation.
@@ -1039,7 +1742,8 @@ fn collect_workspace_lock_context(
     cargo_features: &CargoFeatureSelection,
     package_features: &FeatureSelection,
     sdk_profile_override: Option<&str>,
-) -> CliResult<WorkspaceLockContext> {
+    command_session: Option<&CompilationSession>,
+) -> CliResult<ProjectLockContext> {
     let explicit_entry = entry_file.map(resolve_explicit_lock_entry).transpose()?;
     let explicit_entry_owner = explicit_entry
         .as_deref()
@@ -1075,6 +1779,12 @@ fn collect_workspace_lock_context(
             package_features,
             sdk_profile_override,
             Some(workspace),
+            command_session.filter(|session| {
+                session
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|session_manifest| project_roots_match(session_manifest.project_root(), member.root()))
+            }),
         )?
         else {
             continue;
@@ -1092,7 +1802,7 @@ fn collect_workspace_lock_context(
         ));
     }
     let semantic = workspace_semantic_lock_state(workspace.root(), member_semantics).map_err(CliError::failure)?;
-    Ok(WorkspaceLockContext {
+    Ok(ProjectLockContext {
         resolved,
         project_requirements,
         semantic,
@@ -1263,7 +1973,6 @@ fn merge_workspace_project_requirements(
 struct TestLockInputs {
     inline_imports: Vec<InlineRustImport>,
     project_requirement_modules: Vec<ParsedModule>,
-    provider_module_groups: Vec<Vec<ParsedModule>>,
 }
 
 /// Include provider imports scoped inside `module tests:` when building the project-wide lock context.
@@ -1317,6 +2026,14 @@ fn project_lock_entry_paths(manifest: &ProjectManifest, explicit_entry_file: Opt
     paths.into_iter().collect()
 }
 
+/// Compare project ownership independently of the caller's relative or symlinked spelling.
+fn project_roots_match(left: &Path, right: &Path) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
 /// Collect the project-wide script and owned test dependency inputs used for lock generation and freshness checks.
 ///
 /// When `workspace` is present, descendant member tests are excluded so every test is resolved against the effective
@@ -1328,110 +2045,117 @@ fn collect_project_lock_context(
     package_features: &FeatureSelection,
     sdk_profile_override: Option<&str>,
     workspace: Option<&WorkspaceGraph>,
+    command_session: Option<&CompilationSession>,
 ) -> CliResult<Option<ProjectLockContext>> {
-    let entry_paths = project_lock_entry_paths(manifest, explicit_entry_file);
-    if entry_paths.is_empty() {
+    #[cfg(test)]
+    record_project_lock_context_collection();
+    let command_session_manifest = command_session
+        .map(|session| {
+            session.manifest.as_ref().ok_or_else(|| {
+                CliError::failure(format!(
+                    "project lock collection has no manifest authority for {}",
+                    manifest.project_root().display()
+                ))
+            })
+        })
+        .transpose()?;
+    if command_session_manifest
+        .is_some_and(|session_manifest| !project_roots_match(session_manifest.project_root(), manifest.project_root()))
+    {
+        return Err(CliError::failure(format!(
+            "command-owned compilation session belongs to a different project than {}",
+            manifest.project_root().display()
+        )));
+    }
+    let seed_manifest = command_session_manifest.unwrap_or(manifest);
+    let seed_entry_paths = project_lock_entry_paths(seed_manifest, explicit_entry_file);
+    if seed_entry_paths.is_empty() {
         return Ok(None);
     }
 
-    let sdk_inventory = discover_active_sdk_inventory()?;
-    let package_feature_plan =
-        PackageFeaturePlan::resolve_with_sdk_inventory(manifest, package_features, sdk_inventory.as_deref())
-            .map_err(|error| CliError::failure(error.to_string()))?;
-    let active_dependencies = package_feature_plan
-        .root_package()
-        .map(|package| package.active_dependencies.clone())
-        .unwrap_or_default();
+    let session_entry = seed_entry_paths
+        .first()
+        .ok_or_else(|| CliError::failure("project lock collection lost its source entrypoints"))?;
+    let discovered_session = if command_session.is_none() {
+        #[cfg(test)]
+        record_project_lock_session_discovery();
+        Some(CompilationSession::discover_for_oven(
+            session_entry,
+            package_features,
+            sdk_profile_override,
+        )?)
+    } else {
+        None
+    };
+    let session = command_session
+        .or(discovered_session.as_ref())
+        .ok_or_else(|| CliError::failure("project lock collection lost its compilation session"))?;
+    let session_manifest = session.manifest.as_ref().ok_or_else(|| {
+        CliError::failure(format!(
+            "project lock collection has no manifest authority for {}",
+            manifest.project_root().display()
+        ))
+    })?;
+    if command_session.is_none() && !project_roots_match(session_manifest.project_root(), manifest.project_root()) {
+        return Err(CliError::failure(format!(
+            "command-owned compilation session belongs to a different project than {}",
+            manifest.project_root().display()
+        )));
+    }
+    #[cfg(test)]
+    record_project_lock_authority_snapshot_read();
+    let entry_paths = project_lock_entry_paths(session_manifest, explicit_entry_file);
+    if entry_paths.is_empty() {
+        return Ok(None);
+    }
     let mut modules = Vec::new();
-    let mut provider_module_groups = Vec::new();
     for entry_path in entry_paths {
-        let session = CompilationSession::discover_for_oven(&entry_path, package_features, sdk_profile_override)?;
-        let entry_modules = collect_modules_detailed_with_session(entry_path.clone(), &session)
+        let entry_modules = collect_modules_detailed_with_session(entry_path.clone(), session)
             .map_err(|failure| CliError::failure(failure.render_human()))?;
         modules.extend(entry_modules.iter().cloned());
-        provider_module_groups.push(entry_modules);
     }
 
-    // Each Oven session above prepares a missing local `pub::` dependency before collecting its entry. Re-open the
-    // index only after that preparation so the first published lock records the same checked artifact identity that
-    // every later `lock` observes. A parser-source placeholder here would make the first lock stale as soon as the
-    // preparation wrote its `.incnlib` manifest.
-    let library_manifest_index = LibraryManifestIndex::from_project_manifest_dependencies(
-        manifest,
-        active_dependencies.iter().map(String::as_str),
-    );
-    let library_imported_vocab = library_manifest_index.library_imported_vocab();
-    let library_imported_dsl_surfaces = library_manifest_index.library_imported_dsl_surfaces();
-
-    let sdk_selection =
-        SdkComponentSelection::from_manifest_with_profile_override(Some(manifest), sdk_profile_override);
-    let sdk_components = sdk_inventory
-        .as_ref()
-        .map(|inventory| {
-            resolve_sdk_component_selection(inventory, &sdk_selection, Some(manifest), sdk_profile_override, true)
-        })
-        .transpose()?;
-    let provider_catalog = ProviderPlan::from_resolved_inputs(
-        library_manifest_index.clone(),
-        Some(&package_feature_plan),
-        sdk_inventory.as_deref(),
-        sdk_components.as_ref(),
-        std::iter::empty(),
-    )
-    .map_err(|error| CliError::failure(error.to_string()))?;
-
-    let test_inputs = collect_test_lock_inputs(
-        manifest.project_root(),
+    let TestLockInputs {
+        inline_imports: test_inline_imports,
+        project_requirement_modules: test_requirement_modules,
+    } = collect_test_lock_inputs(
+        session_manifest.project_root(),
         workspace,
-        Some(&library_imported_vocab),
-        Some(&library_imported_dsl_surfaces),
-        Some(&library_manifest_index),
-        &provider_catalog,
+        Some(&session.library_imported_vocab),
+        Some(&session.library_imported_dsl_surfaces),
+        Some(&session.library_manifest_index),
+        session.provider_plan.as_ref(),
+        session,
     )?;
-
-    let mut project_requirement_modules = modules.clone();
-    project_requirement_modules.extend(test_inputs.project_requirement_modules);
-    let mut project_requirements = collect_project_requirements(&project_requirement_modules, &library_manifest_index)?;
-    let provider_plan = ProviderPlan::from_resolved_inputs(
-        library_manifest_index.clone(),
-        Some(&package_feature_plan),
-        sdk_inventory.as_deref(),
-        sdk_components.as_ref(),
-        lock_provider_used_module_paths(&project_requirement_modules),
-    )
-    .map_err(|error| CliError::failure(error.to_string()))?;
-    provider_module_groups.extend(test_inputs.provider_module_groups.iter().cloned());
-    for module_group in &provider_module_groups {
-        let entry_provider_plan = ProviderPlan::from_resolved_inputs(
-            library_manifest_index.clone(),
-            Some(&package_feature_plan),
-            sdk_inventory.as_deref(),
-            sdk_components.as_ref(),
-            lock_provider_used_module_paths(module_group),
-        )
-        .map_err(|error| CliError::failure(error.to_string()))?;
-        extend_requirements_with_provider_plan(&mut project_requirements, &entry_provider_plan)?;
-    }
-    let semantic_sdk_paths = semantic_sdk_path_dependencies(&project_requirements);
-    let semantic = semantic_lock_state(
-        manifest.project_root(),
-        manifest.oven_interop(),
-        sdk_inventory.as_deref(),
-        sdk_components.as_ref(),
-        Some(&package_feature_plan),
-        &provider_plan,
-        &semantic_sdk_paths,
-    )
-    .map_err(CliError::failure)?;
 
     let mut inline_imports = Vec::new();
     for module in &modules {
         inline_imports.extend(collect_rust_dependency_uses(module, false));
     }
-    inline_imports.extend(test_inputs.inline_imports);
+    inline_imports.extend(test_inline_imports);
+    let mut project_requirement_modules = modules;
+    project_requirement_modules.extend(test_requirement_modules);
+    let mut project_requirements =
+        collect_project_requirements(&project_requirement_modules, &session.library_manifest_index)?;
+    #[cfg(test)]
+    record_project_lock_provider_plan_projection();
+    let provider_plan =
+        session.provider_plan_for_used_module_paths(lock_provider_used_module_paths(&project_requirement_modules))?;
+    extend_requirements_with_provider_plan(&mut project_requirements, &provider_plan)?;
+    let semantic_sdk_paths = semantic_sdk_path_dependencies(&project_requirements);
+    let semantic = semantic_lock_state(
+        session_manifest.project_root(),
+        session_manifest.oven_interop(),
+        session.sdk_inventory.as_deref(),
+        session.sdk_components.as_ref(),
+        session.package_feature_plan.as_ref(),
+        &provider_plan,
+        &semantic_sdk_paths,
+    )
+    .map_err(CliError::failure)?;
 
-    let mut resolved =
-        resolve_reachable_dependencies(Some(manifest), &inline_imports, true, cargo_features).map_err(|errors| {
+    let mut resolved = resolve_reachable_dependencies(Some(session_manifest), &inline_imports, true, cargo_features)
+        .map_err(|errors| {
             let mut msg = String::new();
             let sources = build_source_map(&project_requirement_modules);
             for err in errors {
@@ -1831,11 +2555,11 @@ fn collect_test_lock_inputs(
     library_imported_dsl_surfaces: Option<&parser::ImportedLibraryDslSurfaces>,
     library_manifest_index: Option<&LibraryManifestIndex>,
     provider_plan: &ProviderPlan,
+    session: &CompilationSession,
 ) -> CliResult<TestLockInputs> {
     let mut inline_imports = Vec::new();
     let mut project_requirement_modules = Vec::new();
-    let mut provider_module_groups = Vec::new();
-    let test_files = discover_project_test_files(project_root, workspace);
+    let test_files = discover_project_test_files(project_root, workspace, session);
     let source_root = project_root.join("src");
 
     for file_path in test_files {
@@ -1888,22 +2612,23 @@ fn collect_test_lock_inputs(
         for module in &source_modules {
             inline_imports.extend(collect_rust_dependency_uses(module, false));
         }
-        let mut provider_modules = vec![test_module];
-        provider_modules.extend(source_modules);
-        project_requirement_modules.extend(provider_modules.iter().cloned());
-        provider_module_groups.push(provider_modules);
+        project_requirement_modules.push(test_module);
+        project_requirement_modules.extend(source_modules);
     }
 
     Ok(TestLockInputs {
         inline_imports,
         project_requirement_modules,
-        provider_module_groups,
     })
 }
 
 /// Discover test files owned by one project, excluding descendant workspace members in rooted workspaces.
-fn discover_project_test_files(project_root: &Path, workspace: Option<&WorkspaceGraph>) -> Vec<PathBuf> {
-    crate::cli::test_runner::discover_test_files(project_root)
+fn discover_project_test_files(
+    project_root: &Path,
+    workspace: Option<&WorkspaceGraph>,
+    session: &CompilationSession,
+) -> Vec<PathBuf> {
+    crate::cli::test_runner::discover_test_files_with_compilation_session(project_root, session)
         .into_iter()
         .filter(|path| {
             workspace.is_none_or(|graph| {
@@ -2071,6 +2796,95 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn registry_sources_refuse_a_loaf_without_its_sealed_lock() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = tempfile::tempdir()?;
+        let destination = temp_dir.path().join("Cargo.lock");
+
+        let Err(error) = install_required_oven_registry_lock(true, temp_dir.path(), &destination) else {
+            return Err(std::io::Error::other("missing sealed registry lock was accepted").into());
+        };
+
+        assert!(error.to_string().contains("declares registry sources"));
+        assert!(!destination.exists());
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn project_inspection_selection_mismatch_explains_the_transient_selection_boundary() {
+        let diagnostic = project_inspection_selection_mismatch("the requested registry dependencies").to_string();
+
+        assert!(diagnostic.contains("command-local `--sdk-profile` or package-feature selection"));
+        assert!(diagnostic.contains("persist it in `[sdk]` in `incan.toml` and rebake"));
+        assert!(diagnostic.contains("with the same feature flags"));
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn custom_project_layout_cannot_fall_through_after_command_authority_mismatch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        fs::create_dir_all(project.path().join("library"))?;
+        fs::create_dir_all(project.path().join("bin"))?;
+        fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"custom-layout\"\n\n[project.scripts]\nworker = \"bin/worker.incn\"\n\n[build]\nsource-root = \"library\"\n",
+        )?;
+        fs::write(
+            project.path().join("library/lib.incn"),
+            "pub def value() -> int:\n    return 1\n",
+        )?;
+        fs::write(
+            project.path().join("bin/worker.incn"),
+            "def main() -> None:\n    pass\n",
+        )?;
+
+        assert!(!project.path().join("src/lib.incn").exists());
+        assert!(!project.path().join("src/main.incn").exists());
+        assert!(normal_inspection_requires_installed_project_authority(
+            project.path(),
+            false,
+            true,
+            false,
+        ));
+        assert!(!normal_inspection_requires_installed_project_authority(
+            project.path(),
+            false,
+            true,
+            true,
+        ));
+        assert!(!normal_inspection_requires_installed_project_authority(
+            project.path(),
+            true,
+            true,
+            false,
+        ));
+
+        let standalone = tempfile::tempdir()?;
+        assert!(!normal_inspection_requires_installed_project_authority(
+            standalone.path(),
+            false,
+            false,
+            false,
+        ));
+
+        let conventional = tempfile::tempdir()?;
+        fs::create_dir_all(conventional.path().join("src"))?;
+        fs::write(
+            conventional.path().join("src/main.incn"),
+            "def main() -> None:\n    pass\n",
+        )?;
+        assert!(normal_inspection_requires_installed_project_authority(
+            conventional.path(),
+            false,
+            false,
+            false,
+        ));
+        Ok(())
+    }
+
     #[test]
     fn oven_lock_generation_publishes_semantic_state_without_a_cargo_projection()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -2091,6 +2905,85 @@ mod tests {
             !state_dir.join("Cargo.toml").exists() && !state_dir.join("target").exists(),
             "Oven lock generation may retain its publication guard but must not create generated-Cargo lock state"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_oven_lock_publication_collects_once_and_retains_the_whole_dependency_surface()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let project_root = project.path();
+        fs::create_dir_all(project_root.join("src"))?;
+        fs::create_dir_all(project_root.join("tests"))?;
+        fs::write(
+            project_root.join("incan.toml"),
+            r#"[project]
+name = "single_lock_collection"
+version = "0.1.0"
+
+[project.scripts]
+main = "src/main.incn"
+worker = "src/worker.incn"
+
+[rust-dependencies]
+semver = "1"
+serde_json = "1"
+
+[rust-dev-dependencies]
+regex = "1"
+"#,
+        )?;
+        let main = project_root.join("src/main.incn");
+        fs::write(
+            &main,
+            "from rust::serde_json import Value\n\ndef main() -> None:\n    pass\n",
+        )?;
+        fs::write(
+            project_root.join("src/worker.incn"),
+            "from rust::semver import Version\n\ndef worker() -> None:\n    pass\n",
+        )?;
+        fs::write(
+            project_root.join("tests/test_match.incn"),
+            "from rust::regex import Regex\nfrom std.testing import test\n\n@test\ndef test_match() -> None:\n    assert True\n",
+        )?;
+
+        reset_project_lock_collection_metrics();
+        let publication = publish_oven_project_lock(project_root, &main, &FeatureSelection::default())?;
+        let metrics = project_lock_collection_metrics();
+        let normal_dependencies = publication
+            .dependency_surface()
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.crate_name.as_str())
+            .collect::<BTreeSet<_>>();
+        let dev_dependencies = publication
+            .dependency_surface()
+            .dev_dependencies
+            .iter()
+            .map(|dependency| dependency.crate_name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            metrics,
+            ProjectLockCollectionMetrics {
+                context_collections: 1,
+                session_discoveries: 1,
+                authority_snapshot_reads: 1,
+                provider_plan_projections: 1,
+            },
+            "one explicit publication must read one session authority and project one aggregate provider plan across every manifest entry",
+        );
+        assert!(normal_dependencies.is_superset(&BTreeSet::from(["semver", "serde_json"])));
+        assert!(normal_dependencies.is_subset(&BTreeSet::from([
+            "incan_stdlib_core",
+            "incan_stdlib_testing",
+            "semver",
+            "serde_json",
+        ])));
+        assert_eq!(dev_dependencies, BTreeSet::from(["regex"]));
+        let lock = IncanLock::load(&project_root.join("incan.lock"))?;
+        assert!(!lock.deps_fingerprint.is_empty());
+        assert_eq!(lock.cargo_lock_payload, INERT_CARGO_LOCK_PAYLOAD);
         Ok(())
     }
 
@@ -2153,7 +3046,13 @@ mod tests {
             "from internal import SessionContext\nfrom rust::tokio @ \"1\" import spawn\n",
         )?;
 
-        let inputs = collect_test_lock_inputs(project_root, None, None, None, None, &ProviderPlan::default())?;
+        let session = CompilationSession::discover_for_oven(
+            &project_root.join("tests/test_internal.incn"),
+            &FeatureSelection::default(),
+            None,
+        )?;
+        let inputs =
+            collect_test_lock_inputs(project_root, None, None, None, None, &ProviderPlan::default(), &session)?;
         let imports = inputs.inline_imports;
         let tokio = imports
             .iter()
@@ -2201,12 +3100,15 @@ name = "consumer"
         fs::write(&consumer_test, "def test_consumer() -> None:\n    pass\n")?;
 
         let workspace = WorkspaceGraph::load_from_root(root)?;
-        let root_files = discover_project_test_files(workspace.root(), Some(&workspace));
+        let root_session = CompilationSession::discover_for_oven(&root_test, &FeatureSelection::default(), None)?;
+        let root_files = discover_project_test_files(workspace.root(), Some(&workspace), &root_session);
         let consumer = workspace
             .members()
             .find(|member| member.name() == "consumer")
             .ok_or("consumer workspace member should exist")?;
-        let consumer_files = discover_project_test_files(consumer.root(), Some(&workspace));
+        let consumer_session =
+            CompilationSession::discover_for_oven(&consumer_test, &FeatureSelection::default(), None)?;
+        let consumer_files = discover_project_test_files(consumer.root(), Some(&workspace), &consumer_session);
         let mut expected_root_files = vec![fs::canonicalize(root_test)?, fs::canonicalize(nested_root_test)?];
         expected_root_files.sort();
 

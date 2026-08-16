@@ -10181,6 +10181,20 @@ module tests:
 "#,
         )?;
 
+        let mut bake_command = incan_command();
+        bake_command
+            .args(["oven", "bake", "--project", "."])
+            .current_dir(&*dir)
+            .env("CARGO_NET_OFFLINE", "true");
+        super::support::configure_explicit_oven_bake_command(&mut bake_command)?;
+        let bake_output = bake_command.output()?;
+        assert!(
+            bake_output.status.success(),
+            "expected one explicit Oven bake to prepare the complete inline/imported test project.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&bake_output.stdout),
+            String::from_utf8_lossy(&bake_output.stderr),
+        );
+
         let output = run_incan_test(&dir);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -11679,9 +11693,7 @@ def database() -> Database:
 
 mod rfc031_pub_import_integration_tests {
     use super::*;
-    use incan::library_manifest::{
-        FieldVisibilityExport, FunctionExport, LibraryManifest, ModelExport, ParamExport, TypeRef,
-    };
+    use incan::library_manifest::{FieldVisibilityExport, LibraryManifest, ModelExport, TypeRef};
     use incan::manifest::{INTERNAL_MANIFEST_OVERRIDE_ENV, INTERNAL_PROJECT_ROOT_OVERRIDE_ENV};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
@@ -11881,6 +11893,8 @@ impl<T, U> PairFactory<T, U> {
             tmp.path(),
             "[project]\nname = \"generic_json_return_repro\"\n\n[rust-dependencies.serde_json]\nversion = \"1.0\"\n",
             r#"from helpers import accept_value, parse_value
+from rust::serde_json import Value
+from rust::serde_json import from_str as json_parse
 
 
 def main() -> None:
@@ -11919,6 +11933,13 @@ def test_generic_json_result_infers_from_parameter_context() -> None:
     assert true
 "#,
         )?;
+        let project_bake = bake_project(tmp.path())?;
+        assert!(
+            project_bake.status.success(),
+            "expected one explicit Oven bake to prepare the generic JSON test dependency envelope.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&project_bake.stdout),
+            String::from_utf8_lossy(&project_bake.stderr)
+        );
         let test_output = run_test(&tests_dir)?;
         assert!(
             test_output.status.success(),
@@ -12002,7 +12023,7 @@ pub def exercise_callbacks() -> None:
 "#,
         )?;
 
-        let provider_build = run_build_lib(&provider_root)?;
+        let provider_build = bake_library_provider(&provider_root)?;
         assert!(
             provider_build.status.success(),
             "expected shared receiver-factory Rust contracts to compile in a provider.\nstdout:\n{}\nstderr:\n{}",
@@ -12081,6 +12102,13 @@ def main() -> None:
     exercise_callbacks()
 "#,
         )?;
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the receiver-factory package closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
         let consumer_build = run_build(&consumer_main, &tmp.path().join("consumer_out"))?;
         assert!(
             consumer_build.status.success(),
@@ -12161,6 +12189,332 @@ def main() -> None:
         run_timed_incan_command("incan build --lib", command)
     }
 
+    /// Publish one project's completed output and sealed dependency collection.
+    ///
+    /// Normal `build`, `run`, and `test` remain consumers. They cannot create this package handoff implicitly,
+    /// including when the project itself depends on a separately baked public provider.
+    fn bake_project(project_root: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        bake_project_with_package_features(project_root, &[])
+    }
+
+    /// Publish one project for an explicit package-feature selection.
+    fn bake_project_with_package_features(
+        project_root: &Path,
+        package_feature_args: &[&str],
+    ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        let mut command = super::incan_command();
+        command
+            .args(["oven", "bake", "--project", "."])
+            .args(package_feature_args)
+            .current_dir(project_root)
+            .env("CARGO_NET_OFFLINE", "true");
+        support::configure_explicit_oven_bake_command(&mut command)?;
+        run_timed_incan_command("incan oven bake --project", command)
+    }
+
+    /// Publish a public-library provider before a separate consumer imports its package Loaf.
+    fn bake_library_provider(project_root: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        bake_project(project_root)
+    }
+
+    /// Publish one source-backed provider whose checked vocabulary metadata and desugarer are part of the bake.
+    fn write_and_bake_source_vocab_fixture_provider(
+        root: &Path,
+        dependency_key: &str,
+        project_name: &str,
+        source: &str,
+        companion_package: &str,
+        companion_source: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let provider_root = root.join("deps").join(dependency_key);
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            format!(
+                "[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n"
+            ),
+        )?;
+        std::fs::write(provider_root.join("src/lib.incn"), source)?;
+        write_vocab_companion_crate_with_source(
+            &provider_root,
+            "vocab_companion",
+            companion_package,
+            companion_source,
+        )?;
+        let provider_bake = bake_library_provider(&provider_root)?;
+        assert!(
+            provider_bake.status.success(),
+            "expected source-backed {dependency_key} vocabulary fixture provider to bake.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_bake.stdout),
+            String::from_utf8_lossy(&provider_bake.stderr)
+        );
+        Ok(())
+    }
+
+    fn filterkit_vocab_companion_source() -> &'static str {
+        r#"use incan_vocab::{DesugarError, DesugarOutput, HelperBinding, IncanExpr, KeywordActivation, KeywordPlacement, KeywordRegistration, KeywordSpec, KeywordSurfaceKind, LibraryManifest, VocabDesugarer, VocabRegistration, VocabSyntaxNode};
+
+#[derive(Default)]
+struct FilterkitDesugarer;
+
+impl VocabDesugarer for FilterkitDesugarer {
+    fn desugar(&self, _node: &VocabSyntaxNode) -> Result<DesugarOutput, DesugarError> {
+        Ok(DesugarOutput::Expression(IncanExpr::Call {
+            callee: Box::new(IncanExpr::Helper("filter".to_string())),
+            args: vec![IncanExpr::Int(1)],
+        }))
+    }
+}
+
+pub fn library_vocab() -> VocabRegistration {
+    VocabRegistration::new()
+        .with_keyword_registration(KeywordRegistration {
+            activation: KeywordActivation::OnImport { namespace: "filterkit.dsl".to_string() },
+            keywords: vec![KeywordSpec {
+                name: "where".to_string(),
+                surface_kind: KeywordSurfaceKind::BlockDeclaration,
+                compound_tokens: Vec::new(),
+                placement: KeywordPlacement::TopLevel,
+            }],
+            valid_decorators: Vec::new(),
+        })
+        .with_library_manifest(LibraryManifest {
+            helper_bindings: vec![HelperBinding { key: "filter".to_string(), exported_name: "filter".to_string() }],
+            ..LibraryManifest::default()
+        })
+        .with_desugarer(FilterkitDesugarer)
+}
+
+incan_vocab::export_wasm_desugarer!(FilterkitDesugarer);
+"#
+    }
+
+    fn helperkit_vocab_companion_source() -> &'static str {
+        r#"use incan_vocab::{DesugarError, DesugarOutput, HelperBinding, IncanExpr, KeywordActivation, KeywordPlacement, KeywordRegistration, KeywordSpec, KeywordSurfaceKind, LibraryManifest, VocabDesugarer, VocabRegistration, VocabSyntaxNode};
+
+#[derive(Default)]
+struct HelperkitDesugarer;
+
+impl VocabDesugarer for HelperkitDesugarer {
+    fn desugar(&self, _node: &VocabSyntaxNode) -> Result<DesugarOutput, DesugarError> {
+        Ok(DesugarOutput::Expression(IncanExpr::Call {
+            callee: Box::new(IncanExpr::Helper("aggregate_as".to_string())),
+            args: vec![
+                IncanExpr::Call {
+                    callee: Box::new(IncanExpr::Helper("lit".to_string())),
+                    args: vec![IncanExpr::Int(5)],
+                },
+                IncanExpr::Str("total".to_string()),
+            ],
+        }))
+    }
+}
+
+pub fn library_vocab() -> VocabRegistration {
+    VocabRegistration::new()
+        .with_keyword_registration(KeywordRegistration {
+            activation: KeywordActivation::OnImport { namespace: "helperkit.dsl".to_string() },
+            keywords: vec![KeywordSpec {
+                name: "where".to_string(),
+                surface_kind: KeywordSurfaceKind::BlockDeclaration,
+                compound_tokens: Vec::new(),
+                placement: KeywordPlacement::TopLevel,
+            }],
+            valid_decorators: Vec::new(),
+        })
+        .with_library_manifest(LibraryManifest {
+            helper_bindings: vec![
+                HelperBinding { key: "lit".to_string(), exported_name: "lit".to_string() },
+                HelperBinding { key: "aggregate_as".to_string(), exported_name: "aggregate_as".to_string() },
+            ],
+            ..LibraryManifest::default()
+        })
+        .with_desugarer(HelperkitDesugarer)
+}
+
+incan_vocab::export_wasm_desugarer!(HelperkitDesugarer);
+"#
+    }
+
+    fn quality_vocab_companion_source() -> &'static str {
+        r#"use incan_vocab::{ClauseSurface, DeclarationSurface, DesugarError, DesugarOutput, DslSurface, IncanExpr, KeywordActivation, KeywordRegistration, KeywordSpec, LibraryManifest, ScopedSurfaceDescriptor, ScopedSurfaceReceiver, VocabBodyItem, VocabDesugarer, VocabRegistration, VocabSyntaxNode};
+
+#[derive(Default)]
+struct QualityDesugarer;
+
+impl VocabDesugarer for QualityDesugarer {
+    fn desugar(&self, node: &VocabSyntaxNode) -> Result<DesugarOutput, DesugarError> {
+        let VocabSyntaxNode::Declaration(declaration) = node else {
+            return Err(DesugarError::new("quality expects a declaration"));
+        };
+        let clauses = declaration
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                VocabBodyItem::Clause(clause) => Some(clause),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (keyword, compound_tokens) in [
+            ("FROM", Vec::<String>::new()),
+            ("REQUIRE", Vec::new()),
+            ("GROUP", vec!["BY".to_string()]),
+            ("EXPECT", Vec::new()),
+        ] {
+            if !clauses
+                .iter()
+                .any(|clause| clause.keyword == keyword && clause.compound_tokens == compound_tokens)
+            {
+                return Err(DesugarError::new(format!("quality request is missing {keyword}")));
+            }
+        }
+        Ok(DesugarOutput::Expression(IncanExpr::Int(7)))
+    }
+}
+
+pub fn library_vocab() -> VocabRegistration {
+    VocabRegistration::new()
+        .with_keyword_registration(KeywordRegistration {
+            activation: KeywordActivation::OnImport { namespace: "querykit.query".to_string() },
+            keywords: vec![
+                KeywordSpec::block("quality"),
+                KeywordSpec::block("FROM").in_block("quality"),
+                KeywordSpec::block("REQUIRE").in_block("quality"),
+                KeywordSpec::block("GROUP").with_compound_tokens(["BY"]).in_block("quality"),
+                KeywordSpec::block("EXPECT").in_block("quality"),
+            ],
+            valid_decorators: Vec::new(),
+        })
+        .with_surface(
+            DslSurface::on_import("querykit.query")
+                .with_declaration(
+                    DeclarationSurface::named("quality")
+                        .with_mixed_body()
+                        .desugars_to_expression()
+                        .with_clauses([
+                            ClauseSurface::expr("FROM").optional(),
+                            ClauseSurface::expr_list("GROUP BY").repeating().after("FROM"),
+                            ClauseSurface::expr_list("EXPECT").repeating().after("FROM"),
+                            ClauseSurface::expr_list("REQUIRE").repeating().after("FROM"),
+                        ]),
+                )
+                .with_scoped_surface(
+                    ScopedSurfaceDescriptor::leading_dot_path("quality.group.field")
+                        .in_clause_body("quality", "GROUP")
+                        .with_receiver(ScopedSurfaceReceiver::clause("FROM")),
+                ),
+        )
+        .with_library_manifest(LibraryManifest::default())
+        .with_desugarer(QualityDesugarer)
+}
+
+incan_vocab::export_wasm_desugarer!(QualityDesugarer);
+"#
+    }
+
+    fn querykit_expression_clause_vocab_companion_source() -> &'static str {
+        r#"use incan_vocab::{ClauseSurface, DeclarationSurface, DesugarError, DesugarOutput, DslSurface, IncanExpr, VocabBodyItem, VocabDesugarer, VocabRegistration, VocabSyntaxNode};
+
+#[derive(Default)]
+struct QuerykitExpressionClauseDesugarer;
+
+impl VocabDesugarer for QuerykitExpressionClauseDesugarer {
+    fn desugar(&self, node: &VocabSyntaxNode) -> Result<DesugarOutput, DesugarError> {
+        let VocabSyntaxNode::Declaration(declaration) = node else {
+            return Err(DesugarError::new("query expects a declaration"));
+        };
+        if !declaration.body.iter().any(|item| {
+            matches!(item, VocabBodyItem::Clause(clause) if clause.keyword == "SELECT")
+        }) {
+            return Err(DesugarError::new("missing SELECT clause payload"));
+        }
+        Ok(DesugarOutput::Expression(IncanExpr::Int(7)))
+    }
+}
+
+pub fn library_vocab() -> VocabRegistration {
+    VocabRegistration::new()
+        .with_surface(
+            DslSurface::on_import("querykit.query").with_declaration(
+                DeclarationSurface::named("query")
+                    .with_clause_body()
+                    .desugars_to_expression()
+                    .with_clauses([
+                        ClauseSurface::expr("FROM").required(),
+                        ClauseSurface::expr_list("GROUP BY").optional(),
+                        ClauseSurface::expr_list("SELECT").required(),
+                        ClauseSurface::expr_list("ORDER BY").optional(),
+                        ClauseSurface::nested_items("WINDOW BY").optional(),
+                    ]),
+            ),
+        )
+        .with_desugarer(QuerykitExpressionClauseDesugarer)
+}
+
+incan_vocab::export_wasm_desugarer!(QuerykitExpressionClauseDesugarer);
+"#
+    }
+
+    fn querykit_helper_vocab_companion_source() -> &'static str {
+        r#"use incan_vocab::{DesugarError, DesugarOutput, HelperBinding, IncanExpr, KeywordActivation, KeywordPlacement, KeywordRegistration, KeywordSpec, KeywordSurfaceKind, LibraryManifest, VocabDesugarer, VocabRegistration, VocabSyntaxNode};
+
+#[derive(Default)]
+struct QuerykitHelperDesugarer;
+
+impl VocabDesugarer for QuerykitHelperDesugarer {
+    fn desugar(&self, _node: &VocabSyntaxNode) -> Result<DesugarOutput, DesugarError> {
+        Ok(DesugarOutput::Expression(IncanExpr::Tuple(vec![
+            IncanExpr::Call {
+                callee: Box::new(IncanExpr::Helper("aggregate_as".to_string())),
+                args: vec![
+                    IncanExpr::Call {
+                        callee: Box::new(IncanExpr::Helper("lit".to_string())),
+                        args: vec![IncanExpr::Int(5)],
+                    },
+                    IncanExpr::Str("adjusted".to_string()),
+                ],
+            },
+            IncanExpr::Call {
+                callee: Box::new(IncanExpr::Helper("aggregate_as".to_string())),
+                args: vec![
+                    IncanExpr::Call {
+                        callee: Box::new(IncanExpr::Helper("count".to_string())),
+                        args: Vec::new(),
+                    },
+                    IncanExpr::Str("order_count".to_string()),
+                ],
+            },
+        ])))
+    }
+}
+
+pub fn library_vocab() -> VocabRegistration {
+    VocabRegistration::new()
+        .with_keyword_registration(KeywordRegistration {
+            activation: KeywordActivation::OnImport { namespace: "querykit.dsl".to_string() },
+            keywords: vec![KeywordSpec {
+                name: "where".to_string(),
+                surface_kind: KeywordSurfaceKind::BlockDeclaration,
+                compound_tokens: Vec::new(),
+                placement: KeywordPlacement::TopLevel,
+            }],
+            valid_decorators: Vec::new(),
+        })
+        .with_library_manifest(LibraryManifest {
+            helper_bindings: vec![
+                HelperBinding { key: "lit".to_string(), exported_name: "lit".to_string() },
+                HelperBinding { key: "count".to_string(), exported_name: "count".to_string() },
+                HelperBinding { key: "aggregate_as".to_string(), exported_name: "aggregate_as".to_string() },
+            ],
+            ..LibraryManifest::default()
+        })
+        .with_desugarer(QuerykitHelperDesugarer)
+}
+
+incan_vocab::export_wasm_desugarer!(QuerykitHelperDesugarer);
+"#
+    }
+
     /// Run one single-library build with the machine-readable phase report used by Oven timing checks.
     fn run_profiled_build_lib(
         label: &str,
@@ -12174,15 +12528,16 @@ def main() -> None:
         run_profiled_build_command(label, command)
     }
 
-    /// Run the normal Oven library route with a failing Cargo binary first on PATH.
+    /// Run a normal Oven route with a failing Cargo binary first on PATH.
     ///
-    /// This is a behavioural boundary: a successful build proves that both library materialization and vocabulary
-    /// extraction used only the selected direct-rustc closure rather than merely avoiding Cargo in an outer command.
+    /// This is a behavioural boundary: a successful command proves that its completed-Loaf materialization used only
+    /// the selected direct-rustc closure rather than merely avoiding Cargo in an outer command.
     #[cfg(unix)]
-    fn run_build_lib_with_failing_cargo_guard(
+    fn run_incan_with_failing_cargo_guard(
         project_root: &Path,
         guard_root: &Path,
         cargo_marker: &Path,
+        args: &[&str],
     ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(guard_root)?;
         let cargo_guard = guard_root.join("cargo");
@@ -12198,7 +12553,7 @@ def main() -> None:
             paths.extend(std::env::split_paths(&inherited));
         }
         Ok(super::incan_command()
-            .args(["build", "--lib"])
+            .args(args)
             .current_dir(project_root)
             .env("CARGO_NET_OFFLINE", "true")
             .env("PATH", std::env::join_paths(paths)?)
@@ -12331,7 +12686,7 @@ pub def marker() -> int:
 "#,
         )?;
 
-        let provider_build = run_build_lib(&provider_root)?;
+        let provider_build = bake_library_provider(&provider_root)?;
         assert!(
             provider_build.status.success(),
             "expected #902 provider library build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -12360,6 +12715,10 @@ pub def bridged() -> int:
 pub def bridged_record() -> Record:
   return Record(value=marker())
 "#,
+        )?;
+        std::fs::write(
+            consumer_root.join("src/lib.incn"),
+            "pub def bake_marker() -> int:\n  return 1\n",
         )?;
         std::fs::write(
             consumer_root.join("tests/aaa_compiled_annotation_test.incn"),
@@ -12395,6 +12754,14 @@ def test_direct_import() -> None:
   assert bridged() == 7
 "#,
         )?;
+
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the compiled-provider test closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
 
         let batch = run_test(&consumer_root.join("tests"))?;
         let stdout = String::from_utf8_lossy(&batch.stdout);
@@ -12465,7 +12832,7 @@ pub def desc(expr: ColumnExpr) -> ColumnExpr:
             "pub from facade import ColumnExpr, ColumnRefExpr, SortExpr, Frame, frame, col, desc\n",
         )?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected boundarykit provider library build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -12476,7 +12843,7 @@ pub def desc(expr: ColumnExpr) -> ColumnExpr:
         let consumer_root = tmp.path().join("consumer");
         let main_path = write_project_files(
             &consumer_root,
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nboundarykit = { path = \"../boundarykit_provider\" }\n",
+            "[project]\nname = \"boundarykit_consumer\"\n\n[dependencies]\nboundarykit = { path = \"../boundarykit_provider\" }\n",
             r#"from pub::boundarykit import Frame, frame
 from pub::boundarykit import col as __incan_vocab_helper_boundarykit_col
 from pub::boundarykit import desc as __incan_vocab_helper_boundarykit_desc
@@ -12489,6 +12856,13 @@ def main() -> None:
 "#,
         )?;
 
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the boundarykit package closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
         let out_dir = consumer_root.join("out");
         let consumer_build = run_build(&main_path, &out_dir)?;
         let generated_main = std::fs::read_to_string(out_dir.join("src/main.rs"))?;
@@ -12611,6 +12985,13 @@ def test_direct_and_facade_identity_share_one_static() -> None:
 "#,
         )?;
 
+        let producer_build = bake_library_provider(&producer_root)?;
+        assert!(
+            producer_build.status.success(),
+            "expected callkit provider library build to succeed.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&producer_build.stdout),
+            String::from_utf8_lossy(&producer_build.stderr)
+        );
         let producer_tests = run_test(&producer_root.join("tests"))?;
         assert!(
             producer_tests.status.success(),
@@ -12618,18 +12999,15 @@ def test_direct_and_facade_identity_share_one_static() -> None:
             String::from_utf8_lossy(&producer_tests.stdout),
             String::from_utf8_lossy(&producer_tests.stderr)
         );
-        let producer_build = run_build_lib(&producer_root)?;
-        assert!(
-            producer_build.status.success(),
-            "expected callkit provider library build to succeed.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&producer_build.stdout),
-            String::from_utf8_lossy(&producer_build.stderr)
-        );
 
         let consumer_root = tmp.path().join("consumer");
+        let consumer_project_name = "callkit_consumer";
+        let consumer_manifest = format!(
+            "[project]\nname = \"{consumer_project_name}\"\n\n[dependencies]\ncallkit = {{ path = \"../callkit_provider\" }}\n"
+        );
         let main_path = write_project_files(
             &consumer_root,
-            "[project]\nname = \"consumer\"\n\n[dependencies]\ncallkit = { path = \"../callkit_provider\" }\n",
+            &consumer_manifest,
             r#"from pub::callkit import package_markers, registered_count, registered_name, registered_spec_name, scale, scale_alias
 
 def main() -> None:
@@ -12643,17 +13021,33 @@ def main() -> None:
 "#,
         )?;
 
-        let out_dir = consumer_root.join("out");
-        let consumer_build = run_build(&main_path, &out_dir)?;
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the callkit package closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
+        let mut consumer_build_command = super::incan_command();
+        consumer_build_command
+            .args(["build", main_path.to_string_lossy().as_ref()])
+            .env("CARGO_NET_OFFLINE", "true");
+        let consumer_build = run_timed_incan_command("incan build", consumer_build_command)?;
         assert!(
             consumer_build.status.success(),
-            "expected decorated alias partial identity consumer build to succeed.\nstdout:\n{}\nstderr:\n{}",
+            "expected decorated alias partial identity consumer build to reuse its completed Oven output.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&consumer_build.stdout),
             String::from_utf8_lossy(&consumer_build.stderr)
         );
-        // The preceding normal build has already selected and compiled this exact consumer. Run that immutable
-        // Oven artifact to exercise package-static behavior without rebuilding the same source through `incan run`.
-        let consumer_binary = out_dir.join("oven/release/consumer");
+        // The preceding normal build selected the exact completed output. Run its canonical artifact directly to
+        // exercise package-static behavior without compiling the same source again through a custom output path.
+        let consumer_binary = consumer_root
+            .join("target")
+            .join("incan")
+            .join(consumer_project_name)
+            .join("oven")
+            .join("release")
+            .join(consumer_project_name);
         assert!(
             consumer_binary.is_file(),
             "expected Oven to produce the decorated-alias consumer executable at {}",
@@ -12693,7 +13087,7 @@ def main() -> None:
         std::fs::write(producer_root.join("src/facade.incn"), "pub from status import Status\n")?;
         std::fs::write(producer_root.join("src/lib.incn"), "pub from facade import Status\n")?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected enumkit provider library build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -12704,7 +13098,7 @@ def main() -> None:
         let consumer_root = tmp.path().join("consumer");
         let main_path = write_project_files(
             &consumer_root,
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nenumkit = { path = \"../enumkit_provider\" }\n",
+            "[project]\nname = \"enumkit_consumer\"\n\n[dependencies]\nenumkit = { path = \"../enumkit_provider\" }\n",
             r#"from pub::enumkit import Status
 
 
@@ -12713,6 +13107,13 @@ def main() -> None:
   assert Status.Paused.label(prefix="custom") == "custom:paused"
 "#,
         )?;
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the enumkit package closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
         let out_dir = consumer_root.join("out");
         let consumer_build = run_build(&main_path, &out_dir)?;
         assert!(
@@ -12728,13 +13129,24 @@ def main() -> None:
     fn boundary_parity_activates_dependency_vocab_across_check_fmt_and_test() -> Result<(), Box<dyn std::error::Error>>
     {
         let tmp = tempfile::tempdir()?;
-        write_pub_library_with_provider_requirements_and_assert_keyword(
-            tmp.path(),
-            "widgets",
-            "widgets_core",
-            Vec::new(),
-            Vec::new(),
+        let provider_root = tmp.path().join("deps/widgets");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            "[project]\nname = \"widgets_core\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
         )?;
+        std::fs::write(
+            provider_root.join("src/lib.incn"),
+            "pub def widgets_fixture_identity() -> int:\n    return 1\n",
+        )?;
+        write_vocab_companion_crate_with_assert_keyword(&provider_root, "vocab_companion", "widgets_vocab_companion")?;
+        let provider_bake = bake_library_provider(&provider_root)?;
+        assert!(
+            provider_bake.status.success(),
+            "expected one explicit Oven bake to publish the source-backed widgets vocabulary provider.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_bake.stdout),
+            String::from_utf8_lossy(&provider_bake.stderr)
+        );
 
         let consumer_root = tmp.path().join("consumer");
         std::fs::create_dir_all(consumer_root.join("src"))?;
@@ -12763,6 +13175,13 @@ def test_external_vocab_assert_keyword() -> None:
     assert true
 "#,
         )?;
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected one explicit Oven bake to prepare the dependency-vocab consumer and its test envelope.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
 
         let check_output = run_check(&main_path)?;
         assert!(
@@ -12882,6 +13301,7 @@ pub def marker(value: int) -> Marker:
         Ok(())
     }
 
+    #[cfg(unix)]
     #[test]
     fn relocated_artifact_only_provider_keeps_transitive_feature_and_rust_dependency_graph()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -12904,10 +13324,11 @@ json = []
             serializer_root.join("src/lib.incn"),
             "pub def serialized_value() -> int:\n    return 7\n",
         )?;
-        let serializer_build = run_build_lib_artifact_only(&serializer_root)?;
+        let serializer_build =
+            bake_project_with_package_features(&serializer_root, &["--no-default-features", "--features", "json"])?;
         assert!(
             serializer_build.status.success(),
-            "expected leaf provider artifact build to succeed.\nstdout:\n{}\nstderr:\n{}",
+            "expected leaf provider package Loafs to bake.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&serializer_build.stdout),
             String::from_utf8_lossy(&serializer_build.stderr)
         );
@@ -12932,10 +13353,10 @@ serializer = { path = "../serializer", optional = true, default-features = false
             reporting_root.join("src/lib.incn"),
             "pub def report_value() -> int:\n    return 11\n",
         )?;
-        let reporting_build = run_build_lib_artifact_only(&reporting_root)?;
+        let reporting_build = bake_library_provider(&reporting_root)?;
         assert!(
             reporting_build.status.success(),
-            "expected parent provider artifact build to succeed.\nstdout:\n{}\nstderr:\n{}",
+            "expected parent provider and transitive package Loafs to bake.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&reporting_build.stdout),
             String::from_utf8_lossy(&reporting_build.stderr)
         );
@@ -12967,15 +13388,35 @@ serializer = { path = "../serializer", optional = true, default-features = false
         std::fs::remove_dir_all(relocated.join("reporting/src"))?;
 
         let relocated_consumer = relocated.join("consumer");
-        let output = run_build(
-            &relocated_consumer.join("src/main.incn"),
-            &relocated_consumer.join("out"),
+        let consumer_bake = bake_project(&relocated_consumer)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected the relocated consumer to import the complete source-free provider Loaf collection.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
+        let cargo_marker = tmp.path().join("cargo-was-started");
+        let output = run_incan_with_failing_cargo_guard(
+            &relocated_consumer,
+            &tmp.path().join("cargo-guard"),
+            &cargo_marker,
+            &["build", "src/main.incn"],
         )?;
         assert!(
             output.status.success(),
-            "expected relocated source-free transitive provider graph to compile.\nstdout:\n{}\nstderr:\n{}",
+            "expected the relocated source-free transitive provider graph to reuse its completed project Loaf.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("reused sealed project Loaf"),
+            "normal build did not report completed project-output reuse:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !cargo_marker.exists(),
+            "normal relocated completed-output replay launched the guarded Cargo executable"
         );
         Ok(())
     }
@@ -13300,7 +13741,7 @@ pub def display[T](data: DataSet[T]) -> None:
             "pub from dataset import SessionError, DataSet, BoundedDataSet, DataFrame, LazyFrame\npub from functions import display\n",
         )?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected pub-boundary library build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -13319,22 +13760,6 @@ pub def display[T](data: DataSet[T]) -> None:
             ),
         )?;
         std::fs::write(artifact_root.join("src/lib.rs"), "pub fn linked() {}\n")?;
-        Ok(())
-    }
-
-    fn write_library_crate_with_source(
-        artifact_root: &Path,
-        package_name: &str,
-        lib_source: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        std::fs::create_dir_all(artifact_root.join("src"))?;
-        std::fs::write(
-            artifact_root.join("Cargo.toml"),
-            format!(
-                "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n"
-            ),
-        )?;
-        std::fs::write(artifact_root.join("src/lib.rs"), lib_source)?;
         Ok(())
     }
 
@@ -13397,7 +13822,7 @@ pub def display[T](data: DataSet[T]) -> None:
         std::fs::write(
             crate_root.join("Cargo.toml"),
             format!(
-                "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nincan_vocab = {{ path = \"{}\" }}\n\n[lib]\npath = \"src/lib.rs\"\n",
+                "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nincan_vocab = {{ path = \"{}\" }}\n\n[lib]\npath = \"src/lib.rs\"\ncrate-type = [\"rlib\", \"cdylib\"]\n",
                 Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("crates")
                     .join("incan_vocab")
@@ -13895,271 +14320,9 @@ pub def display[T](data: DataSet[T]) -> None:
         Ok(())
     }
 
-    /// Write a package whose rich quality-clause ownership disagrees with legacy low-level keyword surface kinds.
-    ///
-    /// This preserves the compatibility shape used by existing vocab packages: parser activation still receives raw
-    /// keyword registrations, while the richer `DslSurface` is the authority on which nested blocks are clauses.
-    fn write_pub_library_with_mixed_quality_clause_desugarer(
-        root: &Path,
-        desugarer_bytes: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let artifact_root = root.join("deps").join("querykit").join("target").join("lib");
-        std::fs::create_dir_all(artifact_root.join("desugarers"))?;
-        write_minimal_library_crate(&artifact_root, "querykit_core")?;
-        let desugarer_path = artifact_root.join("desugarers").join("querykit_desugarer.wasm");
-        std::fs::write(&desugarer_path, desugarer_bytes)?;
-
-        let metadata = incan_vocab::VocabRegistration::new()
-            .with_keyword_registration(incan_vocab::KeywordRegistration {
-                activation: incan_vocab::KeywordActivation::OnImport {
-                    namespace: "querykit.query".to_string(),
-                },
-                keywords: vec![
-                    incan_vocab::KeywordSpec::block("quality"),
-                    incan_vocab::KeywordSpec::block("FROM").in_block("quality"),
-                    incan_vocab::KeywordSpec::block("REQUIRE").in_block("quality"),
-                    incan_vocab::KeywordSpec::block("GROUP")
-                        .with_compound_tokens(["BY"])
-                        .in_block("quality"),
-                    incan_vocab::KeywordSpec::block("EXPECT").in_block("quality"),
-                ],
-                valid_decorators: Vec::new(),
-            })
-            .with_surface(
-                incan_vocab::DslSurface::on_import("querykit.query")
-                    .with_declaration(
-                        incan_vocab::DeclarationSurface::named("quality")
-                            .with_mixed_body()
-                            .desugars_to_expression()
-                            .with_clauses([
-                                incan_vocab::ClauseSurface::expr("FROM").optional(),
-                                incan_vocab::ClauseSurface::expr_list("GROUP BY")
-                                    .repeating()
-                                    .after("FROM"),
-                                incan_vocab::ClauseSurface::expr_list("EXPECT")
-                                    .repeating()
-                                    .after("FROM"),
-                                incan_vocab::ClauseSurface::expr_list("REQUIRE")
-                                    .repeating()
-                                    .after("FROM"),
-                            ]),
-                    )
-                    .with_scoped_surface(
-                        incan_vocab::ScopedSurfaceDescriptor::leading_dot_path("quality.group.field")
-                            .in_clause_body("quality", "GROUP")
-                            .with_receiver(incan_vocab::ScopedSurfaceReceiver::clause("FROM")),
-                    ),
-            )
-            .metadata();
-        let mut manifest = LibraryManifest::new("querykit_core", "0.1.0");
-        manifest.vocab = Some(incan::library_manifest::VocabExports {
-            crate_path: "vocab_companion".to_string(),
-            package_name: "vocab_companion".to_string(),
-            keyword_registrations: metadata.keyword_registrations,
-            dsl_surfaces: metadata.dsl_surfaces,
-            provider_manifest: incan_vocab::LibraryManifest::default(),
-            desugarer_artifact: Some(incan::library_manifest::VocabDesugarerArtifact {
-                artifact_kind: incan_vocab::DesugarerArtifactKind::WasmModule,
-                abi_version: incan_vocab::WASM_DESUGAR_ABI_VERSION,
-                relative_path: "desugarers/querykit_desugarer.wasm".to_string(),
-                target: "wasm32-wasip1".to_string(),
-                profile: "release".to_string(),
-                entrypoint: "desugar_block".to_string(),
-                sha256: hex::encode(Sha256::digest(desugarer_bytes)),
-            }),
-        });
-        manifest.write_to_path(&artifact_root.join("querykit_core.incnlib"))?;
-        Ok(())
-    }
-
-    fn write_pub_library_with_vocab_desugarer_and_filter_helper(
-        root: &Path,
-        dependency_key: &str,
-        manifest_name: &str,
-        desugarer_bytes: &[u8],
-        keyword: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let artifact_root = root.join("deps").join(dependency_key).join("target").join("lib");
-        std::fs::create_dir_all(artifact_root.join("desugarers"))?;
-        write_library_crate_with_source(
-            &artifact_root,
-            manifest_name,
-            "pub fn filter(value: i64) -> i64 {\n    value\n}\n",
-        )?;
-        let desugarer_path = artifact_root.join("desugarers").join("incql_desugarer.wasm");
-        std::fs::write(&desugarer_path, desugarer_bytes)?;
-
-        let mut manifest = LibraryManifest::new(manifest_name, "0.1.0");
-        manifest.exports.functions.push(FunctionExport {
-            name: "filter".to_string(),
-            emitted_name: None,
-            type_params: Vec::new(),
-            params: vec![ParamExport {
-                name: "value".to_string(),
-                ty: TypeRef::Named {
-                    name: "int".to_string(),
-                },
-                kind: incan::library_manifest::ParamKindExport::Normal,
-                has_default: false,
-                default: None,
-            }],
-            return_type: TypeRef::Named {
-                name: "int".to_string(),
-            },
-            is_async: false,
-        });
-        manifest.vocab = Some(incan::library_manifest::VocabExports {
-            crate_path: "vocab_companion".to_string(),
-            package_name: "vocab_companion".to_string(),
-            keyword_registrations: vec![incan_vocab::KeywordRegistration {
-                activation: incan_vocab::KeywordActivation::OnImport {
-                    namespace: format!("{dependency_key}.dsl"),
-                },
-                keywords: vec![incan_vocab::KeywordSpec {
-                    name: keyword.to_string(),
-                    surface_kind: incan_vocab::KeywordSurfaceKind::BlockDeclaration,
-                    compound_tokens: Vec::new(),
-                    placement: incan_vocab::KeywordPlacement::TopLevel,
-                }],
-                valid_decorators: Vec::new(),
-            }],
-            dsl_surfaces: Vec::new(),
-            provider_manifest: incan_vocab::LibraryManifest {
-                helper_bindings: vec![incan_vocab::HelperBinding {
-                    key: "filter".to_string(),
-                    exported_name: "filter".to_string(),
-                }],
-                ..incan_vocab::LibraryManifest::default()
-            },
-            desugarer_artifact: Some(incan::library_manifest::VocabDesugarerArtifact {
-                artifact_kind: incan_vocab::DesugarerArtifactKind::WasmModule,
-                abi_version: incan_vocab::WASM_DESUGAR_ABI_VERSION,
-                relative_path: "desugarers/incql_desugarer.wasm".to_string(),
-                target: "wasm32-wasip1".to_string(),
-                profile: "release".to_string(),
-                entrypoint: "desugar_block".to_string(),
-                sha256: hex::encode(Sha256::digest(desugarer_bytes)),
-            }),
-        });
-        manifest.write_to_path(&artifact_root.join(format!("{manifest_name}.incnlib")))?;
-        Ok(())
-    }
-
-    fn write_pub_library_with_vocab_desugarer_and_string_helper(
-        root: &Path,
-        desugarer_bytes: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let dependency_key = "helperkit";
-        let manifest_name = "helperkit_core";
-        let artifact_root = root.join("deps").join(dependency_key).join("target").join("lib");
-
-        // ---- Context: helperkit Rust artifact and desugarer asset ----
-        std::fs::create_dir_all(artifact_root.join("desugarers"))?;
-        write_library_crate_with_source(
-            &artifact_root,
-            manifest_name,
-            "pub fn lit(value: i64) -> i64 {\n    value\n}\n\npub fn aggregate_as(_value: i64, label: String) -> String {\n    label\n}\n",
-        )?;
-        let desugarer_path = artifact_root.join("desugarers").join("helperkit_desugarer.wasm");
-        std::fs::write(&desugarer_path, desugarer_bytes)?;
-
-        // ---- Context: public helper manifest surface ----
-        let mut manifest = LibraryManifest::new(manifest_name, "0.1.0");
-        manifest.exports.functions.push(FunctionExport {
-            name: "lit".to_string(),
-            emitted_name: None,
-            type_params: Vec::new(),
-            params: vec![ParamExport {
-                name: "value".to_string(),
-                ty: TypeRef::Named {
-                    name: "int".to_string(),
-                },
-                kind: incan::library_manifest::ParamKindExport::Normal,
-                has_default: false,
-                default: None,
-            }],
-            return_type: TypeRef::Named {
-                name: "int".to_string(),
-            },
-            is_async: false,
-        });
-        manifest.exports.functions.push(FunctionExport {
-            name: "aggregate_as".to_string(),
-            emitted_name: None,
-            type_params: Vec::new(),
-            params: vec![
-                ParamExport {
-                    name: "value".to_string(),
-                    ty: TypeRef::Named {
-                        name: "int".to_string(),
-                    },
-                    kind: incan::library_manifest::ParamKindExport::Normal,
-                    has_default: false,
-                    default: None,
-                },
-                ParamExport {
-                    name: "label".to_string(),
-                    ty: TypeRef::Named {
-                        name: "str".to_string(),
-                    },
-                    kind: incan::library_manifest::ParamKindExport::Normal,
-                    has_default: false,
-                    default: None,
-                },
-            ],
-            return_type: TypeRef::Named {
-                name: "str".to_string(),
-            },
-            is_async: false,
-        });
-
-        // ---- Context: vocab activation and helper bindings ----
-        manifest.vocab = Some(incan::library_manifest::VocabExports {
-            crate_path: "vocab_companion".to_string(),
-            package_name: "vocab_companion".to_string(),
-            keyword_registrations: vec![incan_vocab::KeywordRegistration {
-                activation: incan_vocab::KeywordActivation::OnImport {
-                    namespace: "helperkit.dsl".to_string(),
-                },
-                keywords: vec![incan_vocab::KeywordSpec {
-                    name: "where".to_string(),
-                    surface_kind: incan_vocab::KeywordSurfaceKind::BlockDeclaration,
-                    compound_tokens: Vec::new(),
-                    placement: incan_vocab::KeywordPlacement::TopLevel,
-                }],
-                valid_decorators: Vec::new(),
-            }],
-            dsl_surfaces: Vec::new(),
-            provider_manifest: incan_vocab::LibraryManifest {
-                helper_bindings: vec![
-                    incan_vocab::HelperBinding {
-                        key: "lit".to_string(),
-                        exported_name: "lit".to_string(),
-                    },
-                    incan_vocab::HelperBinding {
-                        key: "aggregate_as".to_string(),
-                        exported_name: "aggregate_as".to_string(),
-                    },
-                ],
-                ..incan_vocab::LibraryManifest::default()
-            },
-            desugarer_artifact: Some(incan::library_manifest::VocabDesugarerArtifact {
-                artifact_kind: incan_vocab::DesugarerArtifactKind::WasmModule,
-                abi_version: incan_vocab::WASM_DESUGAR_ABI_VERSION,
-                relative_path: "desugarers/helperkit_desugarer.wasm".to_string(),
-                target: "wasm32-wasip1".to_string(),
-                profile: "release".to_string(),
-                entrypoint: "desugar_block".to_string(),
-                sha256: hex::encode(Sha256::digest(desugarer_bytes)),
-            }),
-        });
-        manifest.write_to_path(&artifact_root.join(format!("{manifest_name}.incnlib")))?;
-        Ok(())
-    }
-
     fn write_source_pub_library_with_vocab_desugarer_and_query_helpers(
         root: &Path,
-        desugarer_bytes: &[u8],
+        with_vocab: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let producer_root = root.join("deps").join("querykit");
 
@@ -14167,7 +14330,11 @@ pub def display[T](data: DataSet[T]) -> None:
         std::fs::create_dir_all(producer_root.join("src"))?;
         std::fs::write(
             producer_root.join("incan.toml"),
-            "[project]\nname = \"querykit\"\nversion = \"0.1.0\"\n",
+            if with_vocab {
+                "[project]\nname = \"querykit\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n"
+            } else {
+                "[project]\nname = \"querykit\"\nversion = \"0.1.0\"\n"
+            },
         )?;
         std::fs::write(
             producer_root.join("src/helpers.incn"),
@@ -14210,65 +14377,22 @@ pub def aggregate_default(expr: ColumnExpr, output_name: str = DEFAULT_LABEL) ->
             "pub from helpers import IntLiteralExpr, StringLiteralExpr, LiteralValue, ColumnExpr, AggregateMeasure, DEFAULT_LABEL, lit, count, aggregate_as, aggregate_default\n",
         )?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        if with_vocab {
+            write_vocab_companion_crate_with_source(
+                &producer_root,
+                "vocab_companion",
+                "querykit_helper_vocab_companion",
+                querykit_helper_vocab_companion_source(),
+            )?;
+        }
+
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected querykit producer build to succeed.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&producer_build.stdout),
             String::from_utf8_lossy(&producer_build.stderr)
         );
-
-        // ---- Context: vocab activation attached to the built library manifest ----
-        let artifact_root = producer_root.join("target").join("lib");
-        std::fs::create_dir_all(artifact_root.join("desugarers"))?;
-        let desugarer_path = artifact_root.join("desugarers").join("querykit_desugarer.wasm");
-        std::fs::write(&desugarer_path, desugarer_bytes)?;
-        let manifest_path = artifact_root.join("querykit.incnlib");
-        let mut manifest = LibraryManifest::read_from_path(&manifest_path)?;
-        manifest.vocab = Some(incan::library_manifest::VocabExports {
-            crate_path: "vocab_companion".to_string(),
-            package_name: "vocab_companion".to_string(),
-            keyword_registrations: vec![incan_vocab::KeywordRegistration {
-                activation: incan_vocab::KeywordActivation::OnImport {
-                    namespace: "querykit.dsl".to_string(),
-                },
-                keywords: vec![incan_vocab::KeywordSpec {
-                    name: "where".to_string(),
-                    surface_kind: incan_vocab::KeywordSurfaceKind::BlockDeclaration,
-                    compound_tokens: Vec::new(),
-                    placement: incan_vocab::KeywordPlacement::TopLevel,
-                }],
-                valid_decorators: Vec::new(),
-            }],
-            dsl_surfaces: Vec::new(),
-            provider_manifest: incan_vocab::LibraryManifest {
-                helper_bindings: vec![
-                    incan_vocab::HelperBinding {
-                        key: "lit".to_string(),
-                        exported_name: "lit".to_string(),
-                    },
-                    incan_vocab::HelperBinding {
-                        key: "count".to_string(),
-                        exported_name: "count".to_string(),
-                    },
-                    incan_vocab::HelperBinding {
-                        key: "aggregate_as".to_string(),
-                        exported_name: "aggregate_as".to_string(),
-                    },
-                ],
-                ..incan_vocab::LibraryManifest::default()
-            },
-            desugarer_artifact: Some(incan::library_manifest::VocabDesugarerArtifact {
-                artifact_kind: incan_vocab::DesugarerArtifactKind::WasmModule,
-                abi_version: incan_vocab::WASM_DESUGAR_ABI_VERSION,
-                relative_path: "desugarers/querykit_desugarer.wasm".to_string(),
-                target: "wasm32-wasip1".to_string(),
-                profile: "release".to_string(),
-                entrypoint: "desugar_block".to_string(),
-                sha256: hex::encode(Sha256::digest(desugarer_bytes)),
-            }),
-        });
-        manifest.write_to_path(&manifest_path)?;
         Ok(())
     }
 
@@ -14303,43 +14427,58 @@ pub def aggregate_default(expr: ColumnExpr, output_name: str = DEFAULT_LABEL) ->
         Ok(())
     }
 
-    fn write_pub_library_with_provider_requirements_and_assert_keyword(
+    fn write_and_bake_source_provider_with_requirements_and_assert_keyword(
         root: &Path,
-        dependency_key: &str,
-        manifest_name: &str,
-        required_dependencies: Vec<incan_vocab::CargoDependency>,
-        required_stdlib_features: Vec<&str>,
+        axum_requirement: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let artifact_root = root.join("deps").join(dependency_key).join("target").join("lib");
-        std::fs::create_dir_all(artifact_root.join("src"))?;
-        write_minimal_library_crate(&artifact_root, manifest_name)?;
+        let provider_root = root.join("deps/widgets");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            "[project]\nname = \"requirements_widgets_core\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.incn"),
+            "pub def requirements_fixture_identity() -> int:\n  return 1\n",
+        )?;
+        let companion_source = r#"use incan_vocab::{
+    CargoDependency, CargoDependencySource, KeywordActivation, KeywordRegistration, KeywordSpec,
+    KeywordSurfaceKind, LibraryManifest, VocabRegistration,
+};
 
-        let mut manifest = LibraryManifest::new(manifest_name, "0.1.0");
-        manifest.vocab = Some(incan::library_manifest::VocabExports {
-            crate_path: format!("{dependency_key}_vocab_companion"),
-            package_name: format!("{dependency_key}_vocab_companion"),
-            keyword_registrations: vec![incan_vocab::KeywordRegistration {
-                activation: incan_vocab::KeywordActivation::OnImport {
-                    namespace: format!("{dependency_key}.dsl"),
-                },
-                keywords: vec![incan_vocab::KeywordSpec::new(
-                    "assert",
-                    incan_vocab::KeywordSurfaceKind::ControlFlow,
-                )],
-                valid_decorators: Vec::new(),
-            }],
-            dsl_surfaces: Vec::new(),
-            provider_manifest: incan_vocab::LibraryManifest {
-                required_dependencies,
-                required_stdlib_features: required_stdlib_features
-                    .into_iter()
-                    .map(std::string::ToString::to_string)
-                    .collect(),
-                ..incan_vocab::LibraryManifest::default()
+pub fn library_vocab() -> VocabRegistration {
+    VocabRegistration::new()
+        .with_keyword_registration(KeywordRegistration {
+            activation: KeywordActivation::OnImport {
+                namespace: "widgets.dsl".to_string(),
             },
-            desugarer_artifact: None,
-        });
-        manifest.write_to_path(&artifact_root.join(format!("{manifest_name}.incnlib")))?;
+            keywords: vec![KeywordSpec::new("assert", KeywordSurfaceKind::ControlFlow)],
+            valid_decorators: Vec::new(),
+        })
+        .with_library_manifest(LibraryManifest {
+            required_dependencies: vec![CargoDependency {
+                crate_name: "axum".to_string(),
+                source: CargoDependencySource::Version("__AXUM_REQUIREMENT__".to_string()),
+            }],
+            required_stdlib_features: vec!["web".to_string()],
+            ..LibraryManifest::default()
+        })
+}
+"#
+        .replace("__AXUM_REQUIREMENT__", axum_requirement);
+        write_vocab_companion_crate_with_source(
+            &provider_root,
+            "vocab_companion",
+            "requirements_widgets_vocab_companion",
+            &companion_source,
+        )?;
+        let provider_bake = bake_library_provider(&provider_root)?;
+        assert!(
+            provider_bake.status.success(),
+            "expected the widgets provider requirements to bake for axum {axum_requirement}.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_bake.stdout),
+            String::from_utf8_lossy(&provider_bake.stderr)
+        );
         Ok(())
     }
 
@@ -14578,7 +14717,7 @@ pub def aggregate_default(expr: ColumnExpr, output_name: str = DEFAULT_LABEL) ->
             "pub from boxmod import Box\npub from widgets import Widget, make_widget\n",
         )?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected `build --lib` to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -14745,7 +14884,7 @@ pub def search(index: HyperquantIndex) -> int:
             "pub from hyperquant.index import HyperquantIndex as PublicIndex, build_index as make_index\n",
         )?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected an unplumbed source directory to publish as a checked namespace.\nstdout:\n{}\nstderr:\n{}",
@@ -14769,7 +14908,7 @@ pub def search(index: HyperquantIndex) -> int:
         std::fs::create_dir_all(consumer_root.join("src"))?;
         std::fs::write(
             consumer_root.join("incan.toml"),
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nmodulelib = { path = \"../modulelib\" }\n",
+            "[project]\nname = \"modulelib_consumer\"\n\n[dependencies]\nmodulelib = { path = \"../modulelib\" }\n",
         )?;
         let main_path = consumer_root.join("src/main.incn");
         std::fs::write(
@@ -14801,6 +14940,13 @@ def main() -> None:
 "#,
         )?;
 
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the modulelib package closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
         let out_dir = consumer_root.join("out");
         let consumer_build = run_build(&main_path, &out_dir)?;
         assert!(
@@ -14874,7 +15020,7 @@ def test_same_statement_pub_import_alias() -> None:
             producer_root.join("src/hyperquant.incn"),
             "pub def conflicting_module_file() -> int:\n  return 2\n",
         )?;
-        let collision_build = run_build_lib(&producer_root)?;
+        let collision_build = bake_library_provider(&producer_root)?;
         assert!(
             !collision_build.status.success(),
             "a module file and directory entrypoint with the same logical identity must not publish nondeterministically"
@@ -14925,7 +15071,7 @@ pub def make_vault(secret: str) -> Vault:
             "pub from crate.vaults import Vault as PublicVault, VaultBase, make_vault\n",
         )?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected private-field provider library build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -15011,7 +15157,7 @@ pub def make_vault(secret: str) -> Vault:
   pub label: int = 99
 "#,
         )?;
-        let decoy_build = run_build_lib(&decoy_root)?;
+        let decoy_build = bake_library_provider(&decoy_root)?;
         assert!(
             decoy_build.status.success(),
             "expected duplicate-short-name decoy library build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -15038,6 +15184,13 @@ def main() -> None:
 "#,
         )?;
 
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the sealed-class package closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
         let public_build = run_build(&consumer_main, &consumer_root.join("out"))?;
         assert!(
             public_build.status.success(),
@@ -15133,7 +15286,7 @@ def leak(value: Vault) -> str:
         );
         std::fs::remove_file(&sibling_leak)?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected private-model provider library build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -15184,6 +15337,27 @@ def main() -> None:
   println(value.reflected_field_count())
 "#,
         )?;
+        let tests_dir = consumer_root.join("tests");
+        std::fs::create_dir_all(&tests_dir)?;
+        std::fs::write(
+            tests_dir.join("test_private_model.incn"),
+            r#"from pub::sealed_model_lib import ExportedVault as TestVault
+
+def test_private_model_provider_bridge_and_reflection() -> None:
+  value = TestVault(label="test-batch")
+  assert value.label == "test-batch"
+  assert value.reveal() == "sealed"
+  assert len(value.__fields__()) == 1
+  assert value.reflected_field_count() == 1
+"#,
+        )?;
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the sealed-model package closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
         let consumer_run = incan_command()
             .current_dir(&consumer_root)
             .args(["run", consumer_main.to_string_lossy().as_ref()])
@@ -15198,6 +15372,18 @@ def main() -> None:
         assert_eq!(
             String::from_utf8_lossy(&consumer_run.stdout).trim(),
             "visible\nsealed\n1\nlabel\n1"
+        );
+        let test_output = run_test(&tests_dir)?;
+        assert!(
+            test_output.status.success(),
+            "expected compiled private-model test batch to pass.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&test_output.stdout),
+            String::from_utf8_lossy(&test_output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&test_output.stdout).contains("test_private_model_provider_bridge_and_reflection"),
+            "expected private-model regression test to execute:\n{}",
+            String::from_utf8_lossy(&test_output.stdout)
         );
 
         std::fs::write(
@@ -15228,33 +15414,6 @@ def unpack(value: ConsumerVault) -> str:
             "expected canonical and aliased private-field diagnostics, got:\n{private_stderr}"
         );
 
-        let tests_dir = consumer_root.join("tests");
-        std::fs::create_dir_all(&tests_dir)?;
-        std::fs::write(
-            tests_dir.join("test_private_model.incn"),
-            r#"from pub::sealed_model_lib import ExportedVault as TestVault
-
-def test_private_model_provider_bridge_and_reflection() -> None:
-  value = TestVault(label="test-batch")
-  assert value.label == "test-batch"
-  assert value.reveal() == "sealed"
-  assert len(value.__fields__()) == 1
-  assert value.reflected_field_count() == 1
-"#,
-        )?;
-        let test_output = run_test(&tests_dir)?;
-        assert!(
-            test_output.status.success(),
-            "expected compiled private-model test batch to pass.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&test_output.stdout),
-            String::from_utf8_lossy(&test_output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&test_output.stdout).contains("test_private_model_provider_bridge_and_reflection"),
-            "expected private-model regression test to execute:\n{}",
-            String::from_utf8_lossy(&test_output.stdout)
-        );
-
         Ok(())
     }
 
@@ -15278,7 +15437,7 @@ pub class Child extends Base:
   pub own_flag: bool
 "#,
         )?;
-        let provider_build = run_build_lib(&provider_root)?;
+        let provider_build = bake_library_provider(&provider_root)?;
         assert!(
             provider_build.status.success(),
             "expected compiled parent library build to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -15310,7 +15469,14 @@ def main() -> None:
         )?;
 
         let out_dir = consumer_root.join("out");
-        // One normal consumer build proves the original lowering regression.
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the compiled-parent package closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
+        // One normal consumer build proves the completed result is reusable for the original lowering regression.
         // Lock, package-test batch, transitive provider, and Rust bridge paths
         // each have focused coverage; repeating them here adds cost without
         // extending #885's compiled-parent field-materialization contract.
@@ -15682,7 +15848,7 @@ def main() -> None:\n  xs = [1, 2, 3, 4, 5]\n  ys = xs.iter().filter(is_even).ma
         std::fs::create_dir_all(producer_root.join("src"))?;
         std::fs::write(
             producer_root.join("incan.toml"),
-            "[project]\nname = \"widgets_core\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
+            "[project]\nname = \"widgets_vocab_core\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
         )?;
         std::fs::write(
             producer_root.join("src/lib.incn"),
@@ -15709,7 +15875,10 @@ def main() -> None:\n  xs = [1, 2, 3, 4, 5]\n  ys = xs.iter().filter(is_even).ma
             ],
         )?;
 
-        let manifest_path = producer_root.join("target").join("lib").join("widgets_core.incnlib");
+        let manifest_path = producer_root
+            .join("target")
+            .join("lib")
+            .join("widgets_vocab_core.incnlib");
         let manifest = LibraryManifest::read_from_path(&manifest_path)?;
         let vocab = manifest.vocab.as_ref().ok_or("expected vocab payload in .incnlib")?;
         assert_eq!(vocab.crate_path, "vocab_companion");
@@ -15742,8 +15911,12 @@ def main() -> None:\n  xs = [1, 2, 3, 4, 5]\n  ys = xs.iter().filter(is_even).ma
         write_vocab_companion_crate(&producer_root, "vocab_companion", "guarded_widgets_vocab_companion")?;
         let cargo_marker = tmp.path().join("cargo-was-started");
 
-        let producer_build =
-            run_build_lib_with_failing_cargo_guard(&producer_root, &tmp.path().join("cargo-guard"), &cargo_marker)?;
+        let producer_build = run_incan_with_failing_cargo_guard(
+            &producer_root,
+            &tmp.path().join("cargo-guard"),
+            &cargo_marker,
+            &["build", "--lib"],
+        )?;
         assert!(
             producer_build.status.success(),
             "expected normal Oven `build --lib` with vocab companion to succeed without Cargo.\nstdout:\n{}\nstderr:\n{}",
@@ -15837,7 +16010,7 @@ pub def small_key_map_bytes() -> bytes:
             "pub from status import SmallKey, StableKey as PublicStableKey, Status, echo_key, small_key_map_bytes, status_map_bytes\n",
         )?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected `build --lib` to succeed.\nstdout:\n{}\nstderr:\n{}",
@@ -15994,7 +16167,7 @@ pub type StrictPort = newtype int
             "pub from types import Boxed as PublicBoxed, ClonedBox, EnvClass, EnvMode, EnvReadable, EnvToken, ExplicitLabel, MultiToken, Port, Port as PublicPort, Positive as PublicPositive, PositiveBox as PublicPositiveBox, Ratio, StrictPort, TraitToken, WrappedPort\n",
         )?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             producer_build.status.success(),
             "expected std.environ type provider to build.\nstdout:\n{}\nstderr:\n{}",
@@ -16044,13 +16217,10 @@ pub type StrictPort = newtype int
         assert!(!strict.implicit_coercion_enabled);
 
         let consumer_root = tmp.path().join("environ_types_consumer");
-        let consumer_name = unique_test_project_name("environ_types_consumer");
         std::fs::create_dir_all(consumer_root.join("src"))?;
         std::fs::write(
             consumer_root.join("incan.toml"),
-            format!(
-                "[project]\nname = \"{consumer_name}\"\n\n[dependencies]\nenviron_types = {{ path = \"../environ_types_provider\" }}\n"
-            ),
+            "[project]\nname = \"environ_types_consumer\"\n\n[dependencies]\nenviron_types = { path = \"../environ_types_provider\" }\n",
         )?;
         let consumer_main = consumer_root.join("src/main.incn");
         std::fs::write(
@@ -16107,14 +16277,13 @@ def main() -> None:
 "#,
         )?;
 
-        let consumer_check = run_check(&consumer_main)?;
+        let consumer_bake = bake_project(&consumer_root)?;
         assert!(
-            consumer_check.status.success(),
-            "expected consumer typecheck to accept package typed environment reads.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&consumer_check.stdout),
-            String::from_utf8_lossy(&consumer_check.stderr)
+            consumer_bake.status.success(),
+            "expected an explicit Oven bake to import the typed-environment package closure.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
         );
-
         let consumer_run = super::incan_command()
             .args(["run", consumer_main.to_string_lossy().as_ref()])
             .env("CARGO_NET_OFFLINE", "true")
@@ -16447,7 +16616,7 @@ def main() -> Result[None, SessionError]:
             "use incan_vocab::{HelperBinding, LibraryManifest, VocabRegistration};\n\npub fn library_vocab() -> VocabRegistration {\n    VocabRegistration::new().with_library_manifest(LibraryManifest {\n        helper_bindings: vec![HelperBinding {\n            key: \"filter\".to_string(),\n            exported_name: \"filter\".to_string(),\n        }],\n        ..LibraryManifest::default()\n    })\n}\n",
         )?;
 
-        let producer_build = run_build_lib(&producer_root)?;
+        let producer_build = bake_library_provider(&producer_root)?;
         assert!(
             !producer_build.status.success(),
             "expected `build --lib` to fail for invalid helper binding.\nstdout:\n{}\nstderr:\n{}",
@@ -16470,7 +16639,7 @@ def main() -> Result[None, SessionError]:
         std::fs::create_dir_all(producer_root.join("src"))?;
         std::fs::write(
             producer_root.join("incan.toml"),
-            "[project]\nname = \"widgets_core\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
+            "[project]\nname = \"widgets_assert_core\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
         )?;
         std::fs::write(
             producer_root.join("src/lib.incn"),
@@ -17945,25 +18114,28 @@ def reject_mismatched_owner(left: list[f32], right: list[f32]) -> f32:
     #[test]
     fn consumer_build_uses_provider_paths_for_vocab_desugarer_calls() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
-        let response = incan_vocab::DesugarResponse::expression(incan_vocab::IncanExpr::Call {
-            callee: Box::new(incan_vocab::IncanExpr::Helper("filter".to_string())),
-            args: vec![incan_vocab::IncanExpr::Int(1)],
-        });
-        let output_payload = serde_json::to_string(&response)?;
-        let wasm = compile_desugarer_wasm(0, &output_payload, "")?;
-        write_pub_library_with_vocab_desugarer_and_filter_helper(
+        write_and_bake_source_vocab_fixture_provider(
             tmp.path(),
             "filterkit",
             "filterkit_core",
-            &wasm,
-            "where",
+            "pub def filter(value: int) -> int:\n  return value\n",
+            "filterkit_vocab_companion",
+            filterkit_vocab_companion_source(),
         )?;
 
         let main_path = write_project_files(
             tmp.path(),
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nfilterkit = { path = \"deps/filterkit\" }\n",
+            "[project]\nname = \"filterkit_consumer\"\n\n[dependencies]\nfilterkit = { path = \"deps/filterkit\" }\n",
             "import pub::filterkit\n\ndef main() -> None:\n  where true:\n    pass\n",
         )?;
+
+        let consumer_bake = bake_project(tmp.path())?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected the consumer bake to import the filterkit package Loafs.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
 
         let out_dir = tmp.path().join("out");
         let build_output = run_build(&main_path, &out_dir)?;
@@ -17990,23 +18162,18 @@ def reject_mismatched_owner(left: list[f32], right: list[f32]) -> f32:
     fn consumer_build_plans_vocab_helper_calls_like_ordinary_calls_issue729() -> Result<(), Box<dyn std::error::Error>>
     {
         let tmp = tempfile::tempdir()?;
-        let response = incan_vocab::DesugarResponse::expression(incan_vocab::IncanExpr::Call {
-            callee: Box::new(incan_vocab::IncanExpr::Helper("aggregate_as".to_string())),
-            args: vec![
-                incan_vocab::IncanExpr::Call {
-                    callee: Box::new(incan_vocab::IncanExpr::Helper("lit".to_string())),
-                    args: vec![incan_vocab::IncanExpr::Int(5)],
-                },
-                incan_vocab::IncanExpr::Str("total".to_string()),
-            ],
-        });
-        let output_payload = serde_json::to_string(&response)?;
-        let wasm = compile_desugarer_wasm(0, &output_payload, "")?;
-        write_pub_library_with_vocab_desugarer_and_string_helper(tmp.path(), &wasm)?;
+        write_and_bake_source_vocab_fixture_provider(
+            tmp.path(),
+            "helperkit",
+            "helperkit_core",
+            "pub def lit(value: int) -> int:\n  return value\n\npub def aggregate_as(_value: int, label: str) -> str:\n  return label\n",
+            "helperkit_vocab_companion",
+            helperkit_vocab_companion_source(),
+        )?;
 
         let main_path = write_project_files(
             tmp.path(),
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nhelperkit = { path = \"deps/helperkit\" }\n",
+            "[project]\nname = \"helperkit_consumer\"\n\n[dependencies]\nhelperkit = { path = \"deps/helperkit\" }\n",
             r#"import pub::helperkit
 
 def main() -> None:
@@ -18014,6 +18181,14 @@ def main() -> None:
     pass
 "#,
         )?;
+
+        let consumer_bake = bake_project(tmp.path())?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected the consumer bake to import the helperkit package Loafs.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
 
         let out_dir = tmp.path().join("out");
         let output = run_build(&main_path, &out_dir)?;
@@ -18040,35 +18215,11 @@ def main() -> None:
     fn consumer_build_plans_source_backed_vocab_helper_calls_with_defaults_and_unions_issue729()
     -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
-        let response = incan_vocab::DesugarResponse::expression(incan_vocab::IncanExpr::Tuple(vec![
-            incan_vocab::IncanExpr::Call {
-                callee: Box::new(incan_vocab::IncanExpr::Helper("aggregate_as".to_string())),
-                args: vec![
-                    incan_vocab::IncanExpr::Call {
-                        callee: Box::new(incan_vocab::IncanExpr::Helper("lit".to_string())),
-                        args: vec![incan_vocab::IncanExpr::Int(5)],
-                    },
-                    incan_vocab::IncanExpr::Str("adjusted".to_string()),
-                ],
-            },
-            incan_vocab::IncanExpr::Call {
-                callee: Box::new(incan_vocab::IncanExpr::Helper("aggregate_as".to_string())),
-                args: vec![
-                    incan_vocab::IncanExpr::Call {
-                        callee: Box::new(incan_vocab::IncanExpr::Helper("count".to_string())),
-                        args: Vec::new(),
-                    },
-                    incan_vocab::IncanExpr::Str("order_count".to_string()),
-                ],
-            },
-        ]));
-        let output_payload = serde_json::to_string(&response)?;
-        let wasm = compile_desugarer_wasm(0, &output_payload, "")?;
-        write_source_pub_library_with_vocab_desugarer_and_query_helpers(tmp.path(), &wasm)?;
+        write_source_pub_library_with_vocab_desugarer_and_query_helpers(tmp.path(), true)?;
 
         let main_path = write_project_files(
             tmp.path(),
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nquerykit = { path = \"deps/querykit\" }\n",
+            "[project]\nname = \"source_vocab_helper_consumer\"\n\n[dependencies]\nquerykit = { path = \"deps/querykit\" }\n",
             r#"import pub::querykit
 
 def main() -> None:
@@ -18076,6 +18227,14 @@ def main() -> None:
     pass
 "#,
         )?;
+
+        let consumer_bake = bake_project(tmp.path())?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected the source-backed vocab helper consumer to import the sealed querykit package.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
 
         let out_dir = tmp.path().join("out");
         let output = run_build(&main_path, &out_dir)?;
@@ -18116,12 +18275,11 @@ def main() -> None:
     fn consumer_build_plans_source_backed_pub_helper_calls_with_defaults_and_unions_issue729()
     -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
-        let wasm = compile_desugarer_wasm(0, "[]", "")?;
-        write_source_pub_library_with_vocab_desugarer_and_query_helpers(tmp.path(), &wasm)?;
+        write_source_pub_library_with_vocab_desugarer_and_query_helpers(tmp.path(), false)?;
 
         let main_path = write_project_files(
             tmp.path(),
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nquerykit = { path = \"deps/querykit\" }\n",
+            "[project]\nname = \"source_pub_helper_consumer\"\n\n[dependencies]\nquerykit = { path = \"deps/querykit\" }\n",
             r#"from pub::querykit import aggregate_as, aggregate_default, count, lit
 
 def main() -> None:
@@ -18130,6 +18288,14 @@ def main() -> None:
   aggregate_default(lit(7))
 "#,
         )?;
+
+        let consumer_bake = bake_project(tmp.path())?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected the ordinary source-backed helper consumer to import the sealed querykit package.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
 
         let out_dir = tmp.path().join("out");
         let output = run_build(&main_path, &out_dir)?;
@@ -18188,7 +18354,7 @@ def main() -> None:
 
         let main_path = write_project_files(
             tmp.path(),
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nquerykit = { path = \"deps/querykit\" }\n",
+            "[project]\nname = \"scoped_query_surface_consumer\"\n\n[dependencies]\nquerykit = { path = \"deps/querykit\" }\n",
             r#"import pub::querykit
 
 def main() -> None:
@@ -18538,14 +18704,14 @@ def query_block_call(orders: LazyFrame[Order]) -> LazyFrame[Selected]:
     #[test]
     fn consumer_test_activates_dependency_vocab_surfaces_issue730_issue756() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
-        let response = incan_vocab::DesugarResponse::expression(incan_vocab::IncanExpr::Int(7));
-        let output_payload = serde_json::to_string(&response)?;
-        let wasm = compile_desugarer_wasm_requiring_request_substring(
-            &output_payload,
-            "missing SELECT clause payload",
-            r#""keyword":"SELECT""#,
+        write_and_bake_source_vocab_fixture_provider(
+            tmp.path(),
+            "querykit",
+            "querykit_core",
+            "pub def querykit_fixture_identity() -> int:\n    return 7\n",
+            "querykit_expression_clause_vocab_companion",
+            querykit_expression_clause_vocab_companion_source(),
         )?;
-        write_pub_library_with_querykit_expression_clause_desugarer(tmp.path(), &wasm)?;
 
         write_project_files(
             tmp.path(),
@@ -18612,12 +18778,12 @@ def test_dependency_vocab_query_block() -> None:
             String::from_utf8_lossy(&fmt_output.stderr)
         );
 
-        let check_output = run_check(&test_path)?;
+        let consumer_bake = bake_project(tmp.path())?;
         assert!(
-            check_output.status.success(),
-            "expected ordinary check to parse dependency-activated vocab in a test file.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&check_output.stdout),
-            String::from_utf8_lossy(&check_output.stderr)
+            consumer_bake.status.success(),
+            "expected one source-stable Oven bake to prepare the formatted dependency-vocab test.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
         );
 
         let test_output = run_test(&test_path)?;
@@ -18634,18 +18800,18 @@ def test_dependency_vocab_query_block() -> None:
     fn consumer_build_and_test_desugars_quality_expression_vocab_clauses_issue813()
     -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
-        let response = incan_vocab::DesugarResponse::expression(incan_vocab::IncanExpr::Int(7));
-        let output_payload = serde_json::to_string(&response)?;
-        let wasm = compile_desugarer_wasm_requiring_request_substring(
-            &output_payload,
-            "quality expression vocab body did not expose EXPECT as a clause",
-            r#""keyword":"EXPECT""#,
+        write_and_bake_source_vocab_fixture_provider(
+            tmp.path(),
+            "querykit",
+            "querykit_core",
+            "pub def quality_fixture_identity() -> int:\n  return 7\n",
+            "quality_querykit_vocab_companion",
+            quality_vocab_companion_source(),
         )?;
-        write_pub_library_with_mixed_quality_clause_desugarer(tmp.path(), &wasm)?;
 
         let main_path = write_project_files(
             tmp.path(),
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nquerykit = { path = \"deps/querykit\" }\n",
+            "[project]\nname = \"quality_querykit_consumer\"\n\n[dependencies]\nquerykit = { path = \"deps/querykit\" }\n",
             r#"import pub::querykit
 
 def main() -> None:
@@ -18676,6 +18842,14 @@ def test_quality_expression_vocab_result() -> None:
 "#,
         )?;
 
+        let consumer_bake = bake_project(tmp.path())?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected the consumer bake to import the querykit package Loafs.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
+
         let out_dir = tmp.path().join("out");
         let build_output = run_build(&main_path, &out_dir)?;
         let generated_main = std::fs::read_to_string(out_dir.join("src/main.rs"))?;
@@ -18698,51 +18872,6 @@ def test_quality_expression_vocab_result() -> None:
             String::from_utf8_lossy(&test_output.stdout),
             String::from_utf8_lossy(&test_output.stderr)
         );
-        Ok(())
-    }
-
-    #[test]
-    fn consumer_check_desugars_each_quality_clause_issue813() -> Result<(), Box<dyn std::error::Error>> {
-        for (clause, request_fragment) in [
-            ("FROM", r#""keyword":"FROM""#),
-            ("REQUIRE", r#""keyword":"REQUIRE""#),
-            ("GROUP BY", r#""keyword":"GROUP","compound_tokens":["BY"]"#),
-            ("EXPECT", r#""keyword":"EXPECT""#),
-        ] {
-            let tmp = tempfile::tempdir()?;
-            let response = incan_vocab::DesugarResponse::expression(incan_vocab::IncanExpr::Int(7));
-            let output_payload = serde_json::to_string(&response)?;
-            let wasm = compile_desugarer_wasm_requiring_request_substring(
-                &output_payload,
-                &format!("quality expression vocab body did not expose {clause} as a clause"),
-                request_fragment,
-            )?;
-            write_pub_library_with_mixed_quality_clause_desugarer(tmp.path(), &wasm)?;
-
-            let main_path = write_project_files(
-                tmp.path(),
-                "[project]\nname = \"consumer\"\n\n[dependencies]\nquerykit = { path = \"deps/querykit\" }\n",
-                r#"import pub::querykit
-
-def main() -> None:
-    checks: int = quality {
-        FROM orders
-        REQUIRE row_count() >= 1 as non_empty_orders
-        GROUP BY .customer_id
-        EXPECT count() >= 1 as customer_groups_present
-    }
-    assert checks == 7
-"#,
-            )?;
-
-            let check_output = run_check(&main_path)?;
-            assert!(
-                check_output.status.success(),
-                "expected quality expression vocab declaration to expose {clause} to the desugarer.\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&check_output.stdout),
-                String::from_utf8_lossy(&check_output.stderr)
-            );
-        }
         Ok(())
     }
 
@@ -18844,20 +18973,11 @@ def main() -> None:
         std::fs::create_dir_all(project_root.join("src"))?;
         std::fs::create_dir_all(project_root.join("tests"))?;
 
-        write_pub_library_with_provider_requirements_and_assert_keyword(
-            project_root,
-            "widgets",
-            "widgets_core",
-            vec![incan_vocab::CargoDependency {
-                crate_name: "axum".to_string(),
-                source: incan_vocab::CargoDependencySource::Version("0.8".to_string()),
-            }],
-            vec!["web"],
-        )?;
+        write_and_bake_source_provider_with_requirements_and_assert_keyword(project_root, "0.8")?;
 
         std::fs::write(
             project_root.join("incan.toml"),
-            "[project]\nname = \"consumer\"\n\n[dependencies]\nwidgets = { path = \"deps/widgets\" }\n",
+            "[project]\nname = \"provider_requirements_consumer\"\n\n[dependencies]\nwidgets = { path = \"deps/widgets\" }\n",
         )?;
         let main_path = project_root.join("src/main.incn");
         std::fs::write(&main_path, "def main() -> None:\n  pass\n")?;
@@ -18865,6 +18985,16 @@ def main() -> None:
             project_root.join("tests/test_provider.incn"),
             "import pub::widgets\n\ndef test_provider_parity() -> None:\n  assert true\n",
         )?;
+
+        let consumer_bake = bake_project(project_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected the consumer bake to import the widgets provider package Loafs.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
+        let lock_path = project_root.join("incan.lock");
+        let baked_lock_bytes = std::fs::read(&lock_path)?;
 
         let build_out_dir = project_root.join("out");
         let build_output = run_build(&main_path, &build_out_dir)?;
@@ -18875,20 +19005,17 @@ def main() -> None:
             String::from_utf8_lossy(&build_output.stderr)
         );
 
-        let lock_output = run_lock(&main_path)?;
-        assert!(
-            lock_output.status.success(),
-            "expected lock to succeed.\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&lock_output.stdout),
-            String::from_utf8_lossy(&lock_output.stderr)
-        );
-
         let test_output = run_test(&project_root.join("tests"))?;
         assert!(
             test_output.status.success(),
             "expected test run to succeed.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&test_output.stdout),
             String::from_utf8_lossy(&test_output.stderr)
+        );
+        assert_eq!(
+            std::fs::read(&lock_path)?,
+            baked_lock_bytes,
+            "normal build and test must consume the canonical lock published by the explicit bake without rewriting it"
         );
 
         let build_manifest_path = build_out_dir.join("Cargo.toml");
@@ -18924,7 +19051,6 @@ def main() -> None:
             );
         }
 
-        let lock_path = project_root.join("incan.lock");
         let initial_lock = incan::lockfile::IncanLock::load(&lock_path)?;
         assert!(
             initial_lock.deps_fingerprint.starts_with("sha256:"),
@@ -18940,16 +19066,7 @@ def main() -> None:
             "normal Oven locking must not recreate a Cargo workspace projection"
         );
 
-        write_pub_library_with_provider_requirements_and_assert_keyword(
-            project_root,
-            "widgets",
-            "widgets_core",
-            vec![incan_vocab::CargoDependency {
-                crate_name: "axum".to_string(),
-                source: incan_vocab::CargoDependencySource::Version("=0.8.9".to_string()),
-            }],
-            vec!["web"],
-        )?;
+        write_and_bake_source_provider_with_requirements_and_assert_keyword(project_root, "=0.8.9")?;
         let refreshed_lock_output = run_lock(&main_path)?;
         assert!(
             refreshed_lock_output.status.success(),

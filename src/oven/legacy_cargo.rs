@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::commands::common::discover_active_sdk_inventory;
-use crate::library_manifest::{LibraryManifest, digest_provider_artifact};
+use crate::library_manifest::{LibraryManifest, digest_provider_artifact, digest_toolchain_source_tree_with_cache};
 use crate::provider::{SDK_INVENTORY_FILE, SdkInventory};
 
 use super::process::{isolate_process_group, terminate_process_group};
@@ -25,7 +25,7 @@ use super::rustc::{
     OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenRustcArtifactExtern,
     OvenRustcArtifactManifest, OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcRegistrySourcePackage,
     OvenRustcSupportingArtifact, clear_inherited_cargo_environment, rustc_host_target, rustc_identity,
-    select_direct_rustc_plan_identity,
+    select_direct_rustc_plan_identity, validate_project_extension_payload_against_base,
 };
 use super::store::{
     OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreError,
@@ -40,10 +40,10 @@ use crate::version::{INCAN_VERSION, SDK_PROVIDER_CODEGEN_REVISION};
 pub const OVEN_LEGACY_CARGO_PROVENANCE_SCHEMA_VERSION: u32 = 2;
 /// Wire schema for a receipt-bound project extension Loaf.
 ///
-/// Version 3 retains the raw publisher plan as provenance and the effective plan after validated compiler-runtime
-/// family substitution. It excludes generated package metadata from the reusable plan, so each normal consumer
-/// restores its own name/version without a previous project's Cargo environment leaking across receipts.
-pub const OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION: u32 = 3;
+/// Version 9 binds every direct registry dependency alias to its exact locked package, registry, and checksum. This
+/// preserves source authority when one project intentionally selects multiple compatible versions or renamed aliases
+/// of a package instead of asking a normal command to infer identity from a semver-compatible source catalog.
+pub const OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION: u32 = 9;
 /// Wire schema for one independently admitted compiler-suite target shard.
 ///
 /// Version 2 adds the direct-Rustc workspace library/proc-macro materialization DAG. Consumers of schema-10 suite
@@ -64,6 +64,24 @@ pub const OVEN_COMPILER_TEST_SUITE_TOOLCHAIN_DATA_SCHEMA_VERSION: u32 = 1;
 /// The publisher still asks the store to make the authoritative admission decision. This small deterministic margin
 /// lets a foundation describe its selected artifacts without accidentally placing a near-limit group over policy.
 const COMPILER_TEST_SUITE_FOUNDATION_METADATA_HEADROOM_BYTES: u64 = 64 * 1024;
+/// Minimum idle interval between full private-staging capacity scans while the explicit publisher is compiling.
+///
+/// A scan has to walk Cargo's whole transient tree in order to preserve physical-byte accounting and catch output
+/// outside the immediate target subdirectory. Polling it every 25 ms made that guard compete with large dependency
+/// compiles and turn one cold publish into repeated multi-gigabyte tree walks. A quarter-second floor keeps small
+/// overrun fixtures prompt; longer scans must yield for at least their own duration so the guard cannot monopolize
+/// the publisher after the private tree reaches gigabytes.
+pub(crate) const PUBLISHER_CAPACITY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Return the idle time after one complete capacity scan.
+///
+/// The physical-byte policy must inspect every file under private staging because a child can write outside its
+/// declared Cargo target. The monitor therefore yields for the scan duration when a large tree makes that scan more
+/// expensive than the ordinary prompt-poll floor. This bounds the monitor to at most half of one CPU rather than
+/// beginning the next full walk immediately after the preceding one.
+pub(crate) fn publisher_capacity_probe_delay(scan_elapsed: Duration) -> Duration {
+    PUBLISHER_CAPACITY_POLL_INTERVAL.max(scan_elapsed)
+}
 /// Cargo-profile definition mirrored by every publisher-owned compatibility project that receives the suite receipt.
 ///
 /// The direct-Rustc consumer applies the same contract independently. Keeping this as a single manifest fragment
@@ -145,9 +163,10 @@ pub struct OvenLegacyCargoPrepareRequest<'a> {
     /// Exact checked Rust-inspection surface to seal into this plan.
     ///
     /// `Some` limits a narrow Loaf to its checked fixture surface, including an empty surface. `None` retains every
-    /// registry rlib actually emitted into a broad compiler-suite foundation closure; it does not invent artifacts
-    /// or resolve anything beyond this explicit publisher invocation. Normal Oven consumers never construct this
-    /// request.
+    /// registry rlib actually emitted into a broad compiler-suite foundation closure. A caller project partitioned
+    /// against a base Loaf additionally seals its complete locked registry-source graph; neither form invents
+    /// artifacts or resolves anything beyond this explicit publisher invocation. Normal Oven consumers never
+    /// construct this request.
     pub inspection_packages: Option<Vec<OvenLegacyCargoInspectionPackage>>,
     /// Compiler-owned direct dependency closure to retain from the checked generated-project manifest.
     ///
@@ -162,9 +181,10 @@ pub struct OvenLegacyCargoPrepareRequest<'a> {
     pub compact_debug_info: bool,
     /// Optional immutable standard-library base selected before an explicit project bake.
     ///
-    /// When present, the publisher retains only the digest-distinct project fragment.  The caller holds the base
-    /// Loaf generation lock for the whole transaction; this request carries only the immutable identity and plan
-    /// needed to partition staged Cargo output before it enters the bounded store.
+    /// When present, the publisher substitutes the exact release-owned dependency cohort—compiler runtime,
+    /// overlapping locked registry units, and vocabulary auxiliaries—then retains only the project's locked
+    /// third-party and provider delta. The caller holds the base Loaf generation lock for the transaction; this
+    /// request carries the immutable identity and plan evidence needed to partition those responsibilities.
     pub base_loaf: Option<OvenLegacyCargoBaseLoaf<'a>>,
 }
 
@@ -176,6 +196,12 @@ pub struct OvenLegacyCargoBaseLoaf<'a> {
     pub build_unit_identity: String,
     /// Verified complete direct-Rustc closure retained by the immutable base.
     pub artifacts: &'a OvenRustcArtifactManifest,
+    /// Immutable directory containing every digest-verified base artifact.
+    ///
+    /// The publisher reads the sealed registry lock from this root before Cargo resolves a project extension. The
+    /// root is request-local authority retained under the caller's generation lock; it is never serialized into the
+    /// project payload.
+    pub artifact_root: &'a Path,
 }
 
 /// Immutable payload retained by a receipt-bound project extension Loaf.
@@ -183,21 +209,43 @@ pub struct OvenLegacyCargoBaseLoaf<'a> {
 pub(crate) struct OvenProjectExtensionPayload {
     /// Version of this extension wire contract.
     pub schema_version: u32,
-    /// Content address of the exact compiler-shipped base Loaf that supplies the omitted artifacts.
+    /// Content address of the exact compiler-shipped base Loaf that supplies the selected release cohort.
     pub base_loaf_identity: String,
     /// Compatibility identity that must still authorize the project receipt when the extension is consumed.
     pub base_build_unit_identity: String,
     /// Raw publisher-derived direct-Rustc plan retained as immutable provenance.
     ///
-    /// This is never executed by a normal command: its generated-package-local compiler runtime artifacts are
-    /// replaced by the exact compiler-owned runtime family from the selected base before the effective plan is
-    /// published.
+    /// This is never executed by a normal command. It records the project publisher's original closure before its
+    /// compiler-owned runtime, overlapping registry, and vocabulary inputs are canonicalized against the exact base.
     pub publisher_plan: OvenRustcArtifactManifest,
-    /// Complete direct-Rustc execution contract after the validated runtime substitution and base/extension
-    /// composition.
+    /// Complete direct-Rustc execution contract after release-cohort canonicalization and base composition.
     pub complete_plan: OvenRustcArtifactManifest,
+    /// Exact root registry dependency identities selected by the explicit baker, sorted by their Rust-facing aliases.
+    #[serde(default)]
+    pub registry_source_dependencies: Vec<OvenProjectRegistrySourceDependency>,
+    /// Exact dev-only root registry dependency identities selected by the same canonical publisher lock.
+    ///
+    /// These remain separate from normal roots so an inspection consumer can validate the complete test surface
+    /// without pretending a dev-only crate belongs to a normal generated executable.
+    #[serde(default)]
+    pub dev_registry_source_dependencies: Vec<OvenProjectRegistrySourceDependency>,
     /// Sorted paths physically retained below this extension's immutable artifact root.
     pub extension_paths: Vec<String>,
+}
+
+/// Portable source-authority identity for one direct registry dependency declared by a generated project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OvenProjectRegistrySourceDependency {
+    /// Rust-facing dependency alias from the generated root manifest.
+    pub alias: String,
+    /// Cargo package name selected by the root resolve edge.
+    pub package: String,
+    /// Exact locked package version.
+    pub version: String,
+    /// Exact Cargo registry identity.
+    pub registry: String,
+    /// Registry archive checksum sealed into the project Loaf.
+    pub checksum: String,
 }
 
 /// Outcome from a successful explicit `legacy_cargo` publication.
@@ -921,7 +969,7 @@ fn validate_compiler_suite_loaf_runtime_inputs(
         .collect::<Vec<_>>();
     let details = mismatched.into_iter().chain(unexpected).collect::<Vec<_>>().join(", ");
     Err(OvenLegacyCargoError::Plan(format!(
-        "compiler Loaf `{loaf_name}` is incompatible with the staged SDK runtime closure ({details}); regenerate it through the named legacy-cargo Loaf baker with the same SDK inventory"
+        "compiler Loaf `{loaf_name}` is incompatible with the staged SDK runtime closure ({details}); regenerate it through the internal compatibility publisher with the same SDK inventory"
     )))
 }
 
@@ -1078,20 +1126,20 @@ pub struct OvenLegacyCargoCompilerSuiteTiming {
 #[derive(Debug, thiserror::Error)]
 pub enum OvenLegacyCargoError {
     /// The caller supplied an invalid publisher input.
-    #[error("invalid Oven legacy_cargo {field}: {message}")]
+    #[error("invalid Oven internal compatibility publisher {field}: {message}")]
     InvalidInput { field: &'static str, message: String },
     /// A receipt does not authorize the requested generated source.
-    #[error("Oven legacy_cargo receipt mismatch: {message}")]
+    #[error("Oven internal compatibility publisher receipt mismatch: {message}")]
     ReceiptMismatch { message: String },
     /// Filesystem access failed at an explicit publisher path.
-    #[error("Oven legacy_cargo I/O failed at {path}: {source}")]
+    #[error("Oven internal compatibility publisher I/O failed at {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
     /// Cargo failed while the explicitly named publisher was running.
-    #[error("Oven legacy_cargo publisher failed: {output}")]
+    #[error("Oven internal compatibility publisher failed: {output}")]
     CargoFailed { output: String },
     /// Temporary publisher storage reached its enforced compatibility-domain allowance.
     #[error(
-        "Oven legacy_cargo publisher physical reservation at {path} reached {observed_physical_bytes} bytes, exceeding the transient compatibility allowance of {limit_bytes} bytes"
+        "Oven internal compatibility publisher physical reservation at {path} reached {observed_physical_bytes} bytes, exceeding the transient compatibility allowance of {limit_bytes} bytes"
     )]
     TransientCapacityExceeded {
         /// Publisher-owned target or prepared-staging path measured without following links.
@@ -1102,20 +1150,52 @@ pub enum OvenLegacyCargoError {
         limit_bytes: u64,
     },
     /// An expected compiled direct dependency was not available in Cargo's fresh target.
-    #[error("Oven legacy_cargo could not materialize direct dependency `{crate_name}` from {path}")]
+    #[error("Oven internal compatibility publisher could not materialize direct dependency `{crate_name}` from {path}")]
     MissingDirectArtifact { crate_name: String, path: PathBuf },
     /// The bounded Oven store rejected or could not publish the immutable result.
-    #[error("Oven legacy_cargo store failure: {0}")]
+    #[error("Oven internal compatibility publisher store failure: {0}")]
     Store(#[from] OvenStoreError),
     /// A direct-rustc plan could not be serialized or validated.
-    #[error("Oven legacy_cargo direct-rustc plan failure: {0}")]
+    #[error("Oven internal compatibility publisher direct-rustc plan failure: {0}")]
     Plan(String),
+}
+
+/// Select an already published plan through the exact rule for this request's publication shape.
+fn select_existing_direct_rustc_plan_identity(
+    request: &OvenLegacyCargoPrepareRequest<'_>,
+) -> Result<Option<String>, OvenLegacyCargoError> {
+    match request.base_loaf.as_ref() {
+        Some(base) => select_existing_project_extension_identity(request.store, &request.receipt, base),
+        None => match select_direct_rustc_plan_identity(request.store, &request.receipt) {
+            Ok(plan_identity) => Ok(Some(plan_identity)),
+            Err(super::rustc::OvenRustcError::PlanSelection { message, .. })
+                if message == "no compatible stored direct-rustc plan is available" =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(OvenLegacyCargoError::Plan(error.to_string())),
+        },
+    }
+}
+
+/// Return the observable no-publisher result for one exact existing plan.
+fn reused_direct_rustc_plan_result(plan_identity: String) -> OvenLegacyCargoPrepareResult {
+    OvenLegacyCargoPrepareResult {
+        plan_identity,
+        cargo_version: "not-run-existing-plan".to_string(),
+        cargo_manifest_digest: "not-run-existing-plan".to_string(),
+        cargo_lock_digest: "not-run-existing-plan".to_string(),
+        registry_leaves: Vec::new(),
+        transient_reservation_bytes: 0,
+    }
 }
 
 /// Prepare and publish exactly one receipt-bound direct-rustc closure through the hidden `legacy_cargo` boundary.
 ///
-/// Publication is idempotent: if a unique compatible Oven plan already exists, no Cargo process starts. If multiple
-/// plans already match the receipt, the publisher refuses to guess, matching normal Oven execution behavior.
+/// Publication is idempotent: a plain direct plan may reuse the compatible generated-project unit it was published
+/// for, while a base-partitioned project extension must match its exact receipt and base. A broad compiler Loaf can
+/// share a generated build-unit identity with a caller project without owning that project's complete dependency
+/// closure. If multiple valid candidates match the applicable rule, the publisher refuses to guess.
 pub fn prepare_direct_rustc_plan(
     request: &OvenLegacyCargoPrepareRequest<'_>,
 ) -> Result<OvenLegacyCargoPrepareResult, OvenLegacyCargoError> {
@@ -1134,7 +1214,7 @@ pub fn prepare_direct_rustc_plan(
             && request.receipt.compatibility.kind != OvenCompatibilityKind::NativeCompilerTestSuite)
     {
         return Err(OvenLegacyCargoError::ReceiptMismatch {
-            message: "legacy_cargo preparation requires a generated-project or native compiler-suite receipt"
+            message: "compatibility publication requires a generated-project or native compiler-suite receipt"
                 .to_string(),
         });
     }
@@ -1157,37 +1237,34 @@ pub fn prepare_direct_rustc_plan(
             ),
         });
     }
-    match select_direct_rustc_plan_identity(request.store, &request.receipt) {
-        Ok(plan_identity) => {
-            return Ok(OvenLegacyCargoPrepareResult {
-                plan_identity,
-                cargo_version: "not-run-existing-plan".to_string(),
-                cargo_manifest_digest: "not-run-existing-plan".to_string(),
-                cargo_lock_digest: "not-run-existing-plan".to_string(),
-                registry_leaves: Vec::new(),
-                transient_reservation_bytes: 0,
-            });
-        }
-        Err(super::rustc::OvenRustcError::PlanSelection { message, .. })
-            if message == "no compatible stored direct-rustc plan is available" => {}
-        Err(error) => {
-            return Err(OvenLegacyCargoError::Plan(error.to_string()));
-        }
+    if let Some(plan_identity) = select_existing_direct_rustc_plan_identity(request)? {
+        return Ok(reused_direct_rustc_plan_result(plan_identity));
     }
 
     let generated_project = canonical_directory(&request.generated_project, "generated project")?;
     let cargo_manifest = generated_project.join("Cargo.toml");
     let cargo_manifest_bytes = regular_file_bytes(&cargo_manifest)?;
+    let staged_metadata = if let Some(base) = request.base_loaf.as_ref() {
+        let base_lock = verified_release_cohort_registry_lock(base)?;
+        Some(stage_release_cohort_project_lock(
+            &request.cargo,
+            &generated_project,
+            &base_lock,
+            &request.receipt.intent.features,
+        )?)
+    } else {
+        None
+    };
     let _ =
         receipt_authorized_generated_root_bytes(&generated_project, &request.receipt, &request.source_evidence_key)?;
     let cargo_version = tool_version(&request.cargo, "cargo")?;
-    let direct_dependencies = cargo_direct_dependency_names(
+    let declared_direct_dependencies = cargo_direct_dependency_names(
         &cargo_manifest_bytes,
         request.publication_kind == OvenLegacyCargoPublicationKind::LibraryTests,
     )?;
     let mut direct_dependencies = publisher_direct_dependencies(
         &generated_project,
-        direct_dependencies,
+        declared_direct_dependencies.clone(),
         request.publication_kind,
         request.direct_dependency_closure,
     )?;
@@ -1202,6 +1279,12 @@ pub fn prepare_direct_rustc_plan(
     }
     let staging_parent = request.store.root().join("legacy-cargo-staging");
     let publisher_lock = acquire_publisher_lock(&staging_parent)?;
+    // The fast lookup above deliberately precedes manifest inspection. Recheck after taking the cross-process
+    // publisher lock so a concurrent winner cannot make this request rebuild and publish a second byte-distinct
+    // extension for the same exact receipt and build unit.
+    if let Some(plan_identity) = select_existing_direct_rustc_plan_identity(request)? {
+        return Ok(reused_direct_rustc_plan_result(plan_identity));
+    }
     reclaim_stale_publisher_staging(&staging_parent)?;
     let publisher_reservation = request
         .store
@@ -1261,6 +1344,11 @@ pub fn prepare_direct_rustc_plan(
     if host_deps.is_dir() && host_deps != target_deps {
         dependency_directories.push(host_deps);
     }
+    let metadata = match staged_metadata {
+        Some(metadata) => metadata,
+        None => read_legacy_cargo_metadata(&request.cargo, &cargo_manifest, &request.receipt.intent.features)?,
+    };
+    let resolved_direct_dependencies = resolve_direct_dependency_packages(&metadata, &direct_dependencies)?;
     let reported_artifact_files = publisher_output_artifact_paths(&cargo_outputs, &request.receipt.intent.profile)?;
     let (dependency_search_paths, externs, mut supporting_artifacts) = if reported_artifact_files.is_empty() {
         // Cargo's JSON protocol is the normal authority for an explicit bake. Retain the directory reader only as
@@ -1276,12 +1364,12 @@ pub fn prepare_direct_rustc_plan(
         artifact_closure_from_reported_paths(
             &staging,
             &request.receipt.intent.target,
-            &direct_dependencies,
+            &request.receipt.intent.profile,
+            &resolved_direct_dependencies,
             request.publication_kind == OvenLegacyCargoPublicationKind::LibraryTests,
-            &reported_artifact_files,
+            &cargo_outputs,
         )?
     };
-    let metadata = read_legacy_cargo_metadata(&request.cargo, &cargo_manifest, &request.receipt.intent.features)?;
     let (registry_leaves, registry_source_artifacts) =
         publisher_registry_leaf_catalog(PublisherRegistryLeafCatalogRequest {
             outputs: &cargo_outputs,
@@ -1301,6 +1389,7 @@ pub fn prepare_direct_rustc_plan(
         &staging,
         request.inspection_packages.as_deref(),
         &registry_leaves,
+        request.base_loaf.is_some(),
     )?;
     supporting_artifacts.extend(transitive_registry_source_artifacts);
     if !registry_sources.is_empty() {
@@ -1330,6 +1419,7 @@ pub fn prepare_direct_rustc_plan(
     };
     write_provenance(&provenance_path, &provenance)?;
     canonicalize_supporting_artifacts(&mut supporting_artifacts)?;
+    let has_registry_sources = !registry_sources.is_empty();
     let plan = OvenRustcArtifactManifest {
         schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
         intent: request.receipt.intent.clone(),
@@ -1350,11 +1440,31 @@ pub fn prepare_direct_rustc_plan(
             });
         }
         let complete_plan = plan
-            .with_compiler_runtime_family_from_base(base.artifacts)
+            .with_release_cohort_from_base(base.artifacts)
             .map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?;
         let partition = complete_plan
             .partition_against_base(base.artifacts)
             .map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?;
+        let registry_source_dependencies = project_registry_source_dependencies(
+            &metadata,
+            &declared_direct_dependencies,
+            &complete_plan.registry_sources,
+        )?;
+        let cargo_manifest =
+            std::str::from_utf8(&cargo_manifest_bytes).map_err(|error| OvenLegacyCargoError::InvalidInput {
+                field: "Cargo.toml",
+                message: format!("must be UTF-8: {error}"),
+            })?;
+        let cargo_manifest =
+            toml::from_str::<toml::Value>(cargo_manifest).map_err(|error| OvenLegacyCargoError::InvalidInput {
+                field: "Cargo.toml",
+                message: format!("must be valid TOML: {error}"),
+            })?;
+        let dev_registry_source_dependencies = project_registry_source_dependencies(
+            &metadata,
+            &direct_dependency_aliases(&cargo_manifest, "dev-dependencies"),
+            &complete_plan.registry_sources,
+        )?;
         if partition.base_paths.is_empty() {
             return Err(OvenLegacyCargoError::Plan(
                 "selected standard-library Loaf shares no byte-identical artifacts with this project closure; refuse a duplicate whole-closure project bake"
@@ -1376,6 +1486,8 @@ pub fn prepare_direct_rustc_plan(
             base_build_unit_identity: base.build_unit_identity.clone(),
             publisher_plan: plan,
             complete_plan,
+            registry_source_dependencies,
+            dev_registry_source_dependencies,
             extension_paths: partition.extension_paths.into_iter().collect(),
         })
         .map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?;
@@ -1393,6 +1505,7 @@ pub fn prepare_direct_rustc_plan(
             relative_path: artifact.relative_path,
         })
         .collect::<Vec<_>>();
+    materialize_sealed_registry_lock(&staging, has_registry_sources, &mut materialized_files)?;
     // Publisher metadata belongs in the immutable Loaf, but it is not a direct-Rustc input. Keeping it out of the
     // executable artifact plan lets a project extension share the base closure even though its own Cargo lock and
     // publication receipt naturally differ. The store manifest still digests and verifies this copied file.
@@ -1421,6 +1534,51 @@ pub fn prepare_direct_rustc_plan(
         registry_leaves,
         transient_reservation_bytes,
     })
+}
+
+/// Return a reusable project extension only when its exact project receipt and selected standard-library base match.
+///
+/// `DirectRustcPlan` entries are intentionally excluded. They may be valid compiler-owned Loafs for a compatible
+/// generated unit, yet omit a provider's transitive source/metadata authority. Accepting one here would suppress
+/// the only publisher transaction that can seal the caller's complete closure.
+fn select_existing_project_extension_identity(
+    store: &OvenStore,
+    receipt: &OvenReceipt,
+    base: &OvenLegacyCargoBaseLoaf<'_>,
+) -> Result<Option<String>, OvenLegacyCargoError> {
+    let candidates = store.select_payloads_matching_for_execution(|manifest| {
+        manifest.kind == OvenArtifactKind::ProjectPayload
+            && manifest.receipt_identity == receipt.identity
+            && manifest.build_unit_identity == receipt.build_unit_identity
+            && manifest.intent == receipt.intent
+    })?;
+    let mut identities = Vec::new();
+    for candidate in candidates {
+        let identity = candidate.manifest.identity;
+        let payload = serde_json::from_slice::<OvenProjectExtensionPayload>(&candidate.payload).map_err(|error| {
+            OvenLegacyCargoError::Plan(format!(
+                "stored project extension candidate {identity} has an invalid payload: {error}"
+            ))
+        })?;
+        if validate_project_extension_payload_against_base(
+            &payload,
+            &base.loaf_identity,
+            &base.build_unit_identity,
+            base.artifacts,
+        )
+        .is_ok()
+        {
+            identities.push(identity);
+        }
+    }
+    match identities.as_slice() {
+        [] => Ok(None),
+        [identity] => Ok(Some(identity.clone())),
+        _ => Err(OvenLegacyCargoError::Plan(format!(
+            "multiple receipt-exact project extensions are authorized by one selected standard-library Loaf: {}",
+            identities.join(", ")
+        ))),
+    }
 }
 
 /// Canonicalize the union of compiled artifacts and independently discovered sealed source files.
@@ -1856,7 +2014,7 @@ fn cargo_profile_directory(profile: &str) -> Result<&'static str, OvenLegacyCarg
         _ => Err(OvenLegacyCargoError::InvalidInput {
             field: "receipt profile",
             message: format!(
-                "legacy_cargo supports only debug, release, or {OVEN_COMPILER_TEST_PROFILE}, got `{profile}`"
+                "the internal compatibility publisher supports only debug, release, or {OVEN_COMPILER_TEST_PROFILE}, got `{profile}`"
             ),
         }),
     }
@@ -2349,6 +2507,40 @@ pub(crate) fn materialized_files_from_directory(
     Ok(files)
 }
 
+/// Retain the exact dependency graph required to inspect sealed registry sources.
+///
+/// A project extension can share executable artifacts with its compiler Loaf, but its registry-source catalog still
+/// needs the exact checked graph that selected those source trees. The lock is deliberately outside the direct-Rustc
+/// plan: it is inspection authority, not a linker input. It nevertheless crosses the immutable-store boundary with
+/// the same digest verification as every other materialized file.
+fn materialize_sealed_registry_lock(
+    staging: &Path,
+    has_registry_sources: bool,
+    materialized_files: &mut Vec<OvenArtifactMaterializedFile>,
+) -> Result<(), OvenLegacyCargoError> {
+    if !has_registry_sources {
+        return Ok(());
+    }
+    let source_path = verified_regular_file(
+        &staging.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH),
+        "sealed registry Cargo.lock",
+    )?;
+    let relative_path = OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH.to_string();
+    if materialized_files
+        .iter()
+        .any(|file| file.relative_path == relative_path)
+    {
+        return Err(OvenLegacyCargoError::Plan(
+            "sealed registry Cargo.lock duplicates a direct artifact path".to_string(),
+        ));
+    }
+    materialized_files.push(OvenArtifactMaterializedFile {
+        source_path,
+        relative_path,
+    });
+    Ok(())
+}
+
 /// Recursively retain regular provider files in deterministic path order while rejecting symlink indirection.
 fn collect_materialized_directory_files(
     root: &Path,
@@ -2429,7 +2621,7 @@ fn collect_materialized_directory_files(
 }
 
 /// Minimal Cargo JSON message shape used to map publisher-built dependency artifacts back to unit-graph edges.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct CargoCompilerArtifact {
     reason: String,
     package_id: String,
@@ -2442,14 +2634,14 @@ struct CargoCompilerArtifact {
     profile: CargoCompilerArtifactProfile,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 struct CargoCompilerArtifactProfile {
     #[serde(default)]
     test: bool,
 }
 
 /// Target identity emitted by Cargo's stable JSON message stream.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct CargoCompilerArtifactTarget {
     name: String,
     #[serde(default)]
@@ -2524,6 +2716,29 @@ struct CargoMetadataResolveNode {
     features: Vec<String>,
     #[serde(default)]
     dependencies: Vec<String>,
+    /// Direct dependency edges with the Cargo name used by the root package and the exact resolved package ID.
+    ///
+    /// `dependencies` is sufficient for source-closure walking, but it discards the alias-to-package relationship
+    /// needed to select a direct Rustc artifact when the lock contains multiple versions of the same crate.
+    #[serde(default)]
+    deps: Vec<CargoMetadataResolveDependency>,
+}
+
+/// One resolved Cargo dependency edge retained only while the explicit baker is publishing a Loaf.
+#[derive(Clone, Deserialize)]
+struct CargoMetadataResolveDependency {
+    name: String,
+    pkg: String,
+}
+
+/// One declared `rustc --extern` name bound to the exact Cargo package instance that owns its artifact.
+///
+/// Package names are not sufficient: a valid lock can contain two versions of one crate name. The resolved Cargo
+/// package ID is therefore consumed at the explicit baker boundary and never guessed by a normal Oven command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedDirectDependency {
+    package: String,
+    package_id: String,
 }
 
 /// One Cargo package identity used while creating the explicit third-party foundation publisher input.
@@ -2865,18 +3080,18 @@ enum OvenLegacyCargoInvocationTarget {
 fn parse_compiler_suite_unit_graph(output: &CargoInvocationOutput) -> Result<CargoUnitGraph, OvenLegacyCargoError> {
     let graph = serde_json::from_slice::<CargoUnitGraph>(&output.stdout).map_err(|error| {
         OvenLegacyCargoError::Plan(format!(
-            "legacy_cargo did not emit a valid compiler-suite unit graph: {error}"
+            "the internal compatibility publisher did not emit a valid compiler-suite unit graph: {error}"
         ))
     })?;
     if graph.version != 1 {
         return Err(OvenLegacyCargoError::Plan(format!(
-            "legacy_cargo emitted unsupported compiler-suite unit graph version {}",
+            "the internal compatibility publisher emitted unsupported compiler-suite unit graph version {}",
             graph.version
         )));
     }
     if graph.roots.is_empty() {
         return Err(OvenLegacyCargoError::Plan(
-            "legacy_cargo emitted a compiler-suite unit graph without root units".to_string(),
+            "the internal compatibility publisher emitted a compiler-suite unit graph without root units".to_string(),
         ));
     }
     Ok(graph)
@@ -4968,6 +5183,19 @@ fn read_legacy_cargo_metadata(
     cargo_manifest: &Path,
     features: &[String],
 ) -> Result<CargoMetadata, OvenLegacyCargoError> {
+    read_legacy_cargo_metadata_with_lock_policy(cargo, cargo_manifest, features, true)
+}
+
+/// Read publisher metadata with the caller's explicit Cargo.lock admission policy.
+///
+/// Compiler-owned publication always requires a pre-existing lock. The sole `false` caller is the explicit user
+/// project bake, which may create its first offline Cargo.lock before its source and final compiler plans are sealed.
+fn read_legacy_cargo_metadata_with_lock_policy(
+    cargo: &Path,
+    cargo_manifest: &Path,
+    features: &[String],
+    require_existing_lock: bool,
+) -> Result<CargoMetadata, OvenLegacyCargoError> {
     let cargo = canonical_tool_file(cargo, "cargo")?;
     let cargo_manifest = verified_regular_file(cargo_manifest, "Cargo manifest")?;
     let package_root = cargo_manifest
@@ -4982,7 +5210,10 @@ fn read_legacy_cargo_metadata(
         .arg("metadata")
         .arg("--manifest-path")
         .arg(&cargo_manifest)
-        .args(["--locked", "--offline", "--format-version", "1"]);
+        .args(["--offline", "--format-version", "1"]);
+    if require_existing_lock {
+        command.arg("--locked");
+    }
     // The package records must be resolved through the same feature selection as the unit graph. Otherwise an
     // optional dependency may occur in the graph but be absent from this identity lookup, which leaves the named
     // foundation publisher unable to reproduce its declared third-party closure.
@@ -5001,9 +5232,198 @@ fn read_legacy_cargo_metadata(
     }
     serde_json::from_slice(&output.stdout).map_err(|error| {
         OvenLegacyCargoError::Plan(format!(
-            "legacy_cargo emitted invalid compiler foundation metadata: {error}"
+            "the internal compatibility publisher emitted invalid compiler foundation metadata: {error}"
         ))
     })
+}
+
+/// Bind each declared direct dependency alias to the exact resolved Cargo package instance.
+///
+/// A direct-rustc invocation receives `--extern <alias>=<artifact>`, so choosing by library filename or package name
+/// is unsound when a valid lock contains (for example) `substrait` 0.62 transitively and `substrait` 0.63 directly.
+/// Cargo's root resolve edges preserve the alias and package ID relationship; retain it only long enough for the
+/// named baker to select and seal the matching artifact.
+fn resolve_direct_dependency_packages(
+    metadata: &CargoMetadata,
+    dependencies: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, ResolvedDirectDependency>, OvenLegacyCargoError> {
+    if dependencies.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let resolve = metadata.resolve.as_ref().ok_or_else(|| {
+        OvenLegacyCargoError::Plan(
+            "locked Cargo metadata omitted the resolve graph required for direct-rustc dependency selection"
+                .to_string(),
+        )
+    })?;
+    let root_id = resolve.root.as_deref().ok_or_else(|| {
+        OvenLegacyCargoError::Plan("locked Cargo metadata omitted the generated-project root package".to_string())
+    })?;
+    let packages = metadata
+        .packages
+        .iter()
+        .map(|package| (package.id.as_str(), package))
+        .collect::<BTreeMap<_, _>>();
+    let root_package = packages.get(root_id).ok_or_else(|| {
+        OvenLegacyCargoError::Plan(format!(
+            "locked Cargo metadata root package `{root_id}` is absent from its package records"
+        ))
+    })?;
+    let root = resolve.nodes.iter().find(|node| node.id == root_id).ok_or_else(|| {
+        OvenLegacyCargoError::Plan(format!(
+            "locked Cargo metadata root package `{root_id}` has no resolve node"
+        ))
+    })?;
+    let normalize = |name: &str| name.replace('-', "_");
+    let mut resolved = BTreeMap::new();
+    for (alias, package) in dependencies {
+        // The library-test publisher adds the root package's own library as an explicit input. Cargo does not model
+        // that self-library as a root dependency edge, so it is the one principled exception to edge lookup.
+        if normalize(alias) == normalize(&root_package.name) && package == &root_package.name {
+            resolved.insert(
+                alias.clone(),
+                ResolvedDirectDependency {
+                    package: package.clone(),
+                    package_id: root_id.to_string(),
+                },
+            );
+            continue;
+        }
+        let mut candidates = root
+            .deps
+            .iter()
+            .filter(|edge| normalize(&edge.name) == normalize(alias))
+            .filter(|edge| {
+                packages
+                    .get(edge.pkg.as_str())
+                    .is_some_and(|candidate| candidate.name == *package)
+            })
+            .map(|edge| edge.pkg.clone())
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.dedup();
+        match candidates.as_slice() {
+            [package_id] => {
+                resolved.insert(
+                    alias.clone(),
+                    ResolvedDirectDependency {
+                        package: package.clone(),
+                        package_id: package_id.clone(),
+                    },
+                );
+            }
+            [] => {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "locked Cargo metadata has no root dependency edge for direct Rustc extern `{alias}` (package `{package}`)"
+                )));
+            }
+            _ => {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "locked Cargo metadata resolves direct Rustc extern `{alias}` (package `{package}`) ambiguously: {}",
+                    candidates.join(", ")
+                )));
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+/// Bind every direct registry alias in the generated root manifest to its exact sealed source identity.
+///
+/// This deliberately consumes the full declared root dependency map, not the smaller set of crates reachable from
+/// one generated Rust source. Source inspection happens before that generated source exists, and two renamed aliases
+/// can legitimately select distinct compatible versions of the same package. The explicit baker records Cargo's
+/// exact root-edge decision so normal commands never have to repeat or approximate that resolution.
+fn project_registry_source_dependencies(
+    metadata: &CargoMetadata,
+    dependencies: &BTreeMap<String, String>,
+    registry_sources: &[OvenRustcRegistrySourcePackage],
+) -> Result<Vec<OvenProjectRegistrySourceDependency>, OvenLegacyCargoError> {
+    if dependencies.is_empty() {
+        return Ok(Vec::new());
+    }
+    let resolve = metadata.resolve.as_ref().ok_or_else(|| {
+        OvenLegacyCargoError::Plan(
+            "locked Cargo metadata omitted the resolve graph required for project source authority".to_string(),
+        )
+    })?;
+    let root_id = resolve.root.as_deref().ok_or_else(|| {
+        OvenLegacyCargoError::Plan("locked Cargo metadata omitted the generated-project root package".to_string())
+    })?;
+    let packages = metadata
+        .packages
+        .iter()
+        .map(|package| (package.id.as_str(), package))
+        .collect::<BTreeMap<_, _>>();
+    let root = resolve.nodes.iter().find(|node| node.id == root_id).ok_or_else(|| {
+        OvenLegacyCargoError::Plan(format!(
+            "locked Cargo metadata root package `{root_id}` has no resolve node"
+        ))
+    })?;
+    let normalize = |name: &str| name.replace('-', "_");
+    let mut selected = Vec::new();
+    for (alias, declared_package) in dependencies {
+        let mut candidates = root
+            .deps
+            .iter()
+            .filter(|edge| normalize(&edge.name) == normalize(alias))
+            .filter_map(|edge| packages.get(edge.pkg.as_str()).copied())
+            .filter(|package| package.name == *declared_package)
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.id.cmp(&right.id));
+        candidates.dedup_by(|left, right| left.id == right.id);
+        let package = match candidates.as_slice() {
+            [package] => *package,
+            [] => {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "locked Cargo metadata has no root dependency edge for `{alias}` (package `{declared_package}`)"
+                )));
+            }
+            _ => {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "locked Cargo metadata resolves root dependency `{alias}` (package `{declared_package}`) ambiguously"
+                )));
+            }
+        };
+        let Some(registry) = package.source.as_deref() else {
+            continue;
+        };
+        if !registry.starts_with("registry+") {
+            return Err(OvenLegacyCargoError::Plan(format!(
+                "root dependency `{alias}` selected unsupported source `{registry}`"
+            )));
+        }
+        let matches = registry_sources
+            .iter()
+            .filter(|source| {
+                source.package == package.name
+                    && source.version == package.version
+                    && source.source.registry == registry
+            })
+            .collect::<Vec<_>>();
+        let [source] = matches.as_slice() else {
+            return Err(OvenLegacyCargoError::Plan(format!(
+                "root registry dependency `{alias}` (package `{}` {} from `{registry}`) has {} exact sealed source records",
+                package.name,
+                package.version,
+                matches.len()
+            )));
+        };
+        selected.push(OvenProjectRegistrySourceDependency {
+            alias: alias.clone(),
+            package: package.name.clone(),
+            version: package.version.clone(),
+            registry: registry.to_string(),
+            checksum: source.source.checksum.clone(),
+        });
+    }
+    selected.sort_by(|left, right| left.alias.cmp(&right.alias));
+    if selected.windows(2).any(|window| window[0].alias == window[1].alias) {
+        return Err(OvenLegacyCargoError::Plan(
+            "generated project declares duplicate registry dependency aliases".to_string(),
+        ));
+    }
+    Ok(selected)
 }
 
 /// Resolve and digest the exact registry sources available to a child of the explicit Loaf baker.
@@ -5033,6 +5453,72 @@ pub fn legacy_cargo_inspection_sources(
         InspectionPackageScope::ResolvedGraph,
         staging,
     )
+}
+
+/// Resolve inspection sources for one explicit user-requested project bake.
+///
+/// Unlike compiler-owned Loaf publication, a conventional Incan project may have only the semantic `incan.lock` and
+/// no pre-existing Cargo.lock. This function therefore permits Cargo to create its first lock while remaining offline
+/// and inside the named `incan oven bake` transaction. Its caller immediately seals the copied, digested sources and
+/// the final direct-Rustc publisher records its independently generated lock. Normal build, run, and test cannot
+/// call this helper.
+pub fn explicit_project_bake_inspection_sources(
+    cargo: &Path,
+    cargo_manifest: &Path,
+    features: &[String],
+    inspection_packages: &[OvenLegacyCargoInspectionPackage],
+    staging: &Path,
+    release_registry_lock: Option<&Path>,
+) -> Result<Vec<OvenLegacyCargoInspectionSource>, OvenLegacyCargoError> {
+    let package_root = cargo_manifest
+        .parent()
+        .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+            field: "Cargo manifest",
+            message: format!("{} has no package directory", cargo_manifest.display()),
+        })?;
+    let metadata = match release_registry_lock {
+        Some(release_registry_lock) => {
+            stage_release_cohort_project_lock(cargo, package_root, release_registry_lock, features)?
+        }
+        None => read_legacy_cargo_metadata_with_lock_policy(cargo, cargo_manifest, features, false)?,
+    };
+    let lock = regular_file_bytes(&package_root.join("Cargo.lock"))?;
+    legacy_cargo_inspection_sources_from_metadata(
+        &metadata,
+        &lock,
+        inspection_packages,
+        InspectionPackageScope::CompleteResolvedGraph,
+        staging,
+    )
+}
+
+/// Return the digest-verified registry lock owned by one selected release cohort.
+fn verified_release_cohort_registry_lock(base: &OvenLegacyCargoBaseLoaf<'_>) -> Result<PathBuf, OvenLegacyCargoError> {
+    base.artifacts
+        .validate_shape(&base.artifacts.intent)
+        .map_err(|error| OvenLegacyCargoError::Plan(format!("selected release-cohort plan is invalid: {error}")))?;
+    let matches = base
+        .artifacts
+        .supporting_artifacts
+        .iter()
+        .filter(|artifact| artifact.relative_path == OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH)
+        .collect::<Vec<_>>();
+    let [declared] = matches.as_slice() else {
+        return Err(OvenLegacyCargoError::Plan(format!(
+            "selected release Loaf must declare exactly one `{OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH}` artifact, found {}",
+            matches.len()
+        )));
+    };
+    let path = base.artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+    let bytes = regular_file_bytes(&path)?;
+    let actual = digest_bytes(&bytes);
+    if actual != declared.digest {
+        return Err(OvenLegacyCargoError::Plan(format!(
+            "selected release Loaf registry lock digest mismatch: expected {}, got {actual}",
+            declared.digest
+        )));
+    }
+    Ok(path)
 }
 
 /// Resolve and stage every registry source in one locked compiler feature graph.
@@ -5313,6 +5799,202 @@ pub fn stage_locked_loaf_fixture(
     validate_generated_registry_lock(&source_lock, &regular_file_bytes(&lock_path)?)
 }
 
+/// Seed an explicit project publisher from one release cohort without excluding project-only registry packages.
+///
+/// The selected release lock pins every retained release identity and dependency edge. Cargo may add project-owned
+/// package identities, including alternate versions of packages that also occur in the release graph, but it may not
+/// mutate the release graph itself. The normalized lock is written before the actual publisher build, so that build
+/// is unconditionally `--locked`.
+fn stage_release_cohort_project_lock(
+    cargo: &Path,
+    generated_project: &Path,
+    release_lock: &Path,
+    features: &[String],
+) -> Result<CargoMetadata, OvenLegacyCargoError> {
+    let generated_project = canonical_directory(generated_project, "generated release-cohort project")?;
+    let manifest_path = generated_project.join("Cargo.toml");
+    let manifest = regular_file_bytes(&manifest_path)?;
+    let release_lock_bytes = regular_file_bytes(release_lock)?;
+    let lock = release_cohort_generated_project_lock(&manifest_path, &manifest, &release_lock_bytes)?;
+    let lock_path = generated_project.join("Cargo.lock");
+    fs::write(&lock_path, &lock).map_err(|source| OvenLegacyCargoError::Io {
+        path: lock_path.clone(),
+        source,
+    })?;
+
+    // Normalize local and newly introduced project-only edges while preserving every compatible release pin already
+    // present in the seed. This is the sole unlocked metadata invocation and remains inside the explicit baker.
+    let metadata = read_legacy_cargo_metadata_with_lock_policy(cargo, &manifest_path, features, false)?;
+    validate_release_cohort_registry_lock(&release_lock_bytes, &lock, &regular_file_bytes(&lock_path)?)?;
+    Ok(metadata)
+}
+
+type CargoLockPackageIdentity = (String, String, Option<String>);
+
+/// One resolved package node from a Cargo lock graph.
+struct CargoLockPackageNode {
+    checksum: Option<String>,
+    dependencies: BTreeSet<CargoLockPackageIdentity>,
+}
+
+/// Decode a Cargo lock into exact package identities and resolved dependency edges.
+fn cargo_lock_package_graph(
+    cargo_lock: &[u8],
+    field: &'static str,
+) -> Result<BTreeMap<CargoLockPackageIdentity, CargoLockPackageNode>, OvenLegacyCargoError> {
+    let lock = toml::from_slice::<toml::Value>(cargo_lock).map_err(|error| OvenLegacyCargoError::InvalidInput {
+        field,
+        message: error.to_string(),
+    })?;
+    let packages =
+        lock.get("package")
+            .and_then(toml::Value::as_array)
+            .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field,
+                message: "must contain a package array".to_string(),
+            })?;
+    let identities = lock_package_identities(&lock);
+    if packages.len() != identities.len() {
+        return Err(OvenLegacyCargoError::InvalidInput {
+            field,
+            message: "every package must declare a name and version".to_string(),
+        });
+    }
+    if identities.iter().collect::<BTreeSet<_>>().len() != identities.len() {
+        return Err(OvenLegacyCargoError::InvalidInput {
+            field,
+            message: "must not contain duplicate package identities".to_string(),
+        });
+    }
+    let mut references = BTreeMap::new();
+    for identity in &identities {
+        let same_name = identities.iter().filter(|candidate| candidate.0 == identity.0).count();
+        let same_name_version = identities
+            .iter()
+            .filter(|candidate| candidate.0 == identity.0 && candidate.1 == identity.1)
+            .count();
+        let mut aliases = Vec::new();
+        if same_name == 1 {
+            aliases.push(identity.0.clone());
+        }
+        if same_name_version == 1 {
+            aliases.push(format!("{} {}", identity.0, identity.1));
+        }
+        if let Some(source) = identity.2.as_deref() {
+            aliases.push(format!("{} {} ({source})", identity.0, identity.1));
+        }
+        for reference in aliases {
+            if let Some(previous) = references.insert(reference.clone(), identity.clone())
+                && previous != *identity
+            {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "{field} has ambiguous dependency reference `{reference}`"
+                )));
+            }
+        }
+    }
+    let mut graph = BTreeMap::new();
+    for (package, identity) in packages.iter().zip(identities) {
+        let dependencies = package
+            .get("dependencies")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|dependency| {
+                let dependency = dependency.as_str().ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                    field,
+                    message: "package dependency must be a string".to_string(),
+                })?;
+                references.get(dependency).cloned().ok_or_else(|| {
+                    OvenLegacyCargoError::Plan(format!("{field} dependency `{dependency}` has no exact package record"))
+                })
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let node = CargoLockPackageNode {
+            checksum: package
+                .get("checksum")
+                .and_then(toml::Value::as_str)
+                .map(str::to_string),
+            dependencies,
+        };
+        if graph.insert(identity.clone(), node).is_some() {
+            return Err(OvenLegacyCargoError::Plan(format!(
+                "{field} contains duplicate package `{}` {} from {:?}",
+                identity.0, identity.1, identity.2
+            )));
+        }
+    }
+    Ok(graph)
+}
+
+/// Verify that Cargo retained the seeded release graph while admitting project-only registry coordinates.
+///
+/// Package names are not globally owned by a release: a project dependency may legitimately require an incompatible
+/// version of a package also used by the standard library. The invariant is instead graph-shaped. Every package and
+/// dependency edge on a release-owned local/path node retained by the generated root must remain a subset of the
+/// release graph because its compiled artifact is later replaced by the complete release copy. Cargo may prune
+/// feature-disabled local edges, normalize target- and feature-sensitive dependency lists on registry nodes, or
+/// prune unreachable release nodes; their exact coordinate/checksum and the later feature-bound artifact catalog
+/// remain the authority. Extra registry coordinates remain project-owned.
+fn validate_release_cohort_registry_lock(
+    release_lock: &[u8],
+    seeded_lock: &[u8],
+    generated_lock: &[u8],
+) -> Result<(), OvenLegacyCargoError> {
+    let release_checksums = cargo_registry_checksums(release_lock)?;
+    let release = cargo_lock_package_graph(release_lock, "selected release Cargo.lock")?;
+    let seeded = cargo_lock_package_graph(seeded_lock, "release-derived project Cargo.lock")?;
+    let generated = cargo_lock_package_graph(generated_lock, "generated project Cargo.lock")?;
+
+    for (stage, graph) in [("release-derived project", &seeded), ("generated project", &generated)] {
+        for (identity, node) in graph {
+            let Some(release_node) = release.get(identity) else {
+                continue;
+            };
+            let is_registry = identity
+                .2
+                .as_deref()
+                .is_some_and(|source| source.starts_with("registry+"));
+            if !is_registry && !node.dependencies.is_subset(&release_node.dependencies) {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "{stage} lock changed the release-derived dependency edges for `{}` {}",
+                    identity.0, identity.1,
+                )));
+            }
+            if is_registry && node.checksum != release_node.checksum {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "{stage} lock changed the release-derived checksum for `{}` {}",
+                    identity.0, identity.1,
+                )));
+            }
+        }
+    }
+
+    for (identity, generated_node) in &generated {
+        let Some(source) = identity.2.as_deref() else {
+            continue;
+        };
+        if !source.starts_with("registry+") {
+            return Err(OvenLegacyCargoError::Plan(format!(
+                "generated project lock selected unsupported source `{source}` for `{}` {}",
+                identity.0, identity.1
+            )));
+        }
+        let Some(release_checksum) =
+            release_checksums.get(&(identity.0.clone(), identity.1.clone(), source.to_string()))
+        else {
+            continue;
+        };
+        if generated_node.checksum.as_ref() != Some(release_checksum) {
+            return Err(OvenLegacyCargoError::Plan(format!(
+                "generated project lock checksum for release coordinate `{}` {} disagrees with the selected release cohort",
+                identity.0, identity.1
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Prove that local Cargo normalization introduced no registry identity outside the checked compiler lock.
 fn validate_generated_registry_lock(compiler_lock: &[u8], generated_lock: &[u8]) -> Result<(), OvenLegacyCargoError> {
     let compiler_checksums = cargo_registry_checksums(compiler_lock)?;
@@ -5363,6 +6045,25 @@ fn locked_generated_project(
     manifest: &[u8],
     source_lock: &[u8],
 ) -> Result<Vec<u8>, OvenLegacyCargoError> {
+    locked_generated_project_with_registry_policy(manifest_path, manifest, source_lock, false)
+}
+
+/// Seed a generated project from one release lock while allowing genuinely project-owned registry packages.
+fn release_cohort_generated_project_lock(
+    manifest_path: &Path,
+    manifest: &[u8],
+    source_lock: &[u8],
+) -> Result<Vec<u8>, OvenLegacyCargoError> {
+    locked_generated_project_with_registry_policy(manifest_path, manifest, source_lock, true)
+}
+
+/// Extend one checked release lock with local packages reachable from a generated Cargo manifest.
+fn locked_generated_project_with_registry_policy(
+    manifest_path: &Path,
+    manifest: &[u8],
+    source_lock: &[u8],
+    allow_project_registry_packages: bool,
+) -> Result<Vec<u8>, OvenLegacyCargoError> {
     let source_lock = std::str::from_utf8(source_lock).map_err(|error| OvenLegacyCargoError::InvalidInput {
         field: "compiler Cargo.lock",
         message: error.to_string(),
@@ -5381,7 +6082,14 @@ fn locked_generated_project(
             message: error.to_string(),
         })?;
     let mut visiting = BTreeSet::new();
-    let root = locked_local_package(manifest_path, &manifest, &mut lock, &mut visiting, true)?;
+    let root = locked_local_package(
+        manifest_path,
+        &manifest,
+        &mut lock,
+        &mut visiting,
+        true,
+        allow_project_registry_packages,
+    )?;
     let packages = lock
         .get_mut("package")
         .and_then(toml::Value::as_array_mut)
@@ -5411,6 +6119,129 @@ struct LockedLocalPackage {
     value: toml::Value,
 }
 
+/// Cargo workspace authority inherited by one local package manifest.
+///
+/// The manifest is retained alongside its canonical root so inherited dependency paths are resolved against the
+/// workspace that declared them rather than the member that selected them. This effective projection is then folded
+/// into the generated lock graph, which binds the selected workspace package and dependency authority into the same
+/// identity used by the explicit publisher.
+struct LocalCargoWorkspaceAuthority {
+    root: PathBuf,
+    manifest_path: PathBuf,
+    manifest: toml::Value,
+}
+
+/// One dependency specification after applying Cargo workspace inheritance.
+struct EffectiveLocalCargoDependency {
+    alias: String,
+    specification: toml::Value,
+    declaration_root: PathBuf,
+    inherited_workspace: bool,
+}
+
+/// Digest only the effective Cargo workspace facts selected by one local package.
+///
+/// The package's own tree remains separate source authority. This supplemental identity includes each
+/// `[workspace.package]` field explicitly selected with `workspace = true` and every effective
+/// `[workspace.dependencies]` declaration selected by ordinary, build, dev, or target-specific dependencies. A
+/// selected workspace-relative path dependency contributes its Cargo-semantic source digest instead of a local path.
+/// Packages with no inherited workspace facts return `None`, avoiding invalidation from unrelated workspace edits.
+pub(crate) fn digest_local_cargo_workspace_authority(
+    package_root: &Path,
+) -> Result<Option<String>, OvenLegacyCargoError> {
+    let manifest_path = verified_regular_file(
+        &package_root.join("Cargo.toml"),
+        "local Cargo package workspace authority",
+    )?;
+    let manifest_bytes = fs::read(&manifest_path).map_err(|source| OvenLegacyCargoError::Io {
+        path: manifest_path.clone(),
+        source,
+    })?;
+    let manifest =
+        toml::from_slice::<toml::Value>(&manifest_bytes).map_err(|error| OvenLegacyCargoError::InvalidInput {
+            field: "local Cargo package workspace authority",
+            message: format!("{} is not valid TOML: {error}", manifest_path.display()),
+        })?;
+    let workspace = local_cargo_workspace_authority(&manifest_path, &manifest)?;
+    let mut records = BTreeSet::new();
+    if let Some(package) = manifest.get("package").and_then(toml::Value::as_table) {
+        for (field, selection) in package {
+            let Some(selection) = selection.as_table().and_then(|selection| selection.get("workspace")) else {
+                continue;
+            };
+            if selection.as_bool() != Some(true) {
+                return Err(OvenLegacyCargoError::InvalidInput {
+                    field: "local Cargo package workspace authority",
+                    message: format!(
+                        "{} package field `{field}` must set workspace = true to inherit workspace authority",
+                        manifest_path.display()
+                    ),
+                });
+            }
+            let workspace = workspace.as_ref().ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field: "local Cargo package workspace authority",
+                message: format!(
+                    "{} package field `{field}` inherits [workspace.package] but no containing Cargo workspace was found",
+                    manifest_path.display()
+                ),
+            })?;
+            let inherited = workspace
+                .manifest
+                .get("workspace")
+                .and_then(toml::Value::as_table)
+                .and_then(|workspace| workspace.get("package"))
+                .and_then(toml::Value::as_table)
+                .and_then(|package| package.get(field))
+                .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                    field: "local Cargo package workspace authority",
+                    message: format!(
+                        "{} has no [workspace.package].{field} inherited by {}",
+                        workspace.manifest_path.display(),
+                        manifest_path.display()
+                    ),
+                })?;
+            records.insert(format!(
+                "package:{field}:{}",
+                serde_json::to_string(inherited).map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?
+            ));
+        }
+    }
+    let mut resolved_packages = BTreeMap::new();
+    for dependency in manifest_dependency_entries(&manifest_path, &manifest, workspace.as_ref())?
+        .into_iter()
+        .filter(|dependency| dependency.inherited_workspace)
+    {
+        let mut specification = dependency.specification;
+        if let Some(table) = specification.as_table_mut()
+            && let Some(path) = table.get("path").and_then(toml::Value::as_str)
+        {
+            let dependency_root = dependency.declaration_root.join(path);
+            let digest =
+                digest_toolchain_source_tree_with_cache(&dependency_root, &mut resolved_packages).map_err(|error| {
+                    OvenLegacyCargoError::Plan(format!(
+                        "cannot digest inherited workspace dependency `{}` at {}: {error}",
+                        dependency.alias,
+                        dependency_root.display()
+                    ))
+                })?;
+            table.insert(
+                "path".to_string(),
+                toml::Value::String(format!("incan-cargo-package:{digest}")),
+            );
+        }
+        records.insert(format!(
+            "dependency:{}:{}",
+            dependency.alias,
+            serde_json::to_string(&specification).map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?
+        ));
+    }
+    if records.is_empty() {
+        return Ok(None);
+    }
+    let payload = serde_json::to_vec(&records).map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?;
+    Ok(Some(digest_bytes(&payload)))
+}
+
 /// Materialize one local package record and recursively add path dependencies missing from the compiler lock.
 fn locked_local_package(
     manifest_path: &Path,
@@ -5418,6 +6249,7 @@ fn locked_local_package(
     lock: &mut toml::Value,
     visiting: &mut BTreeSet<PathBuf>,
     force_record: bool,
+    allow_project_registry_packages: bool,
 ) -> Result<LockedLocalPackage, OvenLegacyCargoError> {
     let manifest_path = verified_regular_file(manifest_path, "generated Loaf Cargo.toml")?;
     if !visiting.insert(manifest_path.clone()) {
@@ -5442,33 +6274,28 @@ fn locked_local_package(
             message: format!("{} has no package name", manifest_path.display()),
         })?
         .to_string();
-    let version = if let Some(version) = package.get("version").and_then(toml::Value::as_str) {
-        version.to_string()
-    } else if package
-        .get("version")
-        .and_then(toml::Value::as_table)
-        .and_then(|version| version.get("workspace"))
-        .and_then(toml::Value::as_bool)
-        == Some(true)
-    {
-        let candidates = lock_package_identities(lock)
-            .into_iter()
-            .filter(|(candidate_name, _, source)| candidate_name == &name && source.is_none())
-            .collect::<Vec<_>>();
-        let [(_, version, _)] = candidates.as_slice() else {
-            return Err(OvenLegacyCargoError::Plan(format!(
-                "workspace package `{name}` must select exactly one local version from the compiler lock, found {}",
-                candidates.len()
-            )));
+    let workspace = local_cargo_workspace_authority(&manifest_path, manifest)?;
+    let (version, detached_compiler_lock_authority) =
+        if let Some(version) = package.get("version").and_then(toml::Value::as_str) {
+            (version.to_string(), false)
+        } else if package
+            .get("version")
+            .and_then(toml::Value::as_table)
+            .and_then(|version| version.get("workspace"))
+            .and_then(toml::Value::as_bool)
+            == Some(true)
+        {
+            match workspace.as_ref() {
+                Some(workspace) => (inherited_workspace_package_version(workspace, &manifest_path)?, false),
+                None => (detached_compiler_package_version(lock, &name, &manifest_path)?, true),
+            }
+        } else {
+            return Err(OvenLegacyCargoError::InvalidInput {
+                field: "generated Loaf Cargo.toml",
+                message: format!("{} has no package version", manifest_path.display()),
+            });
         };
-        version.clone()
-    } else {
-        return Err(OvenLegacyCargoError::InvalidInput {
-            field: "generated Loaf Cargo.toml",
-            message: format!("{} has no package version", manifest_path.display()),
-        });
-    };
-    if !force_record && lock_contains_package(lock, &name, &version, None) {
+    if !force_record && detached_compiler_lock_authority && lock_contains_package(lock, &name, &version, None) {
         visiting.remove(&manifest_path);
         return Ok(LockedLocalPackage {
             name,
@@ -5476,21 +6303,19 @@ fn locked_local_package(
             value: toml::Value::Table(toml::map::Map::new()),
         });
     }
-    let manifest_root = manifest_path
-        .parent()
-        .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
-            field: "generated Loaf Cargo.toml",
-            message: format!("{} has no package directory", manifest_path.display()),
-        })?;
     let mut dependencies = Vec::new();
-    for (alias, specification) in manifest_dependency_entries(manifest) {
-        dependencies.push(locked_manifest_dependency(
-            manifest_root,
-            &alias,
-            &specification,
+    for dependency in manifest_dependency_entries(&manifest_path, manifest, workspace.as_ref())? {
+        let dependency = locked_manifest_dependency(
+            &dependency.declaration_root,
+            &dependency.alias,
+            &dependency.specification,
             lock,
             visiting,
-        )?);
+            allow_project_registry_packages,
+        )?;
+        if let Some(dependency) = dependency {
+            dependencies.push(dependency);
+        }
     }
     dependencies.sort();
     dependencies.dedup();
@@ -5503,6 +6328,20 @@ fn locked_local_package(
             toml::Value::Array(dependencies.into_iter().map(toml::Value::String).collect()),
         );
     }
+    if !force_record {
+        let packages = lock
+            .get_mut("package")
+            .and_then(toml::Value::as_array_mut)
+            .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field: "compiler Cargo.lock",
+                message: "must contain a package array".to_string(),
+            })?;
+        packages.retain(|package| {
+            !(package.get("name").and_then(toml::Value::as_str) == Some(name.as_str())
+                && package.get("version").and_then(toml::Value::as_str) == Some(version.as_str())
+                && package.get("source").is_none())
+        });
+    }
     visiting.remove(&manifest_path);
     Ok(LockedLocalPackage {
         name,
@@ -5511,25 +6350,391 @@ fn locked_local_package(
     })
 }
 
-/// Collect dependency specifications from ordinary and target-specific Cargo manifest tables.
-fn manifest_dependency_entries(manifest: &toml::Value) -> Vec<(String, toml::Value)> {
+/// Locate explicit Cargo workspace authority, otherwise the nearest containing workspace manifest.
+fn local_cargo_workspace_authority(
+    manifest_path: &Path,
+    manifest: &toml::Value,
+) -> Result<Option<LocalCargoWorkspaceAuthority>, OvenLegacyCargoError> {
+    let manifest_root = manifest_path
+        .parent()
+        .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+            field: "generated Loaf Cargo.toml",
+            message: format!("{} has no package directory", manifest_path.display()),
+        })?;
+    if let Some(explicit_workspace) = manifest
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .and_then(|package| package.get("workspace"))
+    {
+        let explicit_workspace = explicit_workspace
+            .as_str()
+            .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field: "generated Loaf Cargo.toml",
+                message: format!("{} has a non-string package.workspace path", manifest_path.display()),
+            })?;
+        return read_local_cargo_workspace_manifest(&manifest_root.join(explicit_workspace).join("Cargo.toml"))
+            .map(Some);
+    }
+    if manifest.get("workspace").is_some() {
+        if manifest.get("workspace").and_then(toml::Value::as_table).is_none() {
+            return Err(OvenLegacyCargoError::InvalidInput {
+                field: "generated Loaf Cargo.toml",
+                message: format!("{} has a non-table [workspace] value", manifest_path.display()),
+            });
+        }
+        return Ok(Some(LocalCargoWorkspaceAuthority {
+            root: manifest_root.to_path_buf(),
+            manifest_path: manifest_path.to_path_buf(),
+            manifest: manifest.clone(),
+        }));
+    }
+    for ancestor in manifest_root.ancestors().skip(1) {
+        let candidate = ancestor.join("Cargo.toml");
+        if !candidate.is_file() {
+            continue;
+        }
+        let workspace = read_local_cargo_manifest(&candidate)?;
+        match workspace.manifest.get("workspace") {
+            Some(value) if value.is_table() => return Ok(Some(workspace)),
+            Some(_) => {
+                return Err(OvenLegacyCargoError::InvalidInput {
+                    field: "generated Loaf workspace Cargo.toml",
+                    message: format!(
+                        "{} has a non-table [workspace] value",
+                        workspace.manifest_path.display()
+                    ),
+                });
+            }
+            None => {}
+        }
+    }
+    Ok(None)
+}
+
+/// Read and validate one explicitly selected Cargo workspace manifest.
+fn read_local_cargo_workspace_manifest(
+    manifest_path: &Path,
+) -> Result<LocalCargoWorkspaceAuthority, OvenLegacyCargoError> {
+    let workspace = read_local_cargo_manifest(manifest_path)?;
+    if workspace
+        .manifest
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .is_none()
+    {
+        return Err(OvenLegacyCargoError::InvalidInput {
+            field: "generated Loaf workspace Cargo.toml",
+            message: format!(
+                "{} selected by package.workspace has no [workspace] table",
+                workspace.manifest_path.display()
+            ),
+        });
+    }
+    Ok(workspace)
+}
+
+/// Parse one candidate workspace manifest while retaining its canonical path for diagnostics and dependency roots.
+fn read_local_cargo_manifest(manifest_path: &Path) -> Result<LocalCargoWorkspaceAuthority, OvenLegacyCargoError> {
+    let manifest_path = verified_regular_file(manifest_path, "generated Loaf workspace Cargo.toml")?;
+    let bytes = fs::read(&manifest_path).map_err(|source| OvenLegacyCargoError::Io {
+        path: manifest_path.clone(),
+        source,
+    })?;
+    let manifest = toml::from_slice::<toml::Value>(&bytes).map_err(|error| OvenLegacyCargoError::InvalidInput {
+        field: "generated Loaf workspace Cargo.toml",
+        message: format!("{} is not valid TOML: {error}", manifest_path.display()),
+    })?;
+    let root = manifest_path
+        .parent()
+        .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+            field: "generated Loaf workspace Cargo.toml",
+            message: format!("{} has no workspace directory", manifest_path.display()),
+        })?
+        .to_path_buf();
+    Ok(LocalCargoWorkspaceAuthority {
+        root,
+        manifest_path,
+        manifest,
+    })
+}
+
+/// Resolve the lock identity field inherited from `[workspace.package]`.
+fn inherited_workspace_package_version(
+    workspace: &LocalCargoWorkspaceAuthority,
+    package_manifest_path: &Path,
+) -> Result<String, OvenLegacyCargoError> {
+    workspace
+        .manifest
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .and_then(|workspace| workspace.get("package"))
+        .and_then(toml::Value::as_table)
+        .and_then(|package| package.get("version"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+            field: "generated Loaf workspace Cargo.toml",
+            message: format!(
+                "{} has no string [workspace.package].version inherited by {}",
+                workspace.manifest_path.display(),
+                package_manifest_path.display()
+            ),
+        })
+}
+
+/// Retain the checked compiler-lock fallback only for a package detached from its source workspace.
+fn detached_compiler_package_version(
+    lock: &toml::Value,
+    name: &str,
+    manifest_path: &Path,
+) -> Result<String, OvenLegacyCargoError> {
+    let candidates = lock_package_identities(lock)
+        .into_iter()
+        .filter(|(candidate_name, _, source)| candidate_name == name && source.is_none())
+        .collect::<Vec<_>>();
+    let [(_, version, _)] = candidates.as_slice() else {
+        return Err(OvenLegacyCargoError::Plan(format!(
+            "detached workspace package `{name}` at {} must select exactly one local version from the checked compiler lock, found {}",
+            manifest_path.display(),
+            candidates.len()
+        )));
+    };
+    Ok(version.clone())
+}
+
+/// Collect effective dependency specifications from ordinary and target-specific Cargo manifest tables.
+fn manifest_dependency_entries(
+    manifest_path: &Path,
+    manifest: &toml::Value,
+    workspace: Option<&LocalCargoWorkspaceAuthority>,
+) -> Result<Vec<EffectiveLocalCargoDependency>, OvenLegacyCargoError> {
     const SECTIONS: [&str; 3] = ["dependencies", "build-dependencies", "dev-dependencies"];
+    let manifest_root = manifest_path
+        .parent()
+        .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+            field: "generated Loaf Cargo.toml",
+            message: format!("{} has no package directory", manifest_path.display()),
+        })?;
     let mut entries = Vec::new();
     for section in SECTIONS {
         if let Some(dependencies) = manifest.get(section).and_then(toml::Value::as_table) {
-            entries.extend(dependencies.iter().map(|(name, value)| (name.clone(), value.clone())));
+            collect_manifest_dependency_entries(manifest_path, manifest_root, dependencies, workspace, &mut entries)?;
         }
     }
     if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
         for target in targets.values().filter_map(toml::Value::as_table) {
             for section in SECTIONS {
                 if let Some(dependencies) = target.get(section).and_then(toml::Value::as_table) {
-                    entries.extend(dependencies.iter().map(|(name, value)| (name.clone(), value.clone())));
+                    collect_manifest_dependency_entries(
+                        manifest_path,
+                        manifest_root,
+                        dependencies,
+                        workspace,
+                        &mut entries,
+                    )?;
                 }
             }
         }
     }
-    entries
+    Ok(entries)
+}
+
+/// Apply workspace inheritance to one dependency table without asking Cargo to rediscover its authority.
+fn collect_manifest_dependency_entries(
+    manifest_path: &Path,
+    manifest_root: &Path,
+    dependencies: &toml::map::Map<String, toml::Value>,
+    workspace: Option<&LocalCargoWorkspaceAuthority>,
+    entries: &mut Vec<EffectiveLocalCargoDependency>,
+) -> Result<(), OvenLegacyCargoError> {
+    for (alias, specification) in dependencies {
+        let Some(member_table) = specification.as_table() else {
+            entries.push(EffectiveLocalCargoDependency {
+                alias: alias.clone(),
+                specification: specification.clone(),
+                declaration_root: manifest_root.to_path_buf(),
+                inherited_workspace: false,
+            });
+            continue;
+        };
+        let Some(inherits) = member_table.get("workspace") else {
+            entries.push(EffectiveLocalCargoDependency {
+                alias: alias.clone(),
+                specification: specification.clone(),
+                declaration_root: manifest_root.to_path_buf(),
+                inherited_workspace: false,
+            });
+            continue;
+        };
+        if inherits.as_bool() != Some(true) {
+            return Err(OvenLegacyCargoError::InvalidInput {
+                field: "generated Loaf Cargo.toml",
+                message: format!(
+                    "{} dependency `{alias}` must set workspace = true to inherit workspace authority",
+                    manifest_path.display()
+                ),
+            });
+        }
+        let workspace = workspace.ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+            field: "generated Loaf Cargo.toml",
+            message: format!(
+                "{} dependency `{alias}` inherits [workspace.dependencies] but no containing Cargo workspace was found",
+                manifest_path.display()
+            ),
+        })?;
+        let inherited = workspace
+            .manifest
+            .get("workspace")
+            .and_then(toml::Value::as_table)
+            .and_then(|workspace| workspace.get("dependencies"))
+            .and_then(toml::Value::as_table)
+            .and_then(|dependencies| dependencies.get(alias))
+            .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field: "generated Loaf workspace Cargo.toml",
+                message: format!(
+                    "{} has no [workspace.dependencies].{alias} inherited by {}",
+                    workspace.manifest_path.display(),
+                    manifest_path.display()
+                ),
+            })?;
+        entries.push(EffectiveLocalCargoDependency {
+            alias: alias.clone(),
+            specification: merged_workspace_dependency_specification(
+                alias,
+                inherited,
+                member_table,
+                &workspace.manifest_path,
+                manifest_path,
+            )?,
+            declaration_root: workspace.root.clone(),
+            inherited_workspace: true,
+        });
+    }
+    Ok(())
+}
+
+/// Merge Cargo's member-local workspace dependency modifiers into the selected workspace declaration.
+fn merged_workspace_dependency_specification(
+    alias: &str,
+    inherited: &toml::Value,
+    member: &toml::map::Map<String, toml::Value>,
+    workspace_manifest_path: &Path,
+    member_manifest_path: &Path,
+) -> Result<toml::Value, OvenLegacyCargoError> {
+    let mut effective = match inherited {
+        toml::Value::String(version) => {
+            toml::map::Map::from_iter([("version".to_string(), toml::Value::String(version.clone()))])
+        }
+        toml::Value::Table(table) => table.clone(),
+        _ => {
+            return Err(OvenLegacyCargoError::InvalidInput {
+                field: "generated Loaf workspace Cargo.toml",
+                message: format!(
+                    "{} [workspace.dependencies].{alias} must be a version string or dependency table",
+                    workspace_manifest_path.display()
+                ),
+            });
+        }
+    };
+    for (key, value) in member {
+        match key.as_str() {
+            "workspace" => {}
+            "features" => merge_workspace_dependency_features(
+                alias,
+                &mut effective,
+                value,
+                workspace_manifest_path,
+                member_manifest_path,
+            )?,
+            "optional" | "default-features" | "public" if value.is_bool() => {
+                effective.insert(key.clone(), value.clone());
+            }
+            "optional" | "default-features" | "public" => {
+                return Err(OvenLegacyCargoError::InvalidInput {
+                    field: "generated Loaf Cargo.toml",
+                    message: format!(
+                        "{} dependency `{alias}` has a non-boolean `{key}` workspace modifier",
+                        member_manifest_path.display()
+                    ),
+                });
+            }
+            _ => {
+                return Err(OvenLegacyCargoError::InvalidInput {
+                    field: "generated Loaf Cargo.toml",
+                    message: format!(
+                        "{} dependency `{alias}` cannot override workspace authority field `{key}`",
+                        member_manifest_path.display()
+                    ),
+                });
+            }
+        }
+    }
+    if effective.get("workspace").is_some() {
+        return Err(OvenLegacyCargoError::InvalidInput {
+            field: "generated Loaf workspace Cargo.toml",
+            message: format!(
+                "{} [workspace.dependencies].{alias} cannot inherit from another workspace dependency",
+                workspace_manifest_path.display()
+            ),
+        });
+    }
+    Ok(toml::Value::Table(effective))
+}
+
+/// Union the feature sets contributed by the workspace and its member declaration.
+fn merge_workspace_dependency_features(
+    alias: &str,
+    effective: &mut toml::map::Map<String, toml::Value>,
+    member_features: &toml::Value,
+    workspace_manifest_path: &Path,
+    member_manifest_path: &Path,
+) -> Result<(), OvenLegacyCargoError> {
+    let mut features = BTreeSet::new();
+    if let Some(workspace_features) = effective.get("features") {
+        let workspace_features = workspace_features
+            .as_array()
+            .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field: "generated Loaf workspace Cargo.toml",
+                message: format!(
+                    "{} [workspace.dependencies].{alias}.features must be an array",
+                    workspace_manifest_path.display()
+                ),
+            })?;
+        for feature in workspace_features {
+            let feature = feature.as_str().ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+                field: "generated Loaf workspace Cargo.toml",
+                message: format!(
+                    "{} [workspace.dependencies].{alias}.features contains a non-string value",
+                    workspace_manifest_path.display()
+                ),
+            })?;
+            features.insert(feature.to_string());
+        }
+    }
+    let member_features = member_features
+        .as_array()
+        .ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+            field: "generated Loaf Cargo.toml",
+            message: format!(
+                "{} dependency `{alias}` has a non-array features workspace modifier",
+                member_manifest_path.display()
+            ),
+        })?;
+    for feature in member_features {
+        let feature = feature.as_str().ok_or_else(|| OvenLegacyCargoError::InvalidInput {
+            field: "generated Loaf Cargo.toml",
+            message: format!(
+                "{} dependency `{alias}` features contains a non-string value",
+                member_manifest_path.display()
+            ),
+        })?;
+        features.insert(feature.to_string());
+    }
+    effective.insert(
+        "features".to_string(),
+        toml::Value::Array(features.into_iter().map(toml::Value::String).collect()),
+    );
+    Ok(())
 }
 
 /// Resolve one generated-manifest dependency to an exact package identity already admitted by compiler authority.
@@ -5539,7 +6744,8 @@ fn locked_manifest_dependency(
     specification: &toml::Value,
     lock: &mut toml::Value,
     visiting: &mut BTreeSet<PathBuf>,
-) -> Result<String, OvenLegacyCargoError> {
+    allow_project_registry_packages: bool,
+) -> Result<Option<String>, OvenLegacyCargoError> {
     if let Some(table) = specification.as_table()
         && let Some(path) = table.get("path").and_then(toml::Value::as_str)
     {
@@ -5556,7 +6762,14 @@ fn locked_manifest_dependency(
                 field: "generated Loaf path dependency Cargo.toml",
                 message: error.to_string(),
             })?;
-        let package = locked_local_package(&dependency_manifest, &dependency_manifest_value, lock, visiting, false)?;
+        let package = locked_local_package(
+            &dependency_manifest,
+            &dependency_manifest_value,
+            lock,
+            visiting,
+            false,
+            allow_project_registry_packages,
+        )?;
         let declared_package = table.get("package").and_then(toml::Value::as_str).unwrap_or(alias);
         if declared_package != package.name {
             return Err(OvenLegacyCargoError::Plan(format!(
@@ -5575,7 +6788,8 @@ fn locked_manifest_dependency(
                 })?;
             packages.push(package.value);
         }
-        return lock_package_reference(lock, &package.name, &package.version, None);
+        let _ = lock_package_reference(lock, &package.name, &package.version, None)?;
+        return Ok(Some(format!("{} {}", package.name, package.version)));
     }
     let package = specification
         .as_table()
@@ -5603,13 +6817,16 @@ fn locked_manifest_dependency(
                 && semver::Version::parse(version).is_ok_and(|version| requirement.matches(&version))
         })
         .collect::<Vec<_>>();
+    if candidates.is_empty() && allow_project_registry_packages {
+        return Ok(None);
+    }
     let [(name, version, source)] = candidates.as_slice() else {
         return Err(OvenLegacyCargoError::Plan(format!(
             "generated Loaf dependency `{alias}` ({package} {requirement}) must select exactly one package from the compiler lock, found {}",
             candidates.len()
         )));
     };
-    lock_package_reference(lock, name, version, source.as_deref())
+    lock_package_reference(lock, name, version, source.as_deref()).map(Some)
 }
 
 /// Decode package identities from one Cargo lock document.
@@ -5708,6 +6925,17 @@ fn prune_lock_to_package(
             return Err(OvenLegacyCargoError::Plan(format!(
                 "staged Loaf lock has ambiguous dependency reference `{reference}`"
             )));
+        }
+        if source.is_none() {
+            let versioned_reference = format!("{name} {version}");
+            if references
+                .insert(versioned_reference.clone(), index)
+                .is_some_and(|previous| previous != index)
+            {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "staged Loaf lock has ambiguous dependency reference `{versioned_reference}`"
+                )));
+            }
         }
     }
     let root = identities
@@ -5885,6 +7113,7 @@ fn run_legacy_cargo_invocation(
                 })?;
             }
             None => {
+                let scan_started = Instant::now();
                 let reservation = if capacity_root.exists() {
                     conservative_directory_reservation(capacity_root)?
                 } else {
@@ -5901,7 +7130,7 @@ fn run_legacy_cargo_invocation(
                         limit_bytes: transient_limit,
                     });
                 }
-                thread::sleep(Duration::from_millis(25));
+                thread::sleep(publisher_capacity_probe_delay(scan_started.elapsed()));
             }
         }
     };
@@ -6044,105 +7273,108 @@ fn artifact_closure(
 fn artifact_closure_from_reported_paths(
     staging: &Path,
     target_triple: &str,
-    direct_dependencies: &BTreeMap<String, String>,
+    profile: &str,
+    direct_dependencies: &BTreeMap<String, ResolvedDirectDependency>,
     permit_absent_declared_dependencies: bool,
-    reported_artifact_files: &[PathBuf],
+    outputs: &[CargoInvocationOutput],
 ) -> Result<PublisherArtifactClosure, OvenLegacyCargoError> {
     let canonical_staging = canonical_directory(staging, "publisher staging")?;
-    let mut target_files = BTreeMap::new();
-    let mut host_dynamic_files = BTreeMap::new();
+    let mut target_artifacts = Vec::new();
+    let mut host_dynamic_artifacts = Vec::new();
     let mut supporting = BTreeMap::new();
     let mut dependency_search_paths = BTreeSet::new();
     let mut searchable_artifacts = BTreeSet::new();
 
-    for path in reported_artifact_files {
-        let metadata = fs::symlink_metadata(path).map_err(|source| OvenLegacyCargoError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(OvenLegacyCargoError::InvalidInput {
-                field: "Cargo-reported publisher artifact",
-                message: format!("{} must be a regular non-symlink file", path.display()),
-            });
-        }
-        let source_path = verified_regular_file(path, "Cargo-reported publisher artifact")?;
-        if !source_path.starts_with(&canonical_staging) {
-            return Err(OvenLegacyCargoError::InvalidInput {
-                field: "Cargo-reported publisher artifact",
-                message: format!("{} escapes publisher staging", source_path.display()),
-            });
-        }
-        let file_name = source_path.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
-            OvenLegacyCargoError::InvalidInput {
-                field: "Cargo-reported publisher artifact",
-                message: format!("{} has a non-UTF-8 file name", source_path.display()),
+    for output in outputs {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let Ok(artifact) = serde_json::from_str::<CargoCompilerArtifact>(line) else {
+                continue;
+            };
+            if artifact.reason != "compiler-artifact" {
+                continue;
             }
-        })?;
-        if !is_direct_rustc_artifact(file_name) {
-            return Err(OvenLegacyCargoError::InvalidInput {
-                field: "Cargo-reported publisher artifact",
-                message: format!("{} is not a direct-rustc artifact", source_path.display()),
-            });
-        }
-        let target_artifact = compiler_artifact_platform(&source_path, target_triple).is_some();
-        if !target_artifact && !is_dynamic_rustc_artifact(file_name) {
-            // A cross-target direct-rustc plan must not accidentally retain a host `.rlib`. Host dynamic artifacts
-            // are the only supported host-side inputs because procedural macros execute on the publisher host.
-            continue;
-        }
-        let parent = source_path.parent().ok_or_else(|| OvenLegacyCargoError::InvalidInput {
-            field: "Cargo-reported publisher artifact",
-            message: format!("{} has no parent directory", source_path.display()),
-        })?;
-        let artifact_relative_path = relative_path(&canonical_staging, &source_path)?;
-        // A `deps` directory or Cargo 1.99's identity-owned `out` directory is flat after Oven materializes its
-        // recorded files. A profile root is not: retaining a root package `.rlib` there also retains `build/` child
-        // directories for its dependencies. That root output is useful provenance, but it is not a Rustc search
-        // directory. Direct dependencies must still come from one of the two flat, verified layouts below.
-        if parent
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| matches!(name, "deps" | "out"))
-        {
-            dependency_search_paths.insert(relative_path(&canonical_staging, parent)?);
-            searchable_artifacts.insert(artifact_relative_path.clone());
-        }
-        let digest = digest_bytes(&regular_file_bytes(&source_path)?);
-        let artifact = (artifact_relative_path.clone(), digest.clone());
-        if target_artifact {
-            if let Some(previous) = target_files.insert(file_name.to_string(), artifact.clone())
-                && previous != artifact
-            {
-                return Err(OvenLegacyCargoError::InvalidInput {
+            for path in artifact.filenames {
+                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                    return Err(OvenLegacyCargoError::InvalidInput {
+                        field: "Cargo-reported publisher artifact",
+                        message: format!("{} has a non-UTF-8 file name", path.display()),
+                    });
+                };
+                if !is_direct_rustc_artifact(file_name)
+                    || !cargo_reported_direct_artifact(profile, &artifact.target.name, &path)
+                {
+                    continue;
+                }
+                let metadata = fs::symlink_metadata(&path).map_err(|source| OvenLegacyCargoError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(OvenLegacyCargoError::InvalidInput {
+                        field: "Cargo-reported publisher artifact",
+                        message: format!("{} must be a regular non-symlink file", path.display()),
+                    });
+                }
+                let source_path = verified_regular_file(&path, "Cargo-reported publisher artifact")?;
+                if !source_path.starts_with(&canonical_staging) {
+                    return Err(OvenLegacyCargoError::InvalidInput {
+                        field: "Cargo-reported publisher artifact",
+                        message: format!("{} escapes publisher staging", source_path.display()),
+                    });
+                }
+                let target_artifact = compiler_artifact_platform(&source_path, target_triple).is_some();
+                if !target_artifact && !is_dynamic_rustc_artifact(file_name) {
+                    // A cross-target direct-rustc plan must not accidentally retain a host `.rlib`. Host dynamic
+                    // artifacts are the only supported host-side inputs because procedural macros execute there.
+                    continue;
+                }
+                let parent = source_path.parent().ok_or_else(|| OvenLegacyCargoError::InvalidInput {
                     field: "Cargo-reported publisher artifact",
-                    message: format!("multiple target artifacts share filename `{file_name}`"),
-                });
+                    message: format!("{} has no parent directory", source_path.display()),
+                })?;
+                let artifact_relative_path = relative_path(&canonical_staging, &source_path)?;
+                // A `deps` directory or Cargo 1.99's identity-owned `out` directory is flat after Oven materializes
+                // its recorded files. A profile root is provenance only, never a Rustc dependency search directory.
+                if parent
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| matches!(name, "deps" | "out"))
+                {
+                    dependency_search_paths.insert(relative_path(&canonical_staging, parent)?);
+                    searchable_artifacts.insert(artifact_relative_path.clone());
+                }
+                let digest = digest_bytes(&regular_file_bytes(&source_path)?);
+                let retained = PublisherReportedArtifact {
+                    package_id: artifact.package_id.clone(),
+                    relative_path: artifact_relative_path.clone(),
+                    digest: digest.clone(),
+                };
+                if target_artifact {
+                    target_artifacts.push(retained);
+                } else {
+                    host_dynamic_artifacts.push(retained);
+                }
+                if let Some(previous) = supporting.insert(artifact_relative_path.clone(), digest.clone())
+                    && previous != digest
+                {
+                    return Err(OvenLegacyCargoError::InvalidInput {
+                        field: "Cargo-reported publisher artifact",
+                        message: format!("multiple artifacts share path `{artifact_relative_path}`"),
+                    });
+                }
             }
-        } else if let Some(previous) = host_dynamic_files.insert(file_name.to_string(), artifact.clone())
-            && previous != artifact
-        {
-            return Err(OvenLegacyCargoError::InvalidInput {
-                field: "Cargo-reported publisher artifact",
-                message: format!("multiple host dynamic artifacts share filename `{file_name}`"),
-            });
-        }
-        if let Some(previous) = supporting.insert(artifact_relative_path.clone(), digest)
-            && previous != artifact.1
-        {
-            return Err(OvenLegacyCargoError::InvalidInput {
-                field: "Cargo-reported publisher artifact",
-                message: format!("multiple artifacts share path `{artifact_relative_path}`"),
-            });
         }
     }
 
     let mut externs = Vec::new();
     let mut selected = BTreeSet::new();
     for (dependency, package) in direct_dependencies {
-        let Some(artifact) = select_direct_artifact(&target_files, package)
-            .or_else(|| select_direct_proc_macro_artifact(&host_dynamic_files, package))
-        else {
+        let artifact =
+            match select_reported_direct_artifact(&target_artifacts, package, &["rlib", "dylib", "so", "dll"])? {
+                Some(artifact) => Some(artifact),
+                None => select_reported_direct_artifact(&host_dynamic_artifacts, package, &["dylib", "so", "dll"])?,
+            };
+        let Some(artifact) = artifact else {
             if permit_absent_declared_dependencies {
                 continue;
             }
@@ -6174,6 +7406,50 @@ fn artifact_closure_from_reported_paths(
         externs,
         supporting_artifacts,
     ))
+}
+
+/// One direct-rustc artifact reported by Cargo together with the opaque package identity that emitted it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PublisherReportedArtifact {
+    package_id: String,
+    relative_path: String,
+    digest: String,
+}
+
+/// Select the one artifact emitted by Cargo for a particular resolved package instance.
+fn select_reported_direct_artifact(
+    artifacts: &[PublisherReportedArtifact],
+    dependency: &ResolvedDirectDependency,
+    extensions: &[&str],
+) -> Result<Option<(String, String)>, OvenLegacyCargoError> {
+    for extension in extensions {
+        let suffix = format!(".{extension}");
+        let mut candidates = artifacts
+            .iter()
+            .filter(|artifact| artifact.package_id == dependency.package_id)
+            .filter(|artifact| artifact.relative_path.ends_with(&suffix))
+            .map(|artifact| (artifact.relative_path.clone(), artifact.digest.clone()))
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.dedup();
+        match candidates.as_slice() {
+            [] => continue,
+            [artifact] => return Ok(Some(artifact.clone())),
+            _ => {
+                return Err(OvenLegacyCargoError::Plan(format!(
+                    "named publisher resolved direct dependency `{}` to multiple `{extension}` artifacts for Cargo package `{}`: {}",
+                    dependency.package,
+                    dependency.package_id,
+                    candidates
+                        .iter()
+                        .map(|(path, _)| path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Read every exact direct-rustc artifact from the named Cargo publisher's stable JSON records.
@@ -6361,6 +7637,7 @@ fn publisher_registry_source_catalog(
     staging: &Path,
     inspection_packages: Option<&[OvenLegacyCargoInspectionPackage]>,
     registry_leaves: &[OvenRustcRegistryLeaf],
+    complete_resolved_source_catalog: bool,
 ) -> Result<(Vec<OvenRustcRegistrySourcePackage>, Vec<OvenRustcSupportingArtifact>), OvenLegacyCargoError> {
     let mut sources = registry_leaves
         .iter()
@@ -6371,17 +7648,27 @@ fn publisher_registry_source_catalog(
             source: leaf.source.clone(),
         })
         .collect::<Vec<_>>();
-    let Some(inspection_packages) = inspection_packages else {
+    let inspection_sources = match inspection_packages {
+        Some(inspection_packages) => Some(legacy_cargo_inspection_sources_from_metadata(
+            metadata,
+            cargo_lock,
+            inspection_packages,
+            InspectionPackageScope::CompleteResolvedGraph,
+            staging,
+        )?),
+        None if complete_resolved_source_catalog => Some(legacy_cargo_inspection_sources_from_metadata(
+            metadata,
+            cargo_lock,
+            &[],
+            InspectionPackageScope::CompleteResolvedGraph,
+            staging,
+        )?),
+        None => None,
+    };
+    let Some(inspection_sources) = inspection_sources else {
         sources.sort_by(|left, right| (&left.package, &left.version).cmp(&(&right.package, &right.version)));
         return Ok((sources, Vec::new()));
     };
-    let inspection_sources = legacy_cargo_inspection_sources_from_metadata(
-        metadata,
-        cargo_lock,
-        inspection_packages,
-        InspectionPackageScope::DirectRoot,
-        staging,
-    )?;
     let mut source_artifacts = Vec::new();
     for source in inspection_sources {
         let relative_root = source
@@ -7393,6 +8680,10 @@ fn reclaim_unmaterialized_compiler_suite_target_directory(
 
 /// Measure a conservative physical reservation for transient staging without following links or relying on logical
 /// bytes as physical allocation.
+///
+/// Cargo can create short-lived symlinks in its target directory on platforms that expose dynamic libraries. They
+/// count as one allocation apiece here, but their targets are never followed. Later artifact admission still rejects
+/// every symlink, so no link can become a retained Oven input.
 #[cfg(unix)]
 pub(crate) fn conservative_directory_reservation(root: &Path) -> Result<u64, OvenLegacyCargoError> {
     let mut seen_files = BTreeSet::new();
@@ -7413,10 +8704,7 @@ fn conservative_directory_reservation_with_seen_files(
         source,
     })?;
     if metadata.file_type().is_symlink() {
-        return Err(OvenLegacyCargoError::InvalidInput {
-            field: "publisher staging",
-            message: "must not contain symlinks".to_string(),
-        });
+        return Ok(round_physical(metadata.len()));
     }
     if metadata.is_file() {
         let identity = (metadata.dev(), metadata.ino());
@@ -7468,10 +8756,7 @@ pub(crate) fn conservative_directory_reservation(root: &Path) -> Result<u64, Ove
         source,
     })?;
     if metadata.file_type().is_symlink() {
-        return Err(OvenLegacyCargoError::InvalidInput {
-            field: "publisher staging",
-            message: "must not contain symlinks".to_string(),
-        });
+        return Ok(round_physical(metadata.len()));
     }
     if metadata.is_file() {
         return Ok(round_physical(metadata.len()));
@@ -7536,50 +8821,82 @@ fn round_physical(bytes: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CargoInvocationOutput, CargoMetadata, CargoMetadataPackage, CargoMetadataResolve, CargoMetadataResolveNode,
-        CargoUnitGraph, CargoUnitGraphDependency, CargoUnitGraphTarget, CargoUnitGraphUnit,
-        CompilerSuiteArtifactCatalog, InspectionPackageScope, OVEN_COMPILER_TEST_PROFILE,
-        OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION, OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION,
+        CargoInvocationOutput, CargoMetadata, CargoMetadataPackage, CargoMetadataResolve,
+        CargoMetadataResolveDependency, CargoMetadataResolveNode, CargoUnitGraph, CargoUnitGraphDependency,
+        CargoUnitGraphTarget, CargoUnitGraphUnit, CompilerSuiteArtifactCatalog, InspectionPackageScope,
+        OVEN_COMPILER_TEST_PROFILE, OVEN_COMPILER_TEST_SUITE_SCHEMA_VERSION,
+        OVEN_COMPILER_TEST_SUITE_SHARD_SCHEMA_VERSION, OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION,
         OvenCompilerTestSuiteArtifactClosure, OvenCompilerTestSuiteFoundationReference, OvenCompilerTestSuitePayload,
         OvenCompilerTestSuiteShardPayload, OvenCompilerTestSuiteShardReference, OvenCompilerTestSuiteTarget,
-        OvenCompilerTestSuiteToolchainLoafGenerationReference, OvenLegacyCargoDirectDependencyClosure,
-        OvenLegacyCargoInspectionPackage, OvenLegacyCargoInvocationTarget, OvenLegacyCargoPrepareRequest,
-        OvenLegacyCargoPublicationKind, artifact_closure, canonicalize_supporting_artifacts,
-        compiler_suite_artifact_catalog, compiler_suite_artifact_index, compiler_suite_bootstrap_selection,
-        compiler_suite_cargo_build_output, compiler_suite_cli_target_from_artifact_index,
-        compiler_suite_dependency_artifact, compiler_suite_dependency_directories, compiler_suite_direct_cli_plan,
-        compiler_suite_direct_target_plan, compiler_suite_direct_target_shard_from_catalog,
-        compiler_suite_direct_target_shard_plan, compiler_suite_foundation_dependencies,
-        compiler_suite_foundation_lock, compiler_suite_foundation_manifest, compiler_suite_foundation_plans,
-        compiler_suite_output_artifact_paths, compiler_suite_target_externs, compiler_suite_target_from_unit,
-        compiler_suite_target_runner, compiler_suite_target_selection_features, compiler_suite_target_selection_groups,
-        compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
+        OvenCompilerTestSuiteToolchainLoafGenerationReference, OvenLegacyCargoBaseLoaf,
+        OvenLegacyCargoDirectDependencyClosure, OvenLegacyCargoInspectionPackage, OvenLegacyCargoInvocationTarget,
+        OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind, OvenProjectExtensionPayload,
+        ResolvedDirectDependency, artifact_closure, artifact_closure_from_reported_paths,
+        canonicalize_supporting_artifacts, compiler_suite_artifact_catalog, compiler_suite_artifact_index,
+        compiler_suite_bootstrap_selection, compiler_suite_cargo_build_output,
+        compiler_suite_cli_target_from_artifact_index, compiler_suite_dependency_artifact,
+        compiler_suite_dependency_directories, compiler_suite_direct_cli_plan, compiler_suite_direct_target_plan,
+        compiler_suite_direct_target_shard_from_catalog, compiler_suite_direct_target_shard_plan,
+        compiler_suite_foundation_dependencies, compiler_suite_foundation_lock, compiler_suite_foundation_manifest,
+        compiler_suite_foundation_plans, compiler_suite_output_artifact_paths, compiler_suite_target_externs,
+        compiler_suite_target_from_unit, compiler_suite_target_runner, compiler_suite_target_selection_features,
+        compiler_suite_target_selection_groups, compiler_suite_target_selections, compiler_suite_toolchain_data_plans,
         compiler_suite_toolchain_loaf_generation_reference, compiler_suite_verified_target_source_bytes,
-        compiler_suite_workspace_libraries_for_roots, create_publisher_staging, direct_rustc_compile_environment,
-        direct_rustc_reusable_project_plan_environment, generated_project_direct_dependencies,
-        inspection_package_closure_ids, locked_generated_project, materialized_files_from_directory,
-        prepare_compiler_test_suite, prepare_direct_rustc_plan, publisher_direct_dependencies,
+        compiler_suite_workspace_libraries_for_roots, conservative_directory_reservation, create_publisher_staging,
+        digest_local_cargo_workspace_authority, direct_rustc_compile_environment,
+        direct_rustc_reusable_project_plan_environment, explicit_project_bake_inspection_sources,
+        generated_project_direct_dependencies, inspection_package_closure_ids, locked_generated_project,
+        materialize_sealed_registry_lock, materialized_files_from_directory, prepare_compiler_test_suite,
+        prepare_direct_rustc_plan, project_registry_source_dependencies, publisher_direct_dependencies,
         publisher_registry_source_catalog, reclaim_unmaterialized_compiler_suite_target_files,
-        run_legacy_cargo_invocation, select_compiler_test_suite_identity, stage_compiler_suite_shard_files,
-        stage_registry_source_directory, stage_self_contained_sdk_provider_tree, validate_compiler_suite_unit_graph,
-        validate_generated_registry_lock,
+        release_cohort_generated_project_lock, resolve_direct_dependency_packages, run_legacy_cargo_invocation,
+        select_compiler_test_suite_identity, select_existing_project_extension_identity,
+        stage_compiler_suite_shard_files, stage_registry_source_directory, stage_self_contained_sdk_provider_tree,
+        validate_compiler_suite_unit_graph, validate_generated_registry_lock, validate_release_cohort_registry_lock,
     };
     use crate::oven::loaf::{
         OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf, OvenLoafEnvelopeManifest,
         OvenLoafEnvelopeMember, OvenLoafMemberRole,
     };
     use crate::oven::rustc::{
-        OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactManifest, OvenRustcSupportingArtifact,
-        rustc_host_target, rustc_identity,
+        OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenRustcArtifactExtern,
+        OvenRustcArtifactManifest, OvenRustcRegistrySource, OvenRustcRegistrySourcePackage,
+        OvenRustcSupportingArtifact, rustc_host_target, rustc_identity,
     };
     use crate::oven::store::{
         OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreLimits,
     };
     use crate::oven::{
-        OvenBuildIntent, OvenCompilerSuiteRequest, OvenGeneratedProjectRequest, digest_source_tree,
+        OvenBuildIntent, OvenCompilerSuiteRequest, OvenGeneratedProjectRequest, digest_bytes, digest_source_tree,
         receipt_generated_project, receipt_native_compiler_suite,
     };
-    use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        path::{Path, PathBuf},
+        process::Command,
+    };
+
+    #[cfg(unix)]
+    #[test]
+    fn transient_reservation_counts_a_symlink_without_following_its_target() -> Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let outside = tempfile::tempdir()?;
+        let target = outside.path().join("large-external-payload");
+        fs::write(&target, vec![0_u8; 1024 * 1024])?;
+        std::os::unix::fs::symlink(&target, staging.path().join("cargo-transient-link"))?;
+
+        let reservation = conservative_directory_reservation(staging.path())?;
+        assert!(
+            reservation >= 2 * 4096,
+            "the staging root and link must be accounted for"
+        );
+        assert!(
+            reservation < 1024 * 1024,
+            "transient reservation must not follow a symlink outside publisher staging"
+        );
+        Ok(())
+    }
 
     fn write_test_loaf_envelope(
         loafs: &std::path::Path,
@@ -7618,6 +8935,7 @@ mod tests {
                 .iter()
                 .map(|dependency| (*dependency).to_string())
                 .collect(),
+            deps: Vec::new(),
         };
         let metadata = CargoMetadata {
             packages: vec![
@@ -7664,7 +8982,7 @@ mod tests {
     }
 
     #[test]
-    fn sealed_inspection_catalog_keeps_transitive_proc_macro_sources_without_fabricating_a_leaf()
+    fn project_extension_catalog_keeps_every_locked_source_without_fabricating_a_leaf()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = tempfile::tempdir()?;
         let staging = fixture.path().join("staging");
@@ -7693,12 +9011,14 @@ mod tests {
                         .iter()
                         .map(|dependency| (*dependency).to_string())
                         .collect(),
+                    deps: Vec::new(),
                 },
             ))
         };
         let (serde_json, serde_json_node) = package("serde-json", "serde_json", &["serde"])?;
         let (serde, serde_node) = package("serde", "serde", &["serde-derive"])?;
         let (serde_derive, serde_derive_node) = package("serde-derive", "serde_derive", &[])?;
+        let (uninspected, uninspected_node) = package("uninspected", "uninspected", &[])?;
         let metadata = CargoMetadata {
             packages: vec![
                 CargoMetadataPackage {
@@ -7711,6 +9031,7 @@ mod tests {
                 serde_json,
                 serde,
                 serde_derive,
+                uninspected,
             ],
             resolve: Some(CargoMetadataResolve {
                 root: Some("root".to_string()),
@@ -7719,16 +9040,18 @@ mod tests {
                         id: "root".to_string(),
                         features: Vec::new(),
                         dependencies: vec!["serde-json".to_string()],
+                        deps: Vec::new(),
                     },
                     serde_json_node,
                     serde_node,
                     serde_derive_node,
+                    uninspected_node,
                 ],
             }),
         };
         let lock = format!(
             "version = 4\n\n{}",
-            ["serde_json", "serde", "serde_derive"]
+            ["serde_json", "serde", "serde_derive", "uninspected"]
                 .into_iter()
                 .map(|name| format!(
                     "[[package]]\nname = \"{name}\"\nversion = \"1.0.0\"\nsource = \"{registry}\"\nchecksum = \"{name}-checksum\"\n\n"
@@ -7736,20 +9059,12 @@ mod tests {
                 .collect::<String>()
         );
 
-        let (sources, source_artifacts) = publisher_registry_source_catalog(
-            &metadata,
-            lock.as_bytes(),
-            &staging,
-            Some(&[OvenLegacyCargoInspectionPackage {
-                package: "serde_json".to_string(),
-                version_requirement: "1".to_string(),
-            }]),
-            &[],
-        )?;
+        let (sources, source_artifacts) =
+            publisher_registry_source_catalog(&metadata, lock.as_bytes(), &staging, None, &[], true)?;
 
         assert_eq!(
             sources.iter().map(|source| source.package.as_str()).collect::<Vec<_>>(),
-            ["serde", "serde_derive", "serde_json"]
+            ["serde", "serde_derive", "serde_json", "uninspected"]
         );
         assert!(sources.iter().any(|source| source.package == "serde_derive"));
         assert!(
@@ -7813,16 +9128,19 @@ mod tests {
                         id: "root".to_string(),
                         features: Vec::new(),
                         dependencies: vec!["duplicate-1".to_string(), "duplicate-2".to_string()],
+                        deps: Vec::new(),
                     },
                     CargoMetadataResolveNode {
                         id: "duplicate-1".to_string(),
                         features: Vec::new(),
                         dependencies: Vec::new(),
+                        deps: Vec::new(),
                     },
                     CargoMetadataResolveNode {
                         id: "duplicate-2".to_string(),
                         features: Vec::new(),
                         dependencies: Vec::new(),
+                        deps: Vec::new(),
                     },
                 ],
             }),
@@ -7971,6 +9289,206 @@ mod tests {
     }
 
     #[test]
+    fn reported_artifact_closure_keeps_the_direct_package_instance_when_versions_share_a_crate_name()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let target_triple = "aarch64-apple-darwin";
+        let target_dependencies = staging.path().join(format!("target/{target_triple}/debug/deps"));
+        fs::create_dir_all(&target_dependencies)?;
+        let transitive = target_dependencies.join("libsubstrait-aaaa.rlib");
+        let direct = target_dependencies.join("libsubstrait-zzzz.rlib");
+        fs::write(&transitive, "substrait 0.62 transitive")?;
+        fs::write(&direct, "substrait 0.63 direct")?;
+        let compiler_artifact = |package_id: &str, artifact: &Path| {
+            serde_json::json!({
+                "reason": "compiler-artifact",
+                "package_id": package_id,
+                "target": { "name": "substrait" },
+                "filenames": [artifact],
+            })
+            .to_string()
+        };
+        let output = CargoInvocationOutput {
+            stdout: format!(
+                "{}\n{}\n",
+                compiler_artifact("substrait 0.62.2 (registry+https://example.invalid)", &transitive),
+                compiler_artifact("substrait 0.63.0 (registry+https://example.invalid)", &direct),
+            )
+            .into_bytes(),
+        };
+        let dependencies = BTreeMap::from([(
+            "substrait".to_string(),
+            ResolvedDirectDependency {
+                package: "substrait".to_string(),
+                package_id: "substrait 0.63.0 (registry+https://example.invalid)".to_string(),
+            },
+        )]);
+
+        let (_, externs, _) = artifact_closure_from_reported_paths(
+            staging.path(),
+            target_triple,
+            "debug",
+            &dependencies,
+            false,
+            &[output],
+        )?;
+
+        assert_eq!(externs.len(), 1);
+        assert_eq!(externs[0].crate_name, "substrait");
+        assert!(
+            externs[0].relative_path.ends_with("libsubstrait-zzzz.rlib"),
+            "the root --extern must use the direct 0.63 package, not its 0.62 transitive namesake: {}",
+            externs[0].relative_path
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolved_direct_dependency_packages_preserve_the_root_alias_to_package_id()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let metadata = CargoMetadata {
+            packages: vec![
+                CargoMetadataPackage {
+                    id: "root".to_string(),
+                    name: "fixture".to_string(),
+                    version: "0.1.0".to_string(),
+                    manifest_path: PathBuf::from("/fixture/Cargo.toml"),
+                    source: None,
+                },
+                CargoMetadataPackage {
+                    id: "substrait 0.62".to_string(),
+                    name: "substrait".to_string(),
+                    version: "0.62.2".to_string(),
+                    manifest_path: PathBuf::from("/registry/substrait-0.62/Cargo.toml"),
+                    source: Some("registry+https://example.invalid".to_string()),
+                },
+                CargoMetadataPackage {
+                    id: "substrait 0.63".to_string(),
+                    name: "substrait".to_string(),
+                    version: "0.63.0".to_string(),
+                    manifest_path: PathBuf::from("/registry/substrait-0.63/Cargo.toml"),
+                    source: Some("registry+https://example.invalid".to_string()),
+                },
+            ],
+            resolve: Some(CargoMetadataResolve {
+                root: Some("root".to_string()),
+                nodes: vec![
+                    CargoMetadataResolveNode {
+                        id: "root".to_string(),
+                        features: Vec::new(),
+                        dependencies: vec!["substrait 0.63".to_string()],
+                        deps: vec![CargoMetadataResolveDependency {
+                            name: "substrait".to_string(),
+                            pkg: "substrait 0.63".to_string(),
+                        }],
+                    },
+                    CargoMetadataResolveNode {
+                        id: "substrait 0.62".to_string(),
+                        features: Vec::new(),
+                        dependencies: Vec::new(),
+                        deps: Vec::new(),
+                    },
+                    CargoMetadataResolveNode {
+                        id: "substrait 0.63".to_string(),
+                        features: Vec::new(),
+                        dependencies: vec!["substrait 0.62".to_string()],
+                        deps: Vec::new(),
+                    },
+                ],
+            }),
+        };
+
+        let resolved = resolve_direct_dependency_packages(
+            &metadata,
+            &BTreeMap::from([("substrait".to_string(), "substrait".to_string())]),
+        )?;
+
+        assert_eq!(resolved["substrait"].package_id, "substrait 0.63");
+        Ok(())
+    }
+
+    #[test]
+    fn project_registry_source_dependencies_preserve_two_compatible_root_aliases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let registry = "registry+https://example.invalid";
+        let metadata = CargoMetadata {
+            packages: vec![
+                CargoMetadataPackage {
+                    id: "root".to_string(),
+                    name: "fixture".to_string(),
+                    version: "0.1.0".to_string(),
+                    manifest_path: PathBuf::from("/fixture/Cargo.toml"),
+                    source: None,
+                },
+                CargoMetadataPackage {
+                    id: "shared 1.2".to_string(),
+                    name: "shared".to_string(),
+                    version: "1.2.0".to_string(),
+                    manifest_path: PathBuf::from("/registry/shared-1.2/Cargo.toml"),
+                    source: Some(registry.to_string()),
+                },
+                CargoMetadataPackage {
+                    id: "shared 1.8".to_string(),
+                    name: "shared".to_string(),
+                    version: "1.8.0".to_string(),
+                    manifest_path: PathBuf::from("/registry/shared-1.8/Cargo.toml"),
+                    source: Some(registry.to_string()),
+                },
+            ],
+            resolve: Some(CargoMetadataResolve {
+                root: Some("root".to_string()),
+                nodes: vec![CargoMetadataResolveNode {
+                    id: "root".to_string(),
+                    features: Vec::new(),
+                    dependencies: vec!["shared 1.2".to_string(), "shared 1.8".to_string()],
+                    deps: vec![
+                        CargoMetadataResolveDependency {
+                            name: "shared_old".to_string(),
+                            pkg: "shared 1.2".to_string(),
+                        },
+                        CargoMetadataResolveDependency {
+                            name: "shared_new".to_string(),
+                            pkg: "shared 1.8".to_string(),
+                        },
+                    ],
+                }],
+            }),
+        };
+        let source = |version: &str, checksum: &str| OvenRustcRegistrySourcePackage {
+            package: "shared".to_string(),
+            version: version.to_string(),
+            features: Vec::new(),
+            source: OvenRustcRegistrySource {
+                registry: registry.to_string(),
+                checksum: checksum.to_string(),
+                relative_root: format!("registry-sources/shared-{version}"),
+                digest: format!("sha256:shared-{version}"),
+            },
+        };
+        let sources = vec![source("1.2.0", "old-checksum"), source("1.8.0", "new-checksum")];
+        let dependencies = BTreeMap::from([
+            ("shared_new".to_string(), "shared".to_string()),
+            ("shared_old".to_string(), "shared".to_string()),
+        ]);
+
+        let selected = project_registry_source_dependencies(&metadata, &dependencies, &sources)?;
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].alias, "shared_new");
+        assert_eq!(selected[0].version, "1.8.0");
+        assert_eq!(selected[0].checksum, "new-checksum");
+        assert_eq!(selected[1].alias, "shared_old");
+        assert_eq!(selected[1].version, "1.2.0");
+        assert_eq!(selected[1].checksum, "old-checksum");
+
+        let Err(error) = project_registry_source_dependencies(&metadata, &dependencies, &sources[..1]) else {
+            return Err(std::io::Error::other("missing exact source record was accepted").into());
+        };
+        assert!(error.to_string().contains("has 0 exact sealed source records"));
+        Ok(())
+    }
+
+    #[test]
     fn publisher_recovers_one_sealed_target_library_when_cargo_json_omits_its_artifact_family()
     -> Result<(), Box<dyn std::error::Error>> {
         let staging = tempfile::tempdir()?;
@@ -8052,6 +9570,24 @@ mod tests {
                 "providers/sdk-inventory.json".to_string(),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn publisher_materializes_the_sealed_registry_lock_with_registry_sources() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let staging = tempfile::tempdir()?;
+        let sealed_lock = staging.path().join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+        let parent = sealed_lock.parent().ok_or("registry lock has no parent")?;
+        fs::create_dir_all(parent)?;
+        fs::write(&sealed_lock, "version = 4\n")?;
+
+        let mut files = Vec::new();
+        materialize_sealed_registry_lock(staging.path(), true, &mut files)?;
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].relative_path, OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+        assert_eq!(files[0].source_path, fs::canonicalize(&sealed_lock)?);
         Ok(())
     }
 
@@ -8490,18 +10026,22 @@ checksum = "selected"
             .iter()
             .find(|package| package["name"].as_str() == Some("component"))
             .ok_or_else(|| std::io::Error::other("generated component lock package"))?;
+        let compiler_component = packages
+            .iter()
+            .find(|package| package["name"].as_str() == Some("compiler-component"))
+            .ok_or_else(|| std::io::Error::other("generated detached compiler component lock package"))?;
         let fixture_dependencies = fixture["dependencies"]
             .as_array()
             .ok_or_else(|| std::io::Error::other("generated fixture dependencies"))?;
         assert!(
             fixture_dependencies
                 .iter()
-                .any(|dependency| dependency.as_str() == Some("component"))
+                .any(|dependency| dependency.as_str() == Some("component 0.2.0"))
         );
         assert!(
             fixture_dependencies
                 .iter()
-                .any(|dependency| dependency.as_str() == Some("compiler-component"))
+                .any(|dependency| dependency.as_str() == Some("compiler-component 0.5.0"))
         );
         assert!(
             fixture_dependencies
@@ -8516,12 +10056,596 @@ checksum = "selected"
             Some("serde 1.0.228")
         );
         assert_eq!(
+            compiler_component["version"].as_str(),
+            Some("0.5.0"),
+            "a detached compiler-owned package retains the checked local lock version fallback"
+        );
+        assert_eq!(
             packages
                 .iter()
                 .filter(|package| package["name"].as_str() == Some("serde"))
                 .count(),
             1,
             "unreachable compiler packages are pruned without changing the selected registry version"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generated_loaf_lock_qualifies_same_named_local_package_versions() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let generated = project.path().join("generated");
+        let foo_v1 = project.path().join("foo-v1");
+        let foo_v2 = project.path().join("foo-v2");
+        fs::create_dir_all(generated.join("src"))?;
+        fs::create_dir_all(foo_v1.join("src"))?;
+        fs::create_dir_all(foo_v2.join("src"))?;
+        let generated_manifest = concat!(
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n",
+            "[dependencies]\n",
+            "foo_old = { package = \"foo\", path = \"../foo-v1\" }\n",
+            "foo_new = { package = \"foo\", path = \"../foo-v2\" }\n",
+        );
+        let generated_manifest_path = generated.join("Cargo.toml");
+        fs::write(&generated_manifest_path, generated_manifest)?;
+        fs::write(generated.join("src/lib.rs"), "pub fn fixture() {}\n")?;
+        fs::write(
+            foo_v1.join("Cargo.toml"),
+            "[package]\nname = \"foo\"\nversion = \"1.0.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(foo_v1.join("src/lib.rs"), "pub fn foo_v1() {}\n")?;
+        fs::write(
+            foo_v2.join("Cargo.toml"),
+            "[package]\nname = \"foo\"\nversion = \"2.0.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(foo_v2.join("src/lib.rs"), "pub fn foo_v2() {}\n")?;
+        let compiler_lock = br#"version = 4
+
+[[package]]
+name = "compiler-only"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "compiler"
+"#;
+
+        let lock = locked_generated_project(&generated_manifest_path, generated_manifest.as_bytes(), compiler_lock)?;
+        let lock = toml::from_slice::<toml::Value>(&lock)?;
+        let packages = lock["package"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("generated package array"))?;
+        let fixture = packages
+            .iter()
+            .find(|package| package["name"].as_str() == Some("fixture"))
+            .ok_or_else(|| std::io::Error::other("generated fixture lock root"))?;
+        let dependencies = fixture["dependencies"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("generated fixture dependencies"))?
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(dependencies, ["foo 1.0.0", "foo 2.0.0"]);
+        assert_eq!(
+            packages
+                .iter()
+                .filter(|package| package["name"].as_str() == Some("foo"))
+                .count(),
+            2
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generated_lock_inherits_nearest_workspace_package_and_dependencies() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let workspace = project.path().join("vendor");
+        let member = workspace.join("member");
+        let support = workspace.join("support");
+        let generated = project.path().join("generated");
+        fs::create_dir_all(member.join("src"))?;
+        fs::create_dir_all(support.join("src"))?;
+        fs::create_dir_all(generated.join("src"))?;
+        let workspace_manifest_path = workspace.join("Cargo.toml");
+        fs::write(
+            &workspace_manifest_path,
+            concat!(
+                "[workspace]\nmembers = [\"member\", \"support\"]\n\n",
+                "[workspace.package]\nversion = \"1.2.3\"\n\n",
+                "[workspace.dependencies]\n",
+                "serde = { version = \"=1.0.228\", features = [\"derive\"] }\n",
+                "support = { path = \"support\" }\n",
+            ),
+        )?;
+        let member_manifest = concat!(
+            "[package]\nname = \"member\"\nversion.workspace = true\nedition = \"2024\"\n\n",
+            "[dependencies]\n",
+            "serde = { workspace = true, features = [\"alloc\"] }\n",
+            "support.workspace = true\n",
+        );
+        let member_manifest_path = member.join("Cargo.toml");
+        fs::write(&member_manifest_path, member_manifest)?;
+        fs::write(member.join("src/lib.rs"), "pub fn member() {}\n")?;
+        fs::write(
+            support.join("Cargo.toml"),
+            "[package]\nname = \"support\"\nversion = \"0.4.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(support.join("src/lib.rs"), "pub fn support() {}\n")?;
+        let generated_manifest = concat!(
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n",
+            "[dependencies]\nmember = { path = \"../vendor/member\" }\n",
+        );
+        let generated_manifest_path = generated.join("Cargo.toml");
+        fs::write(&generated_manifest_path, generated_manifest)?;
+        fs::write(generated.join("src/lib.rs"), "pub fn fixture() {}\n")?;
+        let compiler_lock = br#"version = 4
+
+[[package]]
+name = "member"
+version = "1.2.3"
+dependencies = [
+ "serde 1.0.228",
+]
+
+[[package]]
+name = "serde"
+version = "1.0.228"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "first"
+
+[[package]]
+name = "serde"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "second"
+"#;
+
+        let first_authority = digest_local_cargo_workspace_authority(&member)?
+            .ok_or_else(|| std::io::Error::other("first inherited workspace authority digest"))?;
+        let first = locked_generated_project(&generated_manifest_path, generated_manifest.as_bytes(), compiler_lock)?;
+        let first_lock = toml::from_slice::<toml::Value>(&first)?;
+        let first_packages = first_lock["package"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("first generated workspace package array"))?;
+        let first_member = first_packages
+            .iter()
+            .find(|package| package["name"].as_str() == Some("member"))
+            .ok_or_else(|| std::io::Error::other("first generated workspace member"))?;
+        assert_eq!(first_member["version"].as_str(), Some("1.2.3"));
+        assert!(
+            first_packages
+                .iter()
+                .any(|package| package["name"].as_str() == Some("support")),
+            "workspace-relative path dependency was not added to the effective local graph"
+        );
+        assert!(
+            first_packages.iter().any(|package| {
+                package["name"].as_str() == Some("serde") && package["version"].as_str() == Some("1.0.228")
+            }),
+            "workspace-selected registry dependency was not retained"
+        );
+
+        fs::write(
+            &workspace_manifest_path,
+            concat!(
+                "[workspace]\nmembers = [\"member\", \"support\"]\n\n",
+                "[workspace.package]\nversion = \"1.2.3\"\n\n",
+                "[workspace.dependencies]\n",
+                "serde = { version = \"=1.0.229\", features = [\"derive\"] }\n",
+                "support = { path = \"support\" }\n",
+            ),
+        )?;
+        let second_authority = digest_local_cargo_workspace_authority(&member)?
+            .ok_or_else(|| std::io::Error::other("second inherited workspace authority digest"))?;
+        assert_ne!(
+            first_authority, second_authority,
+            "selected workspace dependency authority must change the normal source identity"
+        );
+        let second = locked_generated_project(&generated_manifest_path, generated_manifest.as_bytes(), compiler_lock)?;
+        assert_ne!(
+            first, second,
+            "selected workspace dependency authority must change the generated lock identity"
+        );
+        let second_lock = toml::from_slice::<toml::Value>(&second)?;
+        let second_packages = second_lock["package"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("second generated workspace package array"))?;
+        assert!(
+            second_packages.iter().any(|package| {
+                package["name"].as_str() == Some("serde") && package["version"].as_str() == Some("1.0.229")
+            }),
+            "updated workspace registry authority was not selected"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generated_lock_reports_missing_workspace_authority_without_compiler_lock_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = tempfile::tempdir()?;
+        let member = workspace.path().join("member");
+        fs::create_dir_all(member.join("src"))?;
+        let workspace_manifest_path = workspace.path().join("Cargo.toml");
+        fs::write(&workspace_manifest_path, "[workspace]\nmembers = [\"member\"]\n")?;
+        let member_manifest = "[package]\nname = \"member\"\nversion.workspace = true\n";
+        let member_manifest_path = member.join("Cargo.toml");
+        fs::write(&member_manifest_path, member_manifest)?;
+        fs::write(member.join("src/lib.rs"), "pub fn member() {}\n")?;
+        let compiler_lock = b"version = 4\n\n[[package]]\nname = \"member\"\nversion = \"9.9.9\"\n";
+
+        let Err(error) = locked_generated_project(&member_manifest_path, member_manifest.as_bytes(), compiler_lock)
+        else {
+            return Err(std::io::Error::other("missing workspace package version was accepted").into());
+        };
+        let workspace_manifest_path = fs::canonicalize(&workspace_manifest_path)?;
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains(&workspace_manifest_path.display().to_string()));
+        assert!(diagnostic.contains("[workspace.package].version"));
+        assert!(
+            !diagnostic.contains("9.9.9"),
+            "a containing workspace must not fall back to a compiler-lock coincidence"
+        );
+
+        fs::write(
+            &workspace_manifest_path,
+            "[workspace]\nmembers = [\"member\"]\n\n[workspace.package]\nversion = \"1.2.3\"\n",
+        )?;
+        let member_manifest = concat!(
+            "[package]\nname = \"member\"\nversion.workspace = true\n\n",
+            "[dependencies]\nserde.workspace = true\n",
+        );
+        fs::write(&member_manifest_path, member_manifest)?;
+        let Err(error) = locked_generated_project(&member_manifest_path, member_manifest.as_bytes(), compiler_lock)
+        else {
+            return Err(std::io::Error::other("missing workspace dependency was accepted").into());
+        };
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains(&workspace_manifest_path.display().to_string()));
+        assert!(diagnostic.contains("[workspace.dependencies].serde"));
+        Ok(())
+    }
+
+    #[test]
+    fn release_cohort_lock_pins_overlap_while_permitting_project_only_packages()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let manifest_path = project.path().join("Cargo.toml");
+        let manifest = concat!(
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n",
+            "[dependencies]\nserde = \"1\"\nproject-only = \"2\"\n",
+        );
+        fs::write(&manifest_path, manifest)?;
+        let release_lock = br#"version = 4
+
+[[package]]
+name = "serde"
+version = "1.0.228"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-serde"
+"#;
+
+        let seed = release_cohort_generated_project_lock(&manifest_path, manifest.as_bytes(), release_lock)?;
+        let seed_text = std::str::from_utf8(&seed)?;
+        assert!(seed_text.contains("name = \"serde\""));
+        assert!(seed_text.contains("version = \"1.0.228\""));
+        assert!(!seed_text.contains("project-only"));
+
+        let normalized = br#"version = 4
+
+[[package]]
+name = "fixture"
+version = "0.1.0"
+dependencies = [
+ "project-only",
+ "serde",
+]
+
+[[package]]
+name = "project-only"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "project-only-checksum"
+
+[[package]]
+name = "serde"
+version = "1.0.228"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-serde"
+"#;
+        validate_release_cohort_registry_lock(release_lock, &seed, normalized)?;
+
+        let tampered = String::from_utf8(normalized.to_vec())?.replace("release-serde", "tampered");
+        let Err(error) = validate_release_cohort_registry_lock(release_lock, &seed, tampered.as_bytes()) else {
+            return Err(std::io::Error::other("tampered release-owned checksum was accepted").into());
+        };
+        assert!(error.to_string().contains("changed the release-derived checksum"));
+        Ok(())
+    }
+
+    #[test]
+    fn release_cohort_lock_allows_cargo_to_prune_an_unreachable_release_node() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let release_lock = br#"version = 4
+
+[[package]]
+name = "atomic-waker"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-atomic-waker"
+"#;
+        let seeded_lock = br#"version = 4
+
+[[package]]
+name = "fixture"
+version = "0.1.0"
+
+[[package]]
+name = "atomic-waker"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-atomic-waker"
+"#;
+        let generated_lock = br#"version = 4
+
+[[package]]
+name = "fixture"
+version = "0.1.0"
+"#;
+
+        validate_release_cohort_registry_lock(release_lock, seeded_lock, generated_lock)?;
+        Ok(())
+    }
+
+    #[test]
+    fn release_cohort_lock_allows_project_only_versions_and_registry_edge_normalization()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let manifest_path = project.path().join("Cargo.toml");
+        let manifest = concat!(
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n",
+            "[dependencies]\nshared = \"1\"\ndatafusion-shaped = \"1\"\n",
+        );
+        fs::write(&manifest_path, manifest)?;
+        let release_lock = br#"version = 4
+
+[[package]]
+name = "shared"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-shared"
+dependencies = ["transitive"]
+
+[[package]]
+name = "transitive"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-transitive"
+"#;
+        let seed = release_cohort_generated_project_lock(&manifest_path, manifest.as_bytes(), release_lock)?;
+        let normalized = br#"version = 4
+
+[[package]]
+name = "fixture"
+version = "0.1.0"
+dependencies = [
+ "datafusion-shaped",
+ "shared",
+]
+
+[[package]]
+name = "datafusion-shaped"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "project-datafusion"
+dependencies = ["transitive 2.0.0"]
+
+[[package]]
+name = "shared"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-shared"
+dependencies = ["transitive 1.0.0"]
+
+[[package]]
+name = "transitive"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-transitive"
+
+[[package]]
+name = "transitive"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "project-transitive"
+"#;
+
+        validate_release_cohort_registry_lock(release_lock, &seed, normalized)?;
+
+        let normalized_registry_edges = String::from_utf8(normalized.to_vec())?.replace(
+            "dependencies = [\"transitive 1.0.0\"]",
+            "dependencies = [\"transitive 2.0.0\"]",
+        );
+        validate_release_cohort_registry_lock(release_lock, &seed, normalized_registry_edges.as_bytes())?;
+        Ok(())
+    }
+
+    #[test]
+    fn release_cohort_lock_allows_pruned_local_edges_but_rejects_new_release_identity_edges()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let release_lock = br#"version = 4
+
+[[package]]
+name = "release-local"
+version = "1.0.0"
+dependencies = ["shared"]
+
+[[package]]
+name = "shared"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-shared"
+"#;
+        let seeded_lock = br#"version = 4
+
+[[package]]
+name = "fixture"
+version = "0.1.0"
+dependencies = ["release-local"]
+
+[[package]]
+name = "release-local"
+version = "1.0.0"
+dependencies = ["shared"]
+
+[[package]]
+name = "shared"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-shared"
+"#;
+        let generated_lock = br#"version = 4
+
+[[package]]
+name = "fixture"
+version = "0.1.0"
+dependencies = ["release-local"]
+
+[[package]]
+name = "project-only"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "project-only"
+
+[[package]]
+name = "release-local"
+version = "1.0.0"
+dependencies = ["project-only", "shared"]
+
+[[package]]
+name = "shared"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "release-shared"
+"#;
+
+        let pruned_local_lock = br#"version = 4
+
+[[package]]
+name = "fixture"
+version = "0.1.0"
+dependencies = ["release-local"]
+
+[[package]]
+name = "release-local"
+version = "1.0.0"
+"#;
+        validate_release_cohort_registry_lock(release_lock, seeded_lock, pruned_local_lock)?;
+
+        let Err(error) = validate_release_cohort_registry_lock(release_lock, seeded_lock, generated_lock) else {
+            return Err(std::io::Error::other("new edge on a retained local release package was accepted").into());
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("changed the release-derived dependency edges for `release-local` 1.0.0")
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_project_inspection_reuses_the_release_lock_metadata_walk() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = tempfile::tempdir()?;
+        let manifest = project.path().join("Cargo.toml");
+        fs::write(
+            &manifest,
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nlocal = { path = \"local\" }\n",
+        )?;
+        let local = project.path().join("local");
+        fs::create_dir_all(local.join("src"))?;
+        fs::write(
+            local.join("Cargo.toml"),
+            "[package]\nname = \"local\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nhidden = \"1\"\n",
+        )?;
+        fs::write(local.join("src/lib.rs"), "pub fn local() {}\n")?;
+        let registry_source = "registry+https://example.invalid/index";
+        let checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let hidden = project.path().join("registry-hidden");
+        fs::create_dir_all(hidden.join("src"))?;
+        fs::write(
+            hidden.join("Cargo.toml"),
+            "[package]\nname = \"hidden\"\nversion = \"1.0.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(hidden.join("src/lib.rs"), "pub fn hidden() {}\n")?;
+        let release_lock = project.path().join("release-Cargo.lock");
+        fs::write(
+            &release_lock,
+            format!(
+                "version = 4\n\n[[package]]\nname = \"hidden\"\nversion = \"1.0.0\"\nsource = \"{registry_source}\"\nchecksum = \"{checksum}\"\n"
+            ),
+        )?;
+        let metadata = project.path().join("metadata.json");
+        fs::write(
+            &metadata,
+            serde_json::to_vec(&serde_json::json!({
+                "packages": [{
+                    "id": "fixture 0.1.0",
+                    "name": "fixture",
+                    "version": "0.1.0",
+                    "manifest_path": manifest,
+                }, {
+                    "id": "local 0.1.0",
+                    "name": "local",
+                    "version": "0.1.0",
+                    "manifest_path": local.join("Cargo.toml"),
+                }, {
+                    "id": "hidden 1.0.0",
+                    "name": "hidden",
+                    "version": "1.0.0",
+                    "manifest_path": hidden.join("Cargo.toml"),
+                    "source": registry_source,
+                }],
+                "resolve": {
+                    "root": "fixture 0.1.0",
+                    "nodes": [{
+                        "id": "fixture 0.1.0",
+                        "dependencies": ["local 0.1.0"],
+                        "deps": [{ "name": "local", "pkg": "local 0.1.0" }],
+                    }, {
+                        "id": "local 0.1.0",
+                        "dependencies": ["hidden 1.0.0"],
+                        "deps": [{ "name": "hidden", "pkg": "hidden 1.0.0" }],
+                    }, {
+                        "id": "hidden 1.0.0",
+                        "dependencies": [],
+                        "deps": [],
+                    }],
+                },
+            }))?,
+        )?;
+        let marker = project.path().join("metadata-invocations");
+        let cargo = project.path().join("cargo");
+        fs::write(
+            &cargo,
+            format!(
+                "#!/bin/sh\nprintf x >> '{}'\ncat '{}'\n",
+                marker.display(),
+                metadata.display()
+            ),
+        )?;
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
+        let staging = tempfile::tempdir()?;
+
+        let sources =
+            explicit_project_bake_inspection_sources(&cargo, &manifest, &[], &[], staging.path(), Some(&release_lock))?;
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].package, "hidden");
+        assert_eq!(sources[0].checksum, checksum);
+        assert_eq!(
+            fs::read(&marker)?,
+            b"x",
+            "metadata must run once per explicit inspection workspace"
         );
         Ok(())
     }
@@ -8931,7 +11055,7 @@ checksum = "selected"
         assert!(
             error
                 .to_string()
-                .contains("regenerate it through the named legacy-cargo Loaf baker")
+                .contains("regenerate it through the internal compatibility publisher")
         );
         Ok(())
     }
@@ -9300,6 +11424,147 @@ checksum = "selected"
 
     #[cfg(unix)]
     #[test]
+    fn project_extension_reuse_requires_a_complete_current_payload() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let generated_root = project.path().join("src/main.rs");
+        fs::create_dir_all(generated_root.parent().ok_or("generated source parent missing")?)?;
+        fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"oven_schema_fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(&generated_root, "fn main() {}\n")?;
+        let rustc_output = Command::new("rustup").args(["which", "rustc"]).output()?;
+        assert!(rustc_output.status.success(), "rustup which rustc failed");
+        let rustc = PathBuf::from(String::from_utf8(rustc_output.stdout)?.trim());
+        let receipt = receipt_generated_project(
+            &OvenGeneratedProjectRequest::new(
+                project.path(),
+                "oven_schema_fixture",
+                "0.1.0",
+                rustc_host_target(&rustc)?,
+                rustc_identity(&rustc)?,
+                "debug",
+                Vec::new(),
+            )
+            .with_generated_source("generated-root", &generated_root),
+        )?;
+        let base_plan = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent.clone(),
+            dependency_search_paths: vec!["deps".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![OvenRustcArtifactExtern {
+                crate_name: "incan_stdlib".to_string(),
+                relative_path: "deps/libincan_stdlib-release.rlib".to_string(),
+                digest: digest_bytes(b"release stdlib"),
+            }],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: Vec::new(),
+            registry_sources: Vec::new(),
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: Vec::new(),
+        };
+        let mut publisher_plan = base_plan.clone();
+        publisher_plan.externs = vec![
+            OvenRustcArtifactExtern {
+                crate_name: "incan_stdlib".to_string(),
+                relative_path: "deps/libincan_stdlib-project.rlib".to_string(),
+                digest: digest_bytes(b"project stdlib"),
+            },
+            OvenRustcArtifactExtern {
+                crate_name: "project_dep".to_string(),
+                relative_path: "deps/libproject_dep.rlib".to_string(),
+                digest: digest_bytes(b"project dependency"),
+            },
+        ];
+        let complete_plan = publisher_plan.with_release_cohort_from_base(&base_plan)?;
+        let partition = complete_plan.partition_against_base(&base_plan)?;
+        assert!(!partition.base_paths.is_empty());
+        assert!(!partition.extension_paths.is_empty());
+        let base_identity = "sha256:release-base".to_string();
+        let base = OvenLegacyCargoBaseLoaf {
+            loaf_identity: base_identity.clone(),
+            build_unit_identity: receipt.build_unit_identity.clone(),
+            artifacts: &base_plan,
+            artifact_root: project.path(),
+        };
+        let store_root = tempfile::tempdir()?;
+        let store = OvenStore::new(store_root.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let payload = |schema_version| OvenProjectExtensionPayload {
+            schema_version,
+            base_loaf_identity: base_identity.clone(),
+            base_build_unit_identity: receipt.build_unit_identity.clone(),
+            publisher_plan: publisher_plan.clone(),
+            complete_plan: complete_plan.clone(),
+            registry_source_dependencies: Vec::new(),
+            dev_registry_source_dependencies: Vec::new(),
+            extension_paths: partition.extension_paths.iter().cloned().collect(),
+        };
+        let mut stale_payload = serde_json::to_value(payload(OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION - 1))?;
+        let _ = stale_payload
+            .as_object_mut()
+            .ok_or("project extension fixture payload is not an object")?
+            .remove("registry_source_dependencies");
+        let _stale = store.publish(&OvenArtifactPublishRequest {
+            receipt: receipt.clone(),
+            domain: "incan-release-fixture".to_string(),
+            kind: OvenArtifactKind::ProjectPayload,
+            payload: serde_json::to_vec(&stale_payload)?,
+            materialized_files: Vec::new(),
+        })?;
+
+        assert_eq!(
+            select_existing_project_extension_identity(&store, &receipt, &base)?,
+            None
+        );
+
+        let mut complete_plan_drift = payload(OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION);
+        let project_dependency = complete_plan_drift
+            .complete_plan
+            .externs
+            .iter_mut()
+            .find(|artifact| artifact.crate_name == "project_dep")
+            .ok_or("project dependency missing from complete fixture plan")?;
+        project_dependency.digest = digest_bytes(b"drifted project dependency");
+        store.publish(&OvenArtifactPublishRequest {
+            receipt: receipt.clone(),
+            domain: "incan-release-fixture".to_string(),
+            kind: OvenArtifactKind::ProjectPayload,
+            payload: serde_json::to_vec(&complete_plan_drift)?,
+            materialized_files: Vec::new(),
+        })?;
+        let mut extension_paths_drift = payload(OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION);
+        let _ = extension_paths_drift.extension_paths.pop();
+        store.publish(&OvenArtifactPublishRequest {
+            receipt: receipt.clone(),
+            domain: "incan-release-fixture".to_string(),
+            kind: OvenArtifactKind::ProjectPayload,
+            payload: serde_json::to_vec(&extension_paths_drift)?,
+            materialized_files: Vec::new(),
+        })?;
+        assert_eq!(
+            select_existing_project_extension_identity(&store, &receipt, &base)?,
+            None,
+            "current-schema payload drift must trigger a replacement bake"
+        );
+
+        let current = store.publish(&OvenArtifactPublishRequest {
+            receipt: receipt.clone(),
+            domain: "incan-release-fixture".to_string(),
+            kind: OvenArtifactKind::ProjectPayload,
+            payload: serde_json::to_vec(&payload(OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION))?,
+            materialized_files: Vec::new(),
+        })?;
+        assert_eq!(
+            select_existing_project_extension_identity(&store, &receipt, &base)?,
+            Some(current.identity)
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn generated_project_prepare_reuses_a_current_plan_without_invoking_cargo() -> Result<(), Box<dyn std::error::Error>>
     {
         use std::os::unix::fs::PermissionsExt;
@@ -9560,6 +11825,18 @@ checksum = "selected"
             std::thread::sleep(Duration::from_millis(5));
         }
         Err("capacity abort left the fake-Cargo descendant running".into())
+    }
+
+    #[test]
+    fn publisher_capacity_monitor_yields_after_a_long_full_tree_scan() {
+        assert_eq!(
+            super::publisher_capacity_probe_delay(std::time::Duration::from_millis(5)),
+            super::PUBLISHER_CAPACITY_POLL_INTERVAL
+        );
+        assert_eq!(
+            super::publisher_capacity_probe_delay(std::time::Duration::from_secs(2)),
+            std::time::Duration::from_secs(2)
+        );
     }
 
     #[cfg(unix)]

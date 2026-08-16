@@ -8,7 +8,7 @@ use std::sync::{Arc, Barrier};
 
 mod support;
 
-fn incan_command(project_root: &Path, incan_home: &Path) -> Command {
+fn configured_incan_command(project_root: &Path, incan_home: &Path) -> Command {
     let mut command = Command::new(support::incan_binary());
     command
         .current_dir(project_root)
@@ -31,6 +31,26 @@ fn incan_command(project_root: &Path, incan_home: &Path) -> Command {
         command.env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store());
     }
     command
+}
+
+/// Prepare a normal Incan command with any scheduler-granted baker capability removed.
+///
+/// The explicit bake below is allowed to use the package-qualified fixture Cargo proxy. Every replay, drift, and
+/// lock assertion must instead reach the PATH guard if normal command handling ever regresses to Cargo.
+fn incan_command(project_root: &Path, incan_home: &Path) -> Command {
+    let mut command = configured_incan_command(project_root, incan_home);
+    command
+        .env_remove("CARGO")
+        .env_remove("INCAN_INTERNAL_OVEN_LOAF_EXECUTION")
+        .env_remove("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT")
+        .env_remove("INCAN_INTERNAL_OVEN_RUNTIME_ROOT")
+        .env_remove("INCAN_OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY");
+    command
+}
+
+/// Prepare the one explicit project-bake command that owns the Cargo fixture capability.
+fn baker_incan_command(project_root: &Path, incan_home: &Path) -> Command {
+    configured_incan_command(project_root, incan_home)
 }
 
 fn run_checked(mut command: Command, label: &str) -> Result<Output, Box<dyn std::error::Error>> {
@@ -70,6 +90,29 @@ fn write_dependency_project(root: &Path) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
+/// Create the smallest project that requires a real registry source during Rust inspection.
+///
+/// The completed-output regression below uses one mixed conventional project so its single explicit bake can prove
+/// executable replay, release-owned `std.json` source authority, and the normal test path without walking another bake.
+fn write_release_json_authority_project(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(root.join("src"))?;
+    fs::create_dir_all(root.join("tests"))?;
+    fs::write(
+        root.join("incan.toml"),
+        "[project]\nname = \"completed_output_registry_fixture\"\nversion = \"0.1.0\"\n\n[project.scripts]\nmain = \"src/main.incn\"\n",
+    )?;
+    fs::write(root.join("src/main.incn"), "def main() -> None:\n  pass\n")?;
+    fs::write(
+        root.join("src/lib.incn"),
+        "from std.json import JsonValue\n\npub def payload() -> JsonValue:\n  return JsonValue.str(\"oven\")\n",
+    )?;
+    fs::write(
+        root.join("tests/project_output_test.incn"),
+        "from lib import payload\nfrom std.testing import test\n\n@test\ndef test_baked_project_source_authority() -> None:\n  assert payload().as_str() == Some(\"oven\")\n",
+    )?;
+    Ok(())
+}
+
 fn assert_no_generated_cargo_state(project_root: &Path, incan_home: &Path) {
     assert!(
         !incan_home.join("cache/generated-cargo").exists(),
@@ -93,6 +136,35 @@ exit 97
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions)?;
     Ok(())
+}
+
+/// Prepend a Cargo executable which leaves durable evidence if a normal command attempts a fallback launch.
+#[cfg(unix)]
+fn guarded_incan_command(
+    project_root: &Path,
+    incan_home: &Path,
+    guard_root: &Path,
+    marker: &Path,
+) -> Result<Command, Box<dyn std::error::Error>> {
+    fs::create_dir_all(guard_root)?;
+    let guard = guard_root.join("cargo");
+    fs::write(
+        &guard,
+        "#!/bin/sh\nprintf cargo > \"$INCAN_OVEN_CARGO_GUARD_MARKER\"\nexit 97\n",
+    )?;
+    let mut permissions = fs::metadata(&guard)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&guard, permissions)?;
+
+    let mut paths = vec![guard_root.to_path_buf()];
+    if let Some(inherited) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&inherited));
+    }
+    let mut command = incan_command(project_root, incan_home);
+    command
+        .env("PATH", std::env::join_paths(paths)?)
+        .env("INCAN_OVEN_CARGO_GUARD_MARKER", marker);
+    Ok(command)
 }
 
 #[test]
@@ -127,31 +199,39 @@ fn normal_oven_rejects_generated_cargo_target_control_without_side_effects() -> 
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn normal_oven_reuses_sealed_inputs_offline_across_projects() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = tempfile::tempdir()?;
     let incan_home = fixture.path().join("incan-home");
     let first_root = fixture.path().join("first");
     let second_root = fixture.path().join("second");
+    let guard_root = fixture.path().join("cargo-guard");
+    let marker = fixture.path().join("cargo-was-started");
     write_dependency_project(&first_root)?;
     write_dependency_project(&second_root)?;
 
-    let mut first_build = incan_command(&first_root, &incan_home);
+    let mut first_bake = baker_incan_command(&first_root, &incan_home);
+    first_bake.args(["oven", "bake", "--project", "."]);
+    run_checked(first_bake, "explicit Oven bake before sealed cross-project reuse")?;
+    fs::copy(first_root.join("incan.lock"), second_root.join("incan.lock"))?;
+
+    let mut first_build = guarded_incan_command(&first_root, &incan_home, &guard_root, &marker)?;
     // This retired limit must not influence an Oven command or create its removed cache.
     first_build
         .args(["build", "src/main.incn", "--offline"])
         .env("INCAN_GENERATED_CACHE_MAX_ENTRY_BYTES", "1");
     run_checked(first_build, "sealed offline build without a generated Cargo cache")?;
 
-    let mut first_run = incan_command(&first_root, &incan_home);
+    let mut first_run = guarded_incan_command(&first_root, &incan_home, &guard_root, &marker)?;
     first_run.args(["run", "src/main.incn", "--offline"]);
     run_checked(first_run, "sealed offline run")?;
 
-    let mut first_test = incan_command(&first_root, &incan_home);
+    let mut first_test = guarded_incan_command(&first_root, &incan_home, &guard_root, &marker)?;
     first_test.args(["test", "tests/cache_test.incn", "--offline"]);
     run_checked(first_test, "sealed offline test")?;
 
-    let mut first_library = incan_command(&first_root, &incan_home);
+    let mut first_library = guarded_incan_command(&first_root, &incan_home, &guard_root, &marker)?;
     first_library.args(["build", "--lib", "--offline"]);
     run_checked(first_library, "sealed offline library build")?;
     assert_no_generated_cargo_state(&first_root, &incan_home);
@@ -159,10 +239,138 @@ fn normal_oven_reuses_sealed_inputs_offline_across_projects() -> Result<(), Box<
     // The first project covers every normal-command mode. One identical-project build is sufficient to prove that
     // its compatible sealed inputs are reusable across a project boundary; repeating the already-proven debug run
     // would only walk the same consumption path a second time.
-    let mut second_build = incan_command(&second_root, &incan_home);
+    let mut second_build = guarded_incan_command(&second_root, &incan_home, &guard_root, &marker)?;
     second_build.args(["build", "src/main.incn", "--offline"]);
-    run_checked(second_build, "cross-project sealed offline build reuse")?;
+    let second_output = run_checked(second_build, "cross-project sealed offline build reuse")?;
+    assert!(
+        String::from_utf8_lossy(&second_output.stdout).contains("reused sealed project Loaf"),
+        "cross-project build did not report completed Loaf reuse:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second_output.stdout),
+        String::from_utf8_lossy(&second_output.stderr)
+    );
+    assert!(!marker.exists(), "a normal cross-project command launched Cargo");
     assert_no_generated_cargo_state(&second_root, &incan_home);
+    Ok(())
+}
+
+/// One explicit mixed-project bake must authorize both completed-output replay and stdlib-owned Rust inspection.
+///
+/// The library and its test deliberately use only `std.json`, reproducing #1056 without any direct registry
+/// dependency that could mask release-Loaf source authority. Every normal command is Cargo-guarded and no second bake
+/// walks the same publication path again.
+#[cfg(unix)]
+#[test]
+fn explicitly_baked_project_reuses_release_json_authority_without_cargo() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = tempfile::tempdir()?;
+    let project_root = fixture.path().join("project");
+    let incan_home = fixture.path().join("incan-home");
+    let guard_root = fixture.path().join("cargo-guard");
+    let marker = fixture.path().join("cargo-was-started");
+    write_release_json_authority_project(&project_root)?;
+
+    let mut lock = guarded_incan_command(&project_root, &incan_home, &guard_root, &marker)?;
+    lock.arg("lock");
+    run_checked(lock, "Cargo-guarded initial lock for explicit project bake")?;
+    assert!(
+        !marker.exists(),
+        "initial project lock launched the guarded Cargo executable"
+    );
+    let locked_before_bake = fs::read(project_root.join("incan.lock"))?;
+
+    let mut bake = baker_incan_command(&project_root, &incan_home);
+    bake.args(["oven", "bake", "--project", "."]);
+    run_checked(bake, "explicit Oven bake for release-owned JSON authority")?;
+    assert_eq!(
+        fs::read(project_root.join("incan.lock"))?,
+        locked_before_bake,
+        "explicit project bake changed the canonical lock after the initial fixed point"
+    );
+
+    let mut build = guarded_incan_command(&project_root, &incan_home, &guard_root, &marker)?;
+    build.args(["build", "src/main.incn", "--locked"]);
+    let build_output = run_checked(build, "Cargo-guarded completed project-output replay")?;
+    assert!(
+        String::from_utf8_lossy(&build_output.stdout).contains("reused sealed project Loaf"),
+        "normal build did not report completed project-output reuse:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+    assert!(
+        !marker.exists(),
+        "normal completed-output replay launched the guarded Cargo executable"
+    );
+
+    let mut build_lib = guarded_incan_command(&project_root, &incan_home, &guard_root, &marker)?;
+    build_lib.args(["build", "--lib", "--locked"]);
+    let build_lib_output = run_checked(build_lib, "Cargo-guarded completed library replay for #1056")?;
+    assert!(
+        String::from_utf8_lossy(&build_lib_output.stdout).contains("reused sealed project Loaf"),
+        "normal library build did not report completed project-output reuse:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_lib_output.stdout),
+        String::from_utf8_lossy(&build_lib_output.stderr)
+    );
+    assert!(
+        !marker.exists(),
+        "normal completed-library replay launched the guarded Cargo executable"
+    );
+
+    let mut test = guarded_incan_command(&project_root, &incan_home, &guard_root, &marker)?;
+    test.args(["test", "tests", "--fail-on-empty"]);
+    run_checked(test, "Cargo-guarded test from explicit project source authority")?;
+    assert!(!marker.exists(), "normal test launched the guarded Cargo executable");
+
+    let source_path = project_root.join("src/main.incn");
+    let original_source = fs::read_to_string(&source_path)?;
+    fs::write(&source_path, format!("{original_source}\n# source drift\n"))?;
+    let mut source_drift = guarded_incan_command(&project_root, &incan_home, &guard_root, &marker)?;
+    source_drift.args(["build", "src/main.incn"]);
+    let source_drift_output = source_drift.output()?;
+    assert!(
+        !source_drift_output.status.success(),
+        "source drift must reject the completed project-output Loaf"
+    );
+    let source_drift_diagnostics = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&source_drift_output.stdout),
+        String::from_utf8_lossy(&source_drift_output.stderr)
+    );
+    assert!(
+        source_drift_diagnostics.contains("no receipt-compatible Loaf"),
+        "source drift did not return to the explicit-bake boundary:\n{source_drift_diagnostics}"
+    );
+    assert!(
+        !marker.exists(),
+        "source-drift rejection launched the guarded Cargo executable"
+    );
+    fs::write(&source_path, &original_source)?;
+
+    let manifest_path = project_root.join("incan.toml");
+    let original_manifest = fs::read_to_string(&manifest_path)?;
+    let drifted_manifest = format!("{original_manifest}\n[rust-dependencies]\nsemver = \"1\"\n");
+    assert_ne!(original_manifest, drifted_manifest);
+    fs::write(&manifest_path, drifted_manifest)?;
+    let reachable_drifted_source = format!("from rust::semver import Version\n{original_source}");
+    fs::write(&source_path, reachable_drifted_source)?;
+    let mut lock_drift = guarded_incan_command(&project_root, &incan_home, &guard_root, &marker)?;
+    lock_drift.args(["build", "src/main.incn", "--locked"]);
+    let lock_drift_output = lock_drift.output()?;
+    assert!(
+        !lock_drift_output.status.success(),
+        "locked manifest drift must reject the completed project-output Loaf"
+    );
+    let diagnostics = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&lock_drift_output.stdout),
+        String::from_utf8_lossy(&lock_drift_output.stderr)
+    );
+    assert!(
+        diagnostics.contains("incan.lock is out of date"),
+        "locked manifest drift did not fail at the canonical lock boundary:\n{diagnostics}"
+    );
+    assert!(
+        !marker.exists(),
+        "locked manifest-drift rejection launched the guarded Cargo executable"
+    );
     Ok(())
 }
 
@@ -171,18 +379,23 @@ fn concurrent_normal_oven_builds_ignore_cargo_rustc_wrapper() -> Result<(), Box<
     let fixture = tempfile::tempdir()?;
     let first_root = fixture.path().join("first");
     let second_root = fixture.path().join("second");
-    let first_home = fixture.path().join("first-home");
-    let second_home = fixture.path().join("second-home");
+    let incan_home = fixture.path().join("incan-home");
     let wrapper = fixture.path().join("rejecting-rustc-wrapper.sh");
     let marker = fixture.path().join("rustc-wrapper-invoked");
     write_dependency_project(&first_root)?;
     write_dependency_project(&second_root)?;
     write_rejecting_rustc_wrapper(&wrapper)?;
 
+    let mut first_bake = baker_incan_command(&first_root, &incan_home);
+    first_bake.args(["oven", "bake", "--project", "."]);
+    run_checked(first_bake, "one explicit Oven bake before concurrent replay")?;
+    fs::copy(first_root.join("incan.lock"), second_root.join("incan.lock"))?;
+
     let barrier = Arc::new(Barrier::new(3));
     let first_barrier = Arc::clone(&barrier);
     let first_wrapper = wrapper.clone();
     let first_marker = marker.clone();
+    let first_home = incan_home.clone();
     let first = std::thread::spawn(move || {
         first_barrier.wait();
         let mut build = incan_command(&first_root, &first_home);
@@ -196,6 +409,7 @@ fn concurrent_normal_oven_builds_ignore_cargo_rustc_wrapper() -> Result<(), Box<
     });
 
     let second_barrier = Arc::clone(&barrier);
+    let second_home = incan_home.clone();
     let second = std::thread::spawn(move || {
         second_barrier.wait();
         let mut build = incan_command(&second_root, &second_home);
@@ -223,7 +437,7 @@ fn concurrent_normal_oven_builds_ignore_cargo_rustc_wrapper() -> Result<(), Box<
         !fixture.path().join("rustc-wrapper-invoked").exists(),
         "normal Oven direct-rustc execution must not consult Cargo's RUSTC_WRAPPER"
     );
-    assert_no_generated_cargo_state(&fixture.path().join("first"), &fixture.path().join("first-home"));
-    assert_no_generated_cargo_state(&fixture.path().join("second"), &fixture.path().join("second-home"));
+    assert_no_generated_cargo_state(&fixture.path().join("first"), &incan_home);
+    assert_no_generated_cargo_state(&fixture.path().join("second"), &incan_home);
     Ok(())
 }

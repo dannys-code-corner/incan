@@ -17,6 +17,10 @@ pub(crate) const OVEN_COMPILER_SUITE_FIXTURE_CARGO_REAL_ENV: &str = "INCAN_INTER
 pub(crate) const OVEN_COMPILER_SUITE_FIXTURE_RUSTC_REAL_ENV: &str = "INCAN_INTERNAL_OVEN_FIXTURE_RUSTC_REAL";
 /// Invocation log written by the compiler-suite-owned fixture Cargo proxy.
 pub(crate) const OVEN_COMPILER_SUITE_FIXTURE_CARGO_LOG_ENV: &str = "INCAN_INTERNAL_OVEN_FIXTURE_CARGO_LOG";
+/// Exact Cargo executable exposed only to a test helper performing `incan oven bake`.
+pub(crate) const OVEN_COMPILER_SUITE_EXPLICIT_BAKE_CARGO_ENV: &str = "INCAN_INTERNAL_OVEN_EXPLICIT_BAKE_CARGO";
+/// Offline Cargo-home authority exposed only to a test helper performing `incan oven bake`.
+pub(crate) const OVEN_COMPILER_SUITE_EXPLICIT_BAKE_HOME_ENV: &str = "INCAN_INTERNAL_OVEN_EXPLICIT_BAKE_HOME";
 
 const OVEN_COMPILER_SUITE_CAPABILITY_SCHEMA_VERSION: u32 = 1;
 const MAX_COMPILER_SUITE_DIRECT_RUSTC_INPUTS: usize = 1024;
@@ -25,20 +29,34 @@ const MAX_COMPILER_SUITE_DIRECT_RUSTC_INPUTS: usize = 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OvenCompilerSuiteTargetCapabilities {
     pub(crate) generated_rust_closure: bool,
-    pub(crate) legacy_cargo_fixture: bool,
+    pub(crate) cargo_fixture: bool,
+    /// A narrow test-only authority for helpers that explicitly invoke the named Loaf baker.
+    ///
+    /// This deliberately does not set `CARGO` for the whole libtest root: its normal command probes must continue
+    /// to encounter the outer exit-97 Cargo guard if they accidentally try to fall back.
+    pub(crate) explicit_bake_cargo: bool,
 }
 
 impl OvenCompilerSuiteTargetCapabilities {
     /// Resolve the narrow, package-qualified capability registry for one receipt-bound root.
     pub(crate) fn for_target(package_name: &str, target_kind: &str, source_relative_path: &str) -> Self {
         let generated_rust_closure = source_relative_path != "tests/toolchain_installer_tests.rs";
-        let legacy_cargo_fixture = matches!(
+        let cargo_fixture = matches!(
             (package_name, target_kind, source_relative_path),
-            ("incan", "lib", "src/lib.rs") | ("rust_inspect", "lib", "crates/rust_inspect/src/lib.rs")
+            ("incan", "lib", "src/lib.rs")
+                | ("rust_inspect", "lib", "crates/rust_inspect/src/lib.rs")
+                | ("incan", "test", "tests/generated_rust_artifact_tests.rs")
+                | ("incan", "test", "tests/generated_rust_callability_artifact_tests.rs")
+                | ("incan", "test", "tests/generated_cache_integration.rs")
+        );
+        let explicit_bake_cargo = matches!(
+            (package_name, target_kind, source_relative_path),
+            ("incan", "test", "tests/cli_integration.rs") | ("incan", "test", "tests/integration_tests.rs")
         );
         Self {
             generated_rust_closure,
-            legacy_cargo_fixture,
+            cargo_fixture,
+            explicit_bake_cargo,
         }
     }
 }

@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -23,13 +22,14 @@ use super::legacy_cargo::{
     OvenLegacyCargoDirectDependencyClosure, OvenLegacyCargoError, OvenLegacyCargoInspectionPackage,
     OvenLegacyCargoInspectionSource, OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind,
     canonicalize_supporting_artifacts, copy_regular_directory_tree, direct_rustc_compile_environment,
-    materialized_files_from_directory, prepare_direct_rustc_plan,
+    materialized_files_from_directory, prepare_direct_rustc_plan, publisher_capacity_probe_delay,
 };
 use super::process::{isolate_process_group, terminate_process_group};
 use super::rustc::{
-    OvenRegistryLeafAuthority, OvenRustcArtifactExtern, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
-    OvenRustcAuxiliaryTarget, OvenRustcError, OvenRustcRegistryLeaf, OvenRustcRegistrySource,
-    OvenRustcRegistrySourcePackage, OvenRustcSupportingArtifact, clear_inherited_cargo_environment,
+    OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenRegistryLeafAuthority, OvenRustcArtifactExtern,
+    OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcAuxiliaryTarget, OvenRustcError, OvenRustcRegistryLeaf,
+    OvenRustcRegistrySource, OvenRustcRegistrySourcePackage, OvenRustcSupportingArtifact,
+    clear_inherited_cargo_environment, registry_source_dependencies_supported_by_catalog,
     validate_sealed_registry_leaf,
 };
 use super::store::{OvenArtifactKind, OvenStore, OvenStoreError};
@@ -1123,6 +1123,7 @@ fn export_loaf(
         })?;
     }
     merge_loaf_inspection_sources(&mut plan, staging.path(), context.inspection_sources)?;
+    seal_registry_lock_from_temporary_store(&mut plan, &artifact_root, staging.path())?;
     let vocab_transient_peak = bake_compiler_vocab_support(
         &mut plan,
         staging.path(),
@@ -1180,6 +1181,65 @@ fn export_loaf(
         physical_bytes,
         transient_peak_physical_bytes: publisher_transient_peak.max(vocab_transient_peak),
     })
+}
+
+/// Carry the publisher's checked registry lock across the Loaf export boundary.
+///
+/// The temporary publisher store deliberately keeps the lock outside the executable artifact plan: it is inspection
+/// authority, not a direct-rustc linker input. A shipped Loaf nevertheless needs that same immutable authority when
+/// it exposes registry sources, so copy it into the final bundle and declare it as a verified supporting artifact.
+fn seal_registry_lock_from_temporary_store(
+    plan: &mut OvenRustcArtifactManifest,
+    artifact_root: &Path,
+    loaf_staging: &Path,
+) -> Result<(), OvenLoafError> {
+    if plan.registry_sources.is_empty() {
+        return Ok(());
+    }
+    if plan
+        .supporting_artifacts
+        .iter()
+        .any(|artifact| artifact.relative_path == OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH)
+    {
+        return Err(OvenLoafError::Preparation {
+            message: "direct-rustc plan must not predeclare the sealed registry Cargo.lock".to_string(),
+        });
+    }
+    let source_path = artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+    let source_metadata = fs::symlink_metadata(&source_path).map_err(|source| OvenLoafError::Io {
+        path: source_path.clone(),
+        source,
+    })?;
+    if source_metadata.file_type().is_symlink() || !source_metadata.is_file() {
+        return Err(OvenLoafError::Preparation {
+            message: format!(
+                "publisher registry lock must be a regular file: {}",
+                source_path.display()
+            ),
+        });
+    }
+    let destination = loaf_staging.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+    let parent = destination.parent().ok_or_else(|| OvenLoafError::Preparation {
+        message: "Loaf registry lock has no parent directory".to_string(),
+    })?;
+    fs::create_dir_all(parent).map_err(|source| OvenLoafError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    fs::copy(&source_path, &destination).map_err(|source| OvenLoafError::Io {
+        path: source_path.clone(),
+        source,
+    })?;
+    let digest = digest_bytes(&fs::read(&destination).map_err(|source| OvenLoafError::Io {
+        path: destination,
+        source,
+    })?);
+    plan.supporting_artifacts.push(OvenRustcSupportingArtifact {
+        relative_path: OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH.to_string(),
+        digest,
+    });
+    canonicalize_supporting_artifacts(&mut plan.supporting_artifacts)?;
+    Ok(())
 }
 
 /// Seal independently resolved registry sources into a Loaf without inventing linkable artifacts.
@@ -1391,6 +1451,13 @@ fn run_bounded_loaf_cargo(
     })?;
     let mut peak = 0_u64;
     let status = loop {
+        if let Some(status) = child.try_wait().map_err(|source| OvenLoafError::Io {
+            path: PathBuf::from(label),
+            source,
+        })? {
+            break status;
+        }
+        let scan_started = std::time::Instant::now();
         let observed = capacity_roots.iter().try_fold(0_u64, |total, root| {
             super::legacy_cargo::conservative_directory_reservation(root).map(|bytes| total.saturating_add(bytes))
         })?;
@@ -1406,13 +1473,11 @@ fn run_bounded_loaf_cargo(
                 ),
             });
         }
-        if let Some(status) = child.try_wait().map_err(|source| OvenLoafError::Io {
-            path: PathBuf::from(label),
-            source,
-        })? {
-            break status;
-        }
-        thread::sleep(Duration::from_millis(25));
+        // This is the same physical-capacity supervisor used by the project publisher. A full scan walks the
+        // complete private compiler-support target, so it yields for at least its own duration after a large scan
+        // rather than immediately beginning another multi-gigabyte walk. The final exact admission below still
+        // validates every persistent and transient root before this publisher returns.
+        thread::sleep(publisher_capacity_probe_delay(scan_started.elapsed()));
     };
     let output = fs::read(&stdout_path).map_err(|source| OvenLoafError::Io {
         path: stdout_path.clone(),
@@ -2506,39 +2571,6 @@ fn registry_dependencies_supported_by_loaf(
         .all(|dependency| validate_sealed_registry_leaf(dependency, Some(&authority), profile).is_ok())
 }
 
-/// Check whether one immutable registry-source catalog contains exactly one compatible source authority per dependency.
-///
-/// This is intentionally independent of direct-`rustc` leaf selection. The catalog may be shared by multiple
-/// feature-unified compiled closures, but package, version, and selected feature evidence remain exact at this
-/// inspection boundary.
-fn registry_source_dependencies_supported_by_catalog(
-    sources: &[OvenRustcRegistrySourcePackage],
-    dependencies: &[&DependencySpec],
-) -> bool {
-    dependencies.iter().all(|dependency| {
-        let Some(requirement) = dependency
-            .version
-            .as_deref()
-            .and_then(|version| semver::VersionReq::parse(version).ok())
-        else {
-            return false;
-        };
-        let package = dependency.package.as_deref().unwrap_or(&dependency.crate_name);
-        let required_features = dependency.features.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        let matching = sources
-            .iter()
-            .filter(|source| {
-                source.package == package
-                    && semver::Version::parse(&source.version).is_ok_and(|version| requirement.matches(&version))
-                    && required_features
-                        .iter()
-                        .all(|feature| source.features.iter().any(|selected| selected == *feature))
-            })
-            .count();
-        matching == 1
-    })
-}
-
 /// Registry capability required while choosing a compatible Loaf.
 #[derive(Clone, Copy)]
 enum OvenLoafRegistryRequirement {
@@ -3284,14 +3316,14 @@ mod tests {
         acquire_loaf_generation_lock, committed_loaf_envelope_compatibility_identity, committed_loaf_paths,
         digest_runtime_crate_source, loaf_envelope_inspection_packages, loaf_envelope_specifications, loaf_from_loaf,
         merge_loaf_inspection_sources, registry_source_dependencies_supported_by_catalog, run_bounded_loaf_cargo,
-        select_most_specific_compatible_loaf, validate_loaf_declared_file_set,
+        seal_registry_lock_from_temporary_store, select_most_specific_compatible_loaf, validate_loaf_declared_file_set,
     };
     use crate::manifest::{DependencySource, DependencySpec};
     use crate::oven::legacy_cargo::OvenLegacyCargoInspectionSource;
     use crate::oven::rustc::{
-        OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactExtern, OvenRustcArtifactManifest,
-        OvenRustcArtifactPlan, OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcRegistrySourcePackage,
-        OvenRustcSupportingArtifact,
+        OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenRustcArtifactExtern,
+        OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcRegistryLeaf, OvenRustcRegistrySource,
+        OvenRustcRegistrySourcePackage, OvenRustcSupportingArtifact,
     };
     use crate::oven::{OvenGeneratedProjectRequest, digest_bytes, digest_source_tree, receipt_generated_project};
     use incan_core::lang::stdlib::{self, StdlibExtraCrateSource};
@@ -3349,7 +3381,7 @@ mod tests {
     fn loaf_capacity_abort_terminates_fake_cargo_descendants() -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::PermissionsExt;
         use std::process::Command;
-        use std::time::Instant;
+        use std::time::{Duration, Instant};
 
         let fixture = tempfile::tempdir()?;
         let capacity_root = fixture.path().join("capacity");
@@ -3745,6 +3777,44 @@ mod tests {
         assert!(specifications.iter().all(|specification| {
             specification.role == OvenLoafMemberRole::CompiledClosureAndSourceAuthority
                 && specification.retain_complete_registry_leaves
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn loaf_export_retains_the_publisher_registry_lock_for_registry_sources() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let publisher_store = tempfile::tempdir()?;
+        let publisher_lock = publisher_store.path().join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+        let publisher_parent = publisher_lock.parent().ok_or("publisher registry lock has no parent")?;
+        fs::create_dir_all(publisher_parent)?;
+        let lock_bytes = b"version = 4\n";
+        fs::write(&publisher_lock, lock_bytes)?;
+
+        let receipt = runtime_receipt_for_plan()?;
+        let mut plan = empty_manifest(&receipt);
+        plan.registry_sources.push(OvenRustcRegistrySourcePackage {
+            package: "blake2".to_string(),
+            version: "0.10.6".to_string(),
+            features: vec!["std".to_string()],
+            source: OvenRustcRegistrySource {
+                registry: "registry+https://example.invalid/index".to_string(),
+                checksum: "blake2-checksum".to_string(),
+                relative_root: "registry-sources/blake2-0.10.6".to_string(),
+                digest: "sha256:blake2-source".to_string(),
+            },
+        });
+        let loaf_staging = tempfile::tempdir()?;
+
+        seal_registry_lock_from_temporary_store(&mut plan, publisher_store.path(), loaf_staging.path())?;
+
+        assert_eq!(
+            fs::read(loaf_staging.path().join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH))?,
+            lock_bytes
+        );
+        assert!(plan.supporting_artifacts.iter().any(|artifact| {
+            artifact.relative_path == OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH
+                && artifact.digest == digest_bytes(lock_bytes)
         }));
         Ok(())
     }

@@ -74,6 +74,8 @@ static PREPARED_LIBRARY_DEPENDENCIES: LazyLock<Mutex<HashMap<PathBuf, BTreeSet<S
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static SDK_PROVIDER_COMPILER_DIGESTS: LazyLock<Mutex<HashMap<PathBuf, [u8; 32]>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Shared immutable provider projections indexed by the canonical modules an invocation uses.
+type ProviderPlanCache = Arc<Mutex<BTreeMap<BTreeSet<Vec<String>>, Arc<ProviderPlan>>>>;
 pub(crate) const INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV: &str = "INCAN_INTERNAL_LIBRARY_ARTIFACT_ONLY";
 /// Internal marker for a nested `pub::` dependency library build.
 ///
@@ -1608,6 +1610,22 @@ pub(crate) fn discover_effective_project_manifest(start_dir: &Path) -> CliResult
     else {
         return Ok(None);
     };
+    effective_project_manifest(manifest).map(Some)
+}
+
+/// Load one exact project root and materialize RFC 077 inheritance without applying command-discovery overrides.
+///
+/// Recursive source-authority traversal already owns the exact dependency root it is inspecting. Rediscovering from
+/// that root could honor a nested command override and silently bind a different project, so this boundary loads the
+/// named manifest directly while sharing the same workspace resolution as ordinary command discovery.
+pub(crate) fn effective_project_manifest_for_exact_root(project_root: &Path) -> CliResult<ProjectManifest> {
+    let manifest = ProjectManifest::load(&project_root.join(MANIFEST_FILENAME))
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    effective_project_manifest(manifest)
+}
+
+/// Resolve one parsed manifest against its active RFC 077 workspace, if any.
+fn effective_project_manifest(manifest: ProjectManifest) -> CliResult<ProjectManifest> {
     let workspace =
         WorkspaceGraph::discover(manifest.project_root()).map_err(|error| CliError::failure(error.to_string()))?;
     let Some(workspace) = workspace else {
@@ -1617,7 +1635,7 @@ pub(crate) fn discover_effective_project_manifest(start_dir: &Path) -> CliResult
                 manifest.path().display()
             )));
         }
-        return Ok(Some(manifest));
+        return Ok(manifest);
     };
     let canonical_root = std::fs::canonicalize(manifest.project_root()).map_err(|error| {
         CliError::failure(format!(
@@ -1634,7 +1652,6 @@ pub(crate) fn discover_effective_project_manifest(start_dir: &Path) -> CliResult
     })?;
     workspace
         .effective_member_manifest(member)
-        .map(Some)
         .map_err(|error| CliError::failure(error.to_string()))
 }
 
@@ -1729,6 +1746,11 @@ pub(crate) struct CompilationSession {
     pub library_manifest_index: LibraryManifestIndex,
     /// Immutable provider projection shared by compiler stages for ordinary package dependencies and SDK providers.
     pub provider_plan: Arc<ProviderPlan>,
+    /// Module-usage projections already derived from the immutable session inputs.
+    ///
+    /// Collection, requirement discovery, and semantic analysis all need the same projection. Rebuilding it makes
+    /// every command rehash provider source roots and, worse, lets a mutable local cache dominate the warm path.
+    provider_plans_by_modules: ProviderPlanCache,
     /// Integrity-checked active SDK catalog, when this toolchain is component-aware.
     pub sdk_inventory: Option<Arc<SdkInventory>>,
     /// Project-selected SDK component closure, when an inventory is active.
@@ -1926,12 +1948,17 @@ impl CompilationSession {
             .map_err(|error| CliError::failure(error.to_string()))?
             .with_bootstrap_sdk_namespace_roots(bootstrap_sdk_namespace_roots),
         );
+        let provider_plans_by_modules = Arc::new(Mutex::new(BTreeMap::from([(
+            BTreeSet::new(),
+            Arc::clone(&provider_plan),
+        )])));
 
         Ok(Self {
             manifest,
             source_root,
             library_manifest_index,
             provider_plan,
+            provider_plans_by_modules,
             sdk_inventory,
             sdk_components,
             package_feature_plan,
@@ -1945,18 +1972,51 @@ impl CompilationSession {
 
     /// Resolve module participation from this session's immutable provider, feature, and SDK inputs.
     pub(crate) fn provider_plan_for_modules(&self, modules: &[ParsedModule]) -> CliResult<Arc<ProviderPlan>> {
-        ProviderPlan::from_resolved_inputs(
+        self.provider_plan_for_used_module_paths(provider_used_module_paths(modules))
+    }
+
+    /// Resolve one provider projection from canonical module paths while retaining the session's authority snapshot.
+    ///
+    /// Callers with nested source constructs can derive their complete module-use set once, then enter the same cache
+    /// as ordinary compilation without rebuilding SDK, package-feature, or library-manifest inputs.
+    pub(crate) fn provider_plan_for_used_module_paths(
+        &self,
+        used_module_paths: BTreeSet<Vec<String>>,
+    ) -> CliResult<Arc<ProviderPlan>> {
+        if let Some(plan) = self
+            .provider_plans_by_modules
+            .lock()
+            .map_err(|_| CliError::failure("provider-plan cache lock was poisoned"))?
+            .get(&used_module_paths)
+            .cloned()
+        {
+            return Ok(plan);
+        }
+        let plan = ProviderPlan::from_resolved_inputs(
             self.provider_plan.library_manifest_index().clone(),
             self.package_feature_plan.as_ref(),
             self.sdk_inventory.as_deref(),
             self.sdk_components.as_ref(),
-            provider_used_module_paths(modules),
+            used_module_paths.clone(),
         )
         .map(|plan| {
             plan.with_bootstrap_sdk_namespace_roots(self.provider_plan.bootstrap_sdk_namespace_roots().cloned())
         })
         .map(Arc::new)
-        .map_err(|error| CliError::failure(error.to_string()))
+        .map_err(|error| CliError::failure(error.to_string()))?;
+        let mut cached = self
+            .provider_plans_by_modules
+            .lock()
+            .map_err(|_| CliError::failure("provider-plan cache lock was poisoned"))?;
+        Ok(cached.entry(used_module_paths).or_insert(plan).clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn provider_plan_cache_entry_count(&self) -> CliResult<usize> {
+        self.provider_plans_by_modules
+            .lock()
+            .map(|cached| cached.len())
+            .map_err(|_| CliError::failure("provider-plan cache lock was poisoned"))
     }
 
     /// Analyze one collected module graph exactly once.
@@ -2345,6 +2405,7 @@ fn prepare_library_dependency_artifacts(
                     || matches!(preparation, LibraryDependencyPreparation::OvenDirectRustc)
                         && has_source_manifest
                         && !oven_library_dependency_has_verified_profile_receipts(&dependency.path)
+                        && !super::build::oven_library_dependency_declares_package_loaf(&dependency.path)
             }
             Some(LibraryManifestIndexEntry::Failed(failure)) => {
                 failure.kind == LibraryManifestFailureKind::ArtifactMissing
@@ -2357,6 +2418,13 @@ fn prepare_library_dependency_artifacts(
     }
 
     for (dependency_key, dependency_root, active_features) in required {
+        if matches!(preparation, LibraryDependencyPreparation::OvenDirectRustc) {
+            return Err(CliError::failure(format!(
+                "Oven Alpha requires a baked package Loaf for pub::{dependency_key} at {}; run `incan oven bake --project {}` in that provider before preparing this consumer. Normal build, run, test, lock, and consumer bake will not compile the provider or invoke Cargo on its behalf",
+                dependency_root.display(),
+                dependency_root.display()
+            )));
+        }
         prepare_library_dependency_artifact(&dependency_key, &dependency_root, &active_features, preparation)?;
     }
 
@@ -2667,7 +2735,7 @@ fn merge_requirement_dependency(
 }
 
 /// Compare dependency specs while treating equivalent path spellings as the same dependency.
-fn dependency_specs_match(left: &DependencySpec, right: &DependencySpec) -> bool {
+pub(crate) fn dependency_specs_match(left: &DependencySpec, right: &DependencySpec) -> bool {
     if left == right {
         return true;
     }
@@ -2852,7 +2920,10 @@ fn rust_inspect_workspace_fingerprint(
     cargo_target_dir: &Path,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"incan_rust_inspect_workspace/3\0");
+    // Version 4 records a generated projection whose local package metadata matches the canonical Incan manifest.
+    // This prevents `cargo metadata --locked` from rejecting an otherwise exact dependency lock solely because the
+    // inspectable local root was previously emitted with the compiler's version.
+    hasher.update(b"incan_rust_inspect_workspace/4\0");
     hasher.update(project_name.as_bytes());
     hasher.update(b"\0");
     hasher.update(cargo_package_name.as_bytes());
@@ -3223,6 +3294,10 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
     cargo_target_dir: &Path,
     cargo_policy_flags: &[String],
 ) -> CliResult<PathBuf> {
+    let project_manifest =
+        ProjectManifest::discover(project_root).map_err(|error| CliError::failure(error.to_string()))?;
+    let cargo_lock_payload =
+        project_rust_inspect_lock_projection(cargo_lock_payload, cargo_package_name, project_manifest.as_ref())?;
     let fingerprint = rust_inspect_workspace_fingerprint(
         project_name,
         cargo_package_name,
@@ -3257,6 +3332,9 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
 
     let mut generator = ProjectGenerator::new(&rust_inspect_manifest_dir, project_name, true);
     generator.set_package_name(Some(cargo_package_name.to_string()));
+    if let Some(project) = project_manifest.as_ref().and_then(|manifest| manifest.project.as_ref()) {
+        generator.set_package_metadata(project.version.clone(), project.license.clone());
+    }
     generator.set_dependencies(resolved.dependencies.clone());
     generator.set_dev_dependencies(resolved.dev_dependencies.clone());
     generator.set_include_dev_dependencies(true);
@@ -3303,6 +3381,60 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
     }
 
     Ok(rust_inspect_manifest_dir)
+}
+
+/// Project a canonical dependency lock into the generated rust-inspect root without re-resolving dependencies.
+///
+/// A Cargo lock records the local package's version alongside registry packages. Incan's dependency fingerprint
+/// intentionally excludes that local version because it cannot alter the resolved third-party graph. When a project
+/// changes only its own version, passing the old root record to Cargo with `--locked` spuriously rejects the source
+/// inspection projection. Rewrite only that source-less root record to the current manifest version; registry package
+/// entries, checksums, and dependency edges remain selected from the canonical lock. This stays a projection, never
+/// a lock publication or dependency resolver.
+#[cfg(feature = "rust_inspect")]
+fn project_rust_inspect_lock_projection(
+    cargo_lock_payload: Option<String>,
+    cargo_package_name: &str,
+    manifest: Option<&ProjectManifest>,
+) -> CliResult<Option<String>> {
+    let Some(payload) = cargo_lock_payload else {
+        return Ok(None);
+    };
+    let Some(version) = manifest
+        .and_then(|manifest| manifest.project.as_ref())
+        .and_then(|project| project.version.as_deref())
+    else {
+        return Ok(Some(payload));
+    };
+    let mut lock = toml::from_str::<toml::Value>(&payload).map_err(|error| {
+        CliError::failure(format!(
+            "failed to parse canonical Cargo.lock for rust-inspect projection: {error}"
+        ))
+    })?;
+    let Some(packages) = lock.get_mut("package").and_then(toml::Value::as_array_mut) else {
+        // Modern semantic Incan locks intentionally have no Cargo package graph until the explicit Oven publisher
+        // creates one. They are not a Cargo projection and must remain untouched here.
+        return Ok(Some(payload));
+    };
+    let mut matching_roots = packages
+        .iter_mut()
+        .filter_map(|package| {
+            let table = package.as_table_mut()?;
+            let name = table.get("name")?.as_str()?;
+            (name == cargo_package_name && !table.contains_key("source")).then_some(table)
+        })
+        .collect::<Vec<_>>();
+    let [root] = matching_roots.as_mut_slice() else {
+        // A provider-only or workspace lock can legitimately omit the generated inspection package. It is still an
+        // exact external dependency authority, so leave it intact rather than manufacturing a local root record.
+        return Ok(Some(payload));
+    };
+    root.insert("version".to_string(), toml::Value::String(version.to_string()));
+    toml::to_string_pretty(&lock).map(Some).map_err(|error| {
+        CliError::failure(format!(
+            "failed to serialize rust-inspect Cargo.lock projection: {error}"
+        ))
+    })
 }
 
 /// Collect canonical rust-inspect query paths from parsed `rust::` imports.
@@ -4756,6 +4888,38 @@ mod tests {
             source: source.to_string(),
             ast,
         })
+    }
+
+    #[test]
+    fn compilation_session_reuses_provider_plan_for_identical_module_usage() -> Result<(), Box<dyn std::error::Error>> {
+        let library_manifest_index = LibraryManifestIndex::default();
+        let provider_plan = Arc::new(ProviderPlan::default());
+        let session = CompilationSession {
+            manifest: None,
+            source_root: PathBuf::from("fixture"),
+            library_imported_vocab: library_manifest_index.library_imported_vocab(),
+            library_imported_dsl_surfaces: library_manifest_index.library_imported_dsl_surfaces(),
+            library_manifest_index,
+            provider_plans_by_modules: Arc::new(Mutex::new(BTreeMap::from([(
+                BTreeSet::new(),
+                Arc::clone(&provider_plan),
+            )]))),
+            provider_plan,
+            sdk_inventory: None,
+            sdk_components: None,
+            package_feature_plan: None,
+            active_features: BTreeSet::new(),
+            declared_features: BTreeSet::new(),
+            contract_model_bundles: Vec::new(),
+        };
+        let module = parsed_module_for_test("from std.io import stdout\n\ndef main() -> None:\n    pass\n")?;
+
+        let first = session.provider_plan_for_modules(std::slice::from_ref(&module))?;
+        let second = session.provider_plan_for_modules(std::slice::from_ref(&module))?;
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(session.provider_plan_cache_entry_count()?, 2);
+        Ok(())
     }
 
     #[test]
@@ -6610,6 +6774,53 @@ pub def main() -> int:
             Path::new("/cache/target"),
         );
         assert_ne!(fp_one, fp_two);
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn rust_inspect_lock_projection_updates_only_the_local_package_version() -> Result<(), Box<dyn std::error::Error>> {
+        let manifest = ProjectManifest::from_str(
+            "[project]\nname = \"probe\"\nversion = \"1.2.3\"\n",
+            Path::new("probe/incan.toml"),
+        )?;
+        let payload = r#"version = 4
+
+[[package]]
+name = "probe"
+version = "0.1.0"
+dependencies = ["serde"]
+
+[[package]]
+name = "serde"
+version = "1.0.219"
+source = "registry+https://example.invalid/index"
+checksum = "fixture-checksum"
+"#;
+        let projected =
+            super::project_rust_inspect_lock_projection(Some(payload.to_string()), "probe", Some(&manifest))?
+                .ok_or("rust-inspect lock projection unexpectedly removed its lock")?;
+        let lock = toml::from_str::<toml::Value>(&projected)?;
+        let packages = lock
+            .get("package")
+            .and_then(toml::Value::as_array)
+            .ok_or("projected lock omitted its package array")?;
+        let local = packages
+            .iter()
+            .find(|package| {
+                package.get("name").and_then(toml::Value::as_str) == Some("probe") && package.get("source").is_none()
+            })
+            .ok_or("projected lock omitted its local package")?;
+        assert_eq!(local.get("version").and_then(toml::Value::as_str), Some("1.2.3"));
+        let registry = packages
+            .iter()
+            .find(|package| package.get("name").and_then(toml::Value::as_str) == Some("serde"))
+            .ok_or("projected lock omitted its registry package")?;
+        assert_eq!(registry.get("version").and_then(toml::Value::as_str), Some("1.0.219"));
+        assert_eq!(
+            registry.get("checksum").and_then(toml::Value::as_str),
+            Some("fixture-checksum")
+        );
+        Ok(())
     }
 
     #[cfg(feature = "rust_inspect")]
