@@ -1,15 +1,16 @@
 //! Test runner implementation (pytest-style).
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::cli::commands::common::CargoPolicy;
+use crate::cli::commands::common::{CargoPolicy, CompilationSession};
 use crate::cli::{CliError, CliResult, ExitCode};
-use crate::provider::FeatureSelection;
 
 mod discovery;
 mod execution;
@@ -26,16 +27,61 @@ pub use types::{
 };
 
 use discovery::{
-    CollectionEvalContext, discover_test_files_with_selections, discover_tests_and_fixtures_with_context,
-    get_autouse_fixtures, parse_duration_literal,
+    CollectionEvalContext, discover_test_file_candidates, discover_test_files_with_session,
+    discover_tests_and_fixtures_with_context, get_autouse_fixtures, parse_duration_literal,
 };
-use execution::{TestExecutionOptions, run_file_tests_batch, validate_oven_test_lock_policy};
+use execution::{
+    OvenTestCommandContext, TestExecutionOptions, prepare_oven_test_command_context, run_file_tests_batch,
+    validate_oven_test_lock_policy,
+};
 use reporter::{print_test_result, style};
+
+/// Discover a test inventory through a compilation session already owned by the caller.
+pub(crate) fn discover_test_files_with_compilation_session(path: &Path, session: &CompilationSession) -> Vec<PathBuf> {
+    let candidates = discover_test_file_candidates(path);
+    let authority_root = session
+        .manifest
+        .as_ref()
+        .map(|manifest| {
+            std::fs::canonicalize(manifest.project_root()).unwrap_or_else(|_| manifest.project_root().to_path_buf())
+        })
+        .or_else(|| candidates.command_authority_root().ok());
+    authority_root.map_or_else(Vec::new, |authority_root| {
+        discover_test_files_with_session(&candidates, &authority_root, session)
+    })
+}
 
 const RED: &str = "1;31";
 const GREEN: &str = "1;32";
 const YELLOW: &str = "33";
 const BANNER_WIDTH: usize = 58;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_COMMAND_SESSION_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Create the only compilation session owned by one `incan test` invocation.
+fn prepare_test_command_session(
+    representative_test: &Path,
+    list_only: bool,
+    package_features: &crate::provider::FeatureSelection,
+    sdk_profile_override: Option<&str>,
+) -> CliResult<Arc<CompilationSession>> {
+    #[cfg(test)]
+    TEST_COMMAND_SESSION_CONSTRUCTIONS.with(|count| count.set(count.get().saturating_add(1)));
+
+    let session = if list_only {
+        CompilationSession::discover_for_collection_with_selections(
+            representative_test,
+            package_features,
+            sdk_profile_override,
+        )?
+    } else {
+        CompilationSession::discover_for_oven(representative_test, package_features, sdk_profile_override)?
+    };
+    Ok(Arc::new(session))
+}
 
 /// Create a centered banner with a configurable fill character.
 ///
@@ -195,6 +241,37 @@ fn stable_id_root(path: &Path) -> PathBuf {
     } else {
         canonical
     }
+}
+
+/// Infer the command-owned root for a manifest-less test run.
+///
+/// Conventional `tests/` and `src/` anchors belong to their parent project. An unanchored source owns its containing
+/// directory so implementation paths above it never leak into generated module names or runtime working directories.
+fn infer_test_project_root_without_manifest(test_path: &Path) -> PathBuf {
+    let absolute_test_path = if test_path.is_absolute() {
+        test_path.to_path_buf()
+    } else if let Ok(cwd) = std::env::current_dir() {
+        cwd.join(test_path)
+    } else {
+        test_path.to_path_buf()
+    };
+    let absolute_test_path = std::fs::canonicalize(&absolute_test_path).unwrap_or(absolute_test_path);
+
+    for ancestor in absolute_test_path.ancestors().skip(1) {
+        if ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| matches!(name, "tests" | "src"))
+            && let Some(parent) = ancestor.parent()
+        {
+            return parent.to_path_buf();
+        }
+    }
+
+    absolute_test_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
 }
 
 /// Discover and enforce project-level toolchain constraints for a test path, when it belongs to a project.
@@ -594,6 +671,40 @@ fn marker_expr_matches(test: &TestInfo, tokens: &[MarkerToken]) -> Result<bool, 
     MarkerExprParser::parse(tokens, &marker_names(test))
 }
 
+/// Retain collected tests selected by the CLI's keyword, slow-test, and marker rules.
+///
+/// This is deliberately pure: collection and execution remain responsible for their
+/// own I/O, while selection rules can be covered without rebuilding a generated test
+/// project for every boolean marker combination.
+fn filter_collected_tests(
+    tests: Vec<TestInfo>,
+    filter: Option<&str>,
+    include_slow: bool,
+    marker_tokens: Option<&[MarkerToken]>,
+    stable_id_root: &Path,
+) -> Vec<TestInfo> {
+    tests
+        .into_iter()
+        .filter(|test| {
+            if let Some(keyword) = filter
+                && !stable_test_id(test, stable_id_root).contains(keyword)
+            {
+                return false;
+            }
+            if !include_slow && test.markers.contains(&TestMarker::Slow) {
+                return false;
+            }
+            if let Some(tokens) = marker_tokens {
+                match marker_expr_matches(test, tokens) {
+                    Ok(true) => {}
+                    Ok(false) | Err(_) => return false,
+                }
+            }
+            true
+        })
+        .collect()
+}
+
 /// Return `conftest.incn` files that apply to a conventional test file.
 fn applicable_conftest_files(test_file: &Path, root: &Path) -> Vec<PathBuf> {
     if !test_file
@@ -631,6 +742,150 @@ fn applicable_conftest_files(test_file: &Path, root: &Path) -> Vec<PathBuf> {
     }
     files.reverse();
     files
+}
+
+#[derive(Clone)]
+struct CachedConftestDiscovery {
+    fixtures: Vec<FixtureInfo>,
+    default_marks: Vec<String>,
+    known_markers: Vec<String>,
+}
+
+#[derive(Default)]
+struct ConftestDiscoveryCache {
+    entries: HashMap<PathBuf, Result<CachedConftestDiscovery, String>>,
+    parse_count: usize,
+}
+
+impl ConftestDiscoveryCache {
+    /// Parse one inherited conftest at most once per canonical path for this command.
+    #[allow(clippy::too_many_arguments)]
+    fn discover(
+        &mut self,
+        path: &Path,
+        visible_fixture_names: &[String],
+        inherited_marks: &[String],
+        inherited_known_markers: &[String],
+        eval_context: &CollectionEvalContext,
+        session: &CompilationSession,
+    ) -> Result<CachedConftestDiscovery, String> {
+        let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if let Some(result) = self.entries.get(&key) {
+            return result.clone();
+        }
+
+        self.parse_count = self.parse_count.saturating_add(1);
+        let result = discover_tests_and_fixtures_with_context(
+            path,
+            visible_fixture_names,
+            inherited_marks,
+            inherited_known_markers,
+            eval_context,
+            session,
+        )
+        .map(|result| CachedConftestDiscovery {
+            fixtures: result.fixtures,
+            default_marks: result.default_marks,
+            known_markers: result.known_markers,
+        });
+        self.entries.insert(key, result.clone());
+        result
+    }
+}
+
+struct CollectedTestInventory {
+    tests: Vec<TestInfo>,
+    fixtures: HashMap<String, FixtureInfo>,
+    known_markers: BTreeSet<String>,
+}
+
+/// Collect every test source with one shared compilation session and one canonical conftest cache.
+fn collect_test_inventory(
+    test_files: &[PathBuf],
+    root: &Path,
+    eval_context: &CollectionEvalContext,
+    session: &CompilationSession,
+    conftest_cache: &mut ConftestDiscoveryCache,
+) -> Result<CollectedTestInventory, String> {
+    let mut all_tests = Vec::new();
+    let mut all_fixtures = HashMap::new();
+    let mut known_markers = builtin_marker_names();
+    let mut collection_errors = Vec::new();
+    let mut reported_conftest_errors = BTreeSet::new();
+
+    for file_path in test_files {
+        let mut visible_fixture_names = Vec::new();
+        let mut inherited_marks = Vec::new();
+        let mut inherited_known_markers = Vec::new();
+        let mut applicable_fixtures = HashMap::new();
+
+        for conftest in applicable_conftest_files(file_path, root) {
+            match conftest_cache.discover(
+                &conftest,
+                &visible_fixture_names,
+                &inherited_marks,
+                &inherited_known_markers,
+                eval_context,
+                session,
+            ) {
+                Ok(result) => {
+                    inherited_marks = result.default_marks;
+                    inherited_known_markers = result.known_markers.clone();
+                    known_markers.extend(result.known_markers);
+                    for fixture in result.fixtures {
+                        visible_fixture_names.push(fixture.name.clone());
+                        applicable_fixtures.insert(fixture.name.clone(), fixture.clone());
+                        all_fixtures.insert(fixture.name.clone(), fixture);
+                    }
+                }
+                Err(error) => {
+                    let key = std::fs::canonicalize(&conftest).unwrap_or_else(|_| conftest.clone());
+                    if reported_conftest_errors.insert(key) {
+                        collection_errors.push(format!("Error parsing {}: {error}", conftest.display()));
+                    }
+                }
+            }
+        }
+
+        match discover_tests_and_fixtures_with_context(
+            file_path,
+            &visible_fixture_names,
+            &inherited_marks,
+            &inherited_known_markers,
+            eval_context,
+            session,
+        ) {
+            Ok(result) => {
+                known_markers.extend(result.known_markers);
+                for fixture in result.fixtures {
+                    applicable_fixtures.insert(fixture.name.clone(), fixture.clone());
+                    all_fixtures.insert(fixture.name.clone(), fixture);
+                }
+                let mut autouse_fixtures = get_autouse_fixtures(&applicable_fixtures, FixtureScope::Session);
+                autouse_fixtures.extend(get_autouse_fixtures(&applicable_fixtures, FixtureScope::Module));
+                autouse_fixtures.extend(get_autouse_fixtures(&applicable_fixtures, FixtureScope::Function));
+                all_tests.extend(result.tests.into_iter().map(|mut test| {
+                    for autouse in &autouse_fixtures {
+                        if !test.required_fixtures.contains(autouse) {
+                            test.required_fixtures.push(autouse.clone());
+                        }
+                    }
+                    test
+                }));
+            }
+            Err(error) => collection_errors.push(format!("Error parsing {}: {error}", file_path.display())),
+        }
+    }
+
+    if collection_errors.is_empty() {
+        Ok(CollectedTestInventory {
+            tests: all_tests,
+            fixtures: all_fixtures,
+            known_markers,
+        })
+    } else {
+        Err(collection_errors.join("\n"))
+    }
 }
 
 /// Return marker names that do not need user registration.
@@ -713,11 +968,10 @@ struct ActiveUnit {
 fn run_execution_unit(
     unit: &ExecutionUnit,
     cargo_policy: &CargoPolicy,
-    package_features: &FeatureSelection,
-    sdk_profile_override: Option<&str>,
     cargo_features: &[String],
     cargo_no_default_features: bool,
     cargo_all_features: bool,
+    command_context: &Arc<OvenTestCommandContext>,
     no_capture: bool,
     verbose: bool,
     emit_progress: bool,
@@ -726,11 +980,10 @@ fn run_execution_unit(
         &unit.tests,
         &unit.conftest_files_by_file,
         cargo_policy,
-        package_features,
-        sdk_profile_override,
         cargo_features,
         cargo_no_default_features,
         cargo_all_features,
+        command_context,
         TestExecutionOptions {
             no_capture,
             timeout: unit.timeout,
@@ -950,11 +1203,10 @@ fn run_scheduled_execution_units(
     units: Vec<ExecutionUnit>,
     jobs: usize,
     cargo_policy: CargoPolicy,
-    package_features: FeatureSelection,
-    sdk_profile: Option<String>,
     cargo_features: &[String],
     cargo_no_default_features: bool,
     cargo_all_features: bool,
+    command_context: Arc<OvenTestCommandContext>,
     stop_on_fail: bool,
     no_capture: bool,
     verbose: bool,
@@ -966,11 +1218,10 @@ fn run_scheduled_execution_units(
             let results = run_execution_unit(
                 unit,
                 &cargo_policy,
-                &package_features,
-                sdk_profile.as_deref(),
                 cargo_features,
                 cargo_no_default_features,
                 cargo_all_features,
+                &command_context,
                 no_capture,
                 verbose,
                 emit_progress,
@@ -1008,8 +1259,7 @@ fn run_scheduled_execution_units(
             let sender = sender.clone();
             let cargo_features = cargo_features.to_vec();
             let cargo_policy = cargo_policy.clone();
-            let package_features = package_features.clone();
-            let sdk_profile = sdk_profile.clone();
+            let command_context = Arc::clone(&command_context);
             active.push(ActiveUnit {
                 index: unit.index,
                 file_paths: unit.file_paths.clone(),
@@ -1022,11 +1272,10 @@ fn run_scheduled_execution_units(
                 let results = run_execution_unit(
                     &unit,
                     &cargo_policy,
-                    &package_features,
-                    sdk_profile.as_deref(),
                     &cargo_features,
                     cargo_no_default_features,
                     cargo_all_features,
+                    &command_context,
                     no_capture,
                     verbose,
                     emit_progress,
@@ -1091,92 +1340,56 @@ pub fn run_tests(config: TestRunConfig<'_>) -> CliResult<ExitCode> {
     let path = Path::new(path);
     enforce_test_path_toolchain_constraint(path)?;
     let stable_id_root = stable_id_root(path);
-    let test_files = discover_test_files_with_selections(path, &package_features, sdk_profile.as_deref());
-    let eval_context = CollectionEvalContext::new(test_features.into_iter().collect());
-
+    let candidates = discover_test_file_candidates(path);
+    if candidates.is_empty() {
+        return Err(CliError::failure(format!(
+            "No test files found in '{}'\nTest files should be named test_*.incn or *_test.incn",
+            path.display()
+        )));
+    }
+    let authority_root = candidates.command_authority_root().map_err(CliError::failure)?;
+    let representative_test = candidates
+        .representative_path(&authority_root)
+        .ok_or_else(|| CliError::failure("test candidate inventory lost its representative source"))?;
+    let session = prepare_test_command_session(
+        representative_test,
+        list_only,
+        &package_features,
+        sdk_profile.as_deref(),
+    )?;
+    if let Some(manifest) = session.manifest.as_ref() {
+        let session_root =
+            std::fs::canonicalize(manifest.project_root()).unwrap_or_else(|_| manifest.project_root().to_path_buf());
+        if session_root != authority_root {
+            return Err(CliError::failure(format!(
+                "test inventory belongs to {}, but command session selected {}",
+                authority_root.display(),
+                session_root.display()
+            )));
+        }
+    }
+    let test_files = discover_test_files_with_session(&candidates, &authority_root, session.as_ref());
     if test_files.is_empty() {
         return Err(CliError::failure(format!(
             "No test files found in '{}'\nTest files should be named test_*.incn or *_test.incn",
             path.display()
         )));
     }
-    validate_oven_test_lock_policy(&test_files[0], &cargo_policy, &package_features, sdk_profile.as_deref())?;
+    validate_oven_test_lock_policy(
+        session.as_ref(),
+        &test_files[0],
+        &cargo_policy,
+        &package_features,
+        sdk_profile.as_deref(),
+    )?;
 
-    let mut all_tests: Vec<TestInfo> = Vec::new();
-    let mut all_fixtures: HashMap<String, FixtureInfo> = HashMap::new();
-    let mut known_markers = builtin_marker_names();
-    let mut collection_errors = Vec::new();
-
-    for file_path in &test_files {
-        let mut visible_fixture_names = Vec::new();
-        let mut inherited_marks = Vec::new();
-        let mut inherited_known_markers = Vec::new();
-        let mut applicable_fixtures = HashMap::new();
-
-        for conftest in applicable_conftest_files(file_path, path) {
-            match discover_tests_and_fixtures_with_context(
-                &conftest,
-                &visible_fixture_names,
-                &inherited_marks,
-                &inherited_known_markers,
-                &eval_context,
-                &package_features,
-                sdk_profile.as_deref(),
-            ) {
-                Ok(result) => {
-                    inherited_marks = result.default_marks.clone();
-                    inherited_known_markers = result.known_markers.clone();
-                    for marker in result.known_markers {
-                        known_markers.insert(marker);
-                    }
-                    for fixture in result.fixtures {
-                        visible_fixture_names.push(fixture.name.clone());
-                        applicable_fixtures.insert(fixture.name.clone(), fixture.clone());
-                        all_fixtures.insert(fixture.name.clone(), fixture);
-                    }
-                }
-                Err(e) => collection_errors.push(format!("Error parsing {}: {}", conftest.display(), e)),
-            }
-        }
-
-        match discover_tests_and_fixtures_with_context(
-            file_path,
-            &visible_fixture_names,
-            &inherited_marks,
-            &inherited_known_markers,
-            &eval_context,
-            &package_features,
-            sdk_profile.as_deref(),
-        ) {
-            Ok(result) => {
-                for marker in result.known_markers {
-                    known_markers.insert(marker);
-                }
-                for fixture in result.fixtures {
-                    applicable_fixtures.insert(fixture.name.clone(), fixture.clone());
-                    all_fixtures.insert(fixture.name.clone(), fixture);
-                }
-                let mut autouse_fixtures = get_autouse_fixtures(&applicable_fixtures, FixtureScope::Session);
-                autouse_fixtures.extend(get_autouse_fixtures(&applicable_fixtures, FixtureScope::Module));
-                autouse_fixtures.extend(get_autouse_fixtures(&applicable_fixtures, FixtureScope::Function));
-                all_tests.extend(result.tests.into_iter().map(|mut test| {
-                    for autouse in &autouse_fixtures {
-                        if !test.required_fixtures.contains(autouse) {
-                            test.required_fixtures.push(autouse.clone());
-                        }
-                    }
-                    test
-                }));
-            }
-            Err(e) => {
-                collection_errors.push(format!("Error parsing {}: {}", file_path.display(), e));
-            }
-        }
-    }
-
-    if !collection_errors.is_empty() {
-        return Err(CliError::failure(collection_errors.join("\n")));
-    }
+    let eval_context = CollectionEvalContext::new(test_features.into_iter().collect());
+    let mut conftest_cache = ConftestDiscoveryCache::default();
+    let inventory = collect_test_inventory(&test_files, path, &eval_context, session.as_ref(), &mut conftest_cache)
+        .map_err(CliError::failure)?;
+    let all_tests = inventory.tests;
+    let all_fixtures = inventory.fixtures;
+    let known_markers = inventory.known_markers;
 
     if verbose && !all_fixtures.is_empty() {
         println!("Discovered {} fixture(s):", all_fixtures.len());
@@ -1221,26 +1434,13 @@ pub fn run_tests(config: TestRunConfig<'_>) -> CliResult<ExitCode> {
         .map_or_else(BTreeSet::new, |tokens| marker_expr_names(tokens));
     validate_markers(&all_tests, &known_markers, strict_markers, &marker_expr_names).map_err(CliError::failure)?;
 
-    let mut filtered_tests: Vec<TestInfo> = all_tests
-        .into_iter()
-        .filter(|t| {
-            if let Some(keyword) = filter
-                && !stable_test_id(t, &stable_id_root).contains(keyword)
-            {
-                return false;
-            }
-            if !include_slow && t.markers.contains(&TestMarker::Slow) {
-                return false;
-            }
-            if let Some(tokens) = marker_tokens.as_ref() {
-                match marker_expr_matches(t, tokens) {
-                    Ok(true) => {}
-                    Ok(false) | Err(_) => return false,
-                }
-            }
-            true
-        })
-        .collect();
+    let mut filtered_tests = filter_collected_tests(
+        all_tests,
+        filter,
+        include_slow,
+        marker_tokens.as_deref(),
+        &stable_id_root,
+    );
 
     if filtered_tests.is_empty() {
         eprintln!("No tests collected");
@@ -1256,6 +1456,8 @@ pub fn run_tests(config: TestRunConfig<'_>) -> CliResult<ExitCode> {
         }
         return Ok(ExitCode::SUCCESS);
     }
+
+    let command_context = prepare_oven_test_command_context(Arc::clone(&session), &test_files[0], &test_files)?;
 
     let shuffle_seed = if shuffle {
         let value = seed.unwrap_or_else(default_shuffle_seed);
@@ -1317,11 +1519,10 @@ pub fn run_tests(config: TestRunConfig<'_>) -> CliResult<ExitCode> {
         units,
         jobs,
         cargo_policy,
-        package_features,
-        sdk_profile,
         &cargo_features,
         cargo_no_default_features,
         cargo_all_features,
+        command_context,
         stop_on_fail,
         no_capture,
         verbose,
@@ -1527,6 +1728,168 @@ mod tests {
         }
     }
 
+    fn list_test_config(path: &str) -> TestRunConfig<'_> {
+        TestRunConfig {
+            path,
+            verbose: false,
+            stop_on_fail: false,
+            include_slow: false,
+            filter: None,
+            use_color: false,
+            fail_on_empty: true,
+            list_only: true,
+            report_format: TestOutputFormat::Console,
+            junit_path: None,
+            durations: None,
+            shuffle: false,
+            seed: None,
+            run_xfail: false,
+            marker_expr: None,
+            strict_markers: false,
+            jobs: 1,
+            test_features: Vec::new(),
+            package_features: crate::provider::FeatureSelection::default(),
+            sdk_profile: None,
+            timeout: None,
+            no_capture: false,
+            cargo_policy: CargoPolicy::default(),
+            cargo_features: Vec::new(),
+            cargo_no_default_features: false,
+            cargo_all_features: false,
+            workspace_context: None,
+        }
+    }
+
+    #[test]
+    fn command_collection_lock_and_execution_prepare_one_session_and_parse_each_conftest_once()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let tests = project.path().join("tests");
+        std::fs::create_dir_all(&tests)?;
+        std::fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"one_test_session\"\nversion = \"0.1.0\"\n",
+        )?;
+        std::fs::write(
+            tests.join("conftest.incn"),
+            "const TEST_MARKERS: List[str] = [\"shared\"]\n",
+        )?;
+        std::fs::write(
+            tests.join("test_first.incn"),
+            "def test_first() -> None:\n    assert True\n",
+        )?;
+        std::fs::write(
+            tests.join("test_second.incn"),
+            "def test_second() -> None:\n    assert True\n",
+        )?;
+
+        TEST_COMMAND_SESSION_CONSTRUCTIONS.with(|count| count.set(0));
+        let candidates = discover_test_file_candidates(project.path());
+        let authority_root = candidates.command_authority_root()?;
+        let representative = candidates
+            .representative_path(&authority_root)
+            .ok_or("test candidate inventory has no representative")?;
+        let package_features = crate::provider::FeatureSelection::default();
+        let session = prepare_test_command_session(representative, false, &package_features, None)?;
+        let test_files = discover_test_files_with_session(&candidates, &authority_root, session.as_ref());
+        assert_eq!(test_files.len(), 2);
+
+        let mut conftest_cache = ConftestDiscoveryCache::default();
+        let inventory = collect_test_inventory(
+            &test_files,
+            project.path(),
+            &CollectionEvalContext::default(),
+            session.as_ref(),
+            &mut conftest_cache,
+        )?;
+        assert_eq!(inventory.tests.len(), 2);
+        assert_eq!(conftest_cache.parse_count, 1);
+        assert_eq!(conftest_cache.entries.len(), 1);
+
+        crate::cli::commands::lock::reset_project_lock_collection_metrics();
+        let Err(lock_error) = validate_oven_test_lock_policy(
+            session.as_ref(),
+            representative,
+            &CargoPolicy::explicit(false, false, true, Vec::new()),
+            &package_features,
+            None,
+        ) else {
+            return Err("strict test validation accepted a missing incan.lock".into());
+        };
+        assert!(lock_error.message.contains("incan.lock is missing"));
+        assert_eq!(
+            crate::cli::commands::lock::project_lock_collection_counts(),
+            (1, 0),
+            "strict validation must collect through the command session without discovering another",
+        );
+
+        let _execution_context = prepare_oven_test_command_context(Arc::clone(&session), representative, &test_files)?;
+        TEST_COMMAND_SESSION_CONSTRUCTIONS.with(|count| assert_eq!(count.get(), 1));
+        Ok(())
+    }
+
+    #[test]
+    fn list_only_uses_one_parser_session_without_preparing_execution_authority()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let src = project.path().join("src");
+        let tests = project.path().join("tests");
+        std::fs::create_dir_all(&src)?;
+        std::fs::create_dir_all(&tests)?;
+        std::fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"list_without_bake\"\nversion = \"0.1.0\"\n",
+        )?;
+        std::fs::write(src.join("main.incn"), "def main() -> None:\n    pass\n")?;
+        std::fs::write(
+            tests.join("test_list.incn"),
+            "def test_list() -> None:\n    assert True\n",
+        )?;
+
+        TEST_COMMAND_SESSION_CONSTRUCTIONS.with(|count| count.set(0));
+        let path = project.path().to_str().ok_or("test project path is not UTF-8")?;
+        let exit = run_tests(list_test_config(path))?;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        TEST_COMMAND_SESSION_CONSTRUCTIONS.with(|count| assert_eq!(count.get(), 1));
+        assert!(
+            !project.path().join("target").exists(),
+            "listing tests must not prepare generated execution artifacts"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn common_directory_with_sibling_projects_fails_before_selecting_a_session()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let common = tempfile::tempdir()?;
+        for name in ["alpha", "beta"] {
+            let project = common.path().join(name);
+            let tests = project.join("tests");
+            std::fs::create_dir_all(&tests)?;
+            std::fs::write(
+                project.join("incan.toml"),
+                format!("[project]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+            )?;
+            std::fs::write(
+                tests.join(format!("test_{name}.incn")),
+                format!("def test_{name}() -> None:\n    assert True\n"),
+            )?;
+        }
+
+        TEST_COMMAND_SESSION_CONSTRUCTIONS.with(|count| count.set(0));
+        let path = common.path().to_str().ok_or("common test path is not UTF-8")?;
+        let Err(error) = run_tests(list_test_config(path)) else {
+            return Err("a common directory silently selected one sibling project".into());
+        };
+
+        assert!(error.message.contains("test path spans multiple Incan projects"));
+        assert!(error.message.contains("alpha"));
+        assert!(error.message.contains("beta"));
+        TEST_COMMAND_SESSION_CONSTRUCTIONS.with(|count| assert_eq!(count.get(), 0));
+        Ok(())
+    }
+
     // ---- expand_parametrized_tests ----
 
     #[test]
@@ -1592,6 +1955,104 @@ mod tests {
         assert!(expanded[2].parametrize_call.is_some());
         assert_eq!(expanded[3].function_name, "test_another");
         assert!(expanded[3].parametrize_call.is_none());
+    }
+
+    #[test]
+    fn filtered_collection_keeps_keyword_slow_and_marker_selection_independent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tests = vec![
+            make_test("test_api", vec![TestMarker::Mark("api".to_string())]),
+            make_test(
+                "test_api_slow",
+                vec![TestMarker::Mark("api".to_string()), TestMarker::Slow],
+            ),
+            make_test("test_db", vec![TestMarker::Mark("db".to_string())]),
+        ];
+        let root = Path::new(".");
+
+        let default_selection = filter_collected_tests(tests.clone(), None, false, None, root);
+        assert_eq!(
+            default_selection
+                .iter()
+                .map(|test| test.function_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["test_api", "test_db"],
+            "default collection must exclude only slow tests"
+        );
+
+        let keyword_selection = filter_collected_tests(tests.clone(), Some("test_api_slow"), true, None, root);
+        assert_eq!(
+            keyword_selection
+                .iter()
+                .map(|test| test.function_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["test_api_slow"],
+            "keyword selection must remain independent of slow-test selection"
+        );
+
+        let tokens = tokenize_marker_expr("api and not slow")?;
+        let marker_selection = filter_collected_tests(tests, None, true, Some(&tokens), root);
+        assert_eq!(
+            marker_selection
+                .iter()
+                .map(|test| test.function_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["test_api"],
+            "marker selection must retain the non-slow API case only"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn marker_expression_parser_and_strict_validation_cover_collection_errors() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let api_test = make_test("test_api", vec![TestMarker::Mark("api".to_string())]);
+        let tokens = tokenize_marker_expr("api and not slow")?;
+        assert!(marker_expr_matches(&api_test, &tokens)?);
+
+        let known_markers = std::collections::BTreeSet::from(["api".to_string()]);
+        validate_markers(&[api_test], &known_markers, true, &marker_expr_names(&tokens))?;
+
+        let unknown_tokens = tokenize_marker_expr("missing")?;
+        let Err(error) = validate_markers(&[], &known_markers, true, &marker_expr_names(&unknown_tokens)) else {
+            return Err("strict marker validation accepted an unknown marker".into());
+        };
+        assert!(error.contains("unknown marker `missing`"));
+
+        let malformed_tokens = tokenize_marker_expr("api and (")?;
+        let Err(error) = MarkerExprParser::parse(&malformed_tokens, &std::collections::BTreeSet::new()) else {
+            return Err("marker parser accepted an unclosed expression".into());
+        };
+        assert!(error.contains("expected marker name or parenthesized expression"));
+        Ok(())
+    }
+
+    #[test]
+    fn stable_test_ids_are_root_relative_for_file_and_directory_inputs() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let conventional_path = project.path().join("test_runner_surface.incn");
+        std::fs::write(&conventional_path, "def test_beta() -> None:\n    pass\n")?;
+        let mut conventional = make_test("test_beta", vec![]);
+        conventional.file_path = conventional_path.clone();
+        assert_eq!(
+            stable_test_id(&conventional, &stable_id_root(&conventional_path)),
+            "test_runner_surface.incn::test_beta"
+        );
+
+        let inline_path = project.path().join("src/main.incn");
+        let inline_parent = inline_path.parent().ok_or("inline source path has no parent")?;
+        std::fs::create_dir_all(inline_parent)?;
+        std::fs::write(
+            &inline_path,
+            "module tests:\n    def decorated_inline_case() -> None:\n        pass\n",
+        )?;
+        let mut inline = make_test("decorated_inline_case", vec![TestMarker::Test]);
+        inline.file_path = inline_path;
+        assert_eq!(
+            stable_test_id(&inline, &stable_id_root(project.path())),
+            "src/main.incn::decorated_inline_case"
+        );
+        Ok(())
     }
 
     #[test]

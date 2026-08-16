@@ -29,7 +29,7 @@ That does not mean Incan is Python compatibility tooling or a Rust replacement. 
 
 ## Current beta versus 1.0 direction
 
-Incan is beta software. In the documented Oven Alpha envelope, ordinary build, test, and run commands select receipt-bound direct-`rustc` plans from Incan-owned storage; Cargo-backed compatibility publication is confined to the hidden, explicitly named `legacy_cargo` Loaf baker rather than acting as a normal-command fallback. Generated Rust remains inspectable backend output, but it should not be treated as the permanent public semantic contract.
+Incan is beta software. In the documented Oven Alpha envelope, ordinary build, test, and run commands select receipt-bound direct-`rustc` plans from Incan-owned storage; Cargo-backed compatibility publication is confined to the internal compatibility publisher rather than acting as a normal-command fallback. Generated Rust remains inspectable backend output, but it should not be treated as the permanent public semantic contract.
 
 The 1.0 direction is:
 

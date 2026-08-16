@@ -37,9 +37,9 @@ pub enum ProviderArtifactDigestError {
 
 /// Hash every immutable manifest, generated source, and generated-project input in one provider artifact tree.
 ///
-/// A nested Cargo `target/` directory is deliberately excluded because it is a mutable build cache rather than
-/// provider content. Generated providers normally use an external shared target directory, but this exclusion keeps
-/// integrity stable if a backend tool creates the conventional directory later.
+/// Compiler, VCS, and test-runner output directories are deliberately excluded because they are mutable caches
+/// rather than provider content. Generated providers normally use an external shared target directory, but these
+/// exclusions keep integrity stable if a backend tool creates conventional local output later.
 pub fn digest_provider_artifact(root: &Path) -> Result<String, ProviderArtifactDigestError> {
     if !root.is_dir() {
         return Err(ProviderArtifactDigestError::InvalidRoot {
@@ -158,19 +158,62 @@ pub(crate) fn digest_toolchain_source_tree_with_cache(
     root: &Path,
     resolved_packages: &mut BTreeMap<PathBuf, String>,
 ) -> Result<String, ProviderArtifactDigestError> {
-    digest_toolchain_package_inner(root, &mut BTreeSet::new(), resolved_packages)
+    digest_cargo_package_inner(
+        root,
+        &mut BTreeSet::new(),
+        resolved_packages,
+        CargoSourceCoverage::ToolchainSemantic,
+    )
 }
 
-/// Resolve one support package plus its recursive Cargo path dependencies into a path-independent digest.
-fn digest_toolchain_package_inner(
+/// Hash every non-output file in a local Rust package plus its recursive Cargo path dependencies.
+///
+/// Arbitrary third-party build scripts and `include_*` macros may consume inputs that cannot be inferred from the
+/// manifest. This conservative authority therefore retains every regular package file except known mutable output
+/// directories. Cargo manifests contribute normalized dependency edges so sibling packages remain relocation-stable.
+pub(crate) fn digest_cargo_path_source_tree_with_cache(
+    root: &Path,
+    resolved_packages: &mut BTreeMap<PathBuf, String>,
+) -> Result<String, ProviderArtifactDigestError> {
+    digest_cargo_package_inner(
+        root,
+        &mut BTreeSet::new(),
+        resolved_packages,
+        CargoSourceCoverage::ConservativePathCrate,
+    )
+}
+
+/// File-coverage policy for one recursive Cargo package digest.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CargoSourceCoverage {
+    /// Compiler-owned crates declare exceptional semantic inputs, allowing unrelated repository files to be ignored.
+    ToolchainSemantic,
+    /// Caller-owned crates receive conservative coverage because their build-time file reads are not constrained.
+    ConservativePathCrate,
+}
+
+/// Resolve one package plus its recursive Cargo path dependencies into a path-independent digest.
+fn digest_cargo_package_inner(
     root: &Path,
     visiting: &mut BTreeSet<PathBuf>,
     resolved_packages: &mut BTreeMap<PathBuf, String>,
+    coverage: CargoSourceCoverage,
 ) -> Result<String, ProviderArtifactDigestError> {
     if !root.is_dir() {
         return Err(ProviderArtifactDigestError::InvalidRoot {
             path: root.to_path_buf(),
         });
+    }
+    if coverage == CargoSourceCoverage::ConservativePathCrate {
+        let metadata = fs::symlink_metadata(root).map_err(|source| ProviderArtifactDigestError::Io {
+            path: root.to_path_buf(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(ProviderArtifactDigestError::UnsupportedEntry {
+                path: root.to_path_buf(),
+            });
+        }
     }
     let normalized_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     if let Some(digest) = resolved_packages.get(&normalized_root) {
@@ -179,7 +222,14 @@ fn digest_toolchain_package_inner(
     if !visiting.insert(normalized_root.clone()) {
         return Err(ProviderArtifactDigestError::Normalization {
             path: root.to_path_buf(),
-            message: "toolchain Cargo path-dependency graph contains a cycle".to_string(),
+            message: match coverage {
+                CargoSourceCoverage::ToolchainSemantic => {
+                    "toolchain Cargo path-dependency graph contains a cycle".to_string()
+                }
+                CargoSourceCoverage::ConservativePathCrate => {
+                    "Cargo path-dependency source graph contains a cycle".to_string()
+                }
+            },
         });
     }
 
@@ -198,8 +248,23 @@ fn digest_toolchain_package_inner(
             path: manifest_path.clone(),
             message: error.to_string(),
         })?;
-    normalize_toolchain_manifest_path_dependencies(&mut manifest, root, visiting, resolved_packages)?;
-    let workspace_context = inherited_workspace_context(root, &manifest, visiting, resolved_packages)?;
+    let mut direct_path_roots = BTreeSet::new();
+    normalize_cargo_manifest_path_dependencies(
+        &mut manifest,
+        root,
+        visiting,
+        resolved_packages,
+        coverage,
+        &mut direct_path_roots,
+    )?;
+    let workspace_context = inherited_workspace_context(
+        root,
+        &manifest,
+        visiting,
+        resolved_packages,
+        coverage,
+        &mut direct_path_roots,
+    )?;
     let normalized_manifest =
         toml::to_string(&manifest).map_err(|error| ProviderArtifactDigestError::Normalization {
             path: manifest_path.clone(),
@@ -207,7 +272,10 @@ fn digest_toolchain_package_inner(
         })?;
 
     let mut hasher = Sha256::new();
-    hasher.update(b"incan-toolchain-cargo-package-v1\0");
+    hasher.update(match coverage {
+        CargoSourceCoverage::ToolchainSemantic => b"incan-toolchain-cargo-package-v1\0".as_slice(),
+        CargoSourceCoverage::ConservativePathCrate => b"incan-cargo-path-source-closure-v1\0".as_slice(),
+    });
     hash_named_bytes(&mut hasher, "Cargo.toml", normalized_manifest.as_bytes());
     if let Some(context) = workspace_context {
         let context = toml::to_string(&context).map_err(|error| ProviderArtifactDigestError::Normalization {
@@ -216,37 +284,53 @@ fn digest_toolchain_package_inner(
         })?;
         hash_named_bytes(&mut hasher, "workspace-inherited.toml", context.as_bytes());
     }
-    hash_compiled_source_inputs(root, &root.join("src"), &mut hasher)?;
-    let build_script = manifest
-        .get("package")
-        .and_then(toml::Value::as_table)
-        .and_then(|package| package.get("build"))
-        .and_then(toml::Value::as_str)
-        .map(|path| root.join(path))
-        .unwrap_or_else(|| root.join("build.rs"));
-    if build_script.is_file() {
-        hash_compiled_file(root, &build_script, &mut hasher)?;
+    match coverage {
+        CargoSourceCoverage::ToolchainSemantic => {
+            hash_compiled_source_inputs(root, &root.join("src"), &mut hasher)?;
+            let build_script = manifest
+                .get("package")
+                .and_then(toml::Value::as_table)
+                .and_then(|package| package.get("build"))
+                .and_then(toml::Value::as_str)
+                .map(|path| root.join(path))
+                .unwrap_or_else(|| root.join("build.rs"));
+            if build_script.is_file() {
+                hash_compiled_file(root, &build_script, &mut hasher)?;
+            }
+            hash_declared_semantic_inputs(root, &manifest, &mut hasher)?;
+        }
+        CargoSourceCoverage::ConservativePathCrate => {
+            hash_conservative_package_inputs(root, root, &manifest_path, &direct_path_roots, &mut hasher)?;
+        }
     }
-    hash_declared_semantic_inputs(root, &manifest, &mut hasher)?;
     visiting.remove(&normalized_root);
     let digest = format!("sha256:{}", hex::encode(hasher.finalize()));
     resolved_packages.insert(normalized_root, digest.clone());
     Ok(digest)
 }
 
-/// Replace path dependencies in one Cargo manifest with the semantic digests of their target packages.
-fn normalize_toolchain_manifest_path_dependencies(
+/// Replace path dependencies in one Cargo manifest with the source digests of their target packages.
+fn normalize_cargo_manifest_path_dependencies(
     manifest: &mut toml::Value,
     base: &Path,
     visiting: &mut BTreeSet<PathBuf>,
     resolved_packages: &mut BTreeMap<PathBuf, String>,
+    coverage: CargoSourceCoverage,
+    direct_path_roots: &mut BTreeSet<PathBuf>,
 ) -> Result<(), ProviderArtifactDigestError> {
     let Some(root) = manifest.as_table_mut() else {
         return Ok(());
     };
     for section in ["dependencies", "build-dependencies"] {
         if let Some(dependencies) = root.get_mut(section) {
-            normalize_toolchain_dependency_table(dependencies, base, visiting, resolved_packages)?;
+            normalize_cargo_dependency_table(
+                dependencies,
+                base,
+                visiting,
+                resolved_packages,
+                coverage,
+                direct_path_roots,
+            )?;
         }
     }
     if let Some(targets) = root.get_mut("target").and_then(toml::Value::as_table_mut) {
@@ -256,7 +340,14 @@ fn normalize_toolchain_manifest_path_dependencies(
             };
             for section in ["dependencies", "build-dependencies"] {
                 if let Some(dependencies) = target.get_mut(section) {
-                    normalize_toolchain_dependency_table(dependencies, base, visiting, resolved_packages)?;
+                    normalize_cargo_dependency_table(
+                        dependencies,
+                        base,
+                        visiting,
+                        resolved_packages,
+                        coverage,
+                        direct_path_roots,
+                    )?;
                 }
             }
         }
@@ -265,11 +356,13 @@ fn normalize_toolchain_manifest_path_dependencies(
 }
 
 /// Normalize every direct path dependency in one Cargo dependency table.
-fn normalize_toolchain_dependency_table(
+fn normalize_cargo_dependency_table(
     dependencies: &mut toml::Value,
     base: &Path,
     visiting: &mut BTreeSet<PathBuf>,
     resolved_packages: &mut BTreeMap<PathBuf, String>,
+    coverage: CargoSourceCoverage,
+    direct_path_roots: &mut BTreeSet<PathBuf>,
 ) -> Result<(), ProviderArtifactDigestError> {
     let Some(dependencies) = dependencies.as_table_mut() else {
         return Ok(());
@@ -282,25 +375,41 @@ fn normalize_toolchain_dependency_table(
             continue;
         };
         let dependency_root = base.join(&path);
-        let digest = digest_toolchain_package_inner(&dependency_root, visiting, resolved_packages)?;
+        let digest = digest_cargo_package_inner(&dependency_root, visiting, resolved_packages, coverage)?;
+        if coverage == CargoSourceCoverage::ConservativePathCrate {
+            let normalized_dependency_root =
+                fs::canonicalize(&dependency_root).map_err(|source| ProviderArtifactDigestError::Io {
+                    path: dependency_root.clone(),
+                    source,
+                })?;
+            direct_path_roots.insert(normalized_dependency_root);
+        }
         let package = dependency
             .get("package")
             .and_then(toml::Value::as_str)
             .unwrap_or(dependency_key);
         dependency.insert(
             "path".to_string(),
-            toml::Value::String(format!("incan-toolchain-package://{package}#{digest}")),
+            toml::Value::String(format!(
+                "{}://{package}#{digest}",
+                match coverage {
+                    CargoSourceCoverage::ToolchainSemantic => "incan-toolchain-package",
+                    CargoSourceCoverage::ConservativePathCrate => "incan-cargo-path-package",
+                }
+            )),
         );
     }
     Ok(())
 }
 
-/// Materialize only the workspace package and dependency values inherited by one support package.
+/// Materialize only the workspace package and dependency values inherited by one Cargo package.
 fn inherited_workspace_context(
     package_root: &Path,
     package_manifest: &toml::Value,
     visiting: &mut BTreeSet<PathBuf>,
     resolved_packages: &mut BTreeMap<PathBuf, String>,
+    coverage: CargoSourceCoverage,
+    direct_path_roots: &mut BTreeSet<PathBuf>,
 ) -> Result<Option<toml::Value>, ProviderArtifactDigestError> {
     let Some((workspace_root, workspace_manifest)) = find_workspace_manifest(package_root, package_manifest)? else {
         return Ok(None);
@@ -339,7 +448,14 @@ fn inherited_workspace_context(
         collect_inherited_workspace_dependencies(package_manifest, workspace_dependencies, &mut inherited);
         if !inherited.is_empty() {
             let mut dependencies = toml::Value::Table(inherited);
-            normalize_toolchain_dependency_table(&mut dependencies, &workspace_root, visiting, resolved_packages)?;
+            normalize_cargo_dependency_table(
+                &mut dependencies,
+                &workspace_root,
+                visiting,
+                resolved_packages,
+                coverage,
+                direct_path_roots,
+            )?;
             context.insert("dependencies".to_string(), dependencies);
         }
     }
@@ -440,6 +556,57 @@ fn read_workspace_manifest(path: &Path) -> Result<toml::Value, ProviderArtifactD
         path: path.to_path_buf(),
         message: error.to_string(),
     })
+}
+
+/// Hash every conservatively authored package file without descending into outputs or nested path packages.
+fn hash_conservative_package_inputs(
+    package_root: &Path,
+    directory: &Path,
+    manifest_path: &Path,
+    direct_path_roots: &BTreeSet<PathBuf>,
+    hasher: &mut Sha256,
+) -> Result<(), ProviderArtifactDigestError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|source| ProviderArtifactDigestError::Io {
+            path: directory.to_path_buf(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| ProviderArtifactDigestError::Io {
+            path: directory.to_path_buf(),
+            source,
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| ProviderArtifactDigestError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.is_dir() {
+            if matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some(".git" | ".incan" | ".ralph-cache" | "target")
+            ) {
+                continue;
+            }
+            let normalized = fs::canonicalize(&path).map_err(|source| ProviderArtifactDigestError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if direct_path_roots.contains(&normalized) {
+                continue;
+            }
+            hash_conservative_package_inputs(package_root, &path, manifest_path, direct_path_roots, hasher)?;
+        } else if metadata.is_file() {
+            if path != manifest_path {
+                hash_compiled_file(package_root, &path, hasher)?;
+            }
+        } else {
+            return Err(ProviderArtifactDigestError::UnsupportedEntry { path });
+        }
+    }
+    Ok(())
 }
 
 /// Hash every source-tree input below `directory`, including non-Rust files consumed by `include_*` macros.
@@ -1020,7 +1187,7 @@ struct SemanticArtifactNormalization<'a> {
     normalized_cargo_bytes: &'a [u8],
 }
 
-/// Feed one artifact directory into the stable digest in lexical path order while excluding its mutable target tree.
+/// Feed one artifact directory into the stable digest in lexical path order while excluding mutable output trees.
 fn hash_directory(root: &Path, directory: &Path, hasher: &mut Sha256) -> Result<(), ProviderArtifactDigestError> {
     hash_directory_with_normalization(root, directory, hasher, None, false)
 }
@@ -1060,18 +1227,18 @@ fn hash_directory_with_normalization(
         if normalization.is_some() && relative == Path::new("Cargo.lock") {
             continue;
         }
-        let is_root_target = relative
-            .components()
-            .next()
-            .is_some_and(|component| component.as_os_str() == "target");
-        let is_nested_target = path.file_name().is_some_and(|name| name == "target");
-        if is_root_target || (exclude_nested_targets && is_nested_target) {
-            continue;
-        }
+        let file_name = path.file_name().and_then(|name| name.to_str());
         let file_type = entry.file_type().map_err(|source| ProviderArtifactDigestError::Io {
             path: path.clone(),
             source,
         })?;
+        if file_type.is_dir() {
+            let is_mutable_output = matches!(file_name, Some(".git" | ".incan" | ".ralph-cache" | "target"));
+            let is_nested_target = file_name == Some("target");
+            if is_mutable_output || (exclude_nested_targets && is_nested_target) {
+                continue;
+            }
+        }
         hasher.update(relative.to_string_lossy().replace('\\', "/").as_bytes());
         hasher.update([0]);
         if file_type.is_dir() {
@@ -1112,7 +1279,7 @@ mod tests {
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     #[test]
-    fn digest_tracks_manifest_and_generated_source_but_ignores_build_cache() -> TestResult {
+    fn digest_tracks_manifest_and_generated_source_but_ignores_mutable_output() -> TestResult {
         let artifact = tempfile::tempdir()?;
         fs::create_dir_all(artifact.path().join("src"))?;
         fs::write(artifact.path().join("provider.incnlib"), "manifest")?;
@@ -1123,8 +1290,14 @@ mod tests {
         let source_changed = digest_provider_artifact(artifact.path())?;
         assert_ne!(initial, source_changed);
 
-        fs::create_dir_all(artifact.path().join("target/debug"))?;
-        fs::write(artifact.path().join("target/debug/cache"), "mutable")?;
+        fs::write(artifact.path().join("target"), "authored provider content")?;
+        assert_ne!(source_changed, digest_provider_artifact(artifact.path())?);
+        fs::remove_file(artifact.path().join("target"))?;
+
+        for directory in [".git", ".incan/oven", ".ralph-cache/loafs", "target/debug"] {
+            fs::create_dir_all(artifact.path().join(directory))?;
+            fs::write(artifact.path().join(directory).join("mutable"), "not provider content")?;
+        }
         assert_eq!(source_changed, digest_provider_artifact(artifact.path())?);
         Ok(())
     }

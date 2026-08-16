@@ -10,8 +10,8 @@ use crate::frontend::ast::{
 };
 use crate::frontend::ast_walk::any_expr_in_body;
 use crate::frontend::testing_markers::{TestingMarkerKind, TestingMarkerSemantics, resolve_testing_marker_kind};
-use crate::provider::FeatureSelection;
 
+use super::infer_test_project_root_without_manifest;
 use super::types::{DiscoveryResult, FixtureInfo, FixtureScope, ParametrizeCase, TestInfo, TestMarker};
 
 /// Return whether `path` uses the conventional standalone test-file naming scheme.
@@ -36,45 +36,226 @@ fn source_may_contain_inline_test_module(source: &str) -> bool {
 
 /// Parse one source file for collection-time discovery using the same dependency-provided vocabulary surfaces that
 /// ordinary source compilation receives.
-fn parse_collection_program(
-    path: &Path,
-    source: &str,
-    package_features: &FeatureSelection,
-    sdk_profile_override: Option<&str>,
-) -> Result<(Program, CompilationSession), String> {
-    let session =
-        CompilationSession::discover_for_collection_with_selections(path, package_features, sdk_profile_override)
-            .map_err(|e| format!("Manifest error: {}", e.message))?;
-    let program = session
+fn parse_collection_program(path: &Path, source: &str, session: &CompilationSession) -> Result<Program, String> {
+    session
         .parse_source(path, source, false)
-        .map_err(|e| format!("Parser error: {:?}", e))?;
-    Ok((program, session))
+        .map_err(|e| format!("Parser error: {:?}", e))
 }
 
 /// Parse a non-test source file just far enough to prove it contains a real RFC 018 inline test module.
-fn file_has_inline_test_module(
-    path: &Path,
-    package_features: &FeatureSelection,
-    sdk_profile_override: Option<&str>,
-) -> bool {
+fn file_has_inline_test_module(path: &Path, source: &str, session: &CompilationSession) -> bool {
     if !is_incan_source_file(path) || is_named_test_file(path) {
         return false;
     }
-
-    let Ok(source) = fs::read_to_string(path) else {
-        return false;
-    };
-    if !source_may_contain_inline_test_module(&source) {
+    if !source_may_contain_inline_test_module(source) {
         return false;
     }
 
-    let Ok((ast, _session)) = parse_collection_program(path, &source, package_features, sdk_profile_override) else {
+    let Ok(ast) = parse_collection_program(path, source, session) else {
         return false;
     };
 
     ast.declarations
         .iter()
         .any(|decl| matches!(decl.node, Declaration::TestModule(_)))
+}
+
+/// Cheap filesystem inventory used to select one command-owned collection session before parsing any source.
+pub(crate) struct TestFileCandidates {
+    paths: Vec<PathBuf>,
+    inline_sources: HashMap<PathBuf, String>,
+    authority_by_path: HashMap<PathBuf, PathBuf>,
+    authority_roots: BTreeSet<PathBuf>,
+}
+
+impl TestFileCandidates {
+    /// Resolve the one project authority allowed to own this command's test inventory.
+    pub(crate) fn command_authority_root(&self) -> Result<PathBuf, String> {
+        match self.authority_roots.len() {
+            0 => Err("test candidate inventory has no project authority".to_string()),
+            1 => self
+                .authority_roots
+                .first()
+                .cloned()
+                .ok_or_else(|| "test candidate inventory lost its project authority".to_string()),
+            _ => Err(format!(
+                "test path spans multiple Incan projects: {}. Run `incan test` for one project root or select workspace members explicitly",
+                self.authority_roots
+                    .iter()
+                    .map(|root| root.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+
+    /// Return the first possible test source owned by the selected project authority.
+    pub(crate) fn representative_path(&self, authority_root: &Path) -> Option<&Path> {
+        self.paths
+            .iter()
+            .find(|path| self.path_belongs_to_authority(path, authority_root))
+            .map(PathBuf::as_path)
+    }
+
+    /// Return whether the filesystem walk found no conventional tests or inline-test candidates.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    /// Return whether one candidate path belongs to the selected project authority.
+    fn path_belongs_to_authority(&self, path: &Path, authority_root: &Path) -> bool {
+        self.authority_by_path
+            .get(path)
+            .is_some_and(|candidate_root| candidate_root == authority_root)
+    }
+}
+
+/// Normalize one discovered ownership root without leaving the current directory encoded as an empty relative path.
+fn canonical_authority_root(path: &Path) -> PathBuf {
+    let root = if path.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        path
+    };
+    fs::canonicalize(root)
+        .or_else(|_| std::path::absolute(root))
+        .unwrap_or_else(|_| root.to_path_buf())
+}
+
+/// Return the nearest manifest root enclosing a requested file or directory.
+fn enclosing_manifest_root(path: &Path) -> Option<PathBuf> {
+    let mut cursor = if path.is_file() {
+        path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
+    } else {
+        path.to_path_buf()
+    };
+    loop {
+        if cursor.join("incan.toml").is_file() {
+            return Some(canonical_authority_root(&cursor));
+        }
+        if !cursor.pop() {
+            return None;
+        }
+    }
+}
+
+/// Walk the requested path once, retaining candidates and the deepest project boundary that owns each one.
+///
+/// A command already enclosed by an `incan.toml` never descends into a nested project. A manifest-less common
+/// directory may discover sibling projects, but keeps them as separate authorities so command planning can reject the
+/// ambiguous invocation before selecting a session from whichever file happens to sort first.
+pub(crate) fn discover_test_file_candidates(path: &Path) -> TestFileCandidates {
+    struct CandidateCollector<'a> {
+        selected_manifest_root: Option<&'a Path>,
+        fallback_root: &'a Path,
+        paths: Vec<PathBuf>,
+        inline_sources: HashMap<PathBuf, String>,
+        authority_by_path: HashMap<PathBuf, PathBuf>,
+        authority_roots: BTreeSet<PathBuf>,
+    }
+
+    impl CandidateCollector<'_> {
+        /// Collect test candidates below one path while preserving its active manifest authority.
+        fn collect(&mut self, path: &Path, active_manifest_root: Option<&Path>) {
+            if path.is_file() {
+                let is_named = is_named_test_file(path);
+                let inline_source = if !is_named && is_incan_source_file(path) {
+                    fs::read_to_string(path)
+                        .ok()
+                        .filter(|source| source_may_contain_inline_test_module(source))
+                } else {
+                    None
+                };
+                if !is_named && inline_source.is_none() {
+                    return;
+                }
+
+                let authority_root = active_manifest_root.unwrap_or(self.fallback_root).to_path_buf();
+                let candidate = path.to_path_buf();
+                self.authority_roots.insert(authority_root.clone());
+                self.authority_by_path.insert(candidate.clone(), authority_root);
+                if let Some(source) = inline_source {
+                    self.inline_sources.insert(candidate.clone(), source);
+                }
+                self.paths.push(candidate);
+                return;
+            }
+            if !path.is_dir() {
+                return;
+            }
+
+            let canonical_dir = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            let local_manifest_root = path.join("incan.toml").is_file().then_some(canonical_dir.as_path());
+            let active_manifest_root = match (self.selected_manifest_root, active_manifest_root, local_manifest_root) {
+                (Some(selected), _, Some(local)) if local != selected => return,
+                (Some(selected), _, _) => Some(selected),
+                (None, Some(active), Some(local)) if active != local => return,
+                (None, _, Some(local)) => Some(local),
+                (None, active, None) => active,
+            };
+
+            let Ok(entries) = fs::read_dir(path) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                if entry_path.is_dir() {
+                    let name = entry_path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+                    if !name.starts_with('.') && name != "target" && name != "node_modules" {
+                        self.collect(&entry_path, active_manifest_root);
+                    }
+                } else {
+                    self.collect(&entry_path, active_manifest_root);
+                }
+            }
+        }
+    }
+
+    let selected_manifest_root = enclosing_manifest_root(path);
+    let fallback_root = selected_manifest_root.clone().unwrap_or_else(|| {
+        if path.is_file() {
+            infer_test_project_root_without_manifest(path)
+        } else {
+            fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        }
+    });
+    let mut collector = CandidateCollector {
+        selected_manifest_root: selected_manifest_root.as_deref(),
+        fallback_root: &fallback_root,
+        paths: Vec::new(),
+        inline_sources: HashMap::new(),
+        authority_by_path: HashMap::new(),
+        authority_roots: BTreeSet::new(),
+    };
+    collector.collect(path, selected_manifest_root.as_deref());
+    collector.paths.sort();
+    TestFileCandidates {
+        paths: collector.paths,
+        inline_sources: collector.inline_sources,
+        authority_by_path: collector.authority_by_path,
+        authority_roots: collector.authority_roots,
+    }
+}
+
+/// Confirm inline-test candidates with the parser while preserving conventional named test files.
+pub(crate) fn discover_test_files_with_session(
+    candidates: &TestFileCandidates,
+    authority_root: &Path,
+    session: &CompilationSession,
+) -> Vec<PathBuf> {
+    candidates
+        .paths
+        .iter()
+        .filter(|path| {
+            candidates.path_belongs_to_authority(path, authority_root)
+                && (is_named_test_file(path)
+                    || candidates
+                        .inline_sources
+                        .get(*path)
+                        .is_some_and(|source| file_has_inline_test_module(path, source, session)))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Build a lightweight [`Program`] wrapper around a declaration slice so existing import-alias collection stays shared.
@@ -130,60 +311,29 @@ impl Default for CollectionEvalContext {
 
 /// Discover test files in a directory.
 pub fn discover_test_files(path: &Path) -> Vec<PathBuf> {
-    discover_test_files_with_selections(path, &FeatureSelection::default(), None)
-}
-
-/// Discover test files for explicit package-feature and transient SDK-profile selections.
-pub(crate) fn discover_test_files_with_selections(
-    path: &Path,
-    package_features: &FeatureSelection,
-    sdk_profile_override: Option<&str>,
-) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-
-    if path.is_file() {
-        if is_named_test_file(path) || file_has_inline_test_module(path, package_features, sdk_profile_override) {
-            files.push(path.to_path_buf());
-        }
-    } else if path.is_dir()
-        && let Ok(entries) = fs::read_dir(path)
-    {
-        for entry in entries.flatten() {
-            let entry_path = entry.path();
-            if entry_path.is_dir() {
-                let name = entry_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if !name.starts_with('.') && name != "target" && name != "node_modules" {
-                    files.extend(discover_test_files_with_selections(
-                        &entry_path,
-                        package_features,
-                        sdk_profile_override,
-                    ));
-                }
-            } else {
-                if is_named_test_file(&entry_path)
-                    || file_has_inline_test_module(&entry_path, package_features, sdk_profile_override)
-                {
-                    files.push(entry_path);
-                }
-            }
-        }
+    let candidates = discover_test_file_candidates(path);
+    let Ok(authority_root) = candidates.command_authority_root() else {
+        return Vec::new();
+    };
+    let Some(representative) = candidates.representative_path(&authority_root) else {
+        return Vec::new();
+    };
+    match CompilationSession::discover_for_collection(representative) {
+        Ok(session) => discover_test_files_with_session(&candidates, &authority_root, &session),
+        Err(_) => candidates
+            .paths
+            .iter()
+            .filter(|path| candidates.path_belongs_to_authority(path, &authority_root) && is_named_test_file(path))
+            .cloned()
+            .collect(),
     }
-
-    files.sort();
-    files
 }
 
 /// Discover both tests and fixtures in a file.
 pub fn discover_tests_and_fixtures(file_path: &Path) -> Result<DiscoveryResult, String> {
-    discover_tests_and_fixtures_with_context(
-        file_path,
-        &[],
-        &[],
-        &[],
-        &CollectionEvalContext::default(),
-        &FeatureSelection::default(),
-        None,
-    )
+    let session = CompilationSession::discover_for_collection(file_path)
+        .map_err(|error| format!("Manifest error: {}", error.message))?;
+    discover_tests_and_fixtures_with_context(file_path, &[], &[], &[], &CollectionEvalContext::default(), &session)
 }
 
 /// Discover test declarations using inherited conftest fixtures and marker registries.
@@ -193,12 +343,10 @@ pub(crate) fn discover_tests_and_fixtures_with_context(
     inherited_marks: &[String],
     inherited_known_markers: &[String],
     eval_context: &CollectionEvalContext,
-    package_features: &FeatureSelection,
-    sdk_profile_override: Option<&str>,
+    compilation_session: &CompilationSession,
 ) -> Result<DiscoveryResult, String> {
     let source = fs::read_to_string(file_path).map_err(|e| format!("Failed to read file: {}", e))?;
-    let (ast, compilation_session) =
-        parse_collection_program(file_path, &source, package_features, sdk_profile_override)?;
+    let ast = parse_collection_program(file_path, &source, compilation_session)?;
 
     let is_named_test_file = is_named_test_file(file_path);
     let is_conftest_file = file_path.file_name().and_then(|name| name.to_str()) == Some("conftest.incn");
@@ -1109,6 +1257,53 @@ def helper() -> int:
     }
 
     #[test]
+    fn project_discovery_stops_at_a_nested_manifest_boundary() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let root_tests = project.path().join("tests");
+        let nested = project.path().join("examples/nested");
+        let nested_tests = nested.join("tests");
+        std::fs::create_dir_all(&root_tests)?;
+        std::fs::create_dir_all(&nested_tests)?;
+        std::fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"root_project\"\nversion = \"0.1.0\"\n",
+        )?;
+        std::fs::write(
+            nested.join("incan.toml"),
+            "[project]\nname = \"nested_project\"\nversion = \"0.1.0\"\n",
+        )?;
+        let root_test = root_tests.join("test_root.incn");
+        let nested_test = nested_tests.join("test_nested.incn");
+        std::fs::write(&root_test, "def test_root() -> None:\n    assert True\n")?;
+        std::fs::write(&nested_test, "def test_nested() -> None:\n    assert True\n")?;
+
+        let candidates = discover_test_file_candidates(project.path());
+        let authority_root = candidates.command_authority_root()?;
+        assert_eq!(authority_root, std::fs::canonicalize(project.path())?);
+        let representative = candidates
+            .representative_path(&authority_root)
+            .ok_or("root project has no representative test")?;
+        let session = CompilationSession::discover_for_collection(representative)?;
+        let discovered = discover_test_files_with_session(&candidates, &authority_root, &session);
+
+        assert_eq!(discovered, [root_test]);
+        assert!(!discovered.contains(&nested_test));
+        assert_eq!(
+            discover_test_files(&nested),
+            [nested_test],
+            "an explicitly selected nested project must retain its own tests"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_relative_manifest_root_resolves_to_current_directory_authority() -> Result<(), Box<dyn std::error::Error>>
+    {
+        assert_eq!(canonical_authority_root(Path::new("")), std::fs::canonicalize(".")?);
+        Ok(())
+    }
+
+    #[test]
     fn discover_inline_module_tests_and_fixtures() -> Result<(), Box<dyn std::error::Error>> {
         let source = r#"
 from std.testing import fixture
@@ -1142,6 +1337,45 @@ module tests:
         assert_eq!(result.tests[0].required_fixtures, vec!["inline_fixture".to_string()]);
         assert_eq!(result.fixtures.len(), 1, "inline fixture is discovered");
         assert_eq!(result.fixtures[0].name, "inline_fixture");
+        Ok(())
+    }
+
+    #[test]
+    fn discover_inline_module_keeps_marker_registration_and_defaults() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+module tests:
+    from std.testing import mark
+
+    const TEST_MARKERS: List[str] = ["smoke"]
+    const TEST_MARKS: List[str] = ["smoke"]
+
+    @mark("smoke")
+    def test_inline_marker() -> None:
+        pass
+"#;
+        let file = write_source_file(source)?;
+        let result = discover_tests_and_fixtures(file.path())?;
+
+        assert_eq!(result.known_markers, vec!["smoke".to_string()]);
+        assert_eq!(result.default_marks, vec!["smoke".to_string()]);
+        assert_eq!(result.tests.len(), 1);
+        assert!(result.tests[0].markers.contains(&TestMarker::Mark("smoke".to_string())));
+        Ok(())
+    }
+
+    #[test]
+    fn discover_resource_and_serial_markers_for_scheduler_admission() -> Result<(), Box<dyn std::error::Error>> {
+        let file = write_test_file(
+            "from std.testing import resource, serial\n\n@resource(\"db\")\ndef test_resource() -> None:\n    pass\n\n@serial\ndef test_serial() -> None:\n    pass\n",
+        )?;
+        let result = discover_tests_and_fixtures(file.path())?;
+        assert_eq!(result.tests.len(), 2);
+        assert!(
+            result.tests[0]
+                .markers
+                .contains(&TestMarker::Resource("db".to_string()))
+        );
+        assert!(result.tests[1].markers.contains(&TestMarker::Serial));
         Ok(())
     }
 
@@ -1241,6 +1475,50 @@ def test_broken() -> None:
         assert_eq!(
             result.tests[0].markers[0],
             TestMarker::XFail("known bug #42".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn discover_xfailif_feature_uses_the_collection_feature_context() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+from std.testing import feature, xfailif
+
+@xfailif(feature("known_bug"), reason="feature-gated known issue")
+def test_feature_xfail() -> None:
+    pass
+"#;
+        let file = write_test_file(source)?;
+        let session = CompilationSession::discover_for_collection(file.path())?;
+        let disabled = discover_tests_and_fixtures_with_context(
+            file.path(),
+            &[],
+            &[],
+            &[],
+            &CollectionEvalContext::default(),
+            &session,
+        )?;
+        assert!(
+            !disabled.tests[0]
+                .markers
+                .iter()
+                .any(|marker| matches!(marker, TestMarker::XFail(_))),
+            "disabled collection feature must leave xfailif as an ordinary test"
+        );
+
+        let enabled = discover_tests_and_fixtures_with_context(
+            file.path(),
+            &[],
+            &[],
+            &[],
+            &CollectionEvalContext::new(BTreeSet::from(["known_bug".to_string()])),
+            &session,
+        )?;
+        assert!(
+            enabled.tests[0]
+                .markers
+                .contains(&TestMarker::XFail("feature-gated known issue".to_string())),
+            "enabled collection feature must lower xfailif to the runner's XFail marker"
         );
         Ok(())
     }
@@ -1608,6 +1886,44 @@ def test_len(input: str, expected: int) -> None:
         } else {
             return Err("expected parametrize marker".into());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn discover_parametrize_rejects_wrong_case_arity() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+from std.testing import parametrize
+
+@parametrize("x, y", [1])
+def test_bad_case(x: int, y: int) -> None:
+    pass
+"#;
+        let file = write_test_file(source)?;
+        let Err(error) = discover_tests_and_fixtures(file.path()) else {
+            return Err("parametrize discovery accepted a wrong-arity case".into());
+        };
+        assert!(error.contains("parametrize case `1`"));
+        assert!(error.contains("expected 2 value(s)"));
+        Ok(())
+    }
+
+    #[test]
+    fn discover_conditional_marker_rejects_runtime_expression() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+from std.testing import skipif
+
+def helper() -> bool:
+    return true
+
+@skipif(helper(), reason="dynamic")
+def test_dynamic_condition() -> None:
+    pass
+"#;
+        let file = write_test_file(source)?;
+        let Err(error) = discover_tests_and_fixtures(file.path()) else {
+            return Err("conditional marker discovery accepted a runtime expression".into());
+        };
+        assert!(error.contains("platform()") && error.contains("feature(\"name\")"));
         Ok(())
     }
 

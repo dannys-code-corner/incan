@@ -1040,7 +1040,83 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && makefile.contains("--rustc \"$$(rustup which --toolchain \"$(INCAN_TEST_LOAF_TOOLCHAIN)\" rustc)\""),
         "the named publisher Cargo and direct-rustc consumer toolchains must remain separate"
     );
+    assert!(
+        makefile.contains("suite_tmp=\"$$(mktemp -d \"/tmp/incan-oven-suite.XXXXXX\")\"")
+            && makefile.contains("root_tmp=\"$$(mktemp -d \"/tmp/incan-oven-root.XXXXXX\")\""),
+        "Oven suite and one-root diagnostics must own short Unix scratch paths instead of inheriting a deep worktree TMPDIR"
+    );
+    let partition_target = makefile
+        .split_once(".PHONY: test-oven-partition")
+        .and_then(|(_, suffix)| suffix.split_once(".PHONY: test-oven-replay"))
+        .map(|(target, _)| target)
+        .ok_or("Makefile omitted the prepared Oven partition target")?;
+    assert!(
+        partition_target.contains("INCAN_TEST_OVEN_PARTITION_INDEX")
+            && partition_target.contains("INCAN_TEST_OVEN_PARTITION_COUNT")
+            && partition_target.contains("partition_display=$$(( $(INCAN_TEST_OVEN_PARTITION_INDEX) + 1 ))")
+            && !partition_target.contains("test-prewarm-oven-loafs"),
+        "a partition replay must require explicit zero-based partition coordinates, display one-based progress, and never silently prewarm or bake"
+    );
     let workflow = fs::read_to_string(repo_root().join(".github/workflows/ci.yml"))?;
+    let linux_tools = workflow
+        .find("linux-tool-handoff:")
+        .ok_or("pull-request CI is missing the Linux compiler handoff")?;
+    let linux_prewarm = workflow
+        .find("linux-oven-prewarm:")
+        .ok_or("pull-request CI is missing the Linux Oven prewarm handoff")?;
+    let linux_prewarm_workflow = &workflow[linux_prewarm..];
+    let linux_prewarm_end = linux_prewarm_workflow
+        .find("\n  oven-process-containment:")
+        .ok_or("pull-request CI is missing the job after the Linux Oven prewarm")?;
+    let linux_prewarm_job = &linux_prewarm_workflow[..linux_prewarm_end];
+    let linux_tools_workflow = &workflow[linux_tools..linux_prewarm];
+    let compiler_build = linux_tools_workflow
+        .find("- name: Build Linux compiler and reference generators")
+        .ok_or("pull-request CI is missing Linux compiler build")?;
+    let provider_restore = linux_prewarm_workflow
+        .find("- uses: ./.github/actions/restore-sdk-provider-store")
+        .ok_or("pull-request CI is missing SDK provider cache restore")?;
+    let complete_suite = linux_prewarm_workflow
+        .find("- name: Prewarm the complete Linux stable Oven suite")
+        .ok_or("pull-request CI is missing complete Linux stable Oven suite")?;
+    assert!(
+        compiler_build < linux_tools_workflow.len()
+            && provider_restore < complete_suite
+            && linux_prewarm_workflow.contains("needs:\n      - changes\n      - linux-tool-handoff")
+            && linux_prewarm_job.contains("- name: Save prepared Linux stable Oven suite")
+            && linux_prewarm_job.contains("target/incan_test_sdk_provider_store"),
+        "pull-request CI must build the identity-bearing compiler once, reuse its persistent provider input cache in the single Linux prewarm, and capture that provider store in the immutable prepared-suite handoff"
+    );
+    assert_eq!(
+        linux_prewarm_job.matches("name: test-linux-sdk-provider-store").count(),
+        1,
+        "the Linux prewarm is the sole publisher of the provider-store artifact"
+    );
+    assert!(
+        workflow.contains("INCAN_OVEN_NATIVE_TEST_CASE_TIMINGS")
+            && workflow.contains("INCAN_TEST_COMMAND_TIMINGS")
+            && workflow.contains("INCAN_TEST_OVEN_COMPILER_SUITE_REPORT")
+            && workflow.contains("oven-pr-linux-partition-${{ matrix.partition }}"),
+        "the first stable Linux partition must retain case and nested-command timing evidence needed to investigate remaining native test costs"
+    );
+    let provider_cache_action =
+        fs::read_to_string(repo_root().join(".github/actions/restore-sdk-provider-store/action.yml"))?;
+    assert!(
+        provider_cache_action.contains("oven sdk-provider-store-identity")
+            && provider_cache_action.contains("rustc --version --verbose")
+            && provider_cache_action.contains("incan-sdk-provider-v3"),
+        "the SDK provider cache must use the compiler-owned source identity and retain a selected-rustc suffix"
+    );
+    assert!(
+        !provider_cache_action.contains("shasum -a 256 target/debug/incan"),
+        "a rebuilt development compiler executable must not force an SDK provider cache miss"
+    );
+    assert!(
+        provider_cache_action.contains("actions/cache@v5")
+            && !provider_cache_action.contains("persist:")
+            && !provider_cache_action.contains("actions/cache/restore@v5"),
+        "the provider-store action must own one persistent source/toolchain-keyed input cache; the prepared-suite handoff is a separate exact-source replay cache"
+    );
     let evidence_workflow = fs::read_to_string(repo_root().join(".github/workflows/oven_evidence.yml"))?;
     for required in [
         "toolchain: 1.93.0",
@@ -1056,14 +1132,71 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             "release evidence CI must retain `{required}`"
         );
     }
+    let platform_gate = workflow
+        .find("oven-platform-smoke:")
+        .and_then(|start| {
+            workflow[start..]
+                .find("linux-tool-handoff:")
+                .map(|end| &workflow[start..start + end])
+        })
+        .ok_or("pull-request CI is missing the bounded platform C-ABI gate")?;
     assert!(
         workflow.contains("cancel-in-progress: true")
-            && workflow.contains("make -s test-oven")
+            && workflow.contains("make -s test-prewarm-oven-loafs")
+            && workflow.contains("make -s test-oven-partition")
             && workflow.contains("make test-oven-pr-regressions")
-            && workflow.contains("linux-reference-handoff")
-            && workflow.matches("Install WASI target for vocab desugarers").count() == 2
+            && workflow.contains("linux-tool-handoff")
+            && workflow.contains("linux-oven-prewarm")
+            && workflow.contains("oven-process-containment")
+            && workflow.contains("oven-platform-smoke")
+            && workflow.contains("oven-linux-replay")
+            && workflow.contains("actions/cache/save@v5")
+            && workflow.contains("fail-on-cache-miss: true")
+            && workflow.contains("partition: [0, 1, 2, 3]")
+            && workflow.matches("timeout-minutes: 20").count() >= 4
+            && workflow.matches("Install WASI target for vocab desugarers").count() == 6
             && !workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs, install the vocab target in both Linux paths, execute the full Oven suite on every platform, and retain Linux process-containment coverage"
+        "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and retain each job's documented bounded Oven budget"
+    );
+    let replay_gate = workflow
+        .find("oven-linux-replay:")
+        .and_then(|start| {
+            workflow[start..]
+                .find("\n  oven-release-smoke:")
+                .map(|end| &workflow[start..start + end])
+        })
+        .ok_or("pull-request CI is missing the bounded Linux Oven replay gate")?;
+    let release_gate = workflow
+        .find("oven-release-smoke:")
+        .and_then(|start| {
+            workflow[start..]
+                .find("\n  audit:")
+                .map(|end| &workflow[start..start + end])
+        })
+        .ok_or("pull-request CI is missing the independent Oven release smoke gate")?;
+    assert!(
+        replay_gate.contains("timeout-minutes: 31")
+            && replay_gate.contains("make -s test-oven-partition")
+            && replay_gate.contains(".timing.total_elapsed_ms <= 1680000")
+            && !replay_gate.contains("test-oven-release-smoke"),
+        "the replay job needs a small setup-and-artifact margin while its measured Oven execution remains capped at twenty-eight minutes"
+    );
+    assert!(
+        release_gate.contains("needs:\n      - changes\n      - linux-tool-handoff")
+            && release_gate.contains("timeout-minutes: 20")
+            && release_gate.contains("restore-sdk-provider-store")
+            && release_gate.contains("make -s test-oven-release-smoke")
+            && !release_gate.contains("test-oven-partition"),
+        "normal-command Cargo-guard proof must remain a bounded independent Linux gate rather than extend the heaviest replay worker"
+    );
+    assert!(
+        platform_gate.contains("make -s test-prewarm-sdk")
+            && platform_gate.contains("${{ matrix.c_abi_test }}")
+            && platform_gate.contains("check_verifies_c_bindings_against_a_declared_android_interop_target")
+            && platform_gate.contains("check_verifies_c_bindings_against_a_declared_ios_interop_target")
+            && !platform_gate.contains("test-one")
+            && !platform_gate.contains("test-oven-release-smoke"),
+        "reduced macOS and MSRV gates must retain their platform-specific C-ABI assertions after one SDK prewarm, without repeating the Linux Oven suite bake"
     );
     assert!(
         evidence_workflow.contains("uses: ./.github/actions/run-oven-compiler-suite"),

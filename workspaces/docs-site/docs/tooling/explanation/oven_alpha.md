@@ -51,13 +51,13 @@ For supported compatibility domains, Oven provides:
 
 Cargo is a capable Rust package manager and build tool. The problem is not that Cargo cannot compile Incan's generated Rust; it can. The problem is that making Cargo the normal backend also makes Cargo's project graph, mutable target state, fingerprints, and command lifecycle the authority behind every Incan build. Incan can wrap that process, but a wrapper cannot independently promise that work was prepared once, prove why an artifact is compatible, bound all owned storage, or give the CLI, CI, IDE, and future interactive sessions one shared account of project state.
 
-Oven changes who owns that contract. Rust source, crates, target triples, and `rustc` remain part of the system. Cargo remains a narrow compatibility publisher during Alpha. But Oven owns selection, identity, execution, evidence, and lifecycle for the supported consumer envelope.
+Oven changes who owns that contract. Rust source, crates, target triples, and `rustc` remain part of the system. Cargo remains behind one internal compatibility-publisher boundary during Alpha. But Oven owns selection, identity, execution, evidence, and lifecycle for the supported consumer envelope.
 
 | Concern | Cargo-centered Incan path | Oven model |
 | --- | --- | --- |
 | Project authority | Incan emits a generated Cargo project, then Cargo decides the build graph and manages target state. | Incan checks the project; Oven selects an explicit compatibility identity and verified build plan. |
 | Unit of reuse | A mutable local target tree whose fingerprints are Cargo implementation state, not a portable Incan artifact contract. | An immutable Loaf with declared inputs, artifacts, direct-`rustc` plan, digests, provenance, and accounting. |
-| When expensive work happens | The first consumer command pays unless a compatible local Cargo target happens to be warm. | The hidden publisher performs compatibility compilation once. `incan oven bake` explicitly materializes a shipped sealed Loaf into a local bounded store; an ordinary command may perform that same bounded copy, but never re-resolves or invokes Cargo. |
+| When expensive work happens | The first consumer command pays unless a compatible local Cargo target happens to be warm. | The release ships one full standard-library Loaf family for direct reuse. A project outside that envelope performs bounded compatibility preparation only when the developer explicitly runs `incan oven bake`; ordinary commands never re-resolve, copy the standard library, or invoke Cargo. |
 | Why reuse is valid | Cargo can explain compilation activity, but Incan has no single receipt spanning source, SDK, compiler, dependency closure, selection, and storage. | The same evidence selects the Loaf, drives execution, and records why work was reused or invalidated. |
 | Storage and liveness | Cargo target directories are useful build state, but their lifecycle is not an Incan-owned, lease-protected storage policy. | Oven admits against aggregate and domain bounds, separates logical and physical use, and will not prune active work. |
 | Local and CI semantics | Each surrounding tool can arrange Cargo differently and inherit different cache and process state. | Normal commands and the repository suite use the same stored plans, Cargo guard, compatibility rules, and reports. |
@@ -81,7 +81,7 @@ That foundation is what can later support published Loafs, mixed Incan/Rust work
 checked source + lock + SDK + rustc
                  │
                  ▼
-      hidden legacy_cargo Loaf baker
+    internal compatibility publisher
                  │
                  ▼
        <content-identity>.loaf/
@@ -92,16 +92,16 @@ checked source + lock + SDK + rustc
           direct rustc, no Cargo
 ```
 
-Within Oven Alpha compatibility publication, Cargo has one deliberately named role: maintainers and CI may use the hidden `legacy-cargo` baker to resolve and compile a missing Rust dependency closure. Oven verifies the result, seals it into Loafs, and owns subsequent selection and execution. That boundary is visible and auditable; it is not a normal-command backend. Cargo may still be used to build the Incan compiler itself or by repository lint and security tooling.
+Within Oven Alpha compatibility publication, Cargo has one deliberately bounded role: the internal compatibility publisher may resolve and compile a missing Rust dependency closure for release maintenance or CI. Oven verifies the result, seals it into Loafs, and owns subsequent selection and execution. That boundary is visible and auditable; it is not a normal-command backend. Cargo may still be used to build the Incan compiler itself or by repository lint and security tooling.
 
 An exact, complete envelope match returns `reused` without launching Cargo or rerunning behavioural probes. A missing, mutated, incomplete, or incompatible Loaf fails closed. Publication happens in isolated staging and an atomic manifest switch, so an interrupted replacement leaves the previous valid generation authoritative.
 
 The built-in Alpha envelopes are typed in Oven:
 
-- `release` contains the foundations shipped with a release toolchain;
-- `compiler-suite` contains the debug and release foundations used to run Incan's repository tests through Oven.
+- `release` contains the debug and release variants of one complete release-version standard-library Loaf family; each variant seals every supported `std.*` provider, its checked direct-Rustc closure, and its registry-source authority for that target/profile.
+- `compiler-suite` contains the corresponding complete debug and release standard-library variants used to run Incan's repository tests through Oven, plus the receipt-bound test-plan store.
 
-Their source programs are checked Incan fixtures. Make and CI compose the CLI; they do not define identity, bundle contents, admission policy, or fixture source. For the compiler-suite envelope, the same baker call also prepares or reuses the bounded receipt-compatible suite store selected by the Cargo-guarded replay.
+Their source programs are checked Incan fixtures. Make and CI compose the CLI; they do not define identity, bundle contents, admission policy, or fixture source. For the compiler-suite envelope, the same internal publisher call also prepares or reuses the bounded receipt-compatible suite store selected by the Cargo-guarded replay.
 
 ## Normal commands
 
@@ -115,16 +115,22 @@ incan test
 
 Each command selects a receipt-compatible Loaf and stored direct-`rustc` plan. A changed compiler, target, SDK, feature selection, lock, or relevant source changes the identity. An unchanged clean checkout can select the same Loaf because Git status and shell-script revisions are not compatibility inputs.
 
-For a dependency-free Incan library, an explicit preparation step makes first-use store materialization visible before a build:
+For a supported manifest-backed Incan project, an explicit preparation step makes first-use selection or publication visible before a normal command. `oven bake` discovers `src/lib.incn` and `src/main.incn` when present, so an initialized application and a library use the same command:
 
 ```bash
 incan oven bake --project . --format json
-incan build --lib
+incan oven bake --project . --features json,http --format json
+incan build       # application
+incan build --lib # library
 ```
 
-`oven bake` records debug and release receipts, then reports `materialized` or `reused` for each selected plan. It only copies a receipt-compatible Loaf already shipped by the active toolchain through Oven's bounded, atomic, lease-aware store; it does not compile a final `rlib`, resolve a Rust graph, or launch Cargo. Generated Rust remains project-owned. Normal `build`, `run`, and `test` may also perform this controlled first materialization for a shipped compatible Loaf, but never an uncontrolled cold compatibility bake.
+The release ships one complete standard-library Loaf family: immutable debug and release variants are both required because Rust artifacts are target/profile-specific. Each variant contains the checked full stdlib/provider closure, its direct-`rustc` plan, sealed registry source authority, provenance, digests, and byte accounting. It is one release-versioned standard-library service, not a pair of partial stdlibs or a cache copied once per project.
 
-If no compatible Loaf exists, the command stops without invoking Cargo. For a library, first try `incan oven bake --project <library-root>`; if the active toolchain has no compatible shipped Loaf, install or reinstall an Oven-enabled toolchain for the target, or remove caller-owned Rust dependencies outside the documented Alpha envelope. `bake-loafs` remains only the maintainer path for preparing a toolchain; neither normal commands nor `oven bake` run that baker automatically.
+`oven bake` uses the same Incan package-feature projection as normal commands through `--features`, `--no-default-features`, and `--all-features`, then records debug and release receipts for every discovered project target. Each declared executable receives a stable target identity, additional entrypoints are keyed by project-relative path, and completed outputs remain isolated by that identity and profile. If the full stdlib Loaf already covers a profile, it reports `toolchain_loaf` and selects that immutable closure directly—no Cargo process and no per-project copy. If a target adds artifacts outside the installed standard-library envelope, the explicit command may run the bounded publisher once and publish a receipt-bound project-extension Loaf as `<identity>.loaf/loaf.json` in the policy-bounded local store. Its payload names the exact base Loaf, canonicalizes compiler-owned runtime artifacts, overlapping locked registry units, and vocabulary auxiliaries against that verified release cohort, retains only the project-owned third-party and provider fragment, and binds each direct registry alias to the exact locked package, version, registry, and checksum. An explicit library bake also compiles caller-owned debug and release rlibs through direct `rustc`, seals the checked `.incnlib` metadata and every declared sidecar in the package handoff, and publishes completed project-output Loafs for exact replay. Normal execution holds both leases and composes their verified direct-`rustc` fragments. A repeat with the same feature selection reports `reused` and starts no Cargo process. Generated Rust, final binaries, and final `rlib` output remain project-owned.
+
+The current compatibility boundary is explicit in its schemas: project extensions use schema 9, packaged libraries use schema 6, completed project outputs use schema 12, and project inspection authorities use schema 1. Schema 12 retains schema 11's singular inspection authority and adds stable executable target identities, target/profile isolation, canonical semantic lock authority separated from its derived dependency fingerprint, and report schema 2. Report replay uses tagged project paths and opaque external-authority slots so a matching completed output can return the sealed report without re-entering the frontend or trusting machine-specific external path spelling. A non-strict normal command warns and reuses when only the derived lock fingerprint is stale; `--locked` and `--frozen` reject that stale lock before selection, while a semantic lock change remains a source-authority miss. Rust path dependencies also bind the exact inherited `[workspace.package]` and `[workspace.dependencies]` facts they select. The completed output is the one source-current selector for its inspection authority; normal build, library build, and test analysis cannot independently join a stale or sibling authority. One feature-matched project bake therefore authorizes subsequent `build`, `build --lib`, and `test` consumers when their source, semantic lock, target, profile, compiler, SDK, dependency, and feature evidence still matches. Test-only dependency deltas are prepared from that same project authority rather than forcing the project through a second independent bake path (#1056).
+
+Normal `build`, `run`, and `test` are consumers only. A compatibility miss stops with the `oven bake --project` action; it never turns the normal command into a Cargo fallback. Registry-source authority for supported standard-library facades remains independent from linkable closure selection, so source inspection never joins artifacts from different feature graphs.
 
 Low-level `incan oven` commands remain available for inspection and verification. For example:
 
@@ -134,25 +140,11 @@ incan oven store prune --dry-run --format json
 incan oven bake --project . --format json
 ```
 
-The hidden baker is a maintainer interface, not a developer fallback:
-
-```bash
-incan oven legacy-cargo bake-loafs \
-  --compiler-root . \
-  --output target/share/incan/oven/loafs \
-  --suite-store target/oven-compiler-suite-store \
-  --envelope compiler-suite \
-  --sdk-inventory path/to/sdk-inventory.json \
-  --cargo "$(rustup which --toolchain nightly-2026-03-24 cargo)" \
-  --rustc "$(rustup which --toolchain stable rustc)" \
-  --format json
-```
-
-The publisher Cargo and consumer compiler are separate on purpose. The pinned Cargo supplies publisher-only graph data; the selected `rustc` defines the Loaf identity and performs direct compilation and replay. This lets the stable and MSRV lanes prove their actual consumer toolchains.
+The internal compatibility publisher is a release-maintenance interface, not a developer fallback. Its publisher Cargo and consumer compiler are separate on purpose: Cargo supplies publisher-only graph data, while the selected `rustc` defines the Loaf identity and performs direct compilation and replay. This lets the stable and MSRV lanes prove their actual consumer toolchains.
 
 ## Evidence you can inspect
 
-Oven reports preparation and replay as separate phases. Repository-suite reports include total, passed, failed, ignored, and filtered test cases plus total, green, red, and unreported roots. The benchmark procedure records cold preparation, exact warm reuse, prepared replay, representative normal builds, Cargo-guard results, and phase wall-clock timings. Do not combine cold publication and prepared replay into one headline number: the approximately-five-minute acceptance target applies to the prepared full-suite replay.
+Oven reports preparation and replay as separate phases. Repository-suite reports include total, passed, failed, ignored, and filtered test cases plus total, green, red, and unreported roots. Every report names its selection boundary: `complete-suite` is complete workspace evidence, `selected-complete-roots` is complete evidence only for the named targets or deterministic partition, and `exact-diagnostic` is a partial failure-isolation run that is neither complete-root nor complete-suite evidence. The `complete_root_success` and `complete_suite_success` fields combine that boundary with the terminal result, so four green CI partitions cannot each claim to be the whole suite even though their union covers the prepared inventory. The benchmark procedure records cold preparation, exact warm reuse, prepared replay, representative normal builds, Cargo-guard results, and phase wall-clock timings. Do not combine cold publication and prepared replay into one headline number: the approximately-five-minute acceptance target applies to the prepared full-suite replay.
 
 Storage reports keep these quantities distinct:
 
@@ -169,7 +161,7 @@ See the [Oven Alpha benchmark guide](../../contributing/how-to/oven_alpha_benchm
 
 ## Bounded storage, not cache archaeology
 
-The default developer store is `$INCAN_HOME/oven/store/v2`, or `~/.incan/oven/store/v2` when `INCAN_HOME` is unset. Its filesystem encoding is safe to embed in a Unix native-runtime search path. Its defaults are 3 GiB aggregate physical allocation, 1 GiB physical allocation per compatibility domain, and 768 MiB logical artifact bytes per domain. Compiler-suite and release baking may use explicit allowances calibrated from their measured valid closures.
+The default developer store is `$INCAN_HOME/oven/store/v2`, or `~/.incan/oven/store/v2` when `INCAN_HOME` is unset. Its filesystem encoding is safe to embed in a Unix native-runtime search path. Its defaults are 8 GiB aggregate physical allocation, 6 GiB physical allocation per compatibility domain, and 3 GiB logical artifact bytes per domain. The compiler-suite policy uses explicit 16 GiB aggregate physical, 6 GiB domain physical, and 4 GiB domain logical allowances calibrated from its measured valid closure.
 
 Oven enforces those bounds during admission. It can reclaim least-recently-used inactive entries, but never an active lease. A single domain that cannot fit its allowance is refused deterministically; an operator-supplied limit is never silently expanded. Production defaults are practical policy, not aspirational guesses: a healthy measured closure receives sensible headroom, while duplication, leaked intermediates, and unbounded growth remain defects.
 
@@ -185,6 +177,6 @@ Oven Alpha proves the maintained Incan workflow and the repository's own compile
 - the authored `Loaf.toml`, resolved `Oven.lock`, workspace settings, or registry model proposed for later work; or
 - broad ecosystem readiness based on Axum, Tokio, DataFusion, or other external-library bake-offs.
 
-Those are 0.6-and-later releases and RFC work. For the v0.5 Alpha, the hidden baker is the only Cargo-backed compatibility publisher for supported Oven closures. If the Alpha envelope cannot authorize a normal command, Oven explains the miss and stops.
+Those are 0.6-and-later releases and RFC work. For the v0.5 Alpha, the internal compatibility publisher is the only Cargo-backed producer for supported Oven closures. If the Alpha envelope cannot authorize a normal command, Oven explains the miss and stops.
 
 For the complete command surface, see the [CLI reference](../reference/cli_reference.md).

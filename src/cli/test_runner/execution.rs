@@ -7,6 +7,11 @@ use std::time::{Duration, Instant};
 use crate::backend::{IrCodegen, ProjectGenerator};
 use crate::cli::commands;
 use crate::cli::commands::common::{self, CargoPolicy, ProjectRequirements};
+#[cfg(feature = "rust_inspect")]
+use crate::cli::commands::lock::{
+    OvenRustInspectSourceAuthorityRequest, PreparedOvenProjectRegistrySourceAuthorities, RustInspectWorkspaceRequest,
+    prepare_project_registry_source_authorities, prepare_rust_inspect_workspace,
+};
 use crate::cli::prelude::ParsedModule;
 use crate::compiled_sdk::CompiledSdkModules;
 use crate::dependency_resolver::ResolvedDependencies;
@@ -23,12 +28,13 @@ use crate::frontend::vocab_desugar_pass;
 use crate::frontend::{lexer, parser};
 use crate::lockfile::CargoFeatureSelection;
 use crate::manifest::DependencySpec;
+use crate::oven::legacy_cargo::direct_rustc_compile_environment;
 use crate::oven::loaf::{OVEN_LOAF_MISS_GUIDANCE, runtime_build_unit_inputs};
 use crate::oven::native_test::{OvenNativeTestRequest, run_native_test_batch};
 use crate::oven::rustc::{
     OvenTrustedDirectRustcTargetRequest, attach_caller_owned_rustc_libraries, bake_trusted_direct_rustc_test,
     materialize_declared_rust_libraries_with_selected_path_authority, resolve_active_rustc, rustc_host_target,
-    rustc_identity, trusted_artifact_plan_for_source_evidence,
+    rustc_identity,
 };
 use crate::oven::{
     OvenGeneratedProjectRequest, default_receipt_path, digest_dependency_specs, receipt_generated_project,
@@ -37,9 +43,10 @@ use crate::oven::{
 use crate::provider::{FeatureSelection, ProviderPlan};
 use sha2::{Digest, Sha256};
 
+use super::infer_test_project_root_without_manifest;
 use super::module_graph::collect_source_modules_for_test;
 use super::types::{FixtureScope, TestInfo, TestResult};
-use crate::cli::commands::lock::validate_oven_lock_policy;
+use crate::cli::commands::lock::{OvenLockValidationRequest, validate_oven_lock_policy_with_session};
 
 /// Generated `#[cfg(test)]` module that wraps Incan test functions as Rust `#[test]` cases.
 const INCAN_FILE_TEST_MOD: &str = "__incan_file_tests";
@@ -53,11 +60,65 @@ pub(super) struct TestExecutionOptions {
     pub emit_progress: bool,
 }
 
-/// Receipt-selected direct-Rustc closure for a nested normal test.
-///
-/// A compiler-suite child receives a parent-leased immutable compiler-data root. It uses that Loaf directly instead
-/// of publishing a duplicate closure into its output-owned store; ordinary tests keep the bounded-store path.
-type OvenTestPlanSelection = crate::cli::commands::build::OvenDirectRustcPlanSelection;
+/// Store and immutable source authority opened once for one `incan test` command.
+pub(super) struct OvenTestCommandContext {
+    project_root: PathBuf,
+    planned_test_files: BTreeSet<PathBuf>,
+    session: Arc<common::CompilationSession>,
+    store: crate::oven::store::OvenStore,
+    project_source_authorities: Option<Arc<PreparedOvenProjectRegistrySourceAuthorities>>,
+}
+
+/// Select source-current completed-project authority before any parallel test unit starts.
+pub(super) fn prepare_oven_test_command_context(
+    session: Arc<common::CompilationSession>,
+    representative_test: &Path,
+    planned_test_files: &[PathBuf],
+) -> crate::cli::CliResult<Arc<OvenTestCommandContext>> {
+    let project_root = absolute_project_root(
+        &session
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.project_root().to_path_buf())
+            .unwrap_or_else(|| infer_test_project_root_without_manifest(representative_test)),
+    );
+    let store = commands::oven::open_default_oven_store()?;
+    let has_conventional_target =
+        project_root.join("src/lib.incn").is_file() || project_root.join("src/main.incn").is_file();
+    let project_source_authorities = if session.manifest.is_some() && has_conventional_target {
+        crate::cli::commands::build::load_current_project_registry_source_authorities(&store, &project_root)?
+            .map(prepare_project_registry_source_authorities)
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(Arc::new(OvenTestCommandContext {
+        project_root,
+        planned_test_files: planned_test_files
+            .iter()
+            .map(|path| canonical_path_for_cache_key(path))
+            .collect(),
+        session,
+        store,
+        project_source_authorities,
+    }))
+}
+
+/// Return the command-owned semantic session after confirming that an execution unit came from the planned inventory.
+fn command_session_for_execution_unit<'a>(
+    command_context: &'a OvenTestCommandContext,
+    representative_test: &Path,
+) -> Result<&'a common::CompilationSession, String> {
+    let canonical_test = canonical_path_for_cache_key(representative_test);
+    if !command_context.planned_test_files.contains(&canonical_test) {
+        return Err(format!(
+            "Oven test execution unit {} was not part of the command-owned collection for {}",
+            canonical_test.display(),
+            command_context.project_root.display(),
+        ));
+    }
+    Ok(command_context.session.as_ref())
+}
 
 /// Validate strict Incan lock policy once before Oven schedules any generated native test harnesses.
 ///
@@ -65,6 +126,7 @@ type OvenTestPlanSelection = crate::cli::commands::build::OvenDirectRustcPlanSel
 /// Cargo. Validation uses the Oven read-only resolver: a missing or stale lock fails before scheduling, and a
 /// normal test command never publishes SDK/provider or dependency artifacts.
 pub(super) fn validate_oven_test_lock_policy(
+    session: &common::CompilationSession,
     representative_test: &Path,
     cargo_policy: &CargoPolicy,
     package_features: &FeatureSelection,
@@ -74,23 +136,24 @@ pub(super) fn validate_oven_test_lock_policy(
         return Ok(());
     }
 
-    let session =
-        common::CompilationSession::discover_for_oven(representative_test, package_features, sdk_profile_override)?;
     let manifest = session.manifest.clone();
-    let inferred_project_root = common::resolve_project_root(representative_test);
+    let inferred_project_root = infer_test_project_root_without_manifest(representative_test);
     let project_root = manifest
         .as_ref()
         .map(|manifest| manifest.project_root().to_path_buf())
         .unwrap_or(inferred_project_root);
     let cargo_features = CargoFeatureSelection::default().normalized();
-    validate_oven_lock_policy(
-        &project_root,
-        manifest.as_ref(),
-        representative_test,
-        &cargo_features,
-        cargo_policy,
-        package_features,
-        sdk_profile_override,
+    validate_oven_lock_policy_with_session(
+        OvenLockValidationRequest {
+            project_root: &project_root,
+            manifest: manifest.as_ref(),
+            entry_file: representative_test,
+            cargo_features: &cargo_features,
+            cargo_policy,
+            package_features,
+            sdk_profile_override,
+        },
+        session,
     )
 }
 
@@ -1051,46 +1114,6 @@ fn absolute_project_root(path: &Path) -> PathBuf {
     fs::canonicalize(&absolute).unwrap_or(absolute)
 }
 
-/// Infer a package root for manifest-less test runs.
-///
-/// Prefer conventional package anchors like `tests/` or `src/` so a file such as
-/// `/repo/tests/test_cwd.incn` resolves its runtime cwd to `/repo`, not `/repo/tests`.
-/// If no conventional anchor is present, fall back to the caller cwd when the test
-/// file lives underneath it; otherwise use the test file's parent directory.
-fn infer_project_root_without_manifest(test_path: &Path) -> PathBuf {
-    let absolute_test_path = if test_path.is_absolute() {
-        test_path.to_path_buf()
-    } else if let Ok(cwd) = std::env::current_dir() {
-        cwd.join(test_path)
-    } else {
-        test_path.to_path_buf()
-    };
-    let absolute_test_path = fs::canonicalize(&absolute_test_path).unwrap_or(absolute_test_path);
-
-    for ancestor in absolute_test_path.ancestors().skip(1) {
-        if ancestor
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| matches!(name, "tests" | "src"))
-            && let Some(parent) = ancestor.parent()
-        {
-            return parent.to_path_buf();
-        }
-    }
-
-    if let Ok(cwd) = std::env::current_dir() {
-        let cwd = fs::canonicalize(&cwd).unwrap_or(cwd);
-        if absolute_test_path.starts_with(&cwd) {
-            return cwd;
-        }
-    }
-
-    absolute_test_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf()
-}
-
 /// Promote project dev dependencies into direct-rustc test-harness dependencies.
 ///
 /// Generated user/test code lives in the caller-owned source tree, so every imported dependency belongs in the
@@ -1099,21 +1122,11 @@ fn merge_test_runner_dependencies(
     dependencies: &[crate::manifest::DependencySpec],
     dev_dependencies: &[crate::manifest::DependencySpec],
 ) -> Result<Vec<crate::manifest::DependencySpec>, String> {
-    let mut merged = dependencies.to_vec();
-    for candidate in dev_dependencies {
-        if let Some(existing) = merged.iter().find(|dep| dep.crate_name == candidate.crate_name) {
-            if existing != candidate {
-                return Err(format!(
-                    "test runner dependency `{}` conflicts between dependencies and dev-dependencies",
-                    candidate.crate_name
-                ));
-            }
-            continue;
-        }
-        merged.push(candidate.clone());
-    }
-    merged.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
-    Ok(merged)
+    crate::cli::commands::build::promoted_oven_test_dependencies(&ResolvedDependencies {
+        dependencies: dependencies.to_vec(),
+        dev_dependencies: dev_dependencies.to_vec(),
+    })
+    .map_err(|error| error.message)
 }
 
 /// Build a stable generated-crate suffix for one worker batch, which may contain multiple source files.
@@ -2080,22 +2093,20 @@ pub(super) fn run_file_tests_batch(
     tests: &[TestInfo],
     conftest_files_by_file: &HashMap<PathBuf, Vec<PathBuf>>,
     cargo_policy: &CargoPolicy,
-    package_features: &FeatureSelection,
-    sdk_profile_override: Option<&str>,
     cargo_features: &[String],
     cargo_no_default_features: bool,
     cargo_all_features: bool,
+    command_context: &Arc<OvenTestCommandContext>,
     options: TestExecutionOptions,
 ) -> Vec<(TestInfo, TestResult)> {
     run_file_tests_batch_oven(
         tests,
         conftest_files_by_file,
         cargo_policy,
-        package_features,
-        sdk_profile_override,
         cargo_features,
         cargo_no_default_features,
         cargo_all_features,
+        command_context,
         options,
     )
 }
@@ -2109,11 +2120,10 @@ fn run_file_tests_batch_oven(
     tests: &[TestInfo],
     conftest_files_by_file: &HashMap<PathBuf, Vec<PathBuf>>,
     cargo_policy: &CargoPolicy,
-    package_features: &FeatureSelection,
-    sdk_profile_override: Option<&str>,
     cargo_features: &[String],
     cargo_no_default_features: bool,
     cargo_all_features: bool,
+    command_context: &Arc<OvenTestCommandContext>,
     options: TestExecutionOptions,
 ) -> Vec<(TestInfo, TestResult)> {
     if tests.is_empty() {
@@ -2173,18 +2183,12 @@ fn run_file_tests_batch_oven(
     }
     let source = source_parts.join("\n");
 
-    let session =
-        match common::CompilationSession::discover_for_oven(&first.file_path, package_features, sdk_profile_override) {
-            Ok(session) => session,
-            Err(error) => return failure(error.message),
-        };
+    let session = match command_session_for_execution_unit(command_context, &first.file_path) {
+        Ok(session) => session,
+        Err(message) => return failure(message),
+    };
     let manifest = session.manifest.clone();
-    let project_root = absolute_project_root(
-        &manifest
-            .as_ref()
-            .map(|manifest| manifest.project_root().to_path_buf())
-            .unwrap_or_else(|| infer_project_root_without_manifest(&first.file_path)),
-    );
+    let project_root = command_context.project_root.clone();
     let library_manifest_index = session.library_manifest_index.clone();
     let library_imported_vocab = library_manifest_index.library_imported_vocab();
     let library_imported_dsl_surfaces = library_manifest_index.library_imported_dsl_surfaces();
@@ -2201,7 +2205,7 @@ fn run_file_tests_batch_oven(
         &library_manifest_index,
         &library_imported_vocab,
         &library_imported_dsl_surfaces,
-        &session,
+        session,
         testing_marker_semantics.as_ref(),
     ) {
         Ok(batch) => batch,
@@ -2215,7 +2219,7 @@ fn run_file_tests_batch_oven(
             &library_manifest_index,
             &library_imported_vocab,
             &library_imported_dsl_surfaces,
-            &session,
+            session,
         ) {
             Ok(parsed) => parsed,
             Err(message) => return failure(message),
@@ -2303,10 +2307,95 @@ fn run_file_tests_batch_oven(
         return failure(error.message);
     }
     let inline_path_dependencies = oven_test_inline_dependency_specs(&resolved, &inline_imports);
+    let project_name = manifest
+        .as_ref()
+        .and_then(|manifest| manifest.project.as_ref().and_then(|project| project.name.clone()))
+        .unwrap_or_else(|| "incan_test".to_string());
+    let project_version = manifest
+        .as_ref()
+        .and_then(|manifest| manifest.project.as_ref().and_then(|project| project.version.clone()))
+        .unwrap_or_else(|| "0.1.0".to_string());
+    let batch_file_paths = tests.iter().map(|test| test.file_path.clone()).collect::<Vec<_>>();
+    let dir_suffix = file_batch_dir_suffix(&batch_file_paths, &project_root);
+    let runner_crate_name = runner_crate_name_for_batch_suffix(&dir_suffix);
+    let rustc = match resolve_active_rustc() {
+        Ok(rustc) => rustc,
+        Err(error) => return failure(error.to_string()),
+    };
+    let rustc_target = match rustc_host_target(&rustc) {
+        Ok(target) => target,
+        Err(error) => return failure(error.to_string()),
+    };
+    let rustc_toolchain = match rustc_identity(&rustc) {
+        Ok(identity) => identity,
+        Err(error) => return failure(error.to_string()),
+    };
+    let mut build_unit_inputs = match oven_test_build_unit_inputs(&provider_plan, &requirements, &resolved) {
+        Ok(inputs) => inputs,
+        Err(error) => return failure(error),
+    };
+    if let Err(error) = crate::cli::commands::build::append_oven_interop_execution_build_inputs(
+        &mut build_unit_inputs,
+        manifest.as_ref(),
+        &rustc_target,
+    ) {
+        return failure(error.message);
+    }
+    let inspection_registry_dependencies =
+        match merge_test_runner_dependencies(&resolved.dependencies, &resolved.dev_dependencies) {
+            Ok(dependencies) => dependencies,
+            Err(message) => return failure(message),
+        };
+    if let Some(authority) = command_context.project_source_authorities.as_ref() {
+        build_unit_inputs.insert(
+            "project-inspection-authority".to_string(),
+            authority.authority_identity().to_string(),
+        );
+    }
+    #[cfg(feature = "rust_inspect")]
+    let rust_inspect_manifest_dir = {
+        let metadata_query_paths = common::collect_rust_inspect_query_paths(&dependency_modules);
+        match prepare_rust_inspect_workspace(RustInspectWorkspaceRequest {
+            project_root: &project_root,
+            project_name: project_name.as_str(),
+            cargo_package_name: project_name.as_str(),
+            rust_edition: None,
+            resolved: &resolved,
+            project_requirements: &requirements,
+            lock_payload: None,
+            cargo_lock_projection_root: None,
+            clear_cargo_lock: false,
+            cargo_policy_flags: Vec::new(),
+            cargo_target_dir: &project_root
+                .join("target/incan_tests")
+                .join(&dir_suffix)
+                .join("oven/rust-inspect"),
+            rust_inspect_query_paths: &metadata_query_paths,
+            prepare_when_empty: false,
+            direct_oven_inspection: true,
+            force_direct_prewarm: false,
+            oven_source_authority: Some(OvenRustInspectSourceAuthorityRequest {
+                project_version: &project_version,
+                target: &rustc_target,
+                toolchain: &rustc_toolchain,
+                profile: "debug",
+                features: &feature_selection.cargo_features,
+                build_unit_inputs: &build_unit_inputs,
+                registry_dependencies: &inspection_registry_dependencies,
+            }),
+            prepared_project_source_authorities: command_context.project_source_authorities.clone(),
+            explicit_oven_bake: false,
+        }) {
+            Ok(workspace) => workspace,
+            Err(error) => return failure(error.message),
+        }
+    };
     let analysis = match session.analyze_modules(
         &dependency_modules,
         #[cfg(feature = "rust_inspect")]
-        None,
+        rust_inspect_manifest_dir
+            .as_ref()
+            .map(|workspace| workspace.manifest_dir()),
     ) {
         Ok(analysis) => analysis,
         Err(analysis_failure) => return failure(analysis_failure.render_human()),
@@ -2328,14 +2417,13 @@ fn run_file_tests_batch_oven(
 
     let generation_start = Instant::now();
     let mut codegen = IrCodegen::new();
-    codegen.set_preserve_dependency_public_items(false);
+    #[cfg(feature = "rust_inspect")]
+    if let Some(workspace) = rust_inspect_manifest_dir.as_ref() {
+        codegen.set_rust_inspect_manifest_dir(workspace.manifest_dir().to_path_buf());
+    }
     codegen.set_provider_plan(Arc::clone(&provider_plan));
     codegen.set_stdlib_cache(analysis.stdlib_cache().clone());
     codegen.set_prechecked_type_info(main_type_info, dependency_type_info);
-    let project_name = manifest
-        .as_ref()
-        .and_then(|manifest| manifest.project.as_ref().and_then(|project| project.name.clone()))
-        .unwrap_or_else(|| "incan_test".to_string());
     codegen.set_registry_package_identity(Some(project_name.clone()));
     let compiled_sdk_modules = CompiledSdkModules::from_provider_plan(&provider_plan);
     for module in source_modules
@@ -2352,6 +2440,11 @@ fn run_file_tests_batch_oven(
         .iter()
         .filter(|module| !compiled_sdk_modules.contains_emission_path(&module.path_segments))
         .collect::<Vec<_>>();
+    // A test runner normally compiles against provider crates, where root reachability safely prunes unused public
+    // declarations. When a provider falls back to source emission, its public protocols can still construct sibling
+    // public adapter models that the test root does not name directly. Retain that implementation closure whenever
+    // such a source module is emitted; otherwise generated `std.io` methods can reference omitted iterator adapters.
+    codegen.set_preserve_dependency_public_items(!emitted_source_modules.is_empty());
     for module in &emitted_source_modules {
         codegen.add_module_with_path_segments(&module.name, &module.ast, module.path_segments.clone());
     }
@@ -2380,9 +2473,6 @@ fn run_file_tests_batch_oven(
             .collect::<HashMap<_, _>>();
         codegen.set_externally_reachable_items_by_module(reachable_by_module);
     }
-    let batch_file_paths = tests.iter().map(|test| test.file_path.clone()).collect::<Vec<_>>();
-    let dir_suffix = file_batch_dir_suffix(&batch_file_paths, &project_root);
-    let runner_crate_name = runner_crate_name_for_batch_suffix(&dir_suffix);
     let native_output_name = native_test_output_name(&runner_crate_name, tests);
     let generated_root = project_root.join("target/incan_tests").join(&dir_suffix);
     let mut generator = ProjectGenerator::new(&generated_root, &runner_crate_name, false);
@@ -2404,6 +2494,7 @@ fn run_file_tests_batch_oven(
         Ok(dependencies) => dependencies,
         Err(message) => return failure(message),
     };
+    let test_dependency_surface = runner_dependencies.clone();
     generator.set_dependencies(runner_dependencies);
     generator.set_dev_dependencies(Vec::new());
     let generated: Result<(), String> = if emitted_source_modules.is_empty() {
@@ -2474,34 +2565,12 @@ fn run_file_tests_batch_oven(
     let generation_elapsed = generation_start.elapsed();
 
     let receipt_start = Instant::now();
-    let rustc = match resolve_active_rustc() {
-        Ok(rustc) => rustc,
-        Err(error) => return failure(error.to_string()),
-    };
-    let rustc_target = match rustc_host_target(&rustc) {
-        Ok(target) => target,
-        Err(error) => return failure(error.to_string()),
-    };
-    let mut build_unit_inputs = match oven_test_build_unit_inputs(&provider_plan, &requirements, &resolved) {
-        Ok(inputs) => inputs,
-        Err(error) => return failure(error),
-    };
-    if let Err(error) = crate::cli::commands::build::append_oven_interop_execution_build_inputs(
-        &mut build_unit_inputs,
-        manifest.as_ref(),
-        &rustc_target,
-    ) {
-        return failure(error.message);
-    }
     let mut receipt_request = OvenGeneratedProjectRequest::new(
         &project_root,
         &runner_crate_name,
         "0.1.0",
         rustc_target,
-        match rustc_identity(&rustc) {
-            Ok(identity) => identity,
-            Err(error) => return failure(error.to_string()),
-        },
+        rustc_toolchain,
         "debug",
         Vec::new(),
     )
@@ -2521,43 +2590,44 @@ fn run_file_tests_batch_oven(
     let receipt_elapsed = receipt_start.elapsed();
 
     let selection_start = Instant::now();
-    let store = match commands::oven::open_default_oven_store() {
-        Ok(store) => store,
-        Err(error) => return failure(error.message),
+    let shared_plan_selection = match command_context.project_source_authorities.as_ref() {
+        Some(authority) => match authority.test_dependency_plan(&test_dependency_surface) {
+            Ok(selection) => selection,
+            Err(error) => return failure(error.message),
+        },
+        None => None,
     };
-    let plan_selection = match crate::cli::commands::build::select_oven_direct_rustc_plan(
-        &store,
-        &receipt,
-        &inline_path_dependencies,
-    ) {
-        Ok(Some(selection)) => selection,
-        Ok(None) => {
-            return failure(format!(
-                "Oven Alpha has no compatible native test provider/dependency unit. Generated harness: {}; receipt: {}. `incan test` will not invoke Cargo; the active toolchain does not ship a compatible Oven Loaf. {}",
-                generated_root.display(),
-                receipt_path.display(),
-                OVEN_LOAF_MISS_GUIDANCE,
-            ));
+    let owned_plan_selection = if shared_plan_selection.is_none() {
+        match crate::cli::commands::build::select_oven_direct_rustc_plan(
+            &command_context.store,
+            &receipt,
+            &inline_path_dependencies,
+        ) {
+            Ok(Some(selection)) => Some(selection),
+            Ok(None) => {
+                return failure(format!(
+                    "Oven Alpha has no compatible native test provider/dependency unit. Generated harness: {}; receipt: {}. `incan test` will not invoke Cargo; the active toolchain does not ship a compatible Oven Loaf. {}",
+                    generated_root.display(),
+                    receipt_path.display(),
+                    OVEN_LOAF_MISS_GUIDANCE,
+                ));
+            }
+            Err(error) => return failure(error.message),
         }
-        Err(error) => return failure(error.message),
+    } else {
+        None
+    };
+    let plan_selection = match shared_plan_selection.or(owned_plan_selection.as_ref()) {
+        Some(selection) => selection,
+        None => return failure("Oven test dependency plan selection lost its exact authority".to_string()),
     };
     let selection_elapsed = selection_start.elapsed();
 
     // Classify caller declarations against the source projection, while retaining full-plan path authority for an
     // exact compiler-owned dependency. The complete plan may include private compiler helpers whose names overlap
     // ordinary caller dependencies such as serde_json.
-    let full_artifact_plan = match &plan_selection {
-        OvenTestPlanSelection::Stored(selected) => &selected.artifact_plan,
-        OvenTestPlanSelection::CompilerSuiteNative(native) => &native.artifact_plan,
-    };
-    let artifact_plan = match &plan_selection {
-        OvenTestPlanSelection::Stored(selected) => {
-            trusted_artifact_plan_for_source_evidence(&selected.artifact_plan, &selected.artifacts, "generated-root")
-        }
-        OvenTestPlanSelection::CompilerSuiteNative(native) => {
-            trusted_artifact_plan_for_source_evidence(&native.artifact_plan, &native.artifacts, "generated-root")
-        }
-    };
+    let full_artifact_plan = plan_selection.artifact_plan();
+    let artifact_plan = plan_selection.source_artifact_plan("generated-root");
     let artifact_plan = match artifact_plan {
         Ok(plan) => plan,
         Err(error) => return failure(error.to_string()),
@@ -2568,49 +2638,25 @@ fn run_file_tests_batch_oven(
             &artifact_plan,
         );
 
-    let registry_authority = match &plan_selection {
-        OvenTestPlanSelection::Stored(selected) => selected
-            .artifacts
-            .registry_leaf_authority(&selected.artifact_root, &selected.artifact_plan),
-        OvenTestPlanSelection::CompilerSuiteNative(native) => native
-            .artifacts
-            .registry_leaf_authority(&native.artifact_root, &native.artifact_plan),
-    };
+    let registry_authority = plan_selection.registry_leaf_authority();
     let selected_path_authority =
         crate::cli::commands::build::compiler_selected_path_authority(full_artifact_plan, Some(&provider_plan));
 
-    if crate::cli::commands::build::has_caller_owned_project_libraries(&provider_plan) {
-        let re_materialized = match &plan_selection {
-            OvenTestPlanSelection::Stored(selected) => {
-                match crate::cli::commands::build::rematerialize_caller_owned_libraries(
-                    &provider_plan,
-                    "debug",
-                    &selected.artifacts,
-                    &selected.artifact_root,
-                    &selected.artifact_plan,
-                    &rustc,
-                    &generated_root,
-                    registry_authority.as_ref(),
-                ) {
-                    Ok(libraries) => libraries,
-                    Err(error) => return failure(error.message),
-                }
-            }
-            OvenTestPlanSelection::CompilerSuiteNative(native) => {
-                match crate::cli::commands::build::rematerialize_caller_owned_libraries(
-                    &provider_plan,
-                    "debug",
-                    &native.artifacts,
-                    &native.artifact_root,
-                    &native.artifact_plan,
-                    &rustc,
-                    &generated_root,
-                    registry_authority.as_ref(),
-                ) {
-                    Ok(libraries) => libraries,
-                    Err(error) => return failure(error.message),
-                }
-            }
+    if crate::cli::commands::build::has_caller_owned_project_libraries(&provider_plan)
+        && !plan_selection.uses_packaged_provider_closure()
+    {
+        let re_materialized = match crate::cli::commands::build::rematerialize_caller_owned_libraries(
+            &provider_plan,
+            "debug",
+            plan_selection.artifacts(),
+            plan_selection.output_guard_root(),
+            plan_selection.artifact_plan(),
+            &rustc,
+            &generated_root,
+            registry_authority.as_ref(),
+        ) {
+            Ok(libraries) => libraries,
+            Err(error) => return failure(error.message),
         };
         if let Err(error) = crate::cli::commands::build::replace_caller_owned_package_libraries(
             &mut caller_owned_libraries,
@@ -2645,62 +2691,32 @@ fn run_file_tests_batch_oven(
         return failure("Oven Alpha resolved duplicate caller-owned Rust library crate names".to_string());
     }
     let bake_start = Instant::now();
-    let bake = match &plan_selection {
-        OvenTestPlanSelection::Stored(selected) => {
-            let mut artifact_plan = match trusted_artifact_plan_for_source_evidence(
-                &selected.artifact_plan,
-                &selected.artifacts,
-                "generated-root",
-            ) {
-                Ok(plan) => plan,
-                Err(error) => return failure(error.to_string()),
-            };
-            if let Err(error) = attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries) {
-                return failure(format!("Oven direct-rustc test compilation failed: {error}"));
-            }
-            bake_trusted_direct_rustc_test(&OvenTrustedDirectRustcTargetRequest {
-                receipt: &receipt,
-                artifacts: &selected.artifacts,
-                artifact_root: &selected.artifact_root,
-                artifact_plan: Some(&artifact_plan),
-                rustc: &rustc,
-                source: &generator.crate_root_path(),
-                output: &generated_root.join("oven/debug").join(&native_output_name),
-                crate_name: &runner_crate_name,
-                edition: "2024",
-                source_evidence_key: "generated-root",
-                features: &receipt.intent.features,
-                prefer_dynamic: false,
-            })
-        }
-        OvenTestPlanSelection::CompilerSuiteNative(native) => {
-            let mut artifact_plan = match trusted_artifact_plan_for_source_evidence(
-                &native.artifact_plan,
-                &native.artifacts,
-                "generated-root",
-            ) {
-                Ok(plan) => plan,
-                Err(error) => return failure(error.to_string()),
-            };
-            if let Err(error) = attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries) {
-                return failure(format!("Oven direct-rustc test compilation failed: {error}"));
-            }
-            bake_trusted_direct_rustc_test(&OvenTrustedDirectRustcTargetRequest {
-                receipt: &receipt,
-                artifacts: &native.artifacts,
-                artifact_root: &native.artifact_root,
-                artifact_plan: Some(&artifact_plan),
-                rustc: &rustc,
-                source: &generator.crate_root_path(),
-                output: &generated_root.join("oven/debug").join(&native_output_name),
-                crate_name: &runner_crate_name,
-                edition: "2024",
-                source_evidence_key: "generated-root",
-                features: &receipt.intent.features,
-                prefer_dynamic: false,
-            })
-        }
+    let mut artifact_plan = match plan_selection.source_artifact_plan("generated-root") {
+        Ok(plan) => plan,
+        Err(error) => return failure(error.to_string()),
     };
+    artifact_plan.compile_environment =
+        match direct_rustc_compile_environment(&generated_root, &generator.crate_root_path()) {
+            Ok(environment) => environment,
+            Err(error) => return failure(error.to_string()),
+        };
+    if let Err(error) = attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries) {
+        return failure(format!("Oven direct-rustc test compilation failed: {error}"));
+    }
+    let bake = bake_trusted_direct_rustc_test(&OvenTrustedDirectRustcTargetRequest {
+        receipt: &receipt,
+        artifacts: plan_selection.artifacts(),
+        artifact_root: plan_selection.output_guard_root(),
+        artifact_plan: Some(&artifact_plan),
+        rustc: &rustc,
+        source: &generator.crate_root_path(),
+        output: &generated_root.join("oven/debug").join(&native_output_name),
+        crate_name: &runner_crate_name,
+        edition: "2024",
+        source_evidence_key: "generated-root",
+        features: &receipt.intent.features,
+        prefer_dynamic: false,
+    });
     let bake = match bake {
         Ok(bake) => bake,
         Err(error) => return failure(format!("Oven direct-rustc test compilation failed: {error}")),
@@ -2958,8 +2974,10 @@ mod tests {
         )?;
         let test_file = tests.join("test_lock.incn");
         fs::write(&test_file, "def test_lock() -> None:\n  assert True\n")?;
+        let session = common::CompilationSession::discover_for_oven(&test_file, &FeatureSelection::default(), None)?;
 
         let error = match validate_oven_test_lock_policy(
+            &session,
             &test_file,
             &CargoPolicy::explicit(false, false, true, Vec::new()),
             &FeatureSelection::default(),
@@ -2970,6 +2988,60 @@ mod tests {
         };
 
         assert!(error.message.contains("incan.lock is missing; run `incan lock`"));
+        Ok(())
+    }
+
+    #[test]
+    fn oven_test_execution_units_share_one_command_session() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let tests = project.path().join("tests");
+        fs::create_dir_all(&tests)?;
+        fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"shared_test_session\"\nversion = \"0.1.0\"\n",
+        )?;
+        let first_test = tests.join("test_first.incn");
+        let second_test = tests.join("test_second.incn");
+        fs::write(&first_test, "def test_first() -> None:\n  assert True\n")?;
+        fs::write(&second_test, "def test_second() -> None:\n  assert True\n")?;
+
+        let session = Arc::new(common::CompilationSession::discover_for_oven(
+            &first_test,
+            &FeatureSelection::default(),
+            None,
+        )?);
+        let store_root = tempfile::tempdir()?;
+        let context = OvenTestCommandContext {
+            project_root: absolute_project_root(project.path()),
+            planned_test_files: BTreeSet::from([
+                canonical_path_for_cache_key(&first_test),
+                canonical_path_for_cache_key(&second_test),
+            ]),
+            session,
+            store: crate::oven::store::OvenStore::new(
+                store_root.path(),
+                crate::oven::store::OvenStoreLimits::new(1024 * 1024, 1024 * 1024, 1024 * 1024),
+            ),
+            project_source_authorities: None,
+        };
+
+        fs::write(project.path().join("incan.toml"), "this is no longer a valid manifest")?;
+        let first_session = command_session_for_execution_unit(&context, &first_test).map_err(std::io::Error::other)?;
+        let second_session =
+            command_session_for_execution_unit(&context, &second_test).map_err(std::io::Error::other)?;
+        assert!(std::ptr::eq(first_session, second_session));
+
+        let other_project = tempfile::tempdir()?;
+        fs::write(
+            other_project.path().join("incan.toml"),
+            "[project]\nname = \"other_test_session\"\nversion = \"0.1.0\"\n",
+        )?;
+        let other_test = other_project.path().join("test_other.incn");
+        fs::write(&other_test, "def test_other() -> None:\n  assert True\n")?;
+        let Err(error) = command_session_for_execution_unit(&context, &other_test) else {
+            return Err("a different project unexpectedly reused the command-owned test session".into());
+        };
+        assert!(error.contains("was not part of the command-owned collection"));
         Ok(())
     }
 
@@ -3018,7 +3090,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_test_runner_dependencies_promotes_dev_deps_into_dependencies() {
+    fn merge_test_runner_dependencies_promotes_dev_deps_into_dependencies() -> Result<(), Box<dyn std::error::Error>> {
         use crate::manifest::{DependencySource, DependencySpec};
 
         let deps = vec![DependencySpec {
@@ -3040,17 +3112,15 @@ mod tests {
             package: None,
         }];
 
-        let merged = match merge_test_runner_dependencies(&deps, &dev_deps) {
-            Ok(merged) => merged,
-            Err(err) => panic!("expected merge to succeed: {err}"),
-        };
+        let merged = merge_test_runner_dependencies(&deps, &dev_deps).map_err(std::io::Error::other)?;
         assert_eq!(merged.len(), 2);
         assert!(merged.iter().any(|dep| dep.crate_name == "serde"));
         assert!(merged.iter().any(|dep| dep.crate_name == "tokio"));
+        Ok(())
     }
 
     #[test]
-    fn merge_test_runner_dependencies_rejects_conflicting_duplicates() {
+    fn merge_test_runner_dependencies_unifies_normal_and_dev_features() -> Result<(), Box<dyn std::error::Error>> {
         use crate::manifest::{DependencySource, DependencySpec};
 
         let deps = vec![DependencySpec {
@@ -3072,12 +3142,18 @@ mod tests {
             package: None,
         }];
 
-        let error = match merge_test_runner_dependencies(&deps, &dev_deps) {
-            Ok(merged) => panic!("expected conflict, got merged dependencies: {merged:?}"),
-            Err(err) => err,
+        let merged = merge_test_runner_dependencies(&deps, &dev_deps).map_err(std::io::Error::other)?;
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].features, ["macros", "time"]);
+
+        let mut conflicting = dev_deps[0].clone();
+        conflicting.version = Some("2".to_string());
+        let Err(error) = merge_test_runner_dependencies(&deps, &[conflicting]) else {
+            return Err("normal and dev dependency versions unexpectedly merged".into());
         };
         assert!(error.contains("tokio"));
         assert!(error.contains("conflicts"));
+        Ok(())
     }
 
     #[test]
@@ -3233,6 +3309,23 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
         assert_ne!(flat, nested);
         assert!(flat.starts_with("a_b_"));
         assert!(nested.starts_with("a_b_"));
+    }
+
+    #[test]
+    fn manifestless_test_below_target_directory_owns_its_parent_root() -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = tempfile::tempdir()?;
+        let test_file = workspace.path().join("target/ci-nonroot/tmp/fixture/test_a.incn");
+        let parent = test_file.parent().ok_or("test fixture should have a parent")?;
+        fs::create_dir_all(parent)?;
+        fs::write(&test_file, "def test_a() -> None:\n    pass\n")?;
+        let expected_root = fs::canonicalize(parent)?;
+
+        assert_eq!(
+            infer_test_project_root_without_manifest(&test_file),
+            expected_root,
+            "a manifest-less fixture below a caller target directory must not inherit that caller as its project root"
+        );
+        Ok(())
     }
 
     #[test]

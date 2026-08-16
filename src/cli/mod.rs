@@ -948,14 +948,24 @@ pub enum CacheCommand {
 /// Explicit Oven Alpha lifecycle commands.
 #[derive(Subcommand, Debug)]
 pub enum OvenCommand {
-    /// Explicitly materialize or reuse sealed toolchain Loafs for an Incan library project
+    /// Explicitly materialize or reuse sealed toolchain Loafs for an Incan project
     Bake {
-        /// Library project root containing incan.toml and src/lib.incn
+        /// Project root containing incan.toml and src/lib.incn and/or src/main.incn
         #[arg(long, value_name = "PATH", default_value = ".")]
         project: PathBuf,
+        /// Select Incan package features for the baked project Loaf
+        #[command(flatten)]
+        package_features: PackageFeatureCliFlags,
         /// Output format
         #[arg(long = "format", value_enum, default_value = "text")]
         format: OvenOutputFormat,
+    },
+    /// Emit the compiler-owned SDK provider source identity for repository automation.
+    #[command(hide = true)]
+    SdkProviderStoreIdentity {
+        /// Compiler source checkout that owns the built-in standard library
+        #[arg(long = "compiler-root", value_name = "PATH", default_value = ".")]
+        compiler_root: PathBuf,
     },
     /// Import frozen Cargo declarations as receipt evidence without launching Cargo
     Import {
@@ -989,7 +999,8 @@ pub enum OvenCommand {
         #[command(subcommand)]
         command: OvenInteropCommand,
     },
-    /// Hidden `legacy_cargo` publisher; never used by normal build, run, or test execution
+    /// Internal compatibility publisher; never used by normal build, run, or test execution
+    #[command(hide = true)]
     LegacyCargo {
         #[command(subcommand)]
         command: OvenLegacyCargoCommand,
@@ -1008,7 +1019,26 @@ pub enum OvenCommand {
         /// Receipt-bound test source path to execute; may be repeated. Omitting this runs the complete stored suite.
         #[arg(long = "target", value_name = "SOURCE")]
         targets: Vec<String>,
-        /// Explicit Cargo for roots whose tests exercise legacy Cargo interoperability
+        /// Exact test in one receipt-bound target; may be repeated to reuse one compiled libtest binary
+        #[arg(long = "exact", value_name = "TEST")]
+        exact_names: Vec<String>,
+        /// Zero-based receipt-index partition used by the bounded CI replay; requires `--partition-count`
+        #[arg(
+            long = "partition-index",
+            value_name = "INDEX",
+            requires = "partition_count",
+            hide = true
+        )]
+        partition_index: Option<usize>,
+        /// Total receipt-index partitions used by the bounded CI replay; requires `--partition-index`
+        #[arg(
+            long = "partition-count",
+            value_name = "COUNT",
+            requires = "partition_index",
+            hide = true
+        )]
+        partition_count: Option<usize>,
+        /// Explicit Cargo for compiler-suite roots that deliberately exercise the Loaf baker
         #[arg(long = "fixture-cargo", value_name = "PATH", hide = true)]
         fixture_cargo: Option<PathBuf>,
         /// Caller-owned direct-rustc libtest output path
@@ -1113,7 +1143,7 @@ pub enum OvenInteropCommand {
         /// Exact locked target triple to bake
         #[arg(long, value_name = "TRIPLE")]
         target: String,
-        /// Existing runtime-only Oven receipt used to select the sealed base Loaf plan
+        /// Existing pre-interop Oven receipt used to select the sealed base Loaf plan
         #[arg(long = "base-receipt", value_name = "PATH")]
         base_receipt: PathBuf,
         /// Explicit selected C compiler for a declared C shim or toolchain requirement
@@ -1151,7 +1181,7 @@ pub enum OvenInteropCommand {
         /// Exact locked target triple whose already baked plan will be staged
         #[arg(long, value_name = "TRIPLE")]
         target: String,
-        /// Existing runtime-only Oven receipt used to reconstruct the final immutable interop plan receipt
+        /// Existing pre-interop Oven receipt used to reconstruct the final immutable interop plan receipt
         #[arg(long = "base-receipt", value_name = "PATH")]
         base_receipt: PathBuf,
         /// Fixed Android or iOS output layout; this does not invoke Gradle, Xcode, or signing
@@ -1168,7 +1198,7 @@ pub enum OvenInteropCommand {
     },
 }
 
-/// Hidden `legacy_cargo` commands for baking immutable Oven inputs.
+/// Internal compatibility-publisher commands for baking immutable Oven inputs.
 #[derive(Subcommand, Debug)]
 pub enum OvenLegacyCargoCommand {
     /// Prepare one receipt-bound direct-rustc closure and retain only the bounded Oven result
@@ -1696,7 +1726,16 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
             ),
         },
         Some(Command::Oven { command }) => match command {
-            OvenCommand::Bake { project, format } => commands::oven_bake_project(project, format),
+            OvenCommand::Bake {
+                project,
+                package_features,
+                format,
+            } => commands::oven_bake_project(project, package_features.into(), format),
+            OvenCommand::SdkProviderStoreIdentity { compiler_root } => {
+                let identity = commands::sdk_provider_store_identity_for_compiler_root(&compiler_root)?;
+                println!("{identity}");
+                Ok(ExitCode::SUCCESS)
+            }
             OvenCommand::Import {
                 project,
                 target,
@@ -1811,6 +1850,9 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                 rustc,
                 features,
                 targets,
+                exact_names,
+                partition_index,
+                partition_count,
                 fixture_cargo,
                 output,
                 store,
@@ -1820,6 +1862,9 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                 rustc,
                 features,
                 targets,
+                exact_names,
+                partition_index,
+                partition_count,
                 fixture_cargo,
                 output,
                 store: store.into(),
@@ -1973,6 +2018,24 @@ fn resolve_workspace_command_scope(
     select_workspace: bool,
     member_selectors: &[String],
 ) -> CliResult<Option<ResolvedWorkspaceScope>> {
+    resolve_workspace_command_scope_with_library_build_order(select_workspace, member_selectors, false)
+}
+
+/// Resolve a workspace scope for a library build, retaining provider-before-consumer execution order from the
+/// compiler-owned workspace graph.
+fn resolve_workspace_library_build_scope(
+    select_workspace: bool,
+    member_selectors: &[String],
+) -> CliResult<Option<ResolvedWorkspaceScope>> {
+    resolve_workspace_command_scope_with_library_build_order(select_workspace, member_selectors, true)
+}
+
+/// Resolve the active RFC 077 scope once, optionally applying its library-specific execution order.
+fn resolve_workspace_command_scope_with_library_build_order(
+    select_workspace: bool,
+    member_selectors: &[String],
+    library_build_order: bool,
+) -> CliResult<Option<ResolvedWorkspaceScope>> {
     let current_dir = env::current_dir()
         .map_err(|error| CliError::failure(format!("failed to determine current directory: {error}")))?;
     let workspace = WorkspaceGraph::discover(&current_dir).map_err(|error| CliError::failure(error.to_string()))?;
@@ -1984,14 +2047,16 @@ fn resolve_workspace_command_scope(
         }
         return Ok(None);
     };
-    let selection = workspace
-        .resolve_scope(WorkspaceScopeRequest::new(
-            &current_dir,
-            select_workspace,
-            member_selectors,
-        ))
-        .map_err(|error| CliError::failure(error.to_string()))?;
-    Ok(Some(selection.to_owned_scope()))
+    let request = WorkspaceScopeRequest::new(&current_dir, select_workspace, member_selectors);
+    let scope = if library_build_order {
+        workspace.resolve_library_build_scope(request)
+    } else {
+        workspace
+            .resolve_scope(request)
+            .map(|selection| selection.to_owned_scope())
+    }
+    .map_err(|error| CliError::failure(error.to_string()))?;
+    Ok(Some(scope))
 }
 
 /// Owned build inputs that can be applied once per compiler-selected workspace member.
@@ -2036,6 +2101,20 @@ fn build_uses_workspace_scope(lib_mode: bool, artifact_only: bool, dependency_pr
     !lib_mode || !(artifact_only || dependency_preparation)
 }
 
+/// Attach compiler-owned workspace context to either a freshly prepared or sealed completed-output report.
+fn build_report_with_workspace_context(
+    mut report: serde_json::Value,
+    workspace: commands::build_report::BuildWorkspaceContext,
+) -> CliResult<serde_json::Value> {
+    let workspace = serde_json::to_value(workspace)
+        .map_err(|error| CliError::failure(format!("failed to serialize workspace build context: {error}")))?;
+    report
+        .as_object_mut()
+        .ok_or_else(|| CliError::failure("workspace member build report is not a JSON object"))?
+        .insert("workspace".to_string(), workspace);
+    Ok(report)
+}
+
 /// Fan out builds after resolving the exact RFC 077 member set, producing one aggregate report when JSON is requested.
 ///
 /// Internal artifact-only library children bypass workspace selection because their current directory is the exact
@@ -2052,7 +2131,12 @@ fn execute_build(
         return request.run_single();
     }
 
-    let Some(scope) = resolve_workspace_command_scope(select_workspace, &member_selectors)? else {
+    let scope = if request.lib_mode {
+        resolve_workspace_library_build_scope(select_workspace, &member_selectors)?
+    } else {
+        resolve_workspace_command_scope(select_workspace, &member_selectors)?
+    };
+    let Some(scope) = scope else {
         return request.run_single();
     };
     if !scope.is_single_member() && request.output_dir.is_some() {
@@ -2097,13 +2181,70 @@ fn execute_build(
             }
         };
 
-        let report = if request.lib_mode {
+        // A human-facing workspace build must enter the same no-report completed-output selector as a single-project
+        // build. Report reconstruction is reserved for commands that will actually emit the aggregate JSON.
+        if !request.report_options.enabled() {
+            let file = target.to_string_lossy().to_string();
+            let result = if request.lib_mode {
+                commands::build::build_library(
+                    Some(&file),
+                    request.output_dir.as_ref(),
+                    request.options.clone(),
+                    request.report_options.clone(),
+                )
+            } else {
+                commands::build::build_file(
+                    &file,
+                    request.output_dir.as_ref(),
+                    request.options.clone(),
+                    request.report_options.clone(),
+                )
+            };
+            match result {
+                Ok(_) => {
+                    results.push(serde_json::json!({
+                        "member": {
+                            "name": member.name(),
+                            "root": member.root().display().to_string(),
+                        },
+                        "ok": true,
+                    }));
+                }
+                Err(error) => {
+                    if !error.message.is_empty() {
+                        eprintln!("{}", error.message);
+                    }
+                    failures.push(member.name().to_string());
+                    results.push(serde_json::json!({
+                        "member": {
+                            "name": member.name(),
+                            "root": member.root().display().to_string(),
+                        },
+                        "ok": false,
+                        "error": error.message,
+                    }));
+                }
+            }
+            continue;
+        }
+
+        let workspace_context = commands::build_report::BuildWorkspaceContext {
+            root: scope.workspace_root().display().to_string(),
+            scope_origin: scope.origin().as_str().to_string(),
+            member_name: member.name().to_string(),
+            member_root: member.root().display().to_string(),
+        };
+        let report: CliResult<serde_json::Value> = if request.lib_mode {
             commands::build::build_library_report(
                 Some(target.to_string_lossy().as_ref()),
                 request.output_dir.as_ref(),
                 request.options.clone(),
                 &request.report_options,
             )
+            .and_then(|report| {
+                serde_json::to_value(report.with_workspace_context(workspace_context))
+                    .map_err(|error| CliError::failure(format!("failed to serialize library build report: {error}")))
+            })
         } else {
             commands::build::build_file_report(
                 target.to_string_lossy().as_ref(),
@@ -2111,15 +2252,10 @@ fn execute_build(
                 request.options.clone(),
                 &request.report_options,
             )
+            .and_then(|report| build_report_with_workspace_context(report, workspace_context))
         };
         match report {
             Ok(report) => {
-                let report = report.with_workspace_context(commands::build_report::BuildWorkspaceContext {
-                    root: scope.workspace_root().display().to_string(),
-                    scope_origin: scope.origin().as_str().to_string(),
-                    member_name: member.name().to_string(),
-                    member_root: member.root().display().to_string(),
-                });
                 results.push(serde_json::json!({
                     "member": {
                         "name": member.name(),
@@ -2144,6 +2280,14 @@ fn execute_build(
                 }));
             }
         }
+    }
+
+    if !request.report_options.enabled() {
+        return if failures.is_empty() {
+            Ok(ExitCode::SUCCESS)
+        } else {
+            Err(CliError::new("", ExitCode::FAILURE))
+        };
     }
 
     let aggregate = serde_json::json!({
@@ -2885,13 +3029,80 @@ mod tests {
             "json",
         ])?;
         let Some(Command::Oven {
-            command: OvenCommand::Bake { project, format },
+            command: OvenCommand::Bake { project, format, .. },
         }) = bake.command
         else {
             return Err(expected_command("oven bake"));
         };
         assert_eq!(project, PathBuf::from("examples/library"));
         assert_eq!(format, OvenOutputFormat::Json);
+
+        let provider_identity = parse_cli([
+            "incan",
+            "oven",
+            "sdk-provider-store-identity",
+            "--compiler-root",
+            "compiler-source",
+        ])?;
+        let Some(Command::Oven {
+            command: OvenCommand::SdkProviderStoreIdentity { compiler_root },
+        }) = provider_identity.command
+        else {
+            return Err(expected_command("oven sdk-provider-store-identity"));
+        };
+        assert_eq!(compiler_root, PathBuf::from("compiler-source"));
+
+        let compiler_suite = parse_cli([
+            "incan",
+            "oven",
+            "compiler-libtests",
+            "--target",
+            "tests/integration_tests.rs",
+            "--exact",
+            "rfc031_pub_import_integration_tests::compiled_parent_fields_lower_into_consumer_subclasses_issue885",
+            "--exact",
+            "rfc031_pub_import_integration_tests::compiled_provider_preserves_shared_rust_interop_contracts_issues834_835_961",
+        ])?;
+        let Some(Command::Oven {
+            command: OvenCommand::CompilerLibtests {
+                targets, exact_names, ..
+            },
+        }) = compiler_suite.command
+        else {
+            return Err(expected_command("oven compiler-libtests"));
+        };
+        assert_eq!(targets, ["tests/integration_tests.rs"]);
+        assert_eq!(
+            exact_names,
+            [
+                "rfc031_pub_import_integration_tests::compiled_parent_fields_lower_into_consumer_subclasses_issue885",
+                "rfc031_pub_import_integration_tests::compiled_provider_preserves_shared_rust_interop_contracts_issues834_835_961",
+            ]
+        );
+
+        let compiler_suite_partition = parse_cli([
+            "incan",
+            "oven",
+            "compiler-libtests",
+            "--partition-index",
+            "2",
+            "--partition-count",
+            "4",
+        ])?;
+        let Some(Command::Oven {
+            command:
+                OvenCommand::CompilerLibtests {
+                    partition_index,
+                    partition_count,
+                    ..
+                },
+        }) = compiler_suite_partition.command
+        else {
+            return Err(expected_command("oven compiler-libtests partition"));
+        };
+        assert_eq!(partition_index, Some(2));
+        assert_eq!(partition_count, Some(4));
+        assert!(parse_cli(["incan", "oven", "compiler-libtests", "--partition-index", "0",]).is_err());
 
         let import = parse_cli([
             "incan",
@@ -3292,6 +3503,16 @@ mod tests {
         assert!(verbose);
         assert!(stop_on_fail);
         assert_eq!(filter.as_deref(), Some("unit"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cli_parse_test_collection_features() -> Result<(), clap::Error> {
+        let cli = parse_cli(["incan", "test", "tests/", "--feature", "known_bug", "--feature", "beta"])?;
+        let Some(Command::Test { test_features, .. }) = cli.command else {
+            return Err(expected_command("test"));
+        };
+        assert_eq!(test_features, ["known_bug", "beta"]);
         Ok(())
     }
 

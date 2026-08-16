@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::library_manifest::digest_cargo_path_source_tree_with_cache;
 use crate::manifest::{DependencySource, DependencySpec, GitReference, ProjectManifest};
 
 pub(crate) mod compiler_suite_env;
@@ -36,6 +37,7 @@ pub mod store;
 /// changed local runtime or declared dependency source necessarily selects a different build unit.
 pub fn digest_dependency_specs(dependencies: &[DependencySpec]) -> Result<String, OvenError> {
     let mut records = Vec::with_capacity(dependencies.len());
+    let mut resolved_path_packages = BTreeMap::new();
     for dependency in dependencies {
         let mut features = dependency.features.clone();
         features.sort();
@@ -47,7 +49,19 @@ pub fn digest_dependency_specs(dependencies: &[DependencySpec]) -> Result<String
                 GitReference::Tag(tag) => format!("git:{url}:tag:{tag}"),
                 GitReference::Rev(revision) => format!("git:{url}:rev:{revision}"),
             },
-            DependencySource::Path { path } => format!("path-tree:{}", digest_source_tree(path)?),
+            // A path dependency is selected by its recursive Cargo-semantic source closure, not by compiler output
+            // or unrelated repository files. Sharing the package memo also avoids rescanning a common sibling reached
+            // through several top-level dependencies.
+            DependencySource::Path { path } => {
+                let digest =
+                    digest_cargo_path_source_tree_with_cache(path, &mut resolved_path_packages).map_err(|error| {
+                        OvenError::InvalidProjectSource {
+                            path: path.clone(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                format!("path-tree:{digest}")
+            }
         };
         records.push(format!(
             "{}|{}|{}|{}|{}|{}|{}",
@@ -70,15 +84,27 @@ pub const OVEN_RECEIPT_SCHEMA_VERSION: u32 = 3;
 pub const DEFAULT_RECEIPT_RELATIVE_PATH: &str = ".incan/oven/receipt.json";
 
 /// Default aggregate physical allocation retained by an everyday Alpha Oven store.
-pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+///
+/// A project bake retains independent debug and release plans. Eight GiB keeps both real project closures bounded
+/// without allowing the publisher's private target to grow without limit.
+pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 /// Default physical allocation cap for one compatibility domain.
-pub const DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
+///
+/// A checked IncQL/DataFusion debug plan retains 1.21 GiB while its following release publisher needs a bounded
+/// transient closure. Six GiB covers that serialized two-profile hand-off with practical headroom; callers may
+/// still choose a stricter explicit limit.
+pub const DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 /// Default logical artifact-byte cap for one compatibility domain.
-pub const DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES: u64 = 768 * 1024 * 1024;
+/// The same two IncQL/DataFusion profiles retain 2.11 GiB of logical artifacts. Three GiB preserves a bounded
+/// reusable closure without denying the ordinary debug/release pair.
+pub const DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 /// Aggregate physical allowance for the complete compiler-suite Loaf and repository-test closure.
 pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// Physical allowance for the compiler-suite compatibility domain.
-pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+///
+/// The retained suite currently measures about 3.6 GiB and a compatible publisher staging tree reaches 1.44 GiB.
+/// Six GiB keeps the aggregate domain bounded while allowing one complete replacement with practical headroom.
+pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 /// Logical artifact-byte allowance for the compiler-suite compatibility domain.
 ///
 /// The complete LSP closure measures 3,271,283,026 logical bytes on Linux;
@@ -114,6 +140,16 @@ pub struct OvenGeneratedProjectRequest {
     build_unit_inputs: BTreeMap<String, String>,
 }
 
+/// Verified generated-source closure that may be shared by profile-specific receipts in one command.
+///
+/// The source closure is independent of the direct-Rustc profile. Keeping this proof separate lets a normal
+/// library build derive debug and release receipt identities without walking the same generated tree twice.
+#[derive(Debug, Clone)]
+pub(crate) struct OvenGeneratedProjectSourceEvidence {
+    names: BTreeSet<String>,
+    supplemental_digests: BTreeMap<String, String>,
+}
+
 /// Compiler-owned request for the repository's Rust libtest suite receipt.
 ///
 /// This is deliberately distinct from an arbitrary frozen Cargo package: it records the compiler source closure and
@@ -126,7 +162,7 @@ pub struct OvenCompilerSuiteRequest {
     toolchain: String,
     profile: String,
     features: Vec<String>,
-    loaf_envelope_identity: Option<String>,
+    loaf_compatibility_identity: Option<String>,
 }
 
 impl OvenGeneratedProjectRequest {
@@ -206,18 +242,18 @@ impl OvenCompilerSuiteRequest {
             toolchain: toolchain.into(),
             profile: profile.into(),
             features,
-            loaf_envelope_identity: None,
+            loaf_compatibility_identity: None,
         }
     }
 
-    /// Bind the compiler self-suite to the exact committed Loaf generation its nested commands consume.
+    /// Bind the compiler self-suite to the compatible committed Loaf member set its nested commands consume.
     ///
-    /// This is a reusable build-unit input rather than source evidence: changing the compiler-suite Loaf envelope
-    /// invalidates the stored suite and its compiler-data partitions, while ordinary Rust source edits can continue
-    /// to reuse the same expensive dependency foundation.
+    /// This reusable build-unit input changes when a sealed member closure or direct-Rustc plan changes. It excludes
+    /// envelope publication evidence, so an otherwise irrelevant compiler executable rebuild does not invalidate the
+    /// lock/toolchain-bound compiler-suite foundation.
     #[must_use]
-    pub fn with_loaf_envelope_identity(mut self, identity: impl Into<String>) -> Self {
-        self.loaf_envelope_identity = Some(identity.into());
+    pub fn with_loaf_compatibility_identity(mut self, identity: impl Into<String>) -> Self {
+        self.loaf_compatibility_identity = Some(identity.into());
         self
     }
 }
@@ -394,6 +430,9 @@ pub enum OvenError {
     /// A generated source input could not be read or did not satisfy the Alpha regular-file closure rules.
     #[error("invalid Oven generated source {path}: {message}")]
     InvalidGeneratedSource { path: PathBuf, message: String },
+    /// An authored project source input could not be read or did not satisfy the Alpha regular-file closure rules.
+    #[error("invalid Oven project source {path}: {message}")]
+    InvalidProjectSource { path: PathBuf, message: String },
     /// Receipt JSON could not be serialized.
     #[error("failed to serialize Oven receipt: {0}")]
     Serialize(String),
@@ -473,6 +512,42 @@ pub fn import_frozen_project(request: &OvenImportRequest) -> Result<OvenReceipt,
 /// intent, and generated-source digests rather than any local source or output path. A later Oven plan selection
 /// must still prove its exact native dependency closure against this receipt before `rustc` runs.
 pub fn receipt_generated_project(request: &OvenGeneratedProjectRequest) -> Result<OvenReceipt, OvenError> {
+    let source_evidence = generated_project_source_evidence(request)?;
+    receipt_generated_project_with_source_evidence(request, &source_evidence)
+}
+
+/// Derive one reusable generated-source proof for profile-specific receipts in the current command.
+///
+/// This reads and verifies every requested source exactly once. The opaque result can be supplied only to a request
+/// with the same normalized source-evidence keys, so a debug or release intent cannot silently borrow unrelated
+/// generated inputs.
+pub(crate) fn generated_project_source_evidence(
+    request: &OvenGeneratedProjectRequest,
+) -> Result<OvenGeneratedProjectSourceEvidence, OvenError> {
+    let names = generated_source_evidence_names(request)?;
+    let supplemental_digests = generated_source_evidence(request)?;
+    Ok(OvenGeneratedProjectSourceEvidence {
+        names,
+        supplemental_digests,
+    })
+}
+
+/// Receipt a generated project with a previously verified source closure.
+///
+/// The caller may vary build intent, including debug versus release profile, but the request must retain exactly the
+/// source-evidence keys that produced `source_evidence`. This is an in-process reuse boundary, not a persisted
+/// cache: each returned receipt still carries complete content-derived source evidence and verifies normally.
+pub(crate) fn receipt_generated_project_with_source_evidence(
+    request: &OvenGeneratedProjectRequest,
+    source_evidence: &OvenGeneratedProjectSourceEvidence,
+) -> Result<OvenReceipt, OvenError> {
+    let expected_names = generated_source_evidence_names(request)?;
+    if source_evidence.names != expected_names {
+        return Err(OvenError::InvalidGeneratedSource {
+            path: request.project_root.clone(),
+            message: "reused source evidence does not match the request's generated source keys".to_string(),
+        });
+    }
     let project = OvenProjectIdentity {
         name: normalized_value(&request.project.name, "project name")?,
         version: normalized_value(&request.project.version, "project version")?,
@@ -481,7 +556,7 @@ pub fn receipt_generated_project(request: &OvenGeneratedProjectRequest) -> Resul
         cargo_manifest_digest: None,
         cargo_lock_digest: None,
         incan_manifest_digest: None,
-        supplemental_digests: generated_source_evidence(request)?,
+        supplemental_digests: source_evidence.supplemental_digests.clone(),
         build_unit_inputs: normalized_build_unit_inputs(&request.build_unit_inputs)?,
     };
     let intent = normalized_build_intent(&request.target, &request.toolchain, &request.profile, &request.features)?;
@@ -553,8 +628,8 @@ pub fn receipt_native_compiler_suite(request: &OvenCompilerSuiteRequest) -> Resu
     build_unit_inputs.insert("compiler-cargo-manifest".to_string(), cargo_manifest_digest.clone());
     build_unit_inputs.insert("compiler-cargo-lock".to_string(), cargo_lock_digest.clone());
     build_unit_inputs.insert("compiler-suite-plan".to_string(), compiler_plan_digest);
-    if let Some(identity) = &request.loaf_envelope_identity {
-        build_unit_inputs.insert("compiler-loaf-envelope".to_string(), identity.clone());
+    if let Some(identity) = &request.loaf_compatibility_identity {
+        build_unit_inputs.insert("compiler-loaf-compatibility".to_string(), identity.clone());
     }
     let mut supplemental_digests = BTreeMap::from([
         (
@@ -845,6 +920,31 @@ fn generated_source_evidence(request: &OvenGeneratedProjectRequest) -> Result<BT
     Ok(digests)
 }
 
+/// Return the normalized source-evidence key set without reading the requested files.
+fn generated_source_evidence_names(request: &OvenGeneratedProjectRequest) -> Result<BTreeSet<String>, OvenError> {
+    let mut names = BTreeSet::new();
+    for (name, path) in request
+        .generated_sources
+        .iter()
+        .chain(request.generated_source_trees.iter())
+    {
+        let name = normalized_generated_source_name(name)?;
+        if !names.insert(name.clone()) {
+            return Err(OvenError::InvalidGeneratedSource {
+                path: path.clone(),
+                message: format!("duplicate generated source evidence key `{name}`"),
+            });
+        }
+    }
+    if names.is_empty() {
+        return Err(OvenError::InvalidGeneratedSource {
+            path: request.project_root.clone(),
+            message: "must declare at least one generated source file or tree".to_string(),
+        });
+    }
+    Ok(names)
+}
+
 /// Normalize a caller-facing source-evidence key without allowing blank identity records.
 fn normalized_generated_source_name(name: &str) -> Result<String, OvenError> {
     let normalized = name.trim();
@@ -1084,6 +1184,111 @@ pub fn digest_source_tree(root: &Path) -> Result<String, OvenError> {
     Ok(digest_bytes(&payload))
 }
 
+/// Hash authored project inputs while excluding compiler- and tool-owned mutable output trees.
+///
+/// This intentionally differs from [`digest_source_tree`], whose callers supply an exact generated-source closure
+/// and therefore need every regular file represented. A path dependency instead names an authored project root;
+/// its `.incan`, `.ralph-cache`, `target`, and `.git` directories are not inputs to the dependency's semantics.
+/// Excluding them makes the identity stable across valid local reuse without overlooking any authored file outside
+/// those reserved output locations.
+pub(crate) fn digest_project_source_tree(root: &Path) -> Result<String, OvenError> {
+    let metadata = fs::symlink_metadata(root).map_err(|error| OvenError::InvalidProjectSource {
+        path: root.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(OvenError::InvalidProjectSource {
+            path: root.to_path_buf(),
+            message: "must be a directory without symlink indirection".to_string(),
+        });
+    }
+    let mut records = BTreeMap::new();
+    collect_project_source_tree(root, root, &mut records)?;
+    if records.is_empty() {
+        return Err(OvenError::InvalidProjectSource {
+            path: root.to_path_buf(),
+            message: "must contain at least one authored regular file".to_string(),
+        });
+    }
+    let payload = serde_json::to_vec(&records).map_err(|error| OvenError::Serialize(error.to_string()))?;
+    Ok(digest_bytes(&payload))
+}
+
+/// Whether a directory is compiler, VCS, or test-runner output rather than authored dependency source.
+fn is_mutable_project_output_directory(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".git" | ".incan" | ".ralph-cache" | "target")
+    )
+}
+
+/// Collect authored project files without descending into reserved mutable output directories.
+fn collect_project_source_tree(
+    root: &Path,
+    current: &Path,
+    records: &mut BTreeMap<String, String>,
+) -> Result<(), OvenError> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| OvenError::InvalidProjectSource {
+            path: current.to_path_buf(),
+            message: error.to_string(),
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| OvenError::InvalidProjectSource {
+            path: current.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| OvenError::InvalidProjectSource {
+            path: path.clone(),
+            message: error.to_string(),
+        })?;
+        if metadata.is_dir() && is_mutable_project_output_directory(&path) {
+            continue;
+        }
+        if metadata.file_type().is_symlink() {
+            return Err(OvenError::InvalidProjectSource {
+                path,
+                message: "symlinks are not allowed in an authored project source closure".to_string(),
+            });
+        }
+        if metadata.is_dir() {
+            collect_project_source_tree(root, &path, records)?;
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(OvenError::InvalidProjectSource {
+                path,
+                message: "may contain only regular files and directories".to_string(),
+            });
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| OvenError::InvalidProjectSource {
+                path: path.clone(),
+                message: "escaped the declared project source root".to_string(),
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let digest =
+            fs::read(&path)
+                .map(|bytes| digest_bytes(&bytes))
+                .map_err(|error| OvenError::InvalidProjectSource {
+                    path: path.clone(),
+                    message: error.to_string(),
+                })?;
+        if records.insert(relative.clone(), digest).is_some() {
+            return Err(OvenError::InvalidProjectSource {
+                path,
+                message: format!("duplicate portable source path `{relative}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Recursively collect one generated source tree with sorted portable paths and no link traversal.
 fn collect_generated_source_tree(
     root: &Path,
@@ -1216,7 +1421,7 @@ pub(crate) fn digest_bytes(content: &[u8]) -> String {
 }
 
 /// Write, sync, and atomically replace a receipt from a same-directory staged file.
-fn write_receipt_staged(payload: &[u8], staged_path: &Path, path: &Path, parent: &Path) -> io::Result<()> {
+pub(crate) fn write_receipt_staged(payload: &[u8], staged_path: &Path, path: &Path, parent: &Path) -> io::Result<()> {
     let mut staged = OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -1253,10 +1458,13 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    use crate::manifest::{DependencySource, DependencySpec};
+
     use super::{
         OvenCompilerSuiteRequest, OvenGeneratedProjectRequest, OvenImportRequest, OvenReceipt, default_receipt_path,
-        digest_bytes, import_frozen_project, receipt_generated_project, receipt_native_compiler_suite,
-        receipt_with_build_unit_input, write_receipt,
+        digest_bytes, generated_project_source_evidence, import_frozen_project, receipt_generated_project,
+        receipt_generated_project_with_source_evidence, receipt_native_compiler_suite, receipt_with_build_unit_input,
+        write_receipt,
     };
 
     fn receipt_without_build_unit_input(
@@ -1315,6 +1523,119 @@ mod tests {
     }
 
     #[test]
+    fn path_dependency_identity_ignores_mutable_project_output_but_tracks_authored_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        fs::create_dir_all(project.path().join("src"))?;
+        fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+        )?;
+        fs::write(project.path().join("src/lib.rs"), "pub fn value() -> i32 { 1 }\n")?;
+        let dependency = DependencySpec {
+            crate_name: "fixture".to_string(),
+            version: None,
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Path {
+                path: project.path().to_path_buf(),
+            },
+            optional: false,
+            package: None,
+        };
+        let initial = super::digest_dependency_specs(std::slice::from_ref(&dependency))?;
+
+        fs::write(
+            project.path().join("target"),
+            "an authored file, not an output directory",
+        )?;
+        assert_ne!(
+            initial,
+            super::digest_dependency_specs(std::slice::from_ref(&dependency))?
+        );
+        fs::remove_file(project.path().join("target"))?;
+
+        for directory in [".git", ".incan/oven", ".ralph-cache/loafs", "target/debug"] {
+            fs::create_dir_all(project.path().join(directory))?;
+            fs::write(project.path().join(directory).join("mutable"), "not authored")?;
+        }
+        assert_eq!(
+            initial,
+            super::digest_dependency_specs(std::slice::from_ref(&dependency))?
+        );
+
+        fs::write(project.path().join("native-schema.json"), "{\"version\": 1}\n")?;
+        assert_ne!(
+            initial,
+            super::digest_dependency_specs(std::slice::from_ref(&dependency))?
+        );
+        fs::remove_file(project.path().join("native-schema.json"))?;
+
+        fs::write(project.path().join("src/lib.rs"), "pub fn value() -> i32 { 2 }\n")?;
+        assert_ne!(initial, super::digest_dependency_specs(&[dependency])?);
+        Ok(())
+    }
+
+    #[test]
+    fn path_dependency_identity_tracks_recursive_sibling_path_source() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let first = temp.path().join("source-a");
+        let second = temp.path().join("source-b");
+        let write_packages = |workspace: &Path| -> Result<(), Box<dyn std::error::Error>> {
+            let foo = workspace.join("foo");
+            let bar = workspace.join("bar");
+            for package in [&foo, &bar] {
+                fs::create_dir_all(package.join("src"))?;
+            }
+            fs::write(
+                foo.join("Cargo.toml"),
+                "[package]\nname = \"foo\"\nversion = \"0.1.0\"\n\n[dependencies]\nbar = { path = \"../bar\" }\n",
+            )?;
+            fs::write(foo.join("src/lib.rs"), "pub fn value() -> i32 { bar::value() }\n")?;
+            fs::write(
+                bar.join("Cargo.toml"),
+                "[package]\nname = \"bar\"\nversion = \"0.1.0\"\n",
+            )?;
+            fs::write(bar.join("src/lib.rs"), "pub fn value() -> i32 { 1 }\n")?;
+            fs::write(bar.join("native-schema.json"), "{\"version\": 1}\n")?;
+            Ok(())
+        };
+        write_packages(&first)?;
+        write_packages(&second)?;
+        let dependency = |workspace: &Path| DependencySpec {
+            crate_name: "foo".to_string(),
+            version: None,
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Path {
+                path: workspace.join("foo"),
+            },
+            optional: false,
+            package: None,
+        };
+        let first_dependency = dependency(&first);
+        let second_dependency = dependency(&second);
+        let stable = super::digest_dependency_specs(std::slice::from_ref(&first_dependency))?;
+        assert_eq!(
+            stable,
+            super::digest_dependency_specs(std::slice::from_ref(&second_dependency))?
+        );
+
+        let second_bar = second.join("bar");
+        fs::write(second_bar.join("native-schema.json"), "{\"version\": 2}\n")?;
+        let source_changed = super::digest_dependency_specs(std::slice::from_ref(&second_dependency))?;
+        assert_ne!(stable, source_changed);
+
+        fs::create_dir_all(second_bar.join("target/debug"))?;
+        fs::write(second_bar.join("target/debug/cache"), "mutable output")?;
+        assert_eq!(
+            source_changed,
+            super::digest_dependency_specs(std::slice::from_ref(&second_dependency))?
+        );
+        Ok(())
+    }
+
+    #[test]
     fn generated_project_receipt_needs_no_cargo_input_and_is_portable() -> Result<(), Box<dyn std::error::Error>> {
         let first = tempfile::tempdir()?;
         let second = tempfile::tempdir()?;
@@ -1341,6 +1662,51 @@ mod tests {
             &generated_request(second.path()).with_build_unit_input("runtime-lock", "sha256:changed"),
         )?;
         assert_ne!(first_receipt.build_unit_identity, runtime_changed.build_unit_identity);
+        Ok(())
+    }
+
+    #[test]
+    fn generated_project_receipts_reuse_one_verified_source_closure_across_profiles()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        write_generated_source_closure(project.path(), "fn main() { println!(\"oven\"); }\n")?;
+        let release_request = generated_request(project.path());
+        let debug_request = OvenGeneratedProjectRequest::new(
+            project.path(),
+            "generated_fixture",
+            "0.1.0",
+            "aarch64-apple-darwin",
+            "rustc 1.96.0",
+            "debug",
+            vec!["default".to_string()],
+        )
+        .with_generated_source("generated-rust-main", project.path().join("src/main.rs"))
+        .with_generated_source_tree("generated-rust-tree", project.path().join("src"));
+
+        let source_evidence = generated_project_source_evidence(&release_request)?;
+        let reused_release = receipt_generated_project_with_source_evidence(&release_request, &source_evidence)?;
+        let reused_debug = receipt_generated_project_with_source_evidence(&debug_request, &source_evidence)?;
+
+        assert_eq!(reused_release, receipt_generated_project(&release_request)?);
+        assert_eq!(reused_debug, receipt_generated_project(&debug_request)?);
+        assert_ne!(reused_release.identity, reused_debug.identity);
+
+        let mismatched_request = OvenGeneratedProjectRequest::new(
+            project.path(),
+            "generated_fixture",
+            "0.1.0",
+            "aarch64-apple-darwin",
+            "rustc 1.96.0",
+            "debug",
+            vec!["default".to_string()],
+        )
+        .with_generated_source("different-generated-root", project.path().join("src/main.rs"))
+        .with_generated_source_tree("generated-rust-tree", project.path().join("src"));
+        let error = match receipt_generated_project_with_source_evidence(&mismatched_request, &source_evidence) {
+            Ok(_) => return Err("mismatched source evidence must not authorize another request".into()),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("does not match"));
         Ok(())
     }
 
@@ -1427,15 +1793,15 @@ mod tests {
         let topology_changed = receipt_native_compiler_suite(&request())?;
         assert_ne!(changed.build_unit_identity, topology_changed.build_unit_identity);
 
-        let first_loaf_generation = receipt_native_compiler_suite(
-            &request().with_loaf_envelope_identity(digest_bytes(b"compiler-suite-generation-one")),
+        let first_loaf_compatibility = receipt_native_compiler_suite(
+            &request().with_loaf_compatibility_identity(digest_bytes(b"compiler-suite-members-one")),
         )?;
-        let next_loaf_generation = receipt_native_compiler_suite(
-            &request().with_loaf_envelope_identity(digest_bytes(b"compiler-suite-generation-two")),
+        let next_loaf_compatibility = receipt_native_compiler_suite(
+            &request().with_loaf_compatibility_identity(digest_bytes(b"compiler-suite-members-two")),
         )?;
         assert_ne!(
-            first_loaf_generation.build_unit_identity, next_loaf_generation.build_unit_identity,
-            "a new committed Loaf generation must invalidate the suite and its toolchain-data partitions"
+            first_loaf_compatibility.build_unit_identity, next_loaf_compatibility.build_unit_identity,
+            "a changed compatible Loaf member set must invalidate the suite and its toolchain-data partitions"
         );
         Ok(())
     }

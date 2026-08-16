@@ -777,7 +777,7 @@ impl TypeChecker {
         let dir = self.rust_inspect_manifest_dir.as_ref()?;
         match self
             .rust_inspect_cache
-            .get_or_extract_complete(dir, lookup_path, &|_| ())
+            .get_or_extract_complete_deferred_persist(dir, lookup_path, &|_| ())
         {
             Ok(metadata) => Some((*metadata).clone()),
             Err(err) => {
@@ -816,7 +816,7 @@ impl TypeChecker {
         let dir = self.rust_inspect_manifest_dir.as_ref()?;
         match self
             .rust_inspect_cache
-            .get_or_extract_complete(dir, lookup_path, &|_| ())
+            .get_or_extract_complete_deferred_persist(dir, lookup_path, &|_| ())
         {
             Ok(metadata) => Some((*metadata).clone()),
             Err(err) => {

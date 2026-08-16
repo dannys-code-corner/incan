@@ -43,7 +43,21 @@ static OVEN_PROJECT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub const OVEN_DIRECT_INSPECTION_MARKER: &str = ".incan_oven_direct_rust_project";
 /// Compiler-authored source authority consumed by the direct Oven inspection loader.
 pub const OVEN_DIRECT_INSPECTION_AUTHORITY_FILE: &str = ".incan_oven_rust_sources.json";
-const OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION: u32 = 1;
+const OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION: u32 = 2;
+
+/// How a compiler-authored direct-inspection projection establishes its registry-source integrity boundary.
+///
+/// A standalone projection verifies the complete tree itself. A projection installed from the current Oven selection
+/// relies on the selected, leased Loaf's verification instead: normal consumers already validate the receipt, plan,
+/// artifact-root containment, and file shape there. Rehashing every retained Rust source tree again would turn a
+/// prepared build into a multi-gigabyte integrity scan. Explicit `incan oven inspect` remains the full-closure audit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum OvenInspectionSourceValidation {
+    #[default]
+    FullTreeDigest,
+    SealedOvenSelection,
+}
 
 /// Exact registry source selected from one leased Loaf or the explicit baker's locked metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,13 +82,45 @@ pub struct OvenInspectionRegistrySource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct OvenInspectionSourceAuthority {
     schema_version: u32,
+    #[serde(default)]
+    source_validation: OvenInspectionSourceValidation,
     sources: Vec<OvenInspectionRegistrySource>,
 }
 
-/// Write the exact source authority beside one compiler-authored direct inspection projection.
+/// Write a standalone direct-inspection authority that verifies every source tree before loading it.
+///
+/// This is deliberately the conservative default for callers outside the Oven selection path.
 pub fn write_oven_inspection_source_authority(
     manifest_dir: &Path,
+    sources: Vec<OvenInspectionRegistrySource>,
+) -> Result<PathBuf, RustMetadataError> {
+    write_oven_inspection_source_authority_with_validation(
+        manifest_dir,
+        sources,
+        OvenInspectionSourceValidation::FullTreeDigest,
+    )
+}
+
+/// Write authority from the current selected Oven Loaf or publisher closure.
+///
+/// The caller must have obtained `sources` from the current receipt-bound selection or the baker's freshly verified
+/// locked source closure. This avoids repeating that same full-tree validation inside the metadata loader.
+pub fn write_sealed_oven_inspection_source_authority(
+    manifest_dir: &Path,
+    sources: Vec<OvenInspectionRegistrySource>,
+) -> Result<PathBuf, RustMetadataError> {
+    write_oven_inspection_source_authority_with_validation(
+        manifest_dir,
+        sources,
+        OvenInspectionSourceValidation::SealedOvenSelection,
+    )
+}
+
+/// Serialize deterministic inspection authority using the caller's declared validation boundary.
+fn write_oven_inspection_source_authority_with_validation(
+    manifest_dir: &Path,
     mut sources: Vec<OvenInspectionRegistrySource>,
+    source_validation: OvenInspectionSourceValidation,
 ) -> Result<PathBuf, RustMetadataError> {
     for source in &mut sources {
         source.features.sort();
@@ -98,6 +144,7 @@ pub fn write_oven_inspection_source_authority(
     });
     let authority = OvenInspectionSourceAuthority {
         schema_version: OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION,
+        source_validation,
         sources,
     };
     let path = manifest_dir.join(OVEN_DIRECT_INSPECTION_AUTHORITY_FILE);
@@ -439,6 +486,7 @@ impl RustWorkspace {
             if !path.is_file() {
                 return Ok(OvenInspectionSourceAuthority {
                     schema_version: OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION,
+                    source_validation: OvenInspectionSourceValidation::FullTreeDigest,
                     sources: Vec::new(),
                 });
             }
@@ -449,7 +497,7 @@ impl RustWorkspace {
                         message: format!("invalid Oven Rust source authority: {error}"),
                     }
                 })?;
-            if authority.schema_version != OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION {
+            if !(1..=OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION).contains(&authority.schema_version) {
                 return Err(RustMetadataError::LoadWorkspace {
                     path,
                     message: format!(
@@ -478,15 +526,17 @@ impl RustWorkspace {
                         message: "sealed Oven registry source has no Cargo.toml".to_string(),
                     });
                 }
-                let actual_digest = digest_oven_source_tree(&root)?;
-                if actual_digest != source.source_digest {
-                    return Err(RustMetadataError::LoadWorkspace {
-                        path: root,
-                        message: format!(
-                            "sealed Oven registry source digest is {actual_digest}, expected {}",
-                            source.source_digest
-                        ),
-                    });
+                if authority.source_validation == OvenInspectionSourceValidation::FullTreeDigest {
+                    let actual_digest = digest_oven_source_tree(&root)?;
+                    if actual_digest != source.source_digest {
+                        return Err(RustMetadataError::LoadWorkspace {
+                            path: root,
+                            message: format!(
+                                "sealed Oven registry source digest is {actual_digest}, expected {}",
+                                source.source_digest
+                            ),
+                        });
+                    }
                 }
                 let key = (
                     source.package.clone(),
@@ -594,6 +644,7 @@ impl RustWorkspace {
             lock: Option<&OvenProjectLock>,
             authority: &OvenInspectionSourceAuthority,
             selected_features: &[String],
+            allow_unlocked_registry_dependencies: bool,
         ) -> Result<OvenProjectCrate, RustMetadataError> {
             let manifest_path = manifest_dir.join("Cargo.toml");
             let manifest = toml::from_str::<toml::Value>(&fs::read_to_string(&manifest_path)?).map_err(|error| {
@@ -711,11 +762,13 @@ impl RustWorkspace {
                             is_local_path: true,
                             features: declaration.features,
                         });
-                    } else if let Some((source_dir, features)) = registry_source_for_requirement(
-                        authority,
-                        &declaration.package,
-                        declaration.version.as_deref(),
-                    )? {
+                    } else if allow_unlocked_registry_dependencies
+                        && let Some((source_dir, features)) = registry_source_for_requirement(
+                            authority,
+                            &declaration.package,
+                            declaration.version.as_deref(),
+                        )?
+                    {
                         dependencies.push(OvenProjectDependency {
                             name: declaration.name,
                             source_dir,
@@ -761,8 +814,13 @@ impl RustWorkspace {
                     if self.feature_selections.get(&manifest_dir) == Some(&unified_features) {
                         return Ok(index);
                     }
-                    let direct_crate =
-                        crate_from_manifest(&manifest_dir, self.lock, self.authority, &unified_features)?;
+                    let direct_crate = crate_from_manifest(
+                        &manifest_dir,
+                        self.lock,
+                        self.authority,
+                        &unified_features,
+                        self.lock.is_some() || dependency_depth > 0,
+                    )?;
                     let dependencies = direct_crate.dependencies.clone();
                     self.crates[index] = direct_crate;
                     self.feature_selections.insert(manifest_dir, unified_features);
@@ -781,7 +839,13 @@ impl RustWorkspace {
                 self.indices.insert(manifest_dir.clone(), index);
                 self.feature_selections
                     .insert(manifest_dir.clone(), unified_features.clone());
-                let direct_crate = crate_from_manifest(&manifest_dir, self.lock, self.authority, &unified_features)?;
+                let direct_crate = crate_from_manifest(
+                    &manifest_dir,
+                    self.lock,
+                    self.authority,
+                    &unified_features,
+                    self.lock.is_some() || dependency_depth > 0,
+                )?;
                 let dependencies = direct_crate.dependencies.clone();
                 self.crates.push(direct_crate);
                 for dependency in dependencies {
@@ -812,7 +876,8 @@ impl RustWorkspace {
             manifest_dir,
             &[],
             // An exact lock plus sealed source authority identifies the complete runtime closure. An unlocked explicit
-            // baker fixture may inspect only its directly authorized registry edges.
+            // baker fixture may inspect its direct registry roots but must not infer an unpinned transitive registry
+            // graph from broad Cargo requirements in those roots.
             if lock.is_some() { usize::MAX } else { 1 },
         )?;
         let crates = graph
@@ -929,7 +994,10 @@ impl RustWorkspace {
         let (db, vfs, _pm) = load_workspace_at(&manifest_dir, &cargo_config, &load_config, progress).map_err(|e| {
             RustMetadataError::LoadWorkspace {
                 path: manifest_dir.clone(),
-                message: e.to_string(),
+                // `rust-analyzer` adds the manifest path as its outer context. Preserve its inner Cargo diagnostic as
+                // well: a caller can otherwise see only the redundant "failed to load" message and cannot distinguish
+                // a malformed project from a path or toolchain failure in the explicit inspection capability.
+                message: format!("{e:#}"),
             }
         })?;
         let crate_index = Self::build_crate_index(&db);
@@ -954,7 +1022,7 @@ mod tests {
 
     use super::{
         OVEN_DIRECT_INSPECTION_MARKER, OvenInspectionRegistrySource, RustWorkspace, digest_oven_source_tree,
-        write_oven_inspection_source_authority,
+        write_oven_inspection_source_authority, write_sealed_oven_inspection_source_authority,
     };
 
     use tempfile::tempdir;
@@ -1152,6 +1220,55 @@ mod tests {
     }
 
     #[test]
+    fn unlocked_baker_authority_does_not_infer_a_transitive_registry_version() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let workspace = tempdir()?;
+        let sealed = tempdir()?;
+        fs::create_dir_all(workspace.path().join("src"))?;
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"oven-unlocked-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ndirect = \"1\"\n",
+        )?;
+        fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n")?;
+
+        let mut authority = Vec::new();
+        for (name, version, dependencies) in [
+            ("direct", "1.0.0", "\n[dependencies]\ngetrandom = \">=0.3, <0.5\"\n"),
+            ("getrandom", "0.3.0", ""),
+            ("getrandom", "0.4.0", ""),
+        ] {
+            let package = sealed.path().join(format!("{name}-{version}"));
+            fs::create_dir_all(package.join("src"))?;
+            fs::write(
+                package.join("Cargo.toml"),
+                format!("[package]\nname = \"{name}\"\nversion = \"{version}\"\nedition = \"2021\"\n{dependencies}"),
+            )?;
+            fs::write(package.join("src/lib.rs"), format!("pub fn {name}_api() {{}}\n"))?;
+            authority.push(OvenInspectionRegistrySource {
+                package: name.to_string(),
+                version: version.to_string(),
+                registry: "registry+https://example.invalid/index".to_string(),
+                checksum: format!("{name}-{version}-checksum"),
+                features: Vec::new(),
+                source_digest: digest_oven_source_tree(&package)?,
+                source_root: package,
+            });
+        }
+        write_oven_inspection_source_authority(workspace.path(), authority)?;
+
+        let payload = RustWorkspace::oven_project_json_payload(workspace.path())?;
+        let graph: serde_json::Value = serde_json::from_slice(&payload)?;
+        let crates = graph["crates"].as_array().ok_or("direct Oven graph omitted crates")?;
+        assert_eq!(
+            crates.len(),
+            2,
+            "the root and its one directly authorized registry source must be present"
+        );
+        assert_eq!(crates[1]["display_name"], "direct");
+        Ok(())
+    }
+
+    #[test]
     fn direct_oven_project_rejects_source_digest_and_lock_checksum_mismatches() -> Result<(), Box<dyn std::error::Error>>
     {
         let workspace = tempdir()?;
@@ -1210,6 +1327,57 @@ mod tests {
             Err(error) => error,
         };
         assert!(digest_error.to_string().contains("expected"));
+        Ok(())
+    }
+
+    #[test]
+    fn selected_oven_authority_uses_the_existing_selection_boundary_without_rehashing_sources()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = tempdir()?;
+        let source = tempdir()?;
+        fs::create_dir_all(workspace.path().join("src"))?;
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"root\"\nversion = \"1.0.0\"\n\n[dependencies]\ndemo = \"1\"\n",
+        )?;
+        fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n")?;
+        fs::write(
+            workspace.path().join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"root\"\nversion = \"1.0.0\"\ndependencies = [\"demo\"]\n\n[[package]]\nname = \"demo\"\nversion = \"1.0.0\"\nsource = \"registry+https://example.invalid/index\"\nchecksum = \"locked-checksum\"\n",
+        )?;
+        fs::create_dir_all(source.path().join("src"))?;
+        fs::write(
+            source.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\n",
+        )?;
+        fs::write(source.path().join("src/lib.rs"), "pub fn original() {}\n")?;
+        let source_digest = digest_oven_source_tree(source.path())?;
+        write_sealed_oven_inspection_source_authority(
+            workspace.path(),
+            vec![OvenInspectionRegistrySource {
+                package: "demo".to_string(),
+                version: "1.0.0".to_string(),
+                registry: "registry+https://example.invalid/index".to_string(),
+                checksum: "locked-checksum".to_string(),
+                features: Vec::new(),
+                source_root: source.path().to_path_buf(),
+                source_digest,
+            }],
+        )?;
+
+        fs::write(
+            source.path().join("src/lib.rs"),
+            "pub fn changed_after_selection() {}\n",
+        )?;
+        let payload = RustWorkspace::oven_project_json_payload(workspace.path())?;
+        let graph: serde_json::Value = serde_json::from_slice(&payload)?;
+        let crates = graph["crates"].as_array().ok_or("direct Oven graph omitted crates")?;
+        assert_eq!(
+            crates.len(),
+            2,
+            "the selected source remains available through its locked identity"
+        );
+        assert_eq!(crates[1]["display_name"], "demo");
         Ok(())
     }
 }

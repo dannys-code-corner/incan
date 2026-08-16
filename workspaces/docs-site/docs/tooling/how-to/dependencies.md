@@ -121,18 +121,11 @@ For compiled SDK providers, the fingerprint identifies checked provider contract
 
 ### Legacy generated-Cargo behavior (pre-Oven Alpha)
 
-The generated-Cargo cache, preheat controls, Cargo policy flags, and target-directory overrides describe the former
-0.5 execution backend. They are not controls for ordinary Oven Alpha commands. See
-[Generated-build storage model](../explanation/generated_build_storage.md) only when auditing that historical backend
-or the explicit compatibility-publisher boundary.
+The generated-Cargo cache, preheat controls, Cargo policy flags, and target-directory overrides describe the former 0.5 execution backend. They are not controls for ordinary Oven Alpha commands. See [Generated-build storage model](../explanation/generated_build_storage.md) only when auditing that historical backend or the explicit compatibility-publisher boundary.
 
 ### CI and offline use
 
-Normal Oven Alpha `build`, `run`, and `test` do not launch Cargo or access a registry, so Cargo's `--offline`,
-`--locked`, and `--frozen` policies are not normal-command controls. Commit `incan.lock`, install the required
-Oven-enabled toolchain before entering the restricted environment, and let receipt/lock validation fail closed if
-the project no longer matches the sealed Loaf. Maintainer publication can separately constrain the explicit
-`legacy_cargo` baker with Cargo policy; that does not change the consumer contract.
+Normal Oven Alpha `build`, `run`, and `test` do not launch Cargo or access a registry, so Cargo's `--offline`, `--locked`, and `--frozen` policies are not normal-command controls. Commit `incan.lock`, install the required Oven-enabled toolchain before entering the restricted environment, and let receipt/lock validation fail closed if the project no longer matches the sealed Loaf. Maintainer publication can separately constrain the internal compatibility publisher with Cargo policy; that does not change the consumer contract.
 
 ## Resolution rules
 
@@ -153,14 +146,9 @@ Key rules:
 
 ## Rust dependency feature boundary
 
-Declare Rust dependency features in the inline import or `[rust-dependencies]` entry before running `incan lock`.
-The resulting requirement participates in semantic lock and receipt identity. A normal Oven command accepts it only
-when a sealed Loaf authorizes the exact dependency/feature closure.
+Declare Rust dependency features in the inline import or `[rust-dependencies]` entry before running `incan lock`. The resulting requirement participates in semantic lock and receipt identity. A normal Oven command accepts it only when a sealed Loaf authorizes the exact dependency/feature closure.
 
-Cargo feature and argument passthrough options are not accepted by normal Oven Alpha `build`, `run`, or `test`.
-They remain only on explicit compatibility surfaces such as lock preparation and the hidden maintainer baker. If a
-required closure is absent, change the declaration and install or bake a matching Loaf instead of trying to mutate
-Cargo resolution during the consumer command.
+Cargo feature and argument passthrough options are not accepted by normal Oven Alpha `build`, `run`, or `test`. They remain only on explicit compatibility surfaces such as lock preparation and the internal compatibility publisher. If a required closure is absent, change the declaration and install or bake a matching Loaf instead of trying to mutate Cargo resolution during the consumer command.
 
 ## Common errors and fixes
 

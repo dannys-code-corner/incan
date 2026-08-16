@@ -503,6 +503,8 @@ pub struct IrEmitter<'a> {
     source_dependency_constructor_metadata: HashMap<(Vec<String>, String), StructConstructorMetadata>,
     /// Public source-import projections waiting to inherit their exact provider constructor metadata.
     source_dependency_constructor_reexports: Vec<SourceConstructorReexport>,
+    /// Whether newly seeded source metadata may resolve one or more retained public projections.
+    source_dependency_constructor_reexports_dirty: bool,
     /// Constructor metadata keyed by the exact public dependency and namespace-relative declaration path.
     pub_dependency_constructor_metadata: HashMap<(String, Vec<String>), StructConstructorMetadata>,
     /// Transparent local type aliases keyed by alias name.
@@ -655,6 +657,7 @@ impl<'a> IrEmitter<'a> {
             struct_constructor_metadata: HashMap::new(),
             source_dependency_constructor_metadata: HashMap::new(),
             source_dependency_constructor_reexports: Vec::new(),
+            source_dependency_constructor_reexports_dirty: false,
             pub_dependency_constructor_metadata: HashMap::new(),
             type_aliases: HashMap::new(),
             rusttype_alias_names: HashSet::new(),
@@ -1499,7 +1502,11 @@ impl<'a> IrEmitter<'a> {
     pub(crate) fn seed_dependency_nominal_metadata_from_program(&mut self, program: &IrProgram) {
         self.seed_nominal_metadata_from_program_inner(program, true);
         self.register_source_dependency_constructor_reexports(program);
-        self.propagate_source_dependency_constructor_reexports();
+        // A full emitter may seed hundreds of checked provider modules. Resolving the complete public-reexport
+        // graph after each module makes the fixed-point walk quadratic in that dependency surface. Delay the walk
+        // until a consumer actually binds constructors, when all currently available seed data can be resolved in
+        // one pass to the same fixed point.
+        self.source_dependency_constructor_reexports_dirty = true;
     }
 
     /// Seed public dependency nominal metadata from `.incnlib` manifests.
@@ -1765,6 +1772,9 @@ impl<'a> IrEmitter<'a> {
     /// Repeating until no projection changes makes this independent of dependency registration order and preserves
     /// provider identity through multi-hop aliases without falling back to short names or constructor shape.
     fn propagate_source_dependency_constructor_reexports(&mut self) {
+        if !std::mem::take(&mut self.source_dependency_constructor_reexports_dirty) {
+            return;
+        }
         loop {
             let additions = self
                 .source_dependency_constructor_reexports
@@ -1799,6 +1809,7 @@ impl<'a> IrEmitter<'a> {
     /// The exact module/declaration key is resolved before the local alias is installed. This deliberately replaces
     /// short-name variants so sibling modules exporting the same class name cannot exchange constructor bridge ABIs.
     fn bind_source_dependency_constructor_metadata(&mut self, program: &IrProgram) {
+        self.propagate_source_dependency_constructor_reexports();
         let bindings = program
             .declarations
             .iter()

@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Command, Output};
 use std::time::Instant;
 
 /// Start one opt-in nested Incan-command measurement for an integration-test diagnostic run.
@@ -87,6 +87,30 @@ pub(crate) fn oven_compiler_suite_is_active() -> bool {
     std::env::var_os("INCAN_OVEN_COMPILER_SUITE_RUSTC").is_some_and(|value| !value.is_empty())
         || (std::env::var_os("INCAN_INTERNAL_OVEN_LOAF_EXECUTION").is_some_and(|value| value == "1")
             && std::env::var_os("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT").is_some_and(|value| !value.is_empty()))
+}
+
+/// Apply the compiler-suite's narrowly injected publisher authority to one explicit Oven bake command.
+///
+/// The suite must not set `CARGO` for an entire libtest root: that would let an accidental normal-command fallback
+/// evade the outer exit-97 guard. Callers therefore opt in only for `incan oven bake`, the named publisher boundary.
+/// The command deliberately retains the suite-selected consumer `RUSTC`: publisher Cargo may differ, but the
+/// produced Loaf must be compatible with the direct-Rustc consumer that will select it.
+#[allow(dead_code)]
+pub(crate) fn configure_explicit_oven_bake_command(command: &mut Command) -> std::io::Result<()> {
+    if !oven_compiler_suite_is_active() {
+        return Ok(());
+    }
+    let required = |name: &str| {
+        std::env::var_os(name).filter(|value| !value.is_empty()).ok_or_else(|| {
+            std::io::Error::other(format!(
+                "compiler-suite explicit Oven bake has no injected {name} authority"
+            ))
+        })
+    };
+    command
+        .env("CARGO", required("INCAN_INTERNAL_OVEN_EXPLICIT_BAKE_CARGO")?)
+        .env("HOME", required("INCAN_INTERNAL_OVEN_EXPLICIT_BAKE_HOME")?);
+    Ok(())
 }
 
 /// Return the generated Cargo target selected by the outer test harness.

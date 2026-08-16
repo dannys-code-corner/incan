@@ -62,6 +62,8 @@ struct CacheInner {
     source_public_reexport_paths: HashMap<SourceMetadataIndexKey, HashMap<String, String>>,
     source_inherent_method_indexes: HashMap<SourceMetadataIndexKey, HashMap<String, Vec<RustMethodSig>>>,
     fast_failed_items: HashSet<(PathBuf, String)>,
+    /// Items whose record was produced by complete semantic extraction rather than a source-only fallback.
+    complete_items: HashSet<(PathBuf, String)>,
     failed_items: HashMap<(PathBuf, String), NegativeLookup>,
     disk_cache_state: HashMap<PathBuf, DiskCacheState>,
 }
@@ -159,12 +161,18 @@ struct DiskCacheEnvelope {
     inspector_version: String,
     workspace_fingerprint: String,
     items: HashMap<String, RustItemMetadata>,
+    /// Non-type records verified by complete semantic extraction.
+    ///
+    /// Type records carry their own completeness marker. Functions, traits, constants, and supported modules do not,
+    /// so this set prevents a source-only record from satisfying a complete lookup after process restart.
+    #[serde(default)]
+    complete_items: HashSet<String>,
     #[serde(default)]
     misses: HashMap<String, NegativeLookup>,
 }
 
 // Bump when extracted metadata semantics change in a way that makes previously persisted items unsafe to reuse.
-const DISK_CACHE_FORMAT: u32 = 18;
+const DISK_CACHE_FORMAT: u32 = 19;
 const DISK_CACHE_FILE: &str = ".incan_rust_inspect_cache.json";
 // Backward-compatibility read path for caches written before the crate/module rename.
 const LEGACY_DISK_CACHE_FILE: &str = ".incan_rust_metadata_cache.json";
@@ -316,10 +324,17 @@ fn load_disk_cache_into_memory(
         items: envelope.items.len(),
         misses: envelope.misses.len(),
     };
+    let complete_items = envelope.complete_items;
     for (canonical_path, metadata) in envelope.items {
         let mut metadata = metadata;
         metadata.canonical_path = canonical_path;
         insert_cached_item(inner, root, Arc::new(metadata));
+    }
+    for canonical_path in complete_items {
+        let key = (root.to_path_buf(), canonical_path);
+        if inner.items.contains_key(&key) {
+            inner.complete_items.insert(key);
+        }
     }
     for (canonical_path, miss) in envelope.misses {
         inner.failed_items.insert((root.to_path_buf(), canonical_path), miss);
@@ -363,6 +378,12 @@ fn disk_cache_envelope(inner: &CacheInner, root: &Path) -> Result<DiskCacheEnvel
             items.insert(canonical_path.clone(), (*cached.as_ref()).clone());
         }
     }
+    let complete_items = inner
+        .complete_items
+        .iter()
+        .filter(|(item_root, _)| item_root == root)
+        .map(|(_, canonical_path)| canonical_path.clone())
+        .collect();
     for ((item_root, canonical_path), miss) in &inner.failed_items {
         if item_root == root {
             misses.insert(canonical_path.clone(), miss.clone());
@@ -373,6 +394,7 @@ fn disk_cache_envelope(inner: &CacheInner, root: &Path) -> Result<DiskCacheEnvel
         inspector_version: format!("cache-format-{DISK_CACHE_FORMAT}"),
         workspace_fingerprint: fingerprint,
         items,
+        complete_items,
         misses,
     })
 }
@@ -524,8 +546,43 @@ fn insert_cached_item(inner: &mut CacheInner, root: &Path, metadata: Arc<RustIte
     remove_cached_item_definition_aliases(inner, root, metadata.canonical_path.as_str());
     index_cached_item_definition_aliases(inner, root, metadata.as_ref());
     inner
+        .complete_items
+        .remove(&(root.to_path_buf(), metadata.canonical_path.clone()));
+    inner
         .items
         .insert((root.to_path_buf(), metadata.canonical_path.clone()), metadata);
+}
+
+/// Insert a record produced by complete semantic extraction.
+fn insert_complete_cached_item(inner: &mut CacheInner, root: &Path, metadata: Arc<RustItemMetadata>) {
+    let key = (root.to_path_buf(), metadata.canonical_path.clone());
+    insert_cached_item(inner, root, metadata);
+    inner.complete_items.insert(key);
+}
+
+/// Return whether cached metadata can satisfy a caller that requires a complete Rust type surface.
+///
+/// Syntax-only source fallbacks intentionally retain a `FieldsAndVariantsOnly` marker, so they must still be
+/// upgraded through semantic extraction. A complete type record already contains the methods and trait
+/// implementations such a caller requires and can be reused without reopening its workspace.
+fn is_complete_type_metadata(metadata: &RustItemMetadata) -> bool {
+    matches!(
+        &metadata.kind,
+        RustItemKind::Type(type_info) if type_info.metadata_completeness.is_complete()
+    )
+}
+
+/// Return whether one cache entry can satisfy a semantic-complete lookup.
+///
+/// Types carry an intrinsic completeness marker because source-derived type records may omit methods and trait
+/// implementations. Every other supported item kind is complete only when it was recorded by the complete
+/// extraction path; this distinction survives the disk cache through `complete_items`.
+fn cached_metadata_satisfies_complete_lookup(
+    inner: &CacheInner,
+    key: &(PathBuf, String),
+    metadata: &RustItemMetadata,
+) -> bool {
+    is_complete_type_metadata(metadata) || inner.complete_items.contains(key)
 }
 
 /// Re-key a cached item for a query path while preserving the extracted Rust metadata.
@@ -535,12 +592,17 @@ fn insert_aliased_item(
     canonical_path: &str,
     hit: &Arc<RustItemMetadata>,
 ) -> Arc<RustItemMetadata> {
+    let source_key = (root.to_path_buf(), hit.canonical_path.clone());
+    let source_was_complete = inner.complete_items.contains(&source_key);
     let mut aliased = (*hit.as_ref()).clone();
     aliased.canonical_path = canonical_path.to_owned();
     let arc = Arc::new(aliased);
     let key_item = (root.to_path_buf(), canonical_path.to_owned());
     inner.failed_items.remove(&key_item);
     insert_cached_item(inner, root, Arc::clone(&arc));
+    if source_was_complete {
+        inner.complete_items.insert(key_item);
+    }
     arc
 }
 
@@ -4304,7 +4366,22 @@ impl RustMetadataCache {
         canonical_path: &str,
         progress: &(dyn Fn(String) + Sync),
     ) -> Result<Arc<RustItemMetadata>, RustMetadataError> {
-        self.get_or_extract_complete_inner(manifest_dir, canonical_path, progress)
+        self.get_or_extract_complete_inner(manifest_dir, canonical_path, progress, true)
+            .map(|access| access.metadata)
+    }
+
+    /// Return complete metadata while deferring persistence until the owning compiler phase flushes once.
+    ///
+    /// A typechecking pass can promote hundreds of source-derived records to complete metadata. Rewriting the full
+    /// growing cache snapshot after each promotion is quadratic in the number of discovered records, so the compiler
+    /// uses this method and calls [`Self::persist_manifest_dir`] after its final lookup.
+    pub fn get_or_extract_complete_deferred_persist(
+        &self,
+        manifest_dir: &Path,
+        canonical_path: &str,
+        progress: &(dyn Fn(String) + Sync),
+    ) -> Result<Arc<RustItemMetadata>, RustMetadataError> {
+        self.get_or_extract_complete_inner(manifest_dir, canonical_path, progress, false)
             .map(|access| access.metadata)
     }
 
@@ -4314,10 +4391,12 @@ impl RustMetadataCache {
         manifest_dir: &Path,
         canonical_path: &str,
         progress: &(dyn Fn(String) + Sync),
+        persist_immediately: bool,
     ) -> Result<CacheAccess, RustMetadataError> {
         let root = manifest_dir.canonicalize()?;
         let timing_enabled = rust_inspect_timing_enabled();
         let mut trace = CallTrace::new(timing_enabled, &root, canonical_path);
+        let key_item = (root.clone(), canonical_path.to_owned());
         let mut inner = self.inner.lock().map_err(|e| RustMetadataError::LoadWorkspace {
             path: root.clone(),
             message: format!("metadata cache lock poisoned: {e}"),
@@ -4332,8 +4411,24 @@ impl RustMetadataCache {
             disk_load_started.elapsed(),
             disk_report.detail().as_str(),
         );
+        if let Some(hit) = inner.items.get(&key_item).cloned()
+            && cached_metadata_satisfies_complete_lookup(&inner, &key_item, hit.as_ref())
+        {
+            let outcome = CacheAccessOutcome::ExactHit;
+            trace.set_outcome(outcome.trace_label());
+            return Ok(CacheAccess { metadata: hit, outcome });
+        }
+        if let Some(miss) = inner.failed_items.get(&key_item) {
+            trace.set_outcome("hit.memory.negative");
+            return Err(miss.to_error());
+        }
         let mut last_err = None;
         for candidate in canonical_path_candidates(canonical_path) {
+            let candidate_key = (root.clone(), candidate.clone());
+            if let Some(miss) = inner.failed_items.get(&candidate_key) {
+                last_err = Some(miss.to_error());
+                continue;
+            }
             match extract_in_workspace_set(
                 &mut inner,
                 &root,
@@ -4346,8 +4441,9 @@ impl RustMetadataCache {
                 Ok(mut metadata) => {
                     metadata.canonical_path = canonical_path.to_owned();
                     let metadata = Arc::new(metadata);
-                    insert_cached_item(&mut inner, &root, Arc::clone(&metadata));
-                    if let Err(err) = persist_item_to_disk_cache(&inner, &root) {
+                    inner.failed_items.remove(&key_item);
+                    insert_complete_cached_item(&mut inner, &root, Arc::clone(&metadata));
+                    if persist_immediately && let Err(err) = persist_item_to_disk_cache(&inner, &root) {
                         tracing::warn!(
                             root = %root.display(),
                             query = %canonical_path,
@@ -4361,12 +4457,28 @@ impl RustMetadataCache {
                         outcome: CacheAccessOutcome::Extracted,
                     });
                 }
-                Err(err) => last_err = Some(err),
+                Err(err) => {
+                    if let Some(negative) = NegativeLookup::from_error(&err) {
+                        inner.failed_items.insert(candidate_key, negative);
+                    }
+                    last_err = Some(err);
+                }
             }
         }
         let err = last_err
             .unwrap_or_else(|| RustMetadataError::CrateNotFound(crate_name_for_path(canonical_path).to_string()));
-        trace.set_outcome("miss.complete");
+        if let Some(negative) = NegativeLookup::from_error(&err) {
+            inner.failed_items.insert(key_item, negative);
+            if persist_immediately && let Err(persist_err) = persist_negative_to_disk_cache(&inner, &root) {
+                tracing::warn!(
+                    root = %root.display(),
+                    query = %canonical_path,
+                    error = %persist_err,
+                    "failed to persist rust-inspect disk cache after complete extraction miss"
+                );
+            }
+        }
+        trace.set_outcome("miss.cached.negative");
         Err(err)
     }
 
@@ -4385,7 +4497,7 @@ impl RustMetadataCache {
     /// Persist the in-memory cache snapshot for one manifest root.
     ///
     /// Prewarm uses deferred extraction so callers can batch writes until every requested item has been visited.
-    pub(crate) fn persist_manifest_dir(&self, manifest_dir: &Path) -> Result<(), RustMetadataError> {
+    pub fn persist_manifest_dir(&self, manifest_dir: &Path) -> Result<(), RustMetadataError> {
         let root = manifest_dir.canonicalize()?;
         let mut inner = self.inner.lock().map_err(|e| RustMetadataError::LoadWorkspace {
             path: root.clone(),
@@ -4532,14 +4644,10 @@ impl RustMetadataCache {
                     meta.canonical_path = canonical_path.to_owned();
                     let arc = Arc::new(meta);
                     insert_cached_item(&mut inner, &root, Arc::clone(&arc));
-                    if let Err(err) = persist_item_to_disk_cache(&inner, &root) {
-                        tracing::warn!(
-                            root = %root.display(),
-                            query = %canonical_path,
-                            error = %err,
-                            "failed to persist rust-inspect disk cache after fast source/generated hit"
-                        );
-                    }
+                    // The typechecker can discover hundreds of source-derived metadata records in one pass. Each
+                    // snapshot contains all prior records, so rewriting it here turns a linear walk into repeated
+                    // growing JSON serializations. The owning preparation phase flushes this shared cache once after
+                    // typechecking, just as `Inspector::prewarm` does for its explicit query batch.
                     return Ok(Some(CacheLookupHit {
                         metadata: arc,
                         alias_used: candidate != canonical_path,

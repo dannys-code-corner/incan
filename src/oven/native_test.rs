@@ -177,6 +177,17 @@ fn inventory_native_tests_with_environment(
     working_directory: Option<&Path>,
     allow_empty: bool,
 ) -> Result<OvenNativeTestInventory, OvenNativeTestError> {
+    inventory_native_tests_with_environment_and_timeout(executable, environment, working_directory, allow_empty, None)
+}
+
+/// Inventory one native libtest binary under the same process-tree supervisor as its selected test cases.
+fn inventory_native_tests_with_environment_and_timeout(
+    executable: &Path,
+    environment: &BTreeMap<String, String>,
+    working_directory: Option<&Path>,
+    allow_empty: bool,
+    timeout: Option<Duration>,
+) -> Result<OvenNativeTestInventory, OvenNativeTestError> {
     let executable = verified_executable(executable)?;
     let mut command = Command::new(&executable);
     command.args(["--list", "--format", "terse"]);
@@ -185,12 +196,21 @@ fn inventory_native_tests_with_environment(
     }
     clear_inherited_cargo_environment(&mut command);
     command.envs(environment);
-    let output = command.output().map_err(|source| OvenNativeTestError::Io {
-        path: executable.clone(),
-        source,
-    })?;
-    let transcript = combined_output(&output.stdout, &output.stderr);
-    if !output.status.success() {
+    let (output, timed_out) = run_native_batch_child(command, &executable, timeout)?;
+    let mut transcript = combined_output(&output.stdout, &output.stderr);
+    if timed_out {
+        if !transcript.ends_with('\n') && !transcript.is_empty() {
+            transcript.push('\n');
+        }
+        if let Some(timeout) = timeout {
+            transcript.push_str(&format!(
+                "Oven native test inventory timed out after {} (executable: {})\n",
+                format_timeout(timeout),
+                executable.display(),
+            ));
+        }
+    }
+    if !output.status.success() || timed_out {
         return Err(OvenNativeTestError::InventoryFailed { output: transcript });
     }
     let names = parse_inventory(&output.stdout, allow_empty)?;
@@ -286,6 +306,172 @@ pub fn run_native_test_batch(
     })
 }
 
+/// Execute receipt-selected native tests after verifying one complete inventory, with the target's authored working
+/// directory and the compiler-suite timeout supervisor.
+///
+/// This is the narrow diagnostic counterpart to the complete-root runner. Every requested name must occur in the
+/// same verified inventory before any case starts. The cases then run sequentially from the same executable while
+/// retaining normal Cargo sanitization, output capture, and process-group deadlines. Their terminal summaries and
+/// timings are aggregated without manufacturing one root per selected case.
+pub fn run_native_tests_exact_in_directory_with_timeout(
+    executable: &Path,
+    exact_names: &[String],
+    environment: &BTreeMap<String, String>,
+    working_directory: Option<&Path>,
+    timeout: Option<Duration>,
+) -> Result<OvenNativeTestBatchReport, OvenNativeTestError> {
+    let selection_started = Instant::now();
+    let requested = normalized_exact_names(exact_names)?;
+    let inventory_started = Instant::now();
+    let inventory_timeout = remaining_native_test_timeout(&selection_started, timeout).map_err(|timeout| {
+        OvenNativeTestError::InventoryFailed {
+            output: format!(
+                "Oven native exact selection exhausted its aggregate {} deadline before inventory started",
+                format_timeout(timeout)
+            ),
+        }
+    })?;
+    let inventory = inventory_native_tests_with_environment_and_timeout(
+        executable,
+        environment,
+        working_directory,
+        false,
+        inventory_timeout,
+    )?;
+    let inventory_elapsed_ms = duration_millis(inventory_started.elapsed());
+    let available = inventory.names.iter().collect::<BTreeSet<_>>();
+    for exact_name in &requested {
+        if !available.contains(exact_name) {
+            return Err(OvenNativeTestError::MissingExactTest {
+                name: exact_name.clone(),
+            });
+        }
+    }
+    let executable = verified_executable(executable)?;
+    let mut report = OvenNativeTestBatchReport {
+        inventory: inventory.clone(),
+        success: true,
+        timed_out: false,
+        case_counts: Some(OvenNativeTestCaseCounts::default()),
+        case_timings: Vec::new(),
+        command_timings: Vec::new(),
+        timing: OvenNativeTestBatchTiming {
+            inventory_elapsed_ms,
+            execution_elapsed_ms: 0,
+        },
+        output: String::new(),
+    };
+    for exact_name in requested {
+        let process_timeout = match remaining_native_test_timeout(&selection_started, timeout) {
+            Ok(timeout) => timeout,
+            Err(timeout) => {
+                report.success = false;
+                report.timed_out = true;
+                report.case_counts = None;
+                if !report.output.is_empty() && !report.output.ends_with('\n') {
+                    report.output.push('\n');
+                }
+                report
+                    .output
+                    .push_str(&format!("--- Oven exact test `{exact_name}` ---\n"));
+                report.output.push_str(&format!(
+                    "Oven native exact selection exhausted its aggregate {} deadline before this case could start; no later selected case was launched\n",
+                    format_timeout(timeout)
+                ));
+                break;
+            }
+        };
+        let mut command = Command::new(&executable);
+        command.args(["--exact", &exact_name, "--nocapture"]);
+        if let Some(working_directory) = working_directory {
+            command.current_dir(working_directory);
+        }
+        clear_inherited_cargo_environment(&mut command);
+        command.envs(environment);
+        add_case_timing_diagnostics(&mut command);
+        let execution_started = Instant::now();
+        let (output, timed_out) = run_native_batch_child(command, &executable, process_timeout)?;
+        report.timing.execution_elapsed_ms = report
+            .timing
+            .execution_elapsed_ms
+            .saturating_add(duration_millis(execution_started.elapsed()));
+        let mut transcript = combined_output(&output.stdout, &output.stderr);
+        if timed_out {
+            if !transcript.ends_with('\n') && !transcript.is_empty() {
+                transcript.push('\n');
+            }
+            if let Some(timeout) = timeout {
+                let working_directory = working_directory
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "inherited".to_string());
+                transcript.push_str(&format!(
+                    "Oven native exact selection exhausted its aggregate {} deadline while executing `{exact_name}` (executable: {}; working directory: {}); no later selected case was launched\n",
+                    format_timeout(timeout),
+                    executable.display(),
+                    working_directory,
+                ));
+            }
+        }
+        report.success &= output.status.success() && !timed_out;
+        report.timed_out |= timed_out;
+        match (&mut report.case_counts, parse_libtest_case_counts(&transcript)) {
+            (Some(total), Some(counts)) => {
+                total.passed = total.passed.saturating_add(counts.passed);
+                total.failed = total.failed.saturating_add(counts.failed);
+                total.ignored = total.ignored.saturating_add(counts.ignored);
+            }
+            (counts, None) => *counts = None,
+            (None, Some(_)) => {}
+        }
+        report
+            .case_timings
+            .extend(parse_libtest_case_timings_if_requested(&transcript, &inventory));
+        report
+            .command_timings
+            .extend(parse_native_test_command_timings(&transcript));
+        if !report.output.is_empty() && !report.output.ends_with('\n') {
+            report.output.push('\n');
+        }
+        report
+            .output
+            .push_str(&format!("--- Oven exact test `{exact_name}` ---\n"));
+        report.output.push_str(&transcript);
+        if timed_out {
+            break;
+        }
+    }
+    Ok(report)
+}
+
+/// Return the remaining wall-clock allowance for one exact selection, including inventory and every selected case.
+fn remaining_native_test_timeout(started: &Instant, timeout: Option<Duration>) -> Result<Option<Duration>, Duration> {
+    let Some(timeout) = timeout else {
+        return Ok(None);
+    };
+    timeout
+        .checked_sub(started.elapsed())
+        .filter(|remaining| !remaining.is_zero())
+        .map(Some)
+        .ok_or(timeout)
+}
+
+/// Execute one receipt-selected native test through the multi-exact supervisor.
+pub fn run_native_test_exact_in_directory_with_timeout(
+    executable: &Path,
+    exact_name: &str,
+    environment: &BTreeMap<String, String>,
+    working_directory: Option<&Path>,
+    timeout: Option<Duration>,
+) -> Result<OvenNativeTestBatchReport, OvenNativeTestError> {
+    run_native_tests_exact_in_directory_with_timeout(
+        executable,
+        &[exact_name.to_string()],
+        environment,
+        working_directory,
+        timeout,
+    )
+}
+
 /// Inventory and execute every test in one native libtest binary, accepting a valid zero-test target.
 ///
 /// Cargo accepts a compiled test root with no `#[test]` functions; Oven must do the same for workspace proc-macro
@@ -321,11 +507,52 @@ pub fn run_native_test_batch_all_in_directory_with_timeout(
     working_directory: Option<&Path>,
     timeout: Option<Duration>,
 ) -> Result<OvenNativeTestBatchReport, OvenNativeTestError> {
+    run_native_test_batch_all_in_directory_with_options(executable, environment, working_directory, timeout, None)
+}
+
+/// Inventory and execute every test from one verified caller-selected package directory with a fixed libtest budget.
+///
+/// The compiler-suite scheduler uses this form after splitting its host CPU budget between independent root workers.
+/// A zero budget is rejected before launching a child, so a caller cannot turn a scheduling error into libtest's
+/// less actionable command-line diagnostic.
+pub fn run_native_test_batch_all_in_directory_with_timeout_and_threads(
+    executable: &Path,
+    environment: &BTreeMap<String, String>,
+    working_directory: Option<&Path>,
+    timeout: Option<Duration>,
+    test_threads: usize,
+) -> Result<OvenNativeTestBatchReport, OvenNativeTestError> {
+    if test_threads == 0 {
+        return Err(OvenNativeTestError::InvalidInput {
+            field: "native test thread budget",
+            message: "must be greater than zero".to_string(),
+        });
+    }
+    run_native_test_batch_all_in_directory_with_options(
+        executable,
+        environment,
+        working_directory,
+        timeout,
+        Some(test_threads),
+    )
+}
+
+/// Shared executor for ordinary and scheduler-budgeted complete native-test roots.
+fn run_native_test_batch_all_in_directory_with_options(
+    executable: &Path,
+    environment: &BTreeMap<String, String>,
+    working_directory: Option<&Path>,
+    timeout: Option<Duration>,
+    test_threads: Option<usize>,
+) -> Result<OvenNativeTestBatchReport, OvenNativeTestError> {
     let inventory_started = Instant::now();
     let inventory = inventory_native_tests_with_environment(executable, environment, working_directory, true)?;
     let inventory_elapsed_ms = duration_millis(inventory_started.elapsed());
     let executable = verified_executable(executable)?;
     let mut command = Command::new(&executable);
+    if let Some(test_threads) = test_threads {
+        command.arg(format!("--test-threads={test_threads}"));
+    }
     command.arg("--nocapture");
     if let Some(working_directory) = working_directory {
         command.current_dir(working_directory);
@@ -774,7 +1001,10 @@ mod tests {
         OvenNativeTestCaseCounts, OvenNativeTestCommandTiming, OvenNativeTestError, OvenNativeTestInventory,
         OvenNativeTestRequest, parse_libtest_case_counts, parse_libtest_case_timings,
         parse_native_test_command_timings, run_native_test_batch, run_native_test_batch_all,
-        run_native_test_batch_all_in_directory_with_timeout, run_native_tests,
+        run_native_test_batch_all_in_directory_with_timeout,
+        run_native_test_batch_all_in_directory_with_timeout_and_threads,
+        run_native_test_exact_in_directory_with_timeout, run_native_tests,
+        run_native_tests_exact_in_directory_with_timeout,
     };
 
     #[test]
@@ -997,6 +1227,317 @@ mod tests {
         })?;
         assert!(report.success, "{report:#?}");
         assert_eq!(report.inventory.names, ["generated::case"]);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_batch_runs_one_verified_case_from_the_requested_directory() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let output = tempfile::tempdir()?;
+        let executable = output.path().join("exact-native-test-argument-check");
+        let working_directory = output.path().join("working-directory");
+        fs::create_dir_all(&working_directory)?;
+        let working_directory_marker = output.path().join("working-directory.txt");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--list\" ] && [ \"$2\" = \"--format\" ] && [ \"$3\" = \"terse\" ]; then\n\
+               printf '%s\\n' 'exact::selected: test' 'exact::other: test'\n\
+               exit 0\n\
+             fi\n\
+             if [ \"$1\" = \"--exact\" ] && [ \"$2\" = \"exact::selected\" ] && [ \"$3\" = \"--nocapture\" ] && [ \"$#\" -eq 3 ]; then\n\
+               pwd > \"$INCAN_TEST_EXACT_WORKING_DIRECTORY_MARKER\"\n\
+               printf '%s\\n' 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s'\n\
+               exit 0\n\
+             fi\n\
+             printf 'unexpected native test arguments: %s\\n' \"$*\" >&2\n\
+             exit 62\n",
+        )?;
+        let mut permissions = fs::metadata(&executable)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions)?;
+        let environment = BTreeMap::from([(
+            "INCAN_TEST_EXACT_WORKING_DIRECTORY_MARKER".to_string(),
+            working_directory_marker.display().to_string(),
+        )]);
+
+        let report = run_native_test_exact_in_directory_with_timeout(
+            &executable,
+            "exact::selected",
+            &environment,
+            Some(&working_directory),
+            Some(Duration::from_secs(5)),
+        )?;
+
+        assert!(report.success, "{report:#?}");
+        assert_eq!(report.inventory.names, ["exact::other", "exact::selected"]);
+        assert_eq!(
+            report.case_counts,
+            Some(OvenNativeTestCaseCounts {
+                passed: 1,
+                failed: 0,
+                ignored: 0,
+            })
+        );
+        assert_eq!(
+            fs::read_to_string(working_directory_marker)?.trim(),
+            fs::canonicalize(&working_directory)?.display().to_string(),
+            "the exact diagnostic must retain the package working directory"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn multi_exact_batch_inventories_once_validates_first_and_aggregates_terminal_outcomes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let output = tempfile::tempdir()?;
+        let executable = output.path().join("multi-exact-native-test");
+        let inventory_marker = output.path().join("inventory.txt");
+        let execution_log = output.path().join("executions.txt");
+        let cargo_marker = output.path().join("cargo-environment.txt");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--list\" ] && [ \"$2\" = \"--format\" ] && [ \"$3\" = \"terse\" ]; then\n\
+               printf x >> \"$INCAN_TEST_INVENTORY_MARKER\"\n\
+               printf '%s\\n' 'exact::failed: test' 'exact::green: test' 'exact::ignored: test'\n\
+               exit 0\n\
+             fi\n\
+             if [ -n \"${CARGO:-}\" ] || [ -n \"${CARGO_PKG_NAME:-}\" ]; then\n\
+               printf cargo > \"$INCAN_TEST_CARGO_MARKER\"\n\
+               exit 97\n\
+             fi\n\
+             if [ \"$1\" != \"--exact\" ] || [ \"$3\" != \"--nocapture\" ] || [ \"$#\" -ne 3 ]; then\n\
+               printf 'unexpected native test arguments: %s\\n' \"$*\" >&2\n\
+               exit 62\n\
+             fi\n\
+             printf '%s\\n' \"$2\" >> \"$INCAN_TEST_EXECUTION_LOG\"\n\
+             case \"$2\" in\n\
+               exact::green)\n\
+                 printf '%s\\n' 'incan-test-command-timing {\"test_name\":\"exact::green\",\"command\":\"incan build\",\"elapsed_ms\":9}'\n\
+                 printf '%s\\n' 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s'\n\
+                 exit 0;;\n\
+               exact::failed)\n\
+                 printf '%s\\n' 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s'\n\
+                 exit 1;;\n\
+               exact::ignored)\n\
+                 printf '%s\\n' 'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 2 filtered out; finished in 0.00s'\n\
+                 exit 0;;\n\
+             esac\n\
+             exit 63\n",
+        )?;
+        let mut permissions = fs::metadata(&executable)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions)?;
+        let environment = BTreeMap::from([
+            (
+                "INCAN_TEST_INVENTORY_MARKER".to_string(),
+                inventory_marker.display().to_string(),
+            ),
+            (
+                "INCAN_TEST_EXECUTION_LOG".to_string(),
+                execution_log.display().to_string(),
+            ),
+            (
+                "INCAN_TEST_CARGO_MARKER".to_string(),
+                cargo_marker.display().to_string(),
+            ),
+        ]);
+
+        let missing = run_native_tests_exact_in_directory_with_timeout(
+            &executable,
+            &["exact::green".to_string(), "exact::missing".to_string()],
+            &environment,
+            Some(output.path()),
+            Some(Duration::from_secs(5)),
+        );
+        assert!(matches!(missing, Err(OvenNativeTestError::MissingExactTest { .. })));
+        assert!(
+            !execution_log.exists(),
+            "no selected case may start before the complete exact selection is valid"
+        );
+        assert_eq!(fs::read_to_string(&inventory_marker)?, "x");
+        fs::write(&inventory_marker, "")?;
+
+        let report = run_native_tests_exact_in_directory_with_timeout(
+            &executable,
+            &[
+                "exact::ignored".to_string(),
+                "exact::green".to_string(),
+                "exact::failed".to_string(),
+            ],
+            &environment,
+            Some(output.path()),
+            Some(Duration::from_secs(5)),
+        )?;
+
+        assert!(!report.success, "{report:#?}");
+        assert!(!report.timed_out, "{report:#?}");
+        assert_eq!(
+            fs::read_to_string(inventory_marker)?,
+            "x",
+            "one multi-exact run must inventory exactly once"
+        );
+        assert_eq!(
+            fs::read_to_string(execution_log)?,
+            "exact::failed\nexact::green\nexact::ignored\n"
+        );
+        assert!(
+            !cargo_marker.exists(),
+            "multi-exact children inherited Cargo process state"
+        );
+        assert_eq!(
+            report.case_counts,
+            Some(OvenNativeTestCaseCounts {
+                passed: 1,
+                failed: 1,
+                ignored: 1
+            })
+        );
+        assert_eq!(report.command_timings.len(), 1);
+        assert_eq!(report.command_timings[0].test_name, "exact::green");
+        assert_eq!(report.command_timings[0].elapsed_ms, 9);
+        assert!(report.output.contains("--- Oven exact test `exact::failed` ---"));
+        assert!(report.output.contains("--- Oven exact test `exact::green` ---"));
+        assert!(report.output.contains("--- Oven exact test `exact::ignored` ---"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn multi_exact_batch_contains_a_timed_out_process_tree_and_stops_launching_later_cases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        let output = tempfile::tempdir()?;
+        let executable = output.path().join("multi-exact-timeout");
+        let execution_log = output.path().join("executions.txt");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--list\" ] && [ \"$2\" = \"--format\" ] && [ \"$3\" = \"terse\" ]; then\n\
+               printf '%s\\n' 'exact::a_slow: test' 'exact::z_after: test'\n\
+               exit 0\n\
+             fi\n\
+             printf '%s\\n' \"$2\" >> \"$INCAN_TEST_EXECUTION_LOG\"\n\
+             if [ \"$2\" = \"exact::a_slow\" ]; then sleep 30; fi\n\
+             printf '%s\\n' 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s'\n",
+        )?;
+        let mut permissions = fs::metadata(&executable)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions)?;
+        let environment = BTreeMap::from([(
+            "INCAN_TEST_EXECUTION_LOG".to_string(),
+            execution_log.display().to_string(),
+        )]);
+
+        let started = Instant::now();
+        let report = run_native_tests_exact_in_directory_with_timeout(
+            &executable,
+            &["exact::a_slow".to_string(), "exact::z_after".to_string()],
+            &environment,
+            Some(output.path()),
+            Some(Duration::from_secs(5)),
+        )?;
+
+        assert!(!report.success, "{report:#?}");
+        assert!(report.timed_out, "{report:#?}");
+        assert_eq!(report.case_counts, None);
+        assert!(report.output.contains("aggregate 5s deadline"), "{report:#?}");
+        assert_eq!(fs::read_to_string(execution_log)?, "exact::a_slow\n");
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "the timed-out exact process tree retained its pipes"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn multi_exact_batch_contains_inventory_in_the_aggregate_deadline_before_any_case_starts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        let output = tempfile::tempdir()?;
+        let executable = output.path().join("multi-exact-inventory-timeout");
+        let execution_marker = output.path().join("execution.txt");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--list\" ]; then sleep 30; fi\n\
+             printf executed > \"$INCAN_TEST_EXECUTION_MARKER\"\n",
+        )?;
+        let mut permissions = fs::metadata(&executable)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions)?;
+        let environment = BTreeMap::from([(
+            "INCAN_TEST_EXECUTION_MARKER".to_string(),
+            execution_marker.display().to_string(),
+        )]);
+
+        let started = Instant::now();
+        let result = run_native_tests_exact_in_directory_with_timeout(
+            &executable,
+            &["exact::never_started".to_string()],
+            &environment,
+            Some(output.path()),
+            Some(Duration::from_millis(10)),
+        );
+
+        assert!(
+            matches!(result, Err(OvenNativeTestError::InventoryFailed { output }) if output.contains("inventory timed out"))
+        );
+        assert!(!execution_marker.exists());
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "inventory descendants retained pipes beyond the aggregate timeout"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scheduled_all_batch_honors_its_explicit_libtest_thread_budget() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let output = tempfile::tempdir()?;
+        let executable = output.path().join("scheduled-native-test-argument-check");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--list\" ] && [ \"$2\" = \"--format\" ] && [ \"$3\" = \"terse\" ]; then\n\
+               printf '%s\\n' 'scheduled::case: test'\n\
+               exit 0\n\
+             fi\n\
+             if [ \"$1\" = \"--test-threads=1\" ] && [ \"$2\" = \"--nocapture\" ] && [ \"$#\" -eq 2 ]; then\n\
+               exit 0\n\
+             fi\n\
+             printf 'unexpected native test arguments: %s\\n' \"$*\" >&2\n\
+             exit 62\n",
+        )?;
+        let mut permissions = fs::metadata(&executable)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions)?;
+
+        let report = run_native_test_batch_all_in_directory_with_timeout_and_threads(
+            &executable,
+            &BTreeMap::new(),
+            Some(output.path()),
+            Some(Duration::from_secs(5)),
+            1,
+        )?;
+        assert!(report.success, "{report:#?}");
+        assert_eq!(report.inventory.names, ["scheduled::case"]);
         Ok(())
     }
 

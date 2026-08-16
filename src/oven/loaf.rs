@@ -2,8 +2,9 @@
 //!
 //! A loaf is an immutable direct-`rustc` closure shipped with the active Incan toolchain. It is deliberately
 //! separate from a generated-project receipt: one loaf can satisfy compatible clean worktrees, while each generated
-//! source tree keeps its own receipt and final output. Normal commands may copy a verified loaf into the bounded Oven
-//! store, but never inspect a Cargo target or accept a project-selected native-artifact directory.
+//! source tree keeps its own receipt and final output. Normal commands select a verified compiler Loaf directly, or
+//! a receipt-bound project Loaf from the bounded Oven store; neither path inspects a Cargo target or accepts a
+//! project-selected native-artifact directory.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -12,28 +13,26 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::interop::{OVEN_INTEROP_EXECUTION_RECEIPT_INPUT, OVEN_INTEROP_PLAN_SCHEMA_INPUT};
 use super::legacy_cargo::{
-    OvenLegacyCargoError, OvenLegacyCargoInspectionPackage, OvenLegacyCargoInspectionSource,
-    OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind, canonicalize_supporting_artifacts,
-    copy_regular_directory_tree, direct_rustc_compile_environment, materialized_files_from_directory,
-    prepare_direct_rustc_plan,
+    OvenLegacyCargoDirectDependencyClosure, OvenLegacyCargoError, OvenLegacyCargoInspectionPackage,
+    OvenLegacyCargoInspectionSource, OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind,
+    canonicalize_supporting_artifacts, copy_regular_directory_tree, direct_rustc_compile_environment,
+    materialized_files_from_directory, prepare_direct_rustc_plan, publisher_capacity_probe_delay,
 };
 use super::process::{isolate_process_group, terminate_process_group};
 use super::rustc::{
-    OvenRegistryLeafAuthority, OvenRustcArtifactExtern, OvenRustcArtifactManifest, OvenRustcArtifactPlan,
-    OvenRustcAuxiliaryTarget, OvenRustcError, OvenRustcRegistryLeaf, OvenRustcRegistrySource,
-    OvenRustcRegistrySourcePackage, OvenRustcSupportingArtifact, clear_inherited_cargo_environment,
+    OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenRegistryLeafAuthority, OvenRustcArtifactExtern,
+    OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcAuxiliaryTarget, OvenRustcError, OvenRustcRegistryLeaf,
+    OvenRustcRegistrySource, OvenRustcRegistrySourcePackage, OvenRustcSupportingArtifact,
+    clear_inherited_cargo_environment, registry_source_dependencies_supported_by_catalog,
     validate_sealed_registry_leaf,
 };
-use super::store::{
-    OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreError,
-};
+use super::store::{OvenArtifactKind, OvenStore, OvenStoreError};
 use super::{OvenReceipt, digest_bytes};
 use crate::manifest::{DependencySource, DependencySpec, ProjectManifest};
 use crate::version::{INCAN_VERSION, SDK_PROVIDER_CODEGEN_REVISION};
@@ -41,14 +40,14 @@ use crate::version::{INCAN_VERSION, SDK_PROVIDER_CODEGEN_REVISION};
 /// Current wire format for one compiler-shipped Oven Loaf.
 pub const OVEN_LOAF_SCHEMA_VERSION: u32 = 13;
 /// Current wire format for the atomically committed Loaf-envelope manifest.
-pub const OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub const OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION: u32 = 3;
 /// Internal marker enabled only while the named legacy publisher creates a compiler-owned Loaf.
 ///
 /// This is deliberately distinct from normal Oven command selection: it grants compiler source emission the same
 /// trusted standard-provider identity as the SDK publisher, but it never authorizes Cargo for a caller command.
 pub(crate) const OVEN_LOAF_ENV: &str = "INCAN_OVEN_LOAF";
-/// Actionable user guidance for a normal-command miss without turning the hidden baker into a fallback.
-pub const OVEN_LOAF_MISS_GUIDANCE: &str = "Action: first run `incan oven bake --project <library-root>` to materialize the active toolchain's sealed Loaf into the bounded local store. If that reports no compatible shipped Loaf, install or reinstall an Oven-enabled Incan toolchain for this target, or remove caller-owned Rust dependencies outside the documented Alpha envelope. Maintainers preparing a toolchain use `incan oven legacy-cargo bake-loafs`; normal commands and `incan oven bake` will not run it automatically.";
+/// Actionable user guidance for a normal-command miss without turning it into a compatibility-baker fallback.
+pub const OVEN_LOAF_MISS_GUIDANCE: &str = "Action: run `incan oven bake --project <project-root>`. That explicit command records generated-project receipts for every conventional project target, reuses a compatible closure when present, or performs one bounded compatibility bake. Normal build, run, and test remain Cargo-free and will not invoke the baker automatically.";
 const TOOLCHAIN_LOAF_RELATIVE_ROOT: &str = "share/incan/oven/loafs";
 static LOAF_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const OVEN_LOAF_ENVELOPE_LOCK_FILE: &str = ".envelope.lock";
@@ -56,9 +55,9 @@ const OVEN_LOAF_ENVELOPE_LOCK_FILE: &str = ".envelope.lock";
 /// Built-in compiler-owned Loaf set prepared by the explicit baker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OvenLoafEnvelope {
-    /// Two Loafs shipped in a release toolchain for normal release and debug consumers.
+    /// Coherent compiled closures with source authority shipped in a release toolchain.
     Release,
-    /// Six profile/family Loafs required by the complete compiler test suite.
+    /// The same complete standard-provider closure for compiler-suite debug and release execution.
     CompilerSuite,
 }
 
@@ -69,6 +68,34 @@ pub enum OvenLoafFixtureAction {
     Build,
     /// Compile the fixture with normal `incan run` semantics.
     Run,
+}
+
+/// The independent authority a typed Loaf member contributes to one release-version envelope.
+///
+/// Compiled closures remain feature-unified direct-`rustc` inputs. Source-authority members carry the locked registry
+/// source trees needed during Rust inspection, so those sources are shared without turning unrelated rlibs into one
+/// interchangeable catalog. A checked fixture may deliberately contribute both authorities when its one coherent
+/// closure genuinely owns them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OvenLoafMemberRole {
+    /// A coherent direct-`rustc` closure that can be materialized for normal execution.
+    CompiledClosure,
+    /// A source-inspection authority selected independently from a linkable closure.
+    SourceAuthority,
+    /// One coherent closure that is intentionally both linkable and source-authoritative.
+    CompiledClosureAndSourceAuthority,
+}
+
+impl OvenLoafMemberRole {
+    /// Return whether normal direct-`rustc` execution may select this member.
+    pub(crate) const fn provides_compiled_closure(self) -> bool {
+        matches!(self, Self::CompiledClosure | Self::CompiledClosureAndSourceAuthority)
+    }
+
+    /// Return whether Rust inspection may select this member's sealed source catalog.
+    pub(crate) const fn provides_source_authority(self) -> bool {
+        matches!(self, Self::SourceAuthority | Self::CompiledClosureAndSourceAuthority)
+    }
 }
 
 /// One checked Incan fixture in a built-in Loaf envelope.
@@ -86,15 +113,27 @@ pub struct OvenLoafSpecification {
     pub source: &'static str,
     /// Checked Incan project manifest embedded in the compiler binary.
     pub manifest: &'static str,
-    /// Whether this Loaf owns the envelope-level source-inspection authority independently from linkable leaves.
-    pub seals_envelope_inspection_sources: bool,
+    /// Checked registry-source inventory embedded separately from the generated fixture manifest.
+    ///
+    /// Source-only members use this to seal every supported stdlib package without compiling those packages again.
+    pub inspection_manifest: &'static str,
+    /// The independent authority this immutable member contributes to the envelope.
+    pub role: OvenLoafMemberRole,
+    /// Whether this linkable closure keeps every registry leaf emitted by its checked fixture.
+    pub retain_complete_registry_leaves: bool,
+    /// Whether this compiler-owned Loaf keeps every checked fixture dependency as a direct Rustc extern.
+    ///
+    /// A `stdlib` Loaf is a complete standard-library closure, not a scenario-shaped subset. Compiler-suite Loafs
+    /// additionally seal vocabulary support in a target-specific auxiliary closure, so compiler-only roots never
+    /// become a second direct-Rustc authority for ordinary generated programs.
+    pub retain_checked_direct_dependencies: bool,
 }
 
 impl OvenLoafSpecification {
     /// Return the exact registry packages whose Rust source this checked fixture may inspect.
     pub fn inspection_packages(&self) -> Result<Vec<OvenLegacyCargoInspectionPackage>, String> {
         let path = Path::new("src/oven/fixtures").join(format!("{}.toml", self.project_name));
-        inspection_packages_from_manifest(self.manifest, &path, self.label)
+        inspection_packages_from_manifest(self.inspection_manifest, &path, self.label)
     }
 }
 
@@ -138,9 +177,9 @@ pub struct OvenLoafEnvelopeManifest {
     pub schema_version: u32,
     /// Built-in envelope name (`release` or `compiler-suite`).
     pub envelope: String,
-    /// Content identity of the complete generation and its canonical input evidence.
+    /// Content identity of the complete generation and its release-family compatibility evidence.
     pub generation_identity: String,
-    /// Canonical compiler, SDK, Rust toolchain, lock, and checked-fixture evidence.
+    /// Canonical release-family compatibility evidence, excluding per-executable baker provenance.
     pub evidence: BTreeMap<String, String>,
     /// Complete typed member list for this generation.
     pub loafs: Vec<OvenLoafEnvelopeMember>,
@@ -155,6 +194,8 @@ pub struct OvenLoafEnvelopeMember {
     pub profile: String,
     /// Checked fixture action used to derive its receipt.
     pub action: String,
+    /// The authority this member contributes to the envelope.
+    pub role: OvenLoafMemberRole,
     /// Receipt compatibility identity stored inside the Loaf.
     pub build_unit_identity: String,
     /// Digest of the canonical Loaf metadata, including every declared artifact digest.
@@ -169,99 +210,57 @@ pub struct OvenLoafEnvelopeMember {
     pub path: PathBuf,
 }
 
-const COMPILER_SUITE_LOAFS: [OvenLoafSpecification; 6] = [
+const COMPILER_SUITE_LOAFS: [OvenLoafSpecification; 2] = [
     OvenLoafSpecification {
-        label: "foundation-debug",
+        label: "stdlib",
         project_name: "oven_compiler_suite_foundation",
         profile: "debug",
         action: OvenLoafFixtureAction::Run,
         source: include_str!("fixtures/compiler_suite_foundation.incn"),
         manifest: include_str!("fixtures/compiler_suite_foundation.toml"),
-        seals_envelope_inspection_sources: true,
+        inspection_manifest: include_str!("fixtures/compiler_suite_foundation.toml"),
+        role: OvenLoafMemberRole::CompiledClosureAndSourceAuthority,
+        retain_complete_registry_leaves: true,
+        retain_checked_direct_dependencies: true,
     },
     OvenLoafSpecification {
-        label: "foundation-release",
+        label: "stdlib",
         project_name: "oven_compiler_suite_foundation",
         profile: "release",
         action: OvenLoafFixtureAction::Run,
         source: include_str!("fixtures/compiler_suite_foundation.incn"),
         manifest: include_str!("fixtures/compiler_suite_foundation.toml"),
-        seals_envelope_inspection_sources: true,
-    },
-    OvenLoafSpecification {
-        label: "encoding-debug",
-        project_name: "oven_compiler_suite_encoding",
-        profile: "debug",
-        action: OvenLoafFixtureAction::Run,
-        source: include_str!("fixtures/compiler_suite_encoding.incn"),
-        manifest: include_str!("fixtures/compiler_suite_encoding.toml"),
-        seals_envelope_inspection_sources: false,
-    },
-    OvenLoafSpecification {
-        label: "encoding-release",
-        project_name: "oven_compiler_suite_encoding",
-        profile: "release",
-        action: OvenLoafFixtureAction::Run,
-        source: include_str!("fixtures/compiler_suite_encoding.incn"),
-        manifest: include_str!("fixtures/compiler_suite_encoding.toml"),
-        seals_envelope_inspection_sources: false,
-    },
-    OvenLoafSpecification {
-        label: "surfaces-debug",
-        project_name: "oven_compiler_suite_surfaces",
-        profile: "debug",
-        action: OvenLoafFixtureAction::Run,
-        source: include_str!("fixtures/compiler_suite_surfaces.incn"),
-        manifest: include_str!("fixtures/compiler_suite_surfaces.toml"),
-        seals_envelope_inspection_sources: false,
-    },
-    OvenLoafSpecification {
-        label: "surfaces-release",
-        project_name: "oven_compiler_suite_surfaces",
-        profile: "release",
-        action: OvenLoafFixtureAction::Run,
-        source: include_str!("fixtures/compiler_suite_surfaces.incn"),
-        manifest: include_str!("fixtures/compiler_suite_surfaces.toml"),
-        seals_envelope_inspection_sources: false,
+        inspection_manifest: include_str!("fixtures/compiler_suite_foundation.toml"),
+        role: OvenLoafMemberRole::CompiledClosureAndSourceAuthority,
+        retain_complete_registry_leaves: true,
+        retain_checked_direct_dependencies: true,
     },
 ];
 
-const RELEASE_LOAFS: [OvenLoafSpecification; 4] = [
+const RELEASE_LOAFS: [OvenLoafSpecification; 2] = [
     OvenLoafSpecification {
-        label: "core-release",
-        project_name: "oven_release_core",
-        profile: "release",
-        action: OvenLoafFixtureAction::Build,
-        source: include_str!("fixtures/release_core.incn"),
-        manifest: include_str!("fixtures/release_core.toml"),
-        seals_envelope_inspection_sources: false,
-    },
-    OvenLoafSpecification {
-        label: "foundation-debug",
-        project_name: "oven_release_foundation",
+        label: "stdlib",
+        project_name: "oven_release_stdlib",
         profile: "debug",
         action: OvenLoafFixtureAction::Run,
-        source: include_str!("fixtures/release_foundation.incn"),
-        manifest: include_str!("fixtures/release_foundation.toml"),
-        seals_envelope_inspection_sources: false,
+        source: include_str!("fixtures/release_stdlib.incn"),
+        manifest: include_str!("fixtures/release_stdlib.toml"),
+        inspection_manifest: include_str!("fixtures/release_stdlib.toml"),
+        role: OvenLoafMemberRole::CompiledClosureAndSourceAuthority,
+        retain_complete_registry_leaves: true,
+        retain_checked_direct_dependencies: true,
     },
     OvenLoafSpecification {
-        label: "interop-debug",
-        project_name: "oven_release_interop",
-        profile: "debug",
-        action: OvenLoafFixtureAction::Run,
-        source: include_str!("fixtures/release_interop.incn"),
-        manifest: include_str!("fixtures/release_interop.toml"),
-        seals_envelope_inspection_sources: false,
-    },
-    OvenLoafSpecification {
-        label: "interop-release",
-        project_name: "oven_release_interop",
+        label: "stdlib",
+        project_name: "oven_release_stdlib",
         profile: "release",
         action: OvenLoafFixtureAction::Build,
-        source: include_str!("fixtures/release_interop.incn"),
-        manifest: include_str!("fixtures/release_interop.toml"),
-        seals_envelope_inspection_sources: false,
+        source: include_str!("fixtures/release_stdlib.incn"),
+        manifest: include_str!("fixtures/release_stdlib.toml"),
+        inspection_manifest: include_str!("fixtures/release_stdlib.toml"),
+        role: OvenLoafMemberRole::CompiledClosureAndSourceAuthority,
+        retain_complete_registry_leaves: true,
+        retain_checked_direct_dependencies: true,
     },
 ];
 
@@ -283,6 +282,7 @@ pub fn loaf_envelope_inspection_packages(
 ) -> Result<Vec<OvenLegacyCargoInspectionPackage>, String> {
     let mut packages = loaf_envelope_specifications(envelope)
         .iter()
+        .filter(|specification| specification.role.provides_source_authority())
         .map(OvenLoafSpecification::inspection_packages)
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -478,15 +478,15 @@ pub struct OvenLoafAccounting {
     pub payload_physical_bytes: u64,
 }
 
-/// A receipt-authorized compiler-native closure resolved from immutable toolchain data.
+/// A receipt-authorized complete standard-library closure resolved from immutable toolchain data.
 ///
-/// The compiler-suite scheduler copies this data from its leased store partition into read-only caller output before
-/// spawning nested normal commands. Those commands must not copy the same large closure once per fixture into their
-/// small mutable home: doing so would turn bounded store pruning into a selection/execution race. This value is
-/// therefore available only through the scheduler's internal handoff, while ordinary commands continue to publish
-/// the selected loaf into their policy-bounded Oven store.
+/// The release ships this Loaf once per target/profile. Both ordinary consumers and compiler-suite children retain
+/// its generation lock while executing direct `rustc`; neither path copies the same full stdlib closure into every
+/// project store. Project-specific compatibility closures remain separately bounded store Loafs.
 #[derive(Debug)]
 pub struct OvenToolchainLoaf {
+    /// Content address of the selected immutable `loaf.json` contract.
+    pub loaf_identity: String,
     /// Stable identity of the compiler-shipped loaf selected for this receipt.
     pub loaf_build_unit_identity: String,
     /// Receipt-compatible direct-Rustc manifest retained by the loaf.
@@ -706,6 +706,15 @@ impl OvenLoafCompatibility {
     fn authorizes_provider_subset(&self, receipt: &OvenReceipt) -> Result<bool, OvenLoafError> {
         Ok(self.provider_subset_excess(receipt)?.is_some())
     }
+
+    /// Return whether this independent source authority may inspect Rust metadata for `receipt`.
+    ///
+    /// Source inspection never authorizes a linkable direct-`rustc` closure, so provider modules and facets do not
+    /// participate in this decision. Compiler/runtime source evidence, target, profile, toolchain, and every package
+    /// feature still remain checked by the caller, the selected source catalog, and the plan intent.
+    fn authorizes_source_authority(&self, receipt: &OvenReceipt) -> Result<bool, OvenLoafError> {
+        Ok(self.runtime_inputs == Self::from_receipt(receipt)?.runtime_inputs)
+    }
 }
 
 /// Parse the canonical provider-capability records sealed into a Loaf receipt.
@@ -794,6 +803,8 @@ pub struct OvenLoafBakerContext<'a> {
     pub inspection_sources: &'a [OvenLegacyCargoInspectionSource],
     /// Whether this broad foundation Loaf exposes every registry rlib actually emitted into its coherent closure.
     pub retain_complete_registry_leaves: bool,
+    /// Whether the complete checked fixture dependency surface is direct-linkable by generated standard-library code.
+    pub retain_checked_direct_dependencies: bool,
     pub limits: super::store::OvenStoreLimits,
 }
 
@@ -978,12 +989,19 @@ pub fn prepare_loaf_from_generated_project(
         cargo: context.cargo.to_path_buf(),
         rustc: context.rustc.to_path_buf(),
         sdk_inventory: None,
+        compiler_loaf_root: None,
         domain: format!("toolchain-base-{}", receipt.intent.profile),
         publication_kind: OvenLegacyCargoPublicationKind::Executable,
         source_evidence_key: "generated-root".to_string(),
         compile_environment,
         inspection_packages: (!context.retain_complete_registry_leaves).then(|| context.inspection_packages.to_vec()),
+        direct_dependency_closure: if context.retain_checked_direct_dependencies {
+            OvenLegacyCargoDirectDependencyClosure::CheckedDeclared
+        } else {
+            OvenLegacyCargoDirectDependencyClosure::GeneratedSource
+        },
         compact_debug_info: true,
+        base_loaf: None,
     })?;
     let identity = receipt
         .build_unit_identity
@@ -1105,6 +1123,7 @@ fn export_loaf(
         })?;
     }
     merge_loaf_inspection_sources(&mut plan, staging.path(), context.inspection_sources)?;
+    seal_registry_lock_from_temporary_store(&mut plan, &artifact_root, staging.path())?;
     let vocab_transient_peak = bake_compiler_vocab_support(
         &mut plan,
         staging.path(),
@@ -1162,6 +1181,65 @@ fn export_loaf(
         physical_bytes,
         transient_peak_physical_bytes: publisher_transient_peak.max(vocab_transient_peak),
     })
+}
+
+/// Carry the publisher's checked registry lock across the Loaf export boundary.
+///
+/// The temporary publisher store deliberately keeps the lock outside the executable artifact plan: it is inspection
+/// authority, not a direct-rustc linker input. A shipped Loaf nevertheless needs that same immutable authority when
+/// it exposes registry sources, so copy it into the final bundle and declare it as a verified supporting artifact.
+fn seal_registry_lock_from_temporary_store(
+    plan: &mut OvenRustcArtifactManifest,
+    artifact_root: &Path,
+    loaf_staging: &Path,
+) -> Result<(), OvenLoafError> {
+    if plan.registry_sources.is_empty() {
+        return Ok(());
+    }
+    if plan
+        .supporting_artifacts
+        .iter()
+        .any(|artifact| artifact.relative_path == OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH)
+    {
+        return Err(OvenLoafError::Preparation {
+            message: "direct-rustc plan must not predeclare the sealed registry Cargo.lock".to_string(),
+        });
+    }
+    let source_path = artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+    let source_metadata = fs::symlink_metadata(&source_path).map_err(|source| OvenLoafError::Io {
+        path: source_path.clone(),
+        source,
+    })?;
+    if source_metadata.file_type().is_symlink() || !source_metadata.is_file() {
+        return Err(OvenLoafError::Preparation {
+            message: format!(
+                "publisher registry lock must be a regular file: {}",
+                source_path.display()
+            ),
+        });
+    }
+    let destination = loaf_staging.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+    let parent = destination.parent().ok_or_else(|| OvenLoafError::Preparation {
+        message: "Loaf registry lock has no parent directory".to_string(),
+    })?;
+    fs::create_dir_all(parent).map_err(|source| OvenLoafError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    fs::copy(&source_path, &destination).map_err(|source| OvenLoafError::Io {
+        path: source_path.clone(),
+        source,
+    })?;
+    let digest = digest_bytes(&fs::read(&destination).map_err(|source| OvenLoafError::Io {
+        path: destination,
+        source,
+    })?);
+    plan.supporting_artifacts.push(OvenRustcSupportingArtifact {
+        relative_path: OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH.to_string(),
+        digest,
+    });
+    canonicalize_supporting_artifacts(&mut plan.supporting_artifacts)?;
+    Ok(())
 }
 
 /// Seal independently resolved registry sources into a Loaf without inventing linkable artifacts.
@@ -1373,6 +1451,13 @@ fn run_bounded_loaf_cargo(
     })?;
     let mut peak = 0_u64;
     let status = loop {
+        if let Some(status) = child.try_wait().map_err(|source| OvenLoafError::Io {
+            path: PathBuf::from(label),
+            source,
+        })? {
+            break status;
+        }
+        let scan_started = std::time::Instant::now();
         let observed = capacity_roots.iter().try_fold(0_u64, |total, root| {
             super::legacy_cargo::conservative_directory_reservation(root).map(|bytes| total.saturating_add(bytes))
         })?;
@@ -1388,13 +1473,11 @@ fn run_bounded_loaf_cargo(
                 ),
             });
         }
-        if let Some(status) = child.try_wait().map_err(|source| OvenLoafError::Io {
-            path: PathBuf::from(label),
-            source,
-        })? {
-            break status;
-        }
-        thread::sleep(Duration::from_millis(25));
+        // This is the same physical-capacity supervisor used by the project publisher. A full scan walks the
+        // complete private compiler-support target, so it yields for at least its own duration after a large scan
+        // rather than immediately beginning another multi-gigabyte walk. The final exact admission below still
+        // validates every persistent and transient root before this publisher returns.
+        thread::sleep(publisher_capacity_probe_delay(scan_started.elapsed()));
     };
     let output = fs::read(&stdout_path).map_err(|source| OvenLoafError::Io {
         path: stdout_path.clone(),
@@ -1422,9 +1505,10 @@ fn run_bounded_loaf_cargo(
 /// A generated Incan program need not use JSON, while the compiler's vocab contract always serializes metadata.
 /// Consequently, this compiler-owned closure cannot be inferred from a caller program's provider features. The
 /// explicit `legacy_cargo` publisher builds only `incan_vocab` against the repository lockfile, copies its small
-/// target-specific Rust closure into the immutable loaf, and records the two helper roots explicitly. Vocabulary
-/// extraction receives those roots from the selected full plan; generated roots do not, because their entrypoint
-/// projection is fixed before this compiler-only closure is added. No normal command can re-run this Cargo operation.
+/// target-specific Rust closure into the immutable Loaf, and records the two helper roots as a host-target auxiliary
+/// closure. Vocabulary extraction receives that closure; normal generated roots do not. This prevents a compiler
+/// helper's separately compiled `serde_json` from becoming a second authority beside the full stdlib's `serde_json`.
+/// No normal command can re-run this Cargo operation.
 fn bake_compiler_vocab_support(
     plan: &mut OvenRustcArtifactManifest,
     loaf_staging: &Path,
@@ -1435,16 +1519,10 @@ fn bake_compiler_vocab_support(
     transient_limit: u64,
 ) -> Result<u64, OvenLoafError> {
     const INCAN_VOCAB: &str = "incan_vocab";
-    const SERDE_JSON: &str = "serde_json";
     const VOCAB_DESUGARER_TARGET: &str = "wasm32-wasip1";
-    let required_externs = [INCAN_VOCAB, SERDE_JSON];
-    if plan
-        .externs
-        .iter()
-        .any(|artifact| required_externs.contains(&artifact.crate_name.as_str()))
-    {
+    if plan.externs.iter().any(|artifact| artifact.crate_name == INCAN_VOCAB) {
         return Err(OvenLoafError::Preparation {
-            message: "native foundation unexpectedly declares a compiler vocab support extern".to_string(),
+            message: "native foundation unexpectedly declares the compiler-owned incan_vocab extern".to_string(),
         });
     }
     if !cargo.is_file() {
@@ -1604,10 +1682,11 @@ fn bake_compiler_vocab_support(
 ///
 /// The named publisher starts from an empty target directory, builds only `incan_vocab` against the checked lockfile,
 /// and retains only the exact Rust-library paths in Cargo's `compiler-artifact` records for that invocation. The two
-/// roots selected by vocabulary extraction (`incan_vocab` and `serde_json`) are explicit externs; the remaining
-/// digested artifacts are their declared direct-Rustc support closure, including host procedural macros. A stale or
-/// unrelated Cargo `deps` file is neither scanned nor admitted. The normal guarded library-vocab regression exercises
-/// that sealed set and fails if a consumer attempts to launch Cargo.
+/// roots selected by vocabulary extraction (`incan_vocab` and `serde_json`) are host-target auxiliary externs; they
+/// are deliberately not normal program externs. The remaining digested artifacts are their direct-Rustc support
+/// closure, including host procedural macros. A stale or unrelated Cargo `deps` file is neither scanned nor admitted.
+/// The normal guarded library-vocab regression exercises that sealed set and fails if a consumer attempts to launch
+/// Cargo.
 fn copy_compiler_vocab_support_artifacts(
     source_artifacts: &[PathBuf],
     target_artifact_directory: &Path,
@@ -1723,9 +1802,7 @@ fn copy_compiler_vocab_support_artifacts(
     }
 
     let relative_directory = "compiler-support/deps".to_string();
-    plan.dependency_search_paths.push(relative_directory.clone());
-    plan.dependency_search_paths.sort();
-    plan.dependency_search_paths.dedup();
+    let mut externs = Vec::new();
     for (file_name, digest) in &copied {
         let relative_path = format!("{relative_directory}/{file_name}");
         plan.supporting_artifacts.push(OvenRustcSupportingArtifact {
@@ -1749,12 +1826,19 @@ fn copy_compiler_vocab_support_artifacts(
         let relative_path = format!("{relative_directory}/{file_name}");
         plan.supporting_artifacts
             .retain(|artifact| artifact.relative_path != relative_path);
-        plan.externs.push(OvenRustcArtifactExtern {
+        externs.push(OvenRustcArtifactExtern {
             crate_name: crate_name.to_string(),
             relative_path,
             digest: digest.to_string(),
         });
     }
+    plan.vocab_auxiliary_targets.push(OvenRustcAuxiliaryTarget {
+        target: plan.intent.target.clone(),
+        dependency_search_paths: vec![relative_directory],
+        externs,
+    });
+    plan.vocab_auxiliary_targets
+        .sort_by(|left, right| left.target.cmp(&right.target));
     plan.supporting_artifacts
         .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(())
@@ -2207,10 +2291,27 @@ pub(crate) fn committed_loaf_paths(loaf_root: &Path) -> Result<Vec<PathBuf>, Ove
 
 /// Validate the typed committed-envelope authority without traversing every Loaf artifact tree.
 ///
-/// Selection needs only content-addressed metadata and compatibility records to choose one closure. The final
-/// selected Loaf is structurally audited by [`loaf_from_loaf_with_lock`] before any artifact path reaches Rustc.
-/// Full-generation consumers use [`committed_loaf_paths`] instead.
+/// Selection needs only content-addressed metadata and compatibility records to choose one closure. The selected
+/// Loaf then validates every manifest-declared Rustc input before it is passed to Rustc; it deliberately does not
+/// walk unrelated files below the immutable Loaf directory. Full-generation consumers use [`committed_loaf_paths`]
+/// to reject any undeclared file during an explicit whole-Loaf audit.
 fn committed_loaf_metadata_paths(loaf_root: &Path) -> Result<Vec<PathBuf>, OvenLoafError> {
+    committed_loaf_metadata_paths_with_role(loaf_root, None)
+}
+
+/// Resolve only members that provide one authority while still validating the complete envelope.
+fn committed_loaf_metadata_paths_for_authority(
+    loaf_root: &Path,
+    role: OvenLoafMemberRole,
+) -> Result<Vec<PathBuf>, OvenLoafError> {
+    committed_loaf_metadata_paths_with_role(loaf_root, Some(role))
+}
+
+/// Validate a committed envelope and retain the members selected by an optional authority role.
+fn committed_loaf_metadata_paths_with_role(
+    loaf_root: &Path,
+    role: Option<OvenLoafMemberRole>,
+) -> Result<Vec<PathBuf>, OvenLoafError> {
     let manifest_path = loaf_root.join("envelope.json");
     let manifest = match fs::read(&manifest_path) {
         Ok(bytes) => {
@@ -2279,20 +2380,24 @@ fn committed_loaf_metadata_paths(loaf_root: &Path) -> Result<Vec<PathBuf>, OvenL
                 message: format!("committed envelope member `{}` is not content-addressed", member.label),
             });
         }
-        paths.push(path);
+        if role.is_none_or(|expected| match expected {
+            OvenLoafMemberRole::CompiledClosure => member.role.provides_compiled_closure(),
+            OvenLoafMemberRole::SourceAuthority => member.role.provides_source_authority(),
+            OvenLoafMemberRole::CompiledClosureAndSourceAuthority => {
+                member.role == OvenLoafMemberRole::CompiledClosureAndSourceAuthority
+            }
+        }) {
+            paths.push(path);
+        }
     }
     Ok(paths)
 }
 
-/// Return the content identity of one committed typed envelope without rehashing its artifact closure.
-///
-/// Publication writes `envelope.json` atomically and the generation identity already binds the canonical baker
-/// evidence and complete Loaf member set. Consumers still validate each selected Loaf before execution; this cheap
-/// identity read exists only to key compiler-suite reuse to the same committed envelope authority.
-pub(crate) fn committed_loaf_envelope_identity(
+/// Read and validate the one atomically committed typed envelope manifest.
+fn committed_loaf_envelope_manifest(
     loaf_root: &Path,
     expected_envelope: &str,
-) -> Result<String, OvenLoafError> {
+) -> Result<(OvenLoafEnvelopeManifest, PathBuf), OvenLoafError> {
     let manifest_path = loaf_root.join("envelope.json");
     let bytes = fs::read(&manifest_path).map_err(|source| OvenLoafError::Io {
         path: manifest_path.clone(),
@@ -2318,15 +2423,16 @@ pub(crate) fn committed_loaf_envelope_identity(
             ),
         });
     }
-    let digest = manifest
-        .generation_identity
-        .strip_prefix("sha256:")
-        .ok_or_else(|| OvenLoafError::InvalidLoaf {
-            path: manifest_path.clone(),
-            message: "committed envelope generation identity is not a SHA-256 digest".to_string(),
-        })?;
-    if digest.len() != 64
-        || !digest
+    let generation_digest =
+        manifest
+            .generation_identity
+            .strip_prefix("sha256:")
+            .ok_or_else(|| OvenLoafError::InvalidLoaf {
+                path: manifest_path.clone(),
+                message: "committed envelope generation identity is not a SHA-256 digest".to_string(),
+            })?;
+    if generation_digest.len() != 64
+        || !generation_digest
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
@@ -2335,16 +2441,77 @@ pub(crate) fn committed_loaf_envelope_identity(
             message: "committed envelope generation identity is not a canonical SHA-256 digest".to_string(),
         });
     }
-    Ok(manifest.generation_identity)
+    Ok((manifest, manifest_path))
+}
+
+/// Return the stable compiler-suite compatibility identity of the sealed member set.
+///
+/// A compiler-suite receipt needs to invalidate when a selected Loaf closure or direct-Rustc plan changes, but not
+/// merely because envelope publication evidence changed. In particular, editing an `#[cfg(test)]` compiler source
+/// can change the executable digest while leaving every lock/toolchain-bound member unchanged. Key the costly
+/// compiler-suite foundation to its selected member identities, never to the enclosing generation path, accounting,
+/// or evidence map.
+pub(crate) fn committed_loaf_envelope_compatibility_identity(
+    loaf_root: &Path,
+    expected_envelope: &str,
+) -> Result<String, OvenLoafError> {
+    let (manifest, manifest_path) = committed_loaf_envelope_manifest(loaf_root, expected_envelope)?;
+    let mut members = Vec::with_capacity(manifest.loafs.len());
+    let mut variants = BTreeSet::new();
+    for member in &manifest.loafs {
+        if member.label.trim().is_empty()
+            || member.profile.trim().is_empty()
+            || member.action.trim().is_empty()
+            || member.build_unit_identity.trim().is_empty()
+            || member.loaf_identity.trim().is_empty()
+            || member.plan_identity.trim().is_empty()
+        {
+            return Err(OvenLoafError::InvalidLoaf {
+                path: manifest_path.clone(),
+                message: "committed envelope has an incomplete compatibility member".to_string(),
+            });
+        }
+        if !variants.insert((member.label.clone(), member.profile.clone())) {
+            return Err(OvenLoafError::InvalidLoaf {
+                path: manifest_path.clone(),
+                message: format!(
+                    "committed envelope repeats Loaf family `{}` for profile `{}`",
+                    member.label, member.profile
+                ),
+            });
+        }
+        members.push((
+            &member.label,
+            &member.profile,
+            &member.action,
+            member.role,
+            &member.build_unit_identity,
+            &member.loaf_identity,
+            &member.plan_identity,
+        ));
+    }
+    members.sort_by(|left, right| left.0.cmp(right.0).then_with(|| left.1.cmp(right.1)));
+    let encoded = serde_json::to_vec(&(manifest.schema_version, &manifest.envelope, members)).map_err(|error| {
+        OvenLoafError::Preparation {
+            message: format!("could not encode committed envelope compatibility identity: {error}"),
+        }
+    })?;
+    Ok(digest_bytes(&encoded))
 }
 
 /// One committed Loaf generation whose paths remain stable for the lifetime of its shared lock.
 pub(crate) struct OvenCommittedLoafGeneration {
+    generation_identity: String,
     paths: Vec<PathBuf>,
     _lock: OvenLoafGenerationLock,
 }
 
 impl OvenCommittedLoafGeneration {
+    /// Return the exact committed envelope generation protected by this shared lock.
+    pub(crate) fn generation_identity(&self) -> &str {
+        &self.generation_identity
+    }
+
     /// Return the verified Loaf manifests protected by this generation's shared lock.
     pub(crate) fn paths(&self) -> &[PathBuf] {
         &self.paths
@@ -2359,8 +2526,10 @@ pub(crate) fn acquire_committed_loaf_generation(
         return Ok(None);
     }
     let generation_lock = acquire_loaf_generation_lock(loaf_root)?;
+    let (manifest, _) = committed_loaf_envelope_manifest(loaf_root, "compiler-suite")?;
     let paths = committed_loaf_paths(loaf_root)?;
     Ok(Some(OvenCommittedLoafGeneration {
+        generation_identity: manifest.generation_identity,
         paths,
         _lock: generation_lock,
     }))
@@ -2368,7 +2537,7 @@ pub(crate) fn acquire_committed_loaf_generation(
 
 /// Find the one committed Loaf whose exact build-unit identity matches `receipt`.
 fn exact_committed_loaf_path(loaf_root: &Path, receipt: &OvenReceipt) -> Result<Option<PathBuf>, OvenLoafError> {
-    for path in committed_loaf_metadata_paths(loaf_root)? {
+    for path in committed_loaf_metadata_paths_for_authority(loaf_root, OvenLoafMemberRole::CompiledClosure)? {
         let loaf = read_loaf(&path)?;
         if loaf.build_unit_identity == receipt.build_unit_identity {
             return Ok(Some(path));
@@ -2389,43 +2558,6 @@ fn acquire_loaf_generation_lock(loaf_root: &Path) -> Result<OvenLoafGenerationLo
     Ok(OvenLoafGenerationLock { file })
 }
 
-/// Materialize a compiler-owned loaf only when the active toolchain ships one that the selected policy authorizes.
-///
-/// `Ok(None)` means the requested unit is outside the installed Oven Alpha envelope. It is intentionally distinct
-/// from a corrupt loaf, which is a fail-closed error rather than permission to use a generated-Cargo fallback.
-pub fn materialize_toolchain_loaf(
-    store: &OvenStore,
-    receipt: &OvenReceipt,
-    selection: OvenLoafSelection,
-) -> Result<Option<String>, OvenLoafError> {
-    select_toolchain_loaf(receipt, selection, &[], OvenLoafRegistryRequirement::LinkableLeaf)?
-        .map(|native| materialize_selected_toolchain_loaf(store, receipt, &native))
-        .transpose()
-}
-
-/// Materialize the narrowest receipt-compatible loaf whose own registry catalog satisfies every caller-selected
-/// registry dependency.
-///
-/// Direct Rust metadata is a feature-unified graph, not a set of interchangeable package filenames. When a caller
-/// imports a registry leaf absent from the narrowest provider-only loaf, selecting that loaf and borrowing an
-/// arbitrary compatible catalog can combine incompatible `serde`/`rand` instances. This selector stays within the
-/// compiler-shipped loafs, but chooses one coherent closure before any normal direct-rustc process starts.
-pub fn materialize_toolchain_loaf_for_registry_dependencies(
-    store: &OvenStore,
-    receipt: &OvenReceipt,
-    selection: OvenLoafSelection,
-    dependencies: &[DependencySpec],
-) -> Result<Option<String>, OvenLoafError> {
-    select_toolchain_loaf(
-        receipt,
-        selection,
-        dependencies,
-        OvenLoafRegistryRequirement::LinkableLeaf,
-    )?
-    .map(|native| materialize_selected_toolchain_loaf(store, receipt, &native))
-    .transpose()
-}
-
 /// Check whether one already validated compiler-native loaf can supply all caller-visible registry imports from its
 /// own exact catalog. A missing or incompatible leaf disqualifies this loaf; it never widens the caller to Cargo.
 fn registry_dependencies_supported_by_loaf(
@@ -2439,49 +2571,17 @@ fn registry_dependencies_supported_by_loaf(
         .all(|dependency| validate_sealed_registry_leaf(dependency, Some(&authority), profile).is_ok())
 }
 
-/// Check whether one validated Loaf owns compatible immutable sources for every caller registry dependency.
-fn registry_source_dependencies_supported_by_loaf(
-    native: &OvenToolchainLoaf,
-    dependencies: &[&DependencySpec],
-) -> bool {
-    dependencies.iter().all(|dependency| {
-        let Some(requirement) = dependency
-            .version
-            .as_deref()
-            .and_then(|version| semver::VersionReq::parse(version).ok())
-        else {
-            return false;
-        };
-        let package = dependency.package.as_deref().unwrap_or(&dependency.crate_name);
-        let required_features = dependency.features.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        let matching = native
-            .artifacts
-            .registry_sources
-            .iter()
-            .filter(|source| {
-                source.package == package
-                    && semver::Version::parse(&source.version).is_ok_and(|version| requirement.matches(&version))
-                    && required_features
-                        .iter()
-                        .all(|feature| source.features.iter().any(|selected| selected == *feature))
-            })
-            .count();
-        matching == 1
-    })
-}
-
 /// Registry capability required while choosing a compatible Loaf.
 #[derive(Clone, Copy)]
 enum OvenLoafRegistryRequirement {
     LinkableLeaf,
-    InspectionSource,
 }
 
-/// Resolve a compiler-native loaf for scheduler-owned direct execution without copying it into a mutable Oven store.
+/// Resolve a compiler-owned full-stdlib Loaf for direct execution without copying it into a mutable Oven store.
 ///
-/// This is deliberately narrower than [`materialize_toolchain_loaf`]. Callers must use it only for immutable
-/// compiler-suite toolchain data already selected and leased by the parent scheduler; it is not a general project
-/// artifact-path override or a dependency resolver.
+/// Selection validates the immutable generation, full receipt compatibility, and every caller-visible registry root
+/// before it returns a plan. It is not a dependency resolver: a project dependency absent from the sealed Loaf still
+/// requires an explicit project bake.
 pub fn resolve_toolchain_loaf(
     receipt: &OvenReceipt,
     selection: OvenLoafSelection,
@@ -2489,7 +2589,7 @@ pub fn resolve_toolchain_loaf(
     select_toolchain_loaf(receipt, selection, &[], OvenLoafRegistryRequirement::LinkableLeaf)
 }
 
-/// Resolve a scheduler-held compiler-native Loaf whose linkable catalog satisfies every caller registry root.
+/// Resolve a compiler-owned full-stdlib Loaf whose linkable catalog satisfies every caller registry root.
 pub fn resolve_toolchain_loaf_for_registry_dependencies(
     receipt: &OvenReceipt,
     selection: OvenLoafSelection,
@@ -2503,22 +2603,71 @@ pub fn resolve_toolchain_loaf_for_registry_dependencies(
     )
 }
 
-/// Resolve a scheduler-held compiler-native Loaf whose source authority satisfies every caller-selected registry root.
+/// Resolve one compiler-shipped Loaf by the content address recorded in a project extension payload.
 ///
-/// This is the immutable-suite counterpart to
-/// [`materialize_toolchain_loaf_for_registry_dependencies`]. It keeps nested suite children on the parent
-/// lease while preserving the same single compatibility-domain rule as ordinary bounded-store consumers.
+/// This is intentionally stricter than ordinary compatible-Loaf selection.  An extension is valid only with the
+/// exact base it was partitioned against; choosing a newer or merely similarly capable Loaf could redirect a
+/// direct-Rustc relative path to different metadata.  The returned value retains the generation lock until its
+/// consuming execution finishes.
+pub fn resolve_toolchain_loaf_by_identity(
+    receipt: &OvenReceipt,
+    loaf_identity: &str,
+) -> Result<Option<OvenToolchainLoaf>, OvenLoafError> {
+    let loaf_root = crate::toolchain_layout::resolve_toolchain_data_path(Path::new(TOOLCHAIN_LOAF_RELATIVE_ROOT));
+    if !loaf_root.join("envelope.json").is_file() {
+        return Ok(None);
+    }
+    let generation_lock = acquire_loaf_generation_lock(&loaf_root)?;
+    for loaf_path in committed_loaf_metadata_paths_for_authority(&loaf_root, OvenLoafMemberRole::CompiledClosure)? {
+        if loaf_file_identity(&loaf_path)? != loaf_identity {
+            continue;
+        }
+        return loaf_from_loaf_with_lock(
+            receipt,
+            &loaf_path,
+            OvenLoafSelection::CompilerOwnedProviderSuperset,
+            Some(generation_lock),
+        )
+        .map(Some);
+    }
+    Ok(None)
+}
+
+/// Resolve a scheduler-held source-authority Loaf whose immutable source catalog satisfies every registry root.
+///
+/// Source inspection must not widen direct-`rustc` linkage. This selector therefore chooses only envelope members
+/// explicitly marked [`OvenLoafMemberRole::SourceAuthority`], while normal commands continue to select one coherent
+/// compiled closure through [`resolve_toolchain_loaf_for_registry_dependencies`].
 pub fn resolve_toolchain_loaf_for_registry_sources(
     receipt: &OvenReceipt,
-    selection: OvenLoafSelection,
     dependencies: &[DependencySpec],
 ) -> Result<Option<OvenToolchainLoaf>, OvenLoafError> {
-    select_toolchain_loaf(
-        receipt,
-        selection,
-        dependencies,
-        OvenLoafRegistryRequirement::InspectionSource,
-    )
+    let registry_dependencies = dependencies
+        .iter()
+        .filter(|dependency| matches!(dependency.source, DependencySource::Registry))
+        .collect::<Vec<_>>();
+    let loaf_root = crate::toolchain_layout::resolve_toolchain_data_path(Path::new(TOOLCHAIN_LOAF_RELATIVE_ROOT));
+    if !loaf_root.join("envelope.json").is_file() {
+        return Ok(None);
+    }
+    let generation_lock = acquire_loaf_generation_lock(&loaf_root)?;
+    let mut candidates = Vec::new();
+    for loaf_path in committed_loaf_metadata_paths_for_authority(&loaf_root, OvenLoafMemberRole::SourceAuthority)? {
+        let loaf = read_loaf(&loaf_path)?;
+        if loaf.schema_version != OVEN_LOAF_SCHEMA_VERSION
+            || loaf.plan.intent != receipt.intent
+            || !loaf.compatibility.authorizes_source_authority(receipt)?
+            || !registry_source_dependencies_supported_by_catalog(&loaf.plan.registry_sources, &registry_dependencies)
+        {
+            continue;
+        }
+        candidates.push((loaf.plan.registry_sources.len(), loaf_path));
+    }
+    candidates.sort();
+    let Some((_, loaf_path)) = candidates.into_iter().next() else {
+        return Ok(None);
+    };
+    source_authority_loaf_from_loaf_with_lock(receipt, &loaf_path, Some(generation_lock)).map(Some)
 }
 
 /// Select one receipt-compatible compiler-owned Loaf under a shared generation lock.
@@ -2547,9 +2696,6 @@ fn select_toolchain_loaf(
             OvenLoafRegistryRequirement::LinkableLeaf => {
                 registry_dependencies_supported_by_loaf(&native, &registry_dependencies, &receipt.intent.profile)
             }
-            OvenLoafRegistryRequirement::InspectionSource => {
-                registry_source_dependencies_supported_by_loaf(&native, &registry_dependencies)
-            }
         };
         return Ok(supported.then_some(native));
     }
@@ -2558,23 +2704,23 @@ fn select_toolchain_loaf(
     }
 
     let candidates = compatible_loaf_paths(&loaf_root, receipt)?;
-    let Some(candidate) =
-        select_compatible_loaf_with_registry_requirement(candidates, &registry_dependencies, |candidate| {
-            let native = loaf_from_loaf(
-                receipt,
-                &candidate.path,
-                OvenLoafSelection::CompilerOwnedProviderSuperset,
-            )?;
-            Ok(match registry_requirement {
-                OvenLoafRegistryRequirement::LinkableLeaf => {
-                    registry_dependencies_supported_by_loaf(&native, &registry_dependencies, &receipt.intent.profile)
-                }
-                OvenLoafRegistryRequirement::InspectionSource => {
-                    registry_source_dependencies_supported_by_loaf(&native, &registry_dependencies)
-                }
-            })
-        })?
-    else {
+    let mut supported = Vec::new();
+    for candidate in candidates {
+        let native = loaf_from_loaf(
+            receipt,
+            &candidate.path,
+            OvenLoafSelection::CompilerOwnedProviderSuperset,
+        )?;
+        let candidate_supported = match registry_requirement {
+            OvenLoafRegistryRequirement::LinkableLeaf => {
+                registry_dependencies_supported_by_loaf(&native, &registry_dependencies, &receipt.intent.profile)
+            }
+        };
+        if candidate_supported {
+            supported.push(candidate);
+        }
+    }
+    let Some(candidate) = select_most_specific_compatible_loaf(supported) else {
         return Ok(None);
     };
     loaf_from_loaf_with_lock(
@@ -2586,39 +2732,10 @@ fn select_toolchain_loaf(
     .map(Some)
 }
 
-/// Copy one already-selected compiler Loaf into the caller's bounded store without reselecting compatibility.
-fn materialize_selected_toolchain_loaf(
-    store: &OvenStore,
-    receipt: &OvenReceipt,
-    native: &OvenToolchainLoaf,
-) -> Result<String, OvenLoafError> {
-    let materialized_files = native
-        .artifacts
-        .materialized_artifacts(&native.artifact_root, &receipt.intent)?
-        .into_iter()
-        .map(|artifact| OvenArtifactMaterializedFile {
-            source_path: artifact.source_path,
-            relative_path: artifact.relative_path,
-        })
-        .collect::<Vec<_>>();
-    let payload = serde_json::to_vec(&native.artifacts).map_err(|error| OvenLoafError::InvalidLoaf {
-        path: native.artifact_root.join("loaf.json"),
-        message: format!("could not serialize direct-rustc plan: {error}"),
-    })?;
-    let artifact = store.publish(&OvenArtifactPublishRequest {
-        receipt: receipt.clone(),
-        domain: loaf_domain(&receipt.build_unit_identity),
-        kind: OvenArtifactKind::DirectRustcPlan,
-        payload,
-        materialized_files,
-    })?;
-    Ok(artifact.identity)
-}
-
 /// Return every compiler-owned loaf that authorizes the narrow runtime-provider subset rule.
 fn compatible_loaf_paths(loaf_root: &Path, receipt: &OvenReceipt) -> Result<Vec<CompatibleLoaf>, OvenLoafError> {
     let mut candidates = Vec::new();
-    for loaf_path in committed_loaf_metadata_paths(loaf_root)? {
+    for loaf_path in committed_loaf_metadata_paths_for_authority(loaf_root, OvenLoafMemberRole::CompiledClosure)? {
         let loaf = read_loaf(&loaf_path)?;
         if loaf.schema_version != OVEN_LOAF_SCHEMA_VERSION || loaf.build_unit_identity == receipt.build_unit_identity {
             continue;
@@ -2648,9 +2765,10 @@ fn select_most_specific_compatible_loaf(mut candidates: Vec<CompatibleLoaf>) -> 
 
 /// Select the narrowest compatible Loaf after satisfying any caller-visible registry requirement.
 ///
-/// A registry-free caller has no catalog predicate to prove, so it must not materialize every compatible immutable
-/// closure merely to evaluate an empty conjunction. The final caller always materializes the chosen Loaf below,
-/// preserving complete receipt, catalog, and trusted-path validation before Rustc receives any artifact path.
+/// A registry-free caller has no catalog predicate to prove, so it must not validate every compatible immutable
+/// closure merely to evaluate an empty conjunction. The final caller validates only the selected Loaf before Rustc
+/// receives any artifact path.
+#[cfg(test)]
 fn select_compatible_loaf_with_registry_requirement(
     candidates: Vec<CompatibleLoaf>,
     registry_dependencies: &[&DependencySpec],
@@ -2668,51 +2786,14 @@ fn select_compatible_loaf_with_registry_requirement(
     Ok(select_most_specific_compatible_loaf(supported))
 }
 
-/// Validate and copy one explicitly located compiler-owned loaf into the bounded store.
+/// Verify that one Loaf authorizes `receipt` and resolve its compiler-owned direct-Rustc closure.
 ///
-/// This lower-level entry point exists for packaging and focused tests. Normal CLI commands use
-/// [`materialize_toolchain_loaf`], which derives the only accepted location from the active toolchain.
-pub fn materialize_loaf_from_loaf(
-    store: &OvenStore,
-    receipt: &OvenReceipt,
-    loaf_path: &Path,
-) -> Result<String, OvenLoafError> {
-    materialize_loaf_from_loaf_with_selection(store, receipt, loaf_path, OvenLoafSelection::Exact)
-}
-
-/// Validate and copy one loaf whose exact or explicit provider-subset authorization was selected internally.
-fn materialize_loaf_from_loaf_with_selection(
-    store: &OvenStore,
-    receipt: &OvenReceipt,
-    loaf_path: &Path,
-    selection: OvenLoafSelection,
-) -> Result<String, OvenLoafError> {
-    let loaf = loaf_from_loaf(receipt, loaf_path, selection)?;
-    let materialized_files = loaf
-        .artifacts
-        .materialized_artifacts(&loaf.artifact_root, &receipt.intent)?
-        .into_iter()
-        .map(|artifact| OvenArtifactMaterializedFile {
-            source_path: artifact.source_path,
-            relative_path: artifact.relative_path,
-        })
-        .collect::<Vec<_>>();
-    let payload = serde_json::to_vec(&loaf.artifacts).map_err(|error| OvenLoafError::InvalidLoaf {
-        path: loaf_path.to_path_buf(),
-        message: format!("could not serialize direct-rustc plan: {error}"),
-    })?;
-    let domain = loaf_domain(&receipt.build_unit_identity);
-    let artifact = store.publish(&OvenArtifactPublishRequest {
-        receipt: receipt.clone(),
-        domain,
-        kind: OvenArtifactKind::DirectRustcPlan,
-        payload,
-        materialized_files,
-    })?;
-    Ok(artifact.identity)
-}
-
-/// Verify that one loaf authorizes `receipt` and resolve its compiler-owned direct-Rustc closure.
+/// This is the normal consumer boundary. It verifies the content-addressed manifest, the receipt/compatibility
+/// relationship, the registry catalog, and every declared file used by the resulting Rustc plan. It intentionally
+/// does not recursively inspect unrelated files in the immutable directory: those files cannot become a Rustc input
+/// through the sealed manifest, while walking complete source trees on every command would make a prepared Loaf
+/// behave like a cold cache. [`committed_loaf_paths`] retains the explicit whole-Loaf audit for publication and
+/// inspection flows.
 fn loaf_from_loaf(
     receipt: &OvenReceipt,
     loaf_path: &Path,
@@ -2765,13 +2846,76 @@ fn loaf_from_loaf_with_lock(
         });
     }
     validate_registry_leaf_catalog(&loaf, loaf_path)?;
-    validate_loaf_declared_file_set(&loaf, loaf_path)?;
+    let loaf_identity = loaf_file_identity(loaf_path)?;
     let artifact_root = loaf_path.parent().ok_or_else(|| OvenLoafError::InvalidLoaf {
         path: loaf_path.to_path_buf(),
         message: "loaf file has no parent directory".to_string(),
     })?;
     let artifact_plan = loaf.plan.materialize_trusted_store(artifact_root, &receipt.intent)?;
     Ok(OvenToolchainLoaf {
+        loaf_identity,
+        loaf_build_unit_identity: loaf.build_unit_identity,
+        artifacts: loaf.plan,
+        registry_leaves: loaf.registry_leaves,
+        artifact_root: artifact_root.to_path_buf(),
+        artifact_plan,
+        _generation_lock: generation_lock,
+    })
+}
+
+/// Resolve a receipt-compatible source-authority Loaf without treating its catalog as a linkable closure.
+///
+/// The envelope has already restricted this path to a source-authority member. This second verification makes that
+/// role meaningful at the trust boundary: source inspection accepts exact runtime provenance and intent, while
+/// direct-`rustc` callers must still use [`loaf_from_loaf_with_lock`] and its provider/leaf compatibility checks.
+/// Like executable selection, this validates only manifest-declared source and artifact paths; an explicit
+/// whole-Loaf audit owns undeclared-file discovery.
+fn source_authority_loaf_from_loaf_with_lock(
+    receipt: &OvenReceipt,
+    loaf_path: &Path,
+    generation_lock: Option<OvenLoafGenerationLock>,
+) -> Result<OvenToolchainLoaf, OvenLoafError> {
+    receipt.verify_identity().map_err(|error| OvenLoafError::InvalidLoaf {
+        path: loaf_path.to_path_buf(),
+        message: format!("requested receipt is invalid: {error}"),
+    })?;
+    let loaf = read_loaf(loaf_path)?;
+    if loaf.schema_version != OVEN_LOAF_SCHEMA_VERSION {
+        return Err(OvenLoafError::InvalidLoaf {
+            path: loaf_path.to_path_buf(),
+            message: format!(
+                "schema version {} is unsupported (expected {})",
+                loaf.schema_version, OVEN_LOAF_SCHEMA_VERSION
+            ),
+        });
+    }
+    if !loaf.compatibility.authorizes_source_authority(receipt)? {
+        return Err(OvenLoafError::InvalidLoaf {
+            path: loaf_path.to_path_buf(),
+            message: "source authority does not authorize the requested runtime provenance".to_string(),
+        });
+    }
+    if loaf.plan.intent != receipt.intent {
+        return Err(OvenLoafError::InvalidLoaf {
+            path: loaf_path.to_path_buf(),
+            message: "source-authority direct-rustc intent does not authorize the requested receipt".to_string(),
+        });
+    }
+    if loaf.plan.registry_leaves != loaf.registry_leaves {
+        return Err(OvenLoafError::InvalidLoaf {
+            path: loaf_path.to_path_buf(),
+            message: "source-authority registry catalog does not match its copied direct-rustc plan".to_string(),
+        });
+    }
+    validate_registry_leaf_catalog(&loaf, loaf_path)?;
+    let loaf_identity = loaf_file_identity(loaf_path)?;
+    let artifact_root = loaf_path.parent().ok_or_else(|| OvenLoafError::InvalidLoaf {
+        path: loaf_path.to_path_buf(),
+        message: "source-authority loaf file has no parent directory".to_string(),
+    })?;
+    let artifact_plan = loaf.plan.materialize_trusted_store(artifact_root, &receipt.intent)?;
+    Ok(OvenToolchainLoaf {
+        loaf_identity,
         loaf_build_unit_identity: loaf.build_unit_identity,
         artifacts: loaf.plan,
         registry_leaves: loaf.registry_leaves,
@@ -2783,7 +2927,7 @@ fn loaf_from_loaf_with_lock(
 
 /// Validate a stored Loaf independently of a generated-project receipt.
 ///
-/// The envelope manifest binds the Loaf identity to canonical compiler, SDK, toolchain, lock, and fixture evidence.
+/// The envelope manifest binds the Loaf identity to release-family SDK, toolchain, lock, and fixture evidence.
 /// This check then verifies the immutable payload itself, allowing a complete warm baker invocation to avoid
 /// rerunning compiler behaviour merely to rediscover an already-bound receipt.
 pub(crate) fn validate_stored_loaf(
@@ -3156,14 +3300,6 @@ fn read_loaf(loaf_path: &Path) -> Result<OvenLoaf, OvenLoafError> {
     })
 }
 
-/// Keep one native compatibility identity in a stable, path-safe capacity domain.
-fn loaf_domain(build_unit_identity: &str) -> String {
-    let identity = build_unit_identity
-        .strip_prefix("sha256:")
-        .unwrap_or(build_unit_identity);
-    format!("Loaf-{identity}")
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -3176,28 +3312,76 @@ mod tests {
     use super::{
         CompatibleLoaf, OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf,
         OvenLoafCompatibility, OvenLoafEnvelope, OvenLoafEnvelopeManifest, OvenLoafEnvelopeMember, OvenLoafError,
-        OvenLoafFixtureAction, OvenLoafSelection, acquire_exclusive_loaf_generation_lock, acquire_loaf_generation_lock,
-        committed_loaf_envelope_identity, committed_loaf_paths, digest_runtime_crate_source,
-        loaf_envelope_inspection_packages, loaf_envelope_specifications, loaf_from_loaf, materialize_loaf_from_loaf,
-        materialize_loaf_from_loaf_with_selection, merge_loaf_inspection_sources,
-        registry_source_dependencies_supported_by_loaf, run_bounded_loaf_cargo, select_most_specific_compatible_loaf,
+        OvenLoafFixtureAction, OvenLoafMemberRole, OvenLoafSelection, acquire_exclusive_loaf_generation_lock,
+        acquire_loaf_generation_lock, committed_loaf_envelope_compatibility_identity, committed_loaf_paths,
+        digest_runtime_crate_source, loaf_envelope_inspection_packages, loaf_envelope_specifications, loaf_from_loaf,
+        merge_loaf_inspection_sources, registry_source_dependencies_supported_by_catalog, run_bounded_loaf_cargo,
+        seal_registry_lock_from_temporary_store, select_most_specific_compatible_loaf, validate_loaf_declared_file_set,
     };
     use crate::manifest::{DependencySource, DependencySpec};
     use crate::oven::legacy_cargo::OvenLegacyCargoInspectionSource;
     use crate::oven::rustc::{
-        OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OvenRustcArtifactExtern, OvenRustcArtifactManifest,
-        OvenRustcArtifactPlan, OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcRegistrySourcePackage,
-        OvenRustcSupportingArtifact, select_direct_rustc_plan_identity,
+        OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenRustcArtifactExtern,
+        OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcRegistryLeaf, OvenRustcRegistrySource,
+        OvenRustcRegistrySourcePackage, OvenRustcSupportingArtifact,
     };
-    use crate::oven::store::{OvenStore, OvenStoreLimits};
     use crate::oven::{OvenGeneratedProjectRequest, digest_bytes, digest_source_tree, receipt_generated_project};
+    use incan_core::lang::stdlib::{self, StdlibExtraCrateSource};
+
+    /// Return the canonical standard-library modules owned by checked SDK component sources.
+    ///
+    /// Component entrypoints are the source-of-truth provider surface. Normalizing their `*.prelude` implementation
+    /// modules to their public facade mirrors provider publication, while `std.interop` is the intentionally
+    /// source-less vocabulary-backed provider component.
+    fn checked_stdlib_component_modules() -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
+        let component_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/components");
+        let mut modules = BTreeSet::from(["std.interop".to_string()]);
+        for entry in fs::read_dir(&component_root)? {
+            let entry = entry?;
+            let source = entry.path().join("src/lib.incn");
+            if !source.is_file() {
+                continue;
+            }
+            for line in fs::read_to_string(&source)?.lines() {
+                let Some(import) = line.trim().strip_prefix("import ") else {
+                    continue;
+                };
+                let module = import
+                    .split_whitespace()
+                    .next()
+                    .ok_or("stdlib component import has no module path")?;
+                let module = match module.strip_suffix(".prelude") {
+                    Some(facade) => facade,
+                    None => module,
+                };
+                modules.insert(format!("std.{module}"));
+            }
+        }
+        Ok(modules)
+    }
+
+    /// Return the standard-library imports a checked complete-stdlib fixture declares.
+    fn checked_stdlib_fixture_imports(source: &str) -> BTreeSet<String> {
+        source
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let module = line
+                    .strip_prefix("import ")
+                    .or_else(|| line.strip_prefix("from "))?
+                    .split_whitespace()
+                    .next()?;
+                module.starts_with("std.").then(|| module.to_string())
+            })
+            .collect()
+    }
 
     #[cfg(unix)]
     #[test]
     fn loaf_capacity_abort_terminates_fake_cargo_descendants() -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::PermissionsExt;
         use std::process::Command;
-        use std::time::Instant;
+        use std::time::{Duration, Instant};
 
         let fixture = tempfile::tempdir()?;
         let capacity_root = fixture.path().join("capacity");
@@ -3236,7 +3420,7 @@ mod tests {
         );
         let pid = fs::read_to_string(descendant_pid)?.trim().parse::<u32>()?;
         for _ in 0..100 {
-            if !crate::oven::process::process_exists(pid)? {
+            if !crate::oven::process::process_is_running(pid)? {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(5));
@@ -3298,6 +3482,7 @@ mod tests {
                     label: "one".to_string(),
                     profile: "release".to_string(),
                     action: "build".to_string(),
+                    role: OvenLoafMemberRole::CompiledClosure,
                     build_unit_identity: "sha256:one".to_string(),
                     loaf_identity: committed_identity,
                     plan_identity: digest_bytes(&serde_json::to_vec(&committed_loaf.plan)?),
@@ -3342,28 +3527,65 @@ mod tests {
     }
 
     #[test]
-    fn committed_envelope_identity_is_a_cheap_typed_suite_reuse_key() -> Result<(), Box<dyn std::error::Error>> {
+    fn committed_envelope_compatibility_tracks_members_not_generation_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
-        let generation_identity = digest_bytes(b"complete compiler-suite generation");
-        fs::write(
-            root.path().join("envelope.json"),
-            serde_json::to_vec(&OvenLoafEnvelopeManifest {
-                schema_version: OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION,
-                envelope: "compiler-suite".to_string(),
-                generation_identity: generation_identity.clone(),
-                evidence: BTreeMap::new(),
-                loafs: Vec::new(),
-            })?,
-        )?;
+        let first_member = OvenLoafEnvelopeMember {
+            label: "foundation-debug".to_string(),
+            profile: "debug".to_string(),
+            action: "run".to_string(),
+            role: OvenLoafMemberRole::CompiledClosure,
+            build_unit_identity: digest_bytes(b"foundation-build-unit"),
+            loaf_identity: digest_bytes(b"foundation-loaf"),
+            plan_identity: digest_bytes(b"foundation-plan"),
+            logical_bytes: 1,
+            physical_bytes: 1,
+            path: PathBuf::from("generations/first/foundation.loaf/loaf.json"),
+        };
+        let write_manifest =
+            |generation_identity: String, compiler_evidence: String, member: OvenLoafEnvelopeMember| {
+                fs::write(
+                    root.path().join("envelope.json"),
+                    serde_json::to_vec(&OvenLoafEnvelopeManifest {
+                        schema_version: OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION,
+                        envelope: "compiler-suite".to_string(),
+                        generation_identity,
+                        evidence: BTreeMap::from([("compiler_executable_digest".to_string(), compiler_evidence)]),
+                        loafs: vec![member],
+                    })?,
+                )
+            };
 
+        write_manifest(
+            digest_bytes(b"generation-one"),
+            digest_bytes(b"compiler-one"),
+            first_member.clone(),
+        )?;
+        let first = committed_loaf_envelope_compatibility_identity(root.path(), "compiler-suite")?;
+
+        write_manifest(
+            digest_bytes(b"generation-two"),
+            digest_bytes(b"compiler-two"),
+            first_member.clone(),
+        )?;
         assert_eq!(
-            committed_loaf_envelope_identity(root.path(), "compiler-suite")?,
-            generation_identity
+            committed_loaf_envelope_compatibility_identity(root.path(), "compiler-suite")?,
+            first,
+            "a changed compiler executable may require a new envelope generation but must not rebuild unchanged members"
         );
-        let error = committed_loaf_envelope_identity(root.path(), "release")
-            .err()
-            .ok_or("a release consumer must reject compiler-suite envelope identity")?;
-        assert!(error.to_string().contains("expected `release`"));
+
+        let mut changed_member = first_member;
+        changed_member.plan_identity = digest_bytes(b"changed-foundation-plan");
+        write_manifest(
+            digest_bytes(b"generation-three"),
+            digest_bytes(b"compiler-three"),
+            changed_member,
+        )?;
+        assert_ne!(
+            committed_loaf_envelope_compatibility_identity(root.path(), "compiler-suite")?,
+            first,
+            "a changed sealed member plan must invalidate compiler-suite reuse"
+        );
         Ok(())
     }
 
@@ -3389,38 +3611,106 @@ mod tests {
 
     #[test]
     fn built_in_envelopes_are_checked_complete_and_unambiguous() {
-        for (envelope, expected_len) in [(OvenLoafEnvelope::Release, 4), (OvenLoafEnvelope::CompilerSuite, 6)] {
+        for envelope in [OvenLoafEnvelope::Release, OvenLoafEnvelope::CompilerSuite] {
             let specifications = loaf_envelope_specifications(envelope);
-            assert_eq!(specifications.len(), expected_len);
+            assert_eq!(specifications.len(), 2);
             let identities = specifications
                 .iter()
                 .map(|specification| (specification.label, specification.profile))
                 .collect::<BTreeSet<_>>();
             assert_eq!(identities.len(), specifications.len());
+            assert_eq!(identities, BTreeSet::from([("stdlib", "debug"), ("stdlib", "release")]));
             for specification in specifications {
                 assert!(!specification.source.trim().is_empty());
                 assert!(!specification.manifest.trim().is_empty());
+                assert!(!specification.inspection_manifest.trim().is_empty());
                 assert!(matches!(specification.profile, "debug" | "release"));
                 assert!(
                     specification.profile != "debug" || specification.action != OvenLoafFixtureAction::Build,
                     "a debug Loaf fixture must use `run` so the canonical receipt records debug intent"
                 );
                 assert!(specification.manifest.contains(specification.project_name));
+                assert_eq!(
+                    specification.role,
+                    OvenLoafMemberRole::CompiledClosureAndSourceAuthority
+                );
+                assert!(specification.retain_complete_registry_leaves);
+                assert!(
+                    specification.retain_checked_direct_dependencies,
+                    "every `stdlib` Loaf must directly link the complete checked standard-library dependency surface"
+                );
+                for required_module in [
+                    "std.async.channel",
+                    "std.compression.zstd",
+                    "std.datetime",
+                    "std.datetime.runtime",
+                    "std.encoding.base64",
+                    "std.fs",
+                    "std.interop",
+                    "std.result",
+                    "std.serde",
+                    "std.telemetry",
+                    "std.traits.callable",
+                    "std.web",
+                    "std.web.routing",
+                ] {
+                    assert!(
+                        specification.source.contains(required_module),
+                        "the full release-version provider Loaf must retain `{required_module}`"
+                    );
+                }
+                for required_facade in ["std.datetime", "std.fs", "std.serde", "std.telemetry", "std.web"] {
+                    assert!(
+                        specification
+                            .source
+                            .lines()
+                            .any(|line| line.trim() == format!("import {required_facade}")),
+                        "the full release-version provider Loaf must activate the public `{required_facade}` facade"
+                    );
+                }
+                assert!(
+                    specification.source.contains("@route(\"/oven-loaf-provider\")"),
+                    "{envelope:?}/{:?} must exercise the web proc-macro provider rather than merely importing it",
+                    specification.label
+                );
             }
         }
         let release = loaf_envelope_specifications(OvenLoafEnvelope::Release);
-        let interop_profiles = release
+        let source_authority_profiles = release
             .iter()
-            .filter(|specification| specification.label.starts_with("interop-"))
+            .filter(|specification| specification.role.provides_source_authority())
             .map(|specification| specification.profile)
             .collect::<BTreeSet<_>>();
-        assert_eq!(interop_profiles, BTreeSet::from(["debug", "release"]));
+        assert_eq!(source_authority_profiles, BTreeSet::from(["debug", "release"]));
         assert!(
             release
                 .iter()
-                .filter(|specification| specification.label.starts_with("interop-"))
-                .all(|specification| specification.source.contains("from std.interop import c"))
+                .all(|specification| specification.role != OvenLoafMemberRole::SourceAuthority)
         );
+    }
+
+    #[test]
+    fn complete_stdlib_loaf_fixtures_cover_every_checked_component_module() -> Result<(), Box<dyn std::error::Error>> {
+        let expected_modules = checked_stdlib_component_modules()?;
+        for envelope in [OvenLoafEnvelope::Release, OvenLoafEnvelope::CompilerSuite] {
+            for specification in loaf_envelope_specifications(envelope) {
+                let fixture_modules = checked_stdlib_fixture_imports(specification.source);
+                let missing = expected_modules
+                    .difference(&fixture_modules)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !missing.is_empty() {
+                    return Err(format!(
+                        "{envelope:?}/{}/{} complete stdlib fixture omits checked provider modules: {}",
+                        specification.label,
+                        specification.profile,
+                        missing.join(", ")
+                    )
+                    .into());
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -3429,48 +3719,103 @@ mod tests {
         let specifications = loaf_envelope_specifications(OvenLoafEnvelope::CompilerSuite);
         let packages = loaf_envelope_inspection_packages(OvenLoafEnvelope::CompilerSuite)?;
         assert_eq!(
+            loaf_envelope_inspection_packages(OvenLoafEnvelope::Release)?,
+            packages,
+            "the release and compiler-suite `stdlib` Loafs must declare one identical complete standard-library dependency surface"
+        );
+        let mut expected_packages = stdlib::extra_crate_deps()
+            .filter(|dependency| matches!(dependency.source, StdlibExtraCrateSource::Version(_)))
+            .map(|dependency| {
+                stdlib::extra_crate_package_alias(dependency.crate_name)
+                    .unwrap_or(dependency.crate_name)
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+        expected_packages.extend([
+            "bitflags".to_string(),
+            "semver".to_string(),
+            "serde".to_string(),
+            "serde_json".to_string(),
+            "uuid".to_string(),
+        ]);
+        assert_eq!(
             packages
                 .iter()
-                .map(|package| package.package.as_str())
-                .collect::<Vec<_>>(),
-            ["bitflags", "rand", "semver", "serde", "serde_json", "uuid"]
+                .map(|package| package.package.clone())
+                .collect::<BTreeSet<_>>(),
+            expected_packages
         );
-        let foundation = specifications
+        let provider = specifications
             .iter()
-            .find(|specification| specification.label == "foundation-debug")
-            .ok_or("missing foundation Loaf")?;
+            .find(|specification| specification.label == "stdlib" && specification.profile == "debug")
+            .ok_or("missing compiler-suite standard-provider Loaf")?;
         assert_eq!(
-            foundation
+            provider
                 .inspection_packages()?
                 .iter()
-                .map(|package| package.package.as_str())
-                .collect::<Vec<_>>(),
-            ["bitflags", "rand", "semver", "serde", "serde_json", "uuid"]
+                .map(|package| package.package.clone())
+                .collect::<BTreeSet<_>>(),
+            expected_packages
         );
         for imported_crate in ["rand", "uuid"] {
             assert!(
-                foundation.source.contains(&format!("from rust::{imported_crate}")),
-                "the foundation Loaf must retain an actual checked source import for `{imported_crate}` so reachable dependency resolution produces its direct-rustc leaf"
+                provider.source.contains(&format!("from rust::{imported_crate}")),
+                "the compiler-suite provider Loaf must retain an actual checked source import for `{imported_crate}` so reachable dependency resolution produces its direct-rustc leaf"
             );
         }
         assert!(
-            foundation.source.contains("from std.serde"),
-            "the foundation Loaf must retain the checked stdlib serde surface that produces its derive-enabled direct-rustc leaf"
+            provider.source.contains("std.serde"),
+            "the compiler-suite provider Loaf must retain the checked stdlib serde surface that produces its derive-enabled direct-rustc leaf"
         );
         for reachable_use in ["Uuid.new_v4()", "thread_rng()", ".gen_range("] {
             assert!(
-                foundation.source.contains(reachable_use),
-                "the foundation Loaf must exercise `{reachable_use}` so its declared raw Rust dependency is usable rather than merely imported"
+                provider.source.contains(reachable_use),
+                "the compiler-suite provider Loaf must exercise `{reachable_use}` so its declared raw Rust dependency is usable rather than merely imported"
             );
         }
-        assert!(foundation.seals_envelope_inspection_sources);
-        for specification in specifications
-            .iter()
-            .filter(|specification| !specification.label.starts_with("foundation"))
-        {
-            assert!(specification.inspection_packages()?.is_empty());
-            assert!(!specification.seals_envelope_inspection_sources);
-        }
+        assert!(provider.role.provides_source_authority());
+        assert!(specifications.iter().all(|specification| {
+            specification.role == OvenLoafMemberRole::CompiledClosureAndSourceAuthority
+                && specification.retain_complete_registry_leaves
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn loaf_export_retains_the_publisher_registry_lock_for_registry_sources() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let publisher_store = tempfile::tempdir()?;
+        let publisher_lock = publisher_store.path().join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH);
+        let publisher_parent = publisher_lock.parent().ok_or("publisher registry lock has no parent")?;
+        fs::create_dir_all(publisher_parent)?;
+        let lock_bytes = b"version = 4\n";
+        fs::write(&publisher_lock, lock_bytes)?;
+
+        let receipt = runtime_receipt_for_plan()?;
+        let mut plan = empty_manifest(&receipt);
+        plan.registry_sources.push(OvenRustcRegistrySourcePackage {
+            package: "blake2".to_string(),
+            version: "0.10.6".to_string(),
+            features: vec!["std".to_string()],
+            source: OvenRustcRegistrySource {
+                registry: "registry+https://example.invalid/index".to_string(),
+                checksum: "blake2-checksum".to_string(),
+                relative_root: "registry-sources/blake2-0.10.6".to_string(),
+                digest: "sha256:blake2-source".to_string(),
+            },
+        });
+        let loaf_staging = tempfile::tempdir()?;
+
+        seal_registry_lock_from_temporary_store(&mut plan, publisher_store.path(), loaf_staging.path())?;
+
+        assert_eq!(
+            fs::read(loaf_staging.path().join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH))?,
+            lock_bytes
+        );
+        assert!(plan.supporting_artifacts.iter().any(|artifact| {
+            artifact.relative_path == OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH
+                && artifact.digest == digest_bytes(lock_bytes)
+        }));
         Ok(())
     }
 
@@ -3558,6 +3903,7 @@ mod tests {
             },
         });
         let native = super::OvenToolchainLoaf {
+            loaf_identity: "sha256:fixture-loaf".to_string(),
             loaf_build_unit_identity: receipt.build_unit_identity,
             artifacts,
             registry_leaves: Vec::new(),
@@ -3581,7 +3927,10 @@ mod tests {
             package: Some("regex".to_string()),
         };
 
-        assert!(registry_source_dependencies_supported_by_loaf(&native, &[&dependency]));
+        assert!(registry_source_dependencies_supported_by_catalog(
+            &native.artifacts.registry_sources,
+            &[&dependency]
+        ));
         assert!(native.registry_leaves.is_empty());
         Ok(())
     }
@@ -3617,12 +3966,10 @@ mod tests {
     }
 
     #[test]
-    fn a_toolchain_loaf_materializes_once_and_reuses_across_clean_project_receipts()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn a_toolchain_loaf_serves_clean_project_receipts_without_a_store_copy() -> Result<(), Box<dyn std::error::Error>> {
         let first = tempfile::tempdir()?;
         let second = tempfile::tempdir()?;
         let loaf = tempfile::tempdir()?;
-        let store_root = tempfile::tempdir()?;
         fs::write(first.path().join("main.rs"), "fn main() {}\n")?;
         fs::write(second.path().join("main.rs"), "fn main() { println!(\"second\"); }\n")?;
         let receipt_for = |root: &Path| {
@@ -3669,26 +4016,28 @@ mod tests {
         };
         let loaf_path = loaf.path().join("loaf.json");
         fs::write(&loaf_path, serde_json::to_vec(&loaf_payload)?)?;
-        let store = OvenStore::new(
-            store_root.path(),
-            OvenStoreLimits::new(128 * 1024, 128 * 1024, 64 * 1024),
-        );
-
         let resolved = loaf_from_loaf(&second_receipt, &loaf_path, OvenLoafSelection::Exact)?;
         assert_eq!(resolved.loaf_build_unit_identity, first_receipt.build_unit_identity);
         assert_eq!(resolved.artifact_root, loaf.path());
         assert!(resolved.artifact_plan.externs.is_empty());
 
+        // An immutable consumer validates only the manifest-declared files it can pass to Rustc. An unrelated
+        // extra file therefore cannot influence execution and must not trigger a full recursive directory walk on
+        // every normal command. The explicit whole-Loaf audit below retains the stronger undeclared-file check.
         fs::write(loaf.path().join("unsealed-extra.bin"), "not part of the Loaf")?;
-        let error = match loaf_from_loaf(&second_receipt, &loaf_path, OvenLoafSelection::Exact) {
-            Ok(_) => return Err("selected Loaf with an undeclared file must fail closed".into()),
+        let selection = loaf_from_loaf(&second_receipt, &loaf_path, OvenLoafSelection::Exact)?;
+        assert_eq!(selection.artifact_root, loaf.path());
+        let error = match validate_loaf_declared_file_set(&loaf_payload, &loaf_path) {
+            Ok(()) => return Err("a whole-Loaf audit must reject undeclared files".into()),
             Err(error) => error,
         };
         assert!(error.to_string().contains("undeclared file"));
         fs::remove_file(loaf.path().join("unsealed-extra.bin"))?;
 
-        let identity = materialize_loaf_from_loaf(&store, &first_receipt, &loaf_path)?;
-        assert_eq!(select_direct_rustc_plan_identity(&store, &second_receipt)?, identity);
+        let first_selection = loaf_from_loaf(&first_receipt, &loaf_path, OvenLoafSelection::Exact)?;
+        let second_selection = loaf_from_loaf(&second_receipt, &loaf_path, OvenLoafSelection::Exact)?;
+        assert_eq!(first_selection.artifact_root, loaf.path());
+        assert_eq!(second_selection.artifact_root, loaf.path());
         Ok(())
     }
 
@@ -3696,7 +4045,6 @@ mod tests {
     fn a_loaf_for_another_build_unit_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
         let project = tempfile::tempdir()?;
         let loaf = tempfile::tempdir()?;
-        let store_root = tempfile::tempdir()?;
         let source = project.path().join("main.rs");
         fs::write(&source, "fn main() {}\n")?;
         let receipt = receipt_generated_project(
@@ -3737,13 +4085,8 @@ mod tests {
         };
         let loaf_path = loaf.path().join("loaf.json");
         fs::write(&loaf_path, serde_json::to_vec(&loaf_payload)?)?;
-        let store = OvenStore::new(
-            store_root.path(),
-            OvenStoreLimits::new(128 * 1024, 128 * 1024, 64 * 1024),
-        );
-
         assert!(matches!(
-            materialize_loaf_from_loaf(&store, &receipt, &loaf_path),
+            loaf_from_loaf(&receipt, &loaf_path, OvenLoafSelection::Exact),
             Err(OvenLoafError::InvalidLoaf { .. })
         ));
         Ok(())
@@ -3833,7 +4176,6 @@ mod tests {
     fn a_standard_testing_loaf_authorizes_the_core_provider_subset() -> Result<(), Box<dyn std::error::Error>> {
         let project = tempfile::tempdir()?;
         let loaf_root = tempfile::tempdir()?;
-        let store_root = tempfile::tempdir()?;
         let source = project.path().join("main.rs");
         fs::write(&source, "fn main() {}\n")?;
         let core = runtime_receipt(&source, "", "empty-rust-dependencies", "empty-stdlib-features")?;
@@ -3867,18 +4209,8 @@ mod tests {
         };
         let loaf_path = loaf_root.path().join("loaf.json");
         fs::write(&loaf_path, serde_json::to_vec(&loaf_payload)?)?;
-        let store = OvenStore::new(
-            store_root.path(),
-            OvenStoreLimits::new(128 * 1024, 128 * 1024, 64 * 1024),
-        );
-
-        let identity = materialize_loaf_from_loaf_with_selection(
-            &store,
-            &core,
-            &loaf_path,
-            OvenLoafSelection::CompilerOwnedProviderSuperset,
-        )?;
-        assert_eq!(select_direct_rustc_plan_identity(&store, &core)?, identity);
+        let selected = loaf_from_loaf(&core, &loaf_path, OvenLoafSelection::CompilerOwnedProviderSuperset)?;
+        assert_eq!(selected.artifact_root, loaf_root.path());
         Ok(())
     }
 
@@ -4279,7 +4611,6 @@ mod tests {
         let loaf = tempfile::tempdir()?;
         let receipt = runtime_receipt_for_plan()?;
         let mut plan = empty_manifest(&receipt);
-
         super::copy_compiler_vocab_support_artifacts(
             &artifacts,
             &target_deps,
@@ -4294,8 +4625,24 @@ mod tests {
             artifacts.iter().any(|artifact| artifact == &profile_copy_canonical),
             "the named publisher's reported profile-root rlib must enter the direct-rustc closure"
         );
-        assert!(plan.externs.iter().any(|artifact| artifact.crate_name == "incan_vocab"));
-        assert!(plan.externs.iter().any(|artifact| artifact.crate_name == "serde_json"));
+        assert!(
+            plan.externs.is_empty(),
+            "compiler-only vocab roots must not become program externs"
+        );
+        let host_support = plan
+            .vocab_auxiliary_targets
+            .iter()
+            .find(|target| target.target == receipt.intent.target)
+            .ok_or("missing host compiler vocabulary auxiliary closure")?;
+        assert_eq!(
+            host_support
+                .externs
+                .iter()
+                .map(|artifact| artifact.crate_name.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["incan_vocab", "serde_json"]),
+            "the host vocabulary helper must retain its exact direct-Rustc roots outside the normal program plan"
+        );
         assert!(
             plan.supporting_artifacts
                 .iter()

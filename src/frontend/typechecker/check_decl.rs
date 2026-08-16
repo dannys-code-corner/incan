@@ -2367,13 +2367,26 @@ impl TypeChecker {
     /// Typecheck an inline test module declaration.
     fn check_test_module(&mut self, test_module: &TestModuleDecl) {
         self.symbols.enter_scope(ScopeKind::Block);
+        let outer_import_aliases = self.import_aliases.clone();
+        let inline_program = Program {
+            declarations: test_module.body.clone(),
+            ..Program::default()
+        };
+        self.import_aliases
+            .extend(crate::frontend::decorator_resolution::collect_import_aliases(
+                &inline_program,
+            ));
         let previous_validation_state = self.validate_source_type_names;
         self.validate_source_type_names = false;
         self.collect_declarations_for_check(&test_module.body);
         self.validate_source_type_names = previous_validation_state;
+        if let Some(semantics) = self.testing_marker_semantics.clone() {
+            self.collect_testing_fixture_names_from_decls(&test_module.body, &semantics);
+        }
         for decl in &test_module.body {
             self.check_declaration(decl);
         }
+        self.import_aliases = outer_import_aliases;
         self.symbols.exit_scope();
     }
 

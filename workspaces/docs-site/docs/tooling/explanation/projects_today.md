@@ -14,7 +14,7 @@ incan build path/to/main.incn
 
 Incan checks the source and generates caller-owned Rust, then Oven verifies the build receipt, selects and leases a compatible Loaf, and executes its stored direct-`rustc` plan. For the documented Alpha envelope, the normal command neither launches Cargo nor reads a Cargo target directory. A compatibility miss stops with actionable guidance rather than changing backend.
 
-Cargo currently remains at one explicit maintainer boundary: the hidden `incan oven legacy-cargo bake-loafs` command can prepare a supported Loaf envelope. That publication step is not part of an ordinary build, run, or test command. See [Oven Alpha](oven_alpha.md) for the rationale, architecture, and current limitations.
+Cargo currently remains at one explicit maintainer boundary: the internal release publisher can prepare a supported Loaf envelope. That publication step is not part of an ordinary build, run, or test command. See [Oven Alpha](oven_alpha.md) for the rationale, architecture, and current limitations.
 
 --8<-- "_snippets/callouts/no_install_fallback.md"
 

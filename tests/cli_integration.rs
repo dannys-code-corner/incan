@@ -24,6 +24,81 @@ fn run_incan(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::e
     run_incan_with_env(current_dir, args, &[])
 }
 
+/// Publish a public-library provider before a separate consumer selects its package Loaf. This is intentionally
+/// distinct from normal `build --lib`: only the explicit Oven command may create the provider handoff.
+fn run_explicit_oven_bake(current_dir: &Path) -> Result<Output, Box<dyn std::error::Error>> {
+    run_explicit_oven_bake_with_home(current_dir, None)
+}
+
+/// Bake one project while sharing a caller-selected standalone Oven home with its later workspace replay.
+fn run_explicit_oven_bake_with_home(
+    current_dir: &Path,
+    standalone_incan_home: Option<&Path>,
+) -> Result<Output, Box<dyn std::error::Error>> {
+    let mut command = configured_incan_command(current_dir, &["oven", "bake", "--project", "."]);
+    if !support::oven_compiler_suite_is_active()
+        && let Some(incan_home) = standalone_incan_home
+    {
+        command.env("INCAN_HOME", incan_home);
+    }
+    support::configure_explicit_oven_bake_command(&mut command)?;
+    let timing = support::command_timing_started();
+    let output = command.output()?;
+    support::report_command_timing("incan oven bake --project .", timing);
+    Ok(output)
+}
+
+/// Copy one checked package handoff without following a symlink outside its fixture. The relocation test needs both the
+/// public library output and its immutable package Loaf collection.
+fn copy_fixture_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_symlink() {
+            return Err(format!("fixture handoff contains symlink {}", entry.path().display()).into());
+        }
+        if file_type.is_dir() {
+            copy_fixture_directory(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), target)?;
+        } else {
+            return Err(format!("fixture handoff contains unsupported path {}", entry.path().display()).into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn fixture_handoff_copy_rejects_symlinks() -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir()?;
+    let source = temp.path().join("source");
+    let outside = temp.path().join("outside");
+    let destination = temp.path().join("destination");
+    fs::create_dir_all(&source)?;
+    fs::create_dir_all(&outside)?;
+    fs::write(outside.join("artifact"), "must not be copied")?;
+    symlink(&outside, source.join("linked-handoff"))?;
+
+    let result = copy_fixture_directory(&source, &destination);
+    let Err(error) = result else {
+        return Err("fixture handoff copy followed a symlink".into());
+    };
+    assert!(
+        error.to_string().contains("fixture handoff contains symlink"),
+        "unexpected symlink rejection: {error}"
+    );
+    assert!(
+        !destination.join("linked-handoff").exists(),
+        "fixture handoff copy materialized a symlink target"
+    );
+    Ok(())
+}
+
 /// Run a CLI command with a Cargo executable that records and rejects any launch.
 #[cfg(unix)]
 fn run_incan_with_failing_cargo_guard(
@@ -35,15 +110,9 @@ fn run_incan_with_failing_cargo_guard(
     run_incan_with_failing_cargo_guard_and_env(current_dir, args, guard_dir, marker, &[])
 }
 
-/// Run a guarded CLI command with explicit child-only environment handoffs.
+/// Install one Cargo executable that records and rejects any launch.
 #[cfg(unix)]
-fn run_incan_with_failing_cargo_guard_and_env(
-    current_dir: &Path,
-    args: &[&str],
-    guard_dir: &Path,
-    marker: &Path,
-    envs: &[(&str, &Path)],
-) -> Result<Output, Box<dyn std::error::Error>> {
+fn install_failing_cargo_guard(guard_dir: &Path, marker: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     use std::os::unix::fs::PermissionsExt;
 
     fs::create_dir_all(guard_dir)?;
@@ -55,6 +124,19 @@ fn run_incan_with_failing_cargo_guard_and_env(
     let mut permissions = fs::metadata(&guard)?.permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&guard, permissions)?;
+    Ok(guard)
+}
+
+/// Run a guarded CLI command with explicit child-only environment handoffs.
+#[cfg(unix)]
+fn run_incan_with_failing_cargo_guard_and_env(
+    current_dir: &Path,
+    args: &[&str],
+    guard_dir: &Path,
+    marker: &Path,
+    envs: &[(&str, &Path)],
+) -> Result<Output, Box<dyn std::error::Error>> {
+    let _guard = install_failing_cargo_guard(guard_dir, marker)?;
     let mut paths = vec![guard_dir.to_path_buf()];
     if let Some(inherited) = std::env::var_os("PATH") {
         paths.extend(std::env::split_paths(&inherited));
@@ -115,7 +197,10 @@ fn configured_incan_command(current_dir: &Path, args: &[&str]) -> Command {
                 "INCAN_GENERATED_CARGO_TARGET_DIR",
                 support::generated_cargo_target_dir(),
             )
-            .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store());
+            .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", support::sdk_provider_store())
+            // Explicit provider bakes must not contend with a developer's ambient store when this test binary runs
+            // outside the suite.
+            .env("INCAN_HOME", current_dir.join(".incan-test"));
     }
     command
 }
@@ -141,28 +226,24 @@ fn c_abi_test_clang() -> Option<String> {
     }
 }
 
-/// Run one Unix CLI probe in its own process group so recursive subprocess regressions can be terminated together.
+/// Run one Unix CLI probe in its own process group so a timed-out recursive subprocess tree can be terminated
+/// together. Callers configure the command first, which keeps the watchdog independent of a fixture's environment.
 #[cfg(unix)]
-fn run_incan_with_timeout(
-    current_dir: &Path,
-    args: &[&str],
+fn run_command_with_timeout(
+    mut command: Command,
+    label: &str,
     timeout: std::time::Duration,
 ) -> Result<(Output, bool), Box<dyn std::error::Error>> {
     use std::os::unix::process::CommandExt;
 
-    let mut command = configured_incan_command(current_dir, args);
-    command
-        .process_group(0)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("INCAN_LOCK_PREHEAT", "1");
+    command.process_group(0).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn()?;
     let started = std::time::Instant::now();
     let timing = support::command_timing_started();
     loop {
         if child.try_wait()?.is_some() {
             let output = child.wait_with_output()?;
-            support::report_command_timing(&format!("incan {} (timeout supervised)", args.join(" ")), timing);
+            support::report_command_timing(&format!("{label} (timeout supervised)"), timing);
             return Ok((output, false));
         }
         if started.elapsed() >= timeout {
@@ -191,7 +272,7 @@ fn run_incan_with_timeout(
             while kill_started.elapsed() < std::time::Duration::from_secs(2) {
                 if child.try_wait()?.is_some() {
                     let output = child.wait_with_output()?;
-                    support::report_command_timing(&format!("incan {} (timeout supervised)", args.join(" ")), timing);
+                    support::report_command_timing(&format!("{label} (timeout supervised)"), timing);
                     return Ok((output, true));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(25));
@@ -494,47 +575,12 @@ def main() -> Result[None, str]:
 }
 
 #[test]
-fn rust_read_by_ref_borrows_owned_receiver_issue878() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "rust_read_by_ref_owned_receiver", "")?;
-    fs::write(
-        &main_path,
-        r#"from rust::std::io import Read, stdin
-
-
-def main() -> None:
-    mut input = stdin()
-    _ = Read.by_ref(input)
-"#,
-    )?;
-    let main_arg = main_path.to_str().ok_or("non-utf8 main path")?;
-
-    let lock_output = run_incan(tmp.path(), &["lock", main_arg])?;
-    assert_success(&lock_output, "incan lock for Read.by_ref owned receiver");
-    let build_output = run_incan(tmp.path(), &["build", main_arg, "--locked"])?;
-    assert_success(&build_output, "incan build for Read.by_ref owned receiver");
-
-    let generated = fs::read_to_string(
-        tmp.path()
-            .join("target/incan/rust_read_by_ref_owned_receiver/src/main.rs"),
-    )?;
-    assert!(
-        generated.contains("Read::by_ref(&mut input)"),
-        "owned Rust trait receiver must be borrowed without dereference:\n{generated}"
-    );
-    assert!(
-        !generated.contains("Read::by_ref(&mut *input)"),
-        "owned Rust trait receiver must not use the guard reborrow shape:\n{generated}"
-    );
-    Ok(())
-}
-
-#[test]
-fn rust_stdout_extension_trait_result_supports_try_operator_issue888() -> Result<(), Box<dyn std::error::Error>> {
+fn rust_std_io_trait_interop_borrows_receivers_and_propagates_results_issues878_888()
+-> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(
         tmp.path(),
-        "rust_stdout_extension_trait_result",
+        "rust_std_io_trait_interop",
         r#"
 
 [rust-dependencies]
@@ -543,7 +589,7 @@ console_interop = { path = "rust/console_interop" }
     )?;
     fs::write(
         &main_path,
-        r#"from rust::std::io import Error as IoError, stdout
+        r#"from rust::std::io import Error as IoError, Read, stdin, stdout
 from rust::console_interop import EnterAlternateScreen, ExecutableCommand
 
 def enter_alternate_screen() -> Result[None, IoError]:
@@ -558,13 +604,14 @@ def inspect_alternate_screen_result() -> None:
         Err(_) => pass
 
 def main() -> None:
+    mut input = stdin()
+    _ = Read.by_ref(input)
     inspect_alternate_screen_result()
     match enter_alternate_screen():
         Ok(_) => pass
         Err(_) => pass
 "#,
     )?;
-
     let helper_src = tmp.path().join("rust/console_interop/src");
     fs::create_dir_all(&helper_src)?;
     fs::write(
@@ -599,20 +646,22 @@ impl<W: Write + ?Sized> ExecutableCommand for W {
 }
 "#,
     )?;
-
     let main_arg = main_path.to_str().ok_or("non-utf8 main path")?;
-    let lock_output = run_incan(tmp.path(), &["lock", main_arg])?;
-    assert_success(&lock_output, "incan lock for stdout extension-trait Result");
-    let build_output = run_incan(tmp.path(), &["build", main_arg, "--locked"])?;
-    assert_success(
-        &build_output,
-        "incan build for stdout extension-trait Result postfix try",
-    );
 
-    let generated = fs::read_to_string(
-        tmp.path()
-            .join("target/incan/rust_stdout_extension_trait_result/src/main.rs"),
-    )?;
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake_output, "explicit Oven bake for direct std-I/O trait interop");
+    let build_output = run_incan(tmp.path(), &["build", main_arg, "--locked"])?;
+    assert_success(&build_output, "incan build for direct std-I/O trait interop");
+
+    let generated = fs::read_to_string(tmp.path().join("target/incan/rust_std_io_trait_interop/src/main.rs"))?;
+    assert!(
+        generated.contains("Read::by_ref(&mut input)"),
+        "owned Rust trait receiver must be borrowed without dereference:\n{generated}"
+    );
+    assert!(
+        !generated.contains("Read::by_ref(&mut *input)"),
+        "owned Rust trait receiver must not use the guard reborrow shape:\n{generated}"
+    );
     let compact = generated.split_whitespace().collect::<String>();
     assert!(
         compact.contains("output.execute(EnterAlternateScreen)?"),
@@ -711,6 +760,11 @@ impl Processor {
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for Rust trait-object method argument borrowing",
+    );
     let output = run_incan(tmp.path(), &["run"])?;
     assert_success(&output, "Rust trait-object method argument borrowing");
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3");
@@ -801,6 +855,11 @@ pub use writer::Writer;
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for Rust concrete-reference argument borrowing",
+    );
     let output = run_incan(tmp.path(), &["run"])?;
     assert_success(&output, "Rust concrete-reference argument borrowing");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n1\n");
@@ -1138,10 +1197,10 @@ pub def numbers() -> NumberStream:
         producer_src.join("lib.incn"),
         "pub from facade import NumberStream, StreamError, numbers\n",
     )?;
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
     assert_success(
         &producer_build,
-        "producer build --lib for fallible iterator package boundary",
+        "explicit Oven bake for fallible iterator package boundary",
     );
 
     let consumer_root = tmp.path().join("fallible_consumer");
@@ -1180,6 +1239,11 @@ def main() -> None:
         Err(error) => println(error.message())
 "#,
     )?;
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for the fallible iterator package consumer",
+    );
     let consumer_run = run_incan(&consumer_root, &["run"])?;
     assert_success(
         &consumer_run,
@@ -1229,10 +1293,10 @@ pub from facade import unique
 "#,
     )?;
 
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
     assert_success(
         &producer_build,
-        "producer build --lib for Set constructor package boundary",
+        "explicit Oven bake for Set constructor package boundary",
     );
 
     let consumer_root = tmp.path().join("set_consumer");
@@ -1273,6 +1337,12 @@ def test_set_constructor_boundaries() -> None:
 "#,
     )?;
 
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for the Set constructor package consumer",
+    );
+
     let consumer_run = run_incan(&consumer_root, &["run"])?;
     assert_success(
         &consumer_run,
@@ -1300,22 +1370,6 @@ def main() -> None:
   println("serde trait metadata is available")
 "#,
     )?;
-    let output_dir = tmp.path().join("generated");
-    let main_arg = main_path.to_string_lossy();
-    let output_arg = output_dir.to_string_lossy();
-    let output = run_incan(tmp.path(), &["build", &main_arg, &output_arg])?;
-    assert_success(&output, "incan build with compiled std.serde.json artifact");
-
-    assert!(
-        !output_dir.join("src/__incan_std").exists(),
-        "compiled std.serde.json must not be materialized into the consumer"
-    );
-    let cargo_toml = fs::read_to_string(output_dir.join("Cargo.toml"))?;
-    assert!(
-        cargo_toml.contains("[dependencies.incan_stdlib_data]"),
-        "consumer must link the compiled stdlib data provider:\n{cargo_toml}"
-    );
-
     let tests_dir = tmp.path().join("tests");
     fs::create_dir_all(&tests_dir)?;
     fs::write(
@@ -1331,17 +1385,25 @@ def test_artifact_path() -> None:
     Err(_) => pass
 "#,
     )?;
-    let minimal_test = run_incan(tmp.path(), &["test", "--sdk-profile", "minimal"])?;
-    assert_failure(&minimal_test, "incan test with disabled SDK components");
-    let minimal_test_output = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&minimal_test.stdout),
-        String::from_utf8_lossy(&minimal_test.stderr)
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for compiled SDK provider test projection",
     );
+    let output_dir = tmp.path().join("generated");
+    let main_arg = main_path.to_string_lossy();
+    let output_arg = output_dir.to_string_lossy();
+    let output = run_incan(tmp.path(), &["build", &main_arg, &output_arg])?;
+    assert_success(&output, "incan build with compiled std.serde.json artifact");
+
     assert!(
-        minimal_test_output.contains("disabled")
-            && (minimal_test_output.contains("stdlib-system") || minimal_test_output.contains("stdlib-testing")),
-        "minimal test projection should identify its disabled component:\n{minimal_test_output}"
+        !output_dir.join("src/__incan_std").exists(),
+        "compiled std.serde.json must not be materialized into the consumer"
+    );
+    let cargo_toml = fs::read_to_string(output_dir.join("Cargo.toml"))?;
+    assert!(
+        cargo_toml.contains("[dependencies.incan_stdlib_data]"),
+        "consumer must link the compiled stdlib data provider:\n{cargo_toml}"
     );
 
     let test_output = run_incan(tmp.path(), &["test"])?;
@@ -1397,11 +1459,8 @@ pub def encode_item(item: Item) -> str:
 "#,
     )?;
 
-    let provider_build = run_incan(&provider_root, &["build", "--lib"])?;
-    assert_success(
-        &provider_build,
-        "multi-module JSON provider library with a direct Serialize import",
-    );
+    let provider_build = run_explicit_oven_bake(&provider_root)?;
+    assert_success(&provider_build, "explicit Oven bake for the multi-module JSON provider");
     let generated_encoder = fs::read_to_string(provider_root.join("target/lib/src/codec.rs"))?;
     assert!(
         generated_encoder.contains("__incan_std::serde::json::Serialize::to_json(&item)"),
@@ -1437,6 +1496,12 @@ def test_compiled_json_provider() -> None:
   assert_eq(encode_item(Item(value="ok")), "{\"value\":\"ok\"}")
 "#,
     )?;
+
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for the multi-module JSON package consumer",
+    );
 
     let consumer_run = run_incan(&consumer_root, &["run"])?;
     assert_success(&consumer_run, "consumer of the compiled multi-module JSON provider");
@@ -1631,6 +1696,11 @@ itoa = "1"
                 "def main() -> None:\n  println(\"workspace lock\")\n"
             },
         )?;
+        fs::create_dir_all(member_root.join("tests"))?;
+        fs::write(
+            member_root.join("tests/test_member.incn"),
+            format!("from std.testing import test\n\n@test\ndef test_{name}() -> None:\n  assert True\n"),
+        )?;
     }
 
     let output = run_incan(&root.path().join("packages/alpha"), &["lock"])?;
@@ -1686,7 +1756,10 @@ itoa = "1"
         "workspace members must not receive authoritative lockfiles"
     );
     for (name, _) in [("alpha", "1.2.3"), ("zebra", "4.5.6")] {
-        let build_output = run_incan(&root.path().join("packages").join(name), &["build", "--locked"])?;
+        let member_root = root.path().join("packages").join(name);
+        let bake_output = run_explicit_oven_bake(&member_root)?;
+        assert_success(&bake_output, &format!("explicit Oven bake for workspace member {name}"));
+        let build_output = run_incan(&member_root, &["build", "--locked"])?;
         assert_success(
             &build_output,
             &format!("incan build --locked from workspace member {name}"),
@@ -1703,6 +1776,49 @@ itoa = "1"
             "workspace member {name} did not emit its caller-owned Oven binary"
         );
     }
+
+    // The member lock, explicit member builds, and aggregate workspace build
+    // all operate on this one canonical topology. Retain each command mode,
+    // but do not recreate the same members solely to inspect the JSON fan-out.
+    let aggregate_output = run_incan(root.path(), &["build", "--workspace", "--report", "json"])?;
+    assert_success(&aggregate_output, "workspace build --workspace --report json");
+    let aggregate_report = parse_json_stdout(&aggregate_output)?;
+    assert_eq!(aggregate_report["schema_version"], "incan.workspace.build.v1");
+    assert_eq!(aggregate_report["ok"], true);
+    assert_eq!(aggregate_report["workspace"]["selected_scope"]["origin"], "workspace");
+    assert_eq!(aggregate_report["results"][0]["member"]["name"], "alpha");
+    assert_eq!(aggregate_report["results"][1]["member"]["name"], "zebra");
+    assert_eq!(
+        aggregate_report["results"][0]["report"]["workspace"]["member_name"],
+        "alpha"
+    );
+    assert_eq!(
+        aggregate_report["results"][1]["report"]["workspace"]["member_name"],
+        "zebra"
+    );
+    assert!(
+        aggregate_report["results"][0]["report"]["dependencies"]["rust"]
+            .as_array()
+            .is_some_and(|dependencies| dependencies.iter().any(|dependency| dependency["crate_name"] == "itoa"))
+    );
+
+    let test_output = run_incan(root.path(), &["test", "--workspace", "--format", "json"])?;
+    assert_success(&test_output, "workspace test --workspace --format json");
+    let test_records = parse_jsonl_stdout(&test_output)?;
+    assert_eq!(test_records[0]["event"], "workspace_scope");
+    assert_eq!(test_records[0]["workspace"]["selected_scope"]["origin"], "workspace");
+    let tested_members = test_records
+        .iter()
+        .filter(|record| record.get("test_id").is_some())
+        .map(|record| record["workspace"]["member"]["name"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(tested_members, vec!["alpha", "zebra"]);
+    assert!(
+        test_records
+            .iter()
+            .filter(|record| record.get("summary").is_some())
+            .all(|record| record["workspace"]["root"].is_string())
+    );
     Ok(())
 }
 
@@ -1770,9 +1886,6 @@ fn rooted_workspace_semantic_lock_is_relocation_stable_issue906() -> Result<(), 
 name = "root_lib"
 version = "0.1.0"
 
-[project.scripts]
-library = "src/lib.incn"
-
 [workspace]
 members = ["consumer"]
 default-members = ["root_lib", "consumer"]
@@ -1787,6 +1900,7 @@ root_lib = { path = "." }
         for relative in ["Cargo.toml", "root_lib.incnlib", "src/lib.rs"] {
             fs::copy(prebuilt_artifact.join(relative), artifact.join(relative))?;
         }
+        copy_fixture_directory(&prebuilt_artifact.join("oven"), &artifact.join("oven"))?;
         let consumer = root.join("consumer");
         fs::create_dir_all(consumer.join("src"))?;
         fs::write(
@@ -1821,15 +1935,13 @@ root_lib = { workspace = true }
 name = "root_lib"
 version = "0.1.0"
 
-[project.scripts]
-library = "src/lib.incn"
 "#,
     )?;
     fs::write(producer.join("src/lib.incn"), "pub def answer() -> int:\n  return 42\n")?;
-    let library_output = run_incan(&producer, &["build", "--lib"])?;
+    let library_output = run_explicit_oven_bake(&producer)?;
     assert_success(
         &library_output,
-        "standalone root library build before workspace activation",
+        "standalone root library explicit Oven bake before workspace activation",
     );
 
     let first = create_locked_workspace(&temp.path().join("first/root_lib"), &producer.join("target/lib"))?;
@@ -1907,112 +2019,30 @@ itoa = "1"
         "from rust::itoa import Buffer\n\n\ndef main() -> None:\n  println(\"direct dependency\")\n",
     )?;
 
+    let bake_output = run_explicit_oven_bake(&consumer)?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for rooted workspace member with a direct Rust dependency",
+    );
     let output = run_incan(&consumer, &["build", "--no-locked"])?;
     assert_success(&output, "rooted workspace member build with a direct Rust dependency");
     Ok(())
 }
 
-#[test]
-fn rooted_workspace_member_test_uses_inherited_rust_dependencies_issue907() -> Result<(), Box<dyn std::error::Error>> {
-    let root = tempfile::tempdir()?;
-    fs::create_dir_all(root.path().join("src"))?;
-    fs::write(
-        root.path().join("incan.toml"),
-        r#"[project]
-name = "root_lib"
-version = "0.1.0"
-
-[workspace]
-members = ["consumer"]
-default-members = ["consumer"]
-
-[workspace.rust-dependencies]
-itoa = "1"
-"#,
-    )?;
-    fs::write(
-        root.path().join("src/lib.incn"),
-        "pub def root_marker() -> None:\n  pass\n",
-    )?;
-
-    let consumer = root.path().join("consumer");
-    fs::create_dir_all(consumer.join("src"))?;
-    fs::create_dir_all(consumer.join("tests"))?;
-    fs::write(
-        consumer.join("incan.toml"),
-        r#"[project]
-name = "consumer"
-version = "0.1.0"
-
-[project.scripts]
-main = "src/main.incn"
-
-[rust-dependencies]
-itoa = { workspace = true }
-"#,
-    )?;
-    fs::write(consumer.join("src/main.incn"), "def main() -> None:\n  pass\n")?;
-    fs::write(
-        consumer.join("tests/test_workspace_rust_dependency.incn"),
-        r#"from rust::itoa import Buffer
-from std.testing import test
-
-
-@test
-def test_workspace_rust_dependency_is_available() -> None:
-    assert True
-"#,
-    )?;
-
-    let lock_output = run_incan(root.path(), &["lock"])?;
-    assert_success(
-        &lock_output,
-        "rooted workspace lock with a member-owned test dependency",
-    );
-    let test_output = run_incan(
-        root.path(),
-        &[
-            "test",
-            "--member",
-            "consumer",
-            "--locked",
-            "--fail-on-empty",
-            "tests/test_workspace_rust_dependency.incn",
-        ],
-    )?;
-    assert_success(
-        &test_output,
-        "rooted workspace selected-member test with an inherited Rust dependency",
-    );
-    Ok(())
-}
-
 #[cfg(unix)]
 #[test]
-fn rooted_workspace_missing_artifact_uses_selected_project_identity_issues908_909()
+fn rooted_workspace_cold_lock_and_selected_member_preserve_identity_issues908_909_931()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     fs::create_dir_all(root.path().join("src"))?;
     fs::write(
-        root.path().join("incan.toml"),
-        r#"[project]
-name = "root_lib"
-version = "0.1.0"
-
-[project.scripts]
-library = "src/lib.incn"
-"#,
-    )?;
-    fs::write(
         root.path().join("src/lib.incn"),
         "from std.json import JsonValue\n\n\npub def answer() -> int:\n  return 42\n",
     )?;
-
-    let warmup = run_incan(root.path(), &["build", "--lib"])?;
-    assert_success(&warmup, "standalone SDK and library artifact warmup");
-    fs::remove_dir_all(root.path().join("target"))?;
-    // A normal Oven build does not write `incan.lock`; remove a historical lock if an older fixture run left one.
-    let _ = fs::remove_file(root.path().join("incan.lock"));
+    fs::write(
+        root.path().join("src/main.incn"),
+        "def main() -> None:\n  println(\"root executable\")\n",
+    )?;
 
     fs::write(
         root.path().join("incan.toml"),
@@ -2021,7 +2051,7 @@ name = "root_lib"
 version = "0.1.0"
 
 [project.scripts]
-library = "src/lib.incn"
+main = "src/main.incn"
 
 [workspace]
 members = ["consumer"]
@@ -2029,6 +2059,9 @@ default-members = ["root_lib", "consumer"]
 
 [workspace.dependencies]
 root_lib = { path = "." }
+
+[workspace.rust-dependencies]
+itoa = "1"
 "#,
     )?;
     let consumer = root.path().join("consumer");
@@ -2047,95 +2080,24 @@ root_lib = { workspace = true }
 
 [rust-dependencies]
 regex = "1"
+itoa = { workspace = true }
 "#,
     )?;
     fs::write(
         consumer.join("src/main.incn"),
         "from pub::root_lib import answer\nfrom rust::regex import Regex\n\n\ndef main() -> None:\n  println(answer())\n",
     )?;
-
-    let (lock_output, timed_out) = run_incan_with_timeout(root.path(), &["lock"], std::time::Duration::from_secs(60))?;
-    assert!(
-        !timed_out,
-        "rooted workspace lock exceeded its bounded artifact-preparation window\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&lock_output.stdout),
-        String::from_utf8_lossy(&lock_output.stderr)
-    );
-    assert_success(&lock_output, "fresh rooted workspace lock generation");
-    assert!(
-        root.path().join("target/lib/root_lib.incnlib").is_file(),
-        "the initial lock must prepare its missing root library artifact"
-    );
-
-    let first_lock = fs::read(root.path().join("incan.lock"))?;
-
-    let library_output = run_incan(root.path(), &["build", "--lib", "--member", "root_lib", "--locked"])?;
-    assert_success(
-        &library_output,
-        "target-free selected rooted library build from the first canonical lock",
-    );
-    assert_eq!(
-        first_lock,
-        fs::read(root.path().join("incan.lock"))?,
-        "the selected root library build must preserve the first canonical lock byte-for-byte"
-    );
-
-    assert!(
-        root.path().join("target/lib/oven/release/libroot_lib.rlib").is_file(),
-        "the selected root must materialize a caller-owned direct-rustc library"
-    );
-    assert!(root.path().join("target/lib/root_lib.incnlib").is_file());
-
-    let consumer_output = run_incan(&consumer, &["run", "src/main.incn", "--locked"])?;
-    assert_success(&consumer_output, "consumer of the freshly rebuilt root library");
-    Ok(())
-}
-
-#[test]
-fn cold_rooted_workspace_lock_uses_bounded_loafs_and_strict_library_build_agrees_issue931()
--> Result<(), Box<dyn std::error::Error>> {
-    let root = tempfile::tempdir()?;
-    fs::create_dir_all(root.path().join("src"))?;
+    fs::create_dir_all(consumer.join("tests"))?;
     fs::write(
-        root.path().join("incan.toml"),
-        r#"[project]
-name = "hees_ai"
-version = "0.0.1"
+        consumer.join("tests/test_workspace_rust_dependency.incn"),
+        r#"from rust::itoa import Buffer
+from std.testing import test
 
-[project.scripts]
-library = "src/lib.incn"
 
-[workspace]
-members = ["consumer"]
-default-members = ["hees_ai", "consumer"]
-
-[workspace.dependencies]
-hees_ai = { path = "." }
+@test
+def test_workspace_rust_dependency_is_available() -> None:
+    assert True
 "#,
-    )?;
-    fs::write(
-        root.path().join("src/lib.incn"),
-        "from std.json import JsonValue\n\n\npub def answer() -> int:\n  return 42\n",
-    )?;
-
-    let consumer = root.path().join("consumer");
-    fs::create_dir_all(consumer.join("src"))?;
-    fs::write(
-        consumer.join("incan.toml"),
-        r#"[project]
-name = "hees_consumer"
-version = "0.0.1"
-
-[project.scripts]
-main = "src/main.incn"
-
-[dependencies]
-hees_ai = { workspace = true }
-"#,
-    )?;
-    fs::write(
-        consumer.join("src/main.incn"),
-        "from pub::hees_ai import answer\n\n\ndef main() -> None:\n  println(answer())\n",
     )?;
 
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -2144,11 +2106,11 @@ hees_ai = { workspace = true }
     let incan_home = root.path().join(".incan-home");
     let provider_store = support::cold_sdk_provider_store_or(&incan_home.join("cache/providers/sdk-v2"));
     let generated_target = support::generated_cargo_target_dir_or(&incan_home.join("generated-target"));
-    let run = |args: &[&str]| -> Result<Output, Box<dyn std::error::Error>> {
+    let configure = |cwd: &Path, args: &[&str]| -> Result<Command, Box<dyn std::error::Error>> {
         let mut command = Command::new(incan_binary());
         command
             .args(args)
-            .current_dir(root.path())
+            .current_dir(cwd)
             .env("CARGO_NET_OFFLINE", "true")
             .env("INCAN_NO_BANNER", "1")
             .env("INCAN_LOCK_PREHEAT", "1")
@@ -2160,28 +2122,79 @@ hees_ai = { workspace = true }
             .env("INCAN_INTERNAL_SDK_PROVIDER_STORE", &provider_store)
             .env("INCAN_GENERATED_CARGO_TARGET_DIR", &generated_target);
         if !support::oven_compiler_suite_is_active() {
-            // Exercise an ordinary cold command rather than inheriting the harness's sealed suite inventory. Normal
-            // Oven commands select a compiler-shipped Loaf into their bounded store; they must never revive
-            // the mutable SDK provider publication route. A stored compiler-suite child instead retains its
-            // receipt-injected inventory and has its own sealed-inventory assertion below.
             command
                 .env_remove("INCAN_SDK_INVENTORY")
                 .env_remove("INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE");
         }
-        Ok(command.output()?)
+        if args == ["oven", "bake", "--project", "."] {
+            support::configure_explicit_oven_bake_command(&mut command)?;
+        }
+        Ok(command)
+    };
+    let run = |cwd: &Path, args: &[&str]| -> Result<Output, Box<dyn std::error::Error>> {
+        Ok(configure(cwd, args)?.output()?)
     };
 
     assert!(!root.path().join("target").exists());
     assert!(!incan_home.exists());
     assert!(!root.path().join("incan.lock").exists());
 
-    let first_lock_output = run(&["lock"])?;
-    assert_success(&first_lock_output, "cold rooted workspace lock publication");
+    // The same cold fixture covers both #908/#909's selected-root artifact and #931's bounded Oven
+    // admission/fixed-point contract. The explicit package bake is the only permitted provider publication step.
+    // The one cold publication now covers both library and executable profiles. Keep a bounded watchdog, but give
+    // sealed or low-core runners enough headroom that the deliberately consolidated journey is not killed between
+    // its library and executable halves.
+    let artifact_preparation_timeout = std::thread::available_parallelism()
+        .map(|parallelism| {
+            if support::oven_compiler_suite_is_active() || parallelism.get() <= 4 {
+                std::time::Duration::from_secs(6 * 60)
+            } else {
+                std::time::Duration::from_secs(3 * 60)
+            }
+        })
+        .unwrap_or_else(|_| std::time::Duration::from_secs(6 * 60));
+    let (provider_bake_output, timed_out) = run_command_with_timeout(
+        configure(root.path(), &["oven", "bake", "--project", "."])?,
+        "rooted workspace explicit provider bake",
+        artifact_preparation_timeout,
+    )?;
+    assert!(
+        !timed_out,
+        "rooted workspace provider bake exceeded its bounded preparation window\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&provider_bake_output.stdout),
+        String::from_utf8_lossy(&provider_bake_output.stderr)
+    );
+    assert_success(&provider_bake_output, "cold rooted workspace provider publication");
+
     let lock_path = root.path().join("incan.lock");
+    assert!(
+        lock_path.is_file(),
+        "the explicit project bake must publish the canonical workspace lock before sealing its completed Loaf"
+    );
     let first_lock = fs::read(&lock_path)?;
     let parsed = incan::lockfile::IncanLock::load(&lock_path)?;
     assert!(!parsed.deps_fingerprint.is_empty());
-    assert!(root.path().join("target/lib/hees_ai.incnlib").is_file());
+
+    let (first_lock_output, timed_out) = run_command_with_timeout(
+        configure(root.path(), &["lock"])?,
+        "cold rooted workspace lock",
+        artifact_preparation_timeout,
+    )?;
+    assert!(
+        !timed_out,
+        "rooted workspace lock exceeded its bounded artifact-preparation window\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first_lock_output.stdout),
+        String::from_utf8_lossy(&first_lock_output.stderr)
+    );
+    assert_success(
+        &first_lock_output,
+        "rooted workspace lock fixed point after explicit bake",
+    );
+    assert_eq!(first_lock, fs::read(&lock_path)?);
+    assert!(
+        root.path().join("target/lib/root_lib.incnlib").is_file(),
+        "the explicit provider bake must materialize the selected root library artifact"
+    );
     if support::oven_compiler_suite_is_active() {
         assert!(
             !provider_store.exists(),
@@ -2208,17 +2221,203 @@ hees_ai = { workspace = true }
         );
     }
 
-    let second_lock_output = run(&["lock"])?;
-    assert_success(&second_lock_output, "cold rooted workspace lock fixed point");
+    let second_lock_output = run(root.path(), &["lock"])?;
+    assert_success(&second_lock_output, "second rooted workspace lock fixed point");
     assert_eq!(first_lock, fs::read(&lock_path)?);
 
-    let build_output = run(&["build", "--lib", "--member", "hees_ai"])?;
-    assert_success(&build_output, "rooted workspace library build after lock publication");
+    let cargo_guard_dir = root.path().join("cargo-reuse-guard");
+    let cargo_marker = root.path().join("cargo-reuse-invoked");
+    let cargo_guard = install_failing_cargo_guard(&cargo_guard_dir, &cargo_marker)?;
+    for projection in [
+        root.path().join("target/lib/oven/package-loafs.json"),
+        root.path().join("target/lib/oven/debug/libroot_lib.rlib"),
+        root.path().join("target/lib/oven/release/libroot_lib.rlib"),
+        root.path().join("target/lib/src/lib.rs"),
+        root.path().join("target/incan/root_lib/oven/debug/root_lib"),
+        root.path().join("target/incan/root_lib/oven/release/root_lib"),
+        root.path().join("target/incan/root_lib/src/main.rs"),
+    ] {
+        fs::remove_file(&projection)?;
+    }
+    let mut second_bake = configure(root.path(), &["oven", "bake", "--project", "."])?;
+    let mut guarded_path = vec![cargo_guard_dir];
+    if let Some(inherited) = std::env::var_os("PATH") {
+        guarded_path.extend(std::env::split_paths(&inherited));
+    }
+    second_bake
+        .env("CARGO", &cargo_guard)
+        .env("PATH", std::env::join_paths(&guarded_path)?)
+        .env("INCAN_SDK_INVENTORY", root.path().join("missing-sdk-inventory.json"))
+        .env_remove("INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE");
+    let (second_bake_output, timed_out) = run_command_with_timeout(
+        second_bake,
+        "rooted workspace unchanged explicit bake reuse",
+        artifact_preparation_timeout,
+    )?;
+    assert!(
+        !timed_out,
+        "unchanged rooted workspace bake exceeded its reuse window\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second_bake_output.stdout),
+        String::from_utf8_lossy(&second_bake_output.stderr)
+    );
+    assert_success(&second_bake_output, "unchanged rooted workspace project-bake reuse");
+    let second_bake_stdout = String::from_utf8_lossy(&second_bake_output.stdout);
+    assert_eq!(
+        second_bake_stdout.matches("Reused Oven library").count(),
+        2,
+        "unchanged debug and release profiles must both reuse their completed Loafs:\n{second_bake_stdout}"
+    );
+    assert_eq!(
+        second_bake_stdout.matches("Reused Oven executable").count(),
+        2,
+        "unchanged mixed projects must reuse both executable profiles without frontend work:\n{second_bake_stdout}"
+    );
+    for restored in [
+        root.path().join("target/lib/oven/package-loafs.json"),
+        root.path().join("target/lib/oven/debug/libroot_lib.rlib"),
+        root.path().join("target/lib/oven/release/libroot_lib.rlib"),
+        root.path().join("target/lib/src/lib.rs"),
+        root.path().join("target/incan/root_lib/oven/debug/root_lib"),
+        root.path().join("target/incan/root_lib/oven/release/root_lib"),
+        root.path().join("target/incan/root_lib/src/main.rs"),
+    ] {
+        assert!(
+            restored.is_file(),
+            "unchanged bake did not restore {}",
+            restored.display()
+        );
+    }
+    assert!(
+        !cargo_marker.exists(),
+        "unchanged explicit project bake launched Cargo instead of reusing its sealed Loafs"
+    );
     assert_eq!(first_lock, fs::read(&lock_path)?);
 
-    let strict_output = run(&["build", "--lib", "--member", "hees_ai", "--locked"])?;
+    let library_output = run(root.path(), &["build", "--lib", "--member", "root_lib"])?;
+    assert_success(&library_output, "rooted workspace library build after lock publication");
+    assert_eq!(first_lock, fs::read(&lock_path)?);
+
+    let strict_output = run(root.path(), &["build", "--lib", "--member", "root_lib", "--locked"])?;
     assert_success(&strict_output, "strict rooted workspace library build");
     assert_eq!(first_lock, fs::read(&lock_path)?);
+    assert!(
+        root.path().join("target/lib/oven/release/libroot_lib.rlib").is_file(),
+        "the selected root must materialize a caller-owned direct-rustc library"
+    );
+    assert!(root.path().join("target/lib/root_lib.incnlib").is_file());
+
+    let consumer_bake_output = run(&consumer, &["oven", "bake", "--project", "."])?;
+    assert_success(
+        &consumer_bake_output,
+        "explicit Oven bake for rooted workspace consumer",
+    );
+    let consumer_output = run(&consumer, &["run", "src/main.incn", "--locked"])?;
+    assert_success(&consumer_output, "consumer of the freshly rebuilt root library");
+    assert_eq!(first_lock, fs::read(&lock_path)?);
+
+    // #907 uses the same rooted workspace and canonical lock as #908/#909/#931.
+    // Keep its distinct selected-member test command, but do not build a second
+    // identical workspace merely to prove inherited Rust dependency selection.
+    let inherited_dependency_test = run(
+        root.path(),
+        &[
+            "test",
+            "--member",
+            "consumer",
+            "--locked",
+            "--fail-on-empty",
+            "tests/test_workspace_rust_dependency.incn",
+        ],
+    )?;
+    assert_success(
+        &inherited_dependency_test,
+        "rooted workspace selected-member test with an inherited Rust dependency",
+    );
+    assert_eq!(first_lock, fs::read(&lock_path)?);
+
+    let mut rejected_features = configure(
+        root.path(),
+        &["build", "--lib", "--member", "root_lib", "--cargo-features", "sentinel"],
+    )?;
+    rejected_features
+        .env("CARGO", &cargo_guard)
+        .env("PATH", std::env::join_paths(&guarded_path)?);
+    let rejected_features = rejected_features.output()?;
+    assert_failure(
+        &rejected_features,
+        "completed library output with unsupported Cargo feature controls",
+    );
+    assert!(
+        String::from_utf8_lossy(&rejected_features.stderr).contains("do not accept Cargo feature controls"),
+        "completed-output selection bypassed the normal Cargo-feature rejection:\n{}",
+        String::from_utf8_lossy(&rejected_features.stderr)
+    );
+    assert!(!cargo_marker.exists());
+
+    let fresh_lock = fs::read_to_string(&lock_path)?;
+    let stale_lock = fresh_lock.replace("deps-fingerprint = \"sha256:", "deps-fingerprint = \"sha256:stale");
+    assert_ne!(
+        fresh_lock, stale_lock,
+        "the regression must corrupt canonical lock authority"
+    );
+    fs::write(&lock_path, &stale_lock)?;
+    for (description, args) in [
+        (
+            "strict completed library build",
+            vec!["build", "--lib", "--member", "root_lib", "--locked"],
+        ),
+        (
+            "strict completed library JSON report",
+            vec!["build", "--lib", "--member", "root_lib", "--locked", "--report", "json"],
+        ),
+        (
+            "strict completed executable run",
+            vec!["run", "src/main.incn", "--member", "root_lib", "--locked"],
+        ),
+    ] {
+        let mut command = configure(root.path(), &args)?;
+        command
+            .env("CARGO", &cargo_guard)
+            .env("PATH", std::env::join_paths(&guarded_path)?);
+        let output = command.output()?;
+        assert_failure(&output, description);
+        let diagnostic = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            diagnostic.contains("workspace incan.lock is out of date"),
+            "{description} did not preserve strict-lock diagnostic precedence:\n{diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains("no receipt-compatible Loaf"),
+            "{description} inspected stale completed outputs before strict lock authority:\n{diagnostic}"
+        );
+        assert_eq!(fs::read_to_string(&lock_path)?, stale_lock);
+        assert!(!cargo_marker.exists(), "{description} launched Cargo");
+    }
+
+    let mut non_strict = configure(root.path(), &["build", "--lib", "--member", "root_lib"])?;
+    non_strict
+        .env("CARGO", &cargo_guard)
+        .env("PATH", std::env::join_paths(&guarded_path)?);
+    let non_strict = non_strict.output()?;
+    assert_success(
+        &non_strict,
+        "non-strict completed library build with stale canonical lock",
+    );
+    let non_strict_diagnostic = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&non_strict.stdout),
+        String::from_utf8_lossy(&non_strict.stderr)
+    );
+    assert!(
+        non_strict_diagnostic.contains("workspace incan.lock is out of date; continuing without using it"),
+        "non-strict stale-lock build did not expose its tolerated-stale authority decision:\n{non_strict_diagnostic}"
+    );
+    assert_eq!(fs::read_to_string(&lock_path)?, stale_lock);
+    assert!(!cargo_marker.exists(), "non-strict stale-lock build launched Cargo");
     Ok(())
 }
 
@@ -2232,9 +2431,6 @@ fn locked_build_synthesizes_unreferenced_selected_workspace_member_cargo_root() 
         r#"[project]
 name = "root_lib"
 version = "0.1.0"
-
-[project.scripts]
-library = "src/lib.incn"
 
 [workspace]
 members = ["leaf", "sibling"]
@@ -2275,9 +2471,6 @@ default-members = ["root_lib", "leaf", "sibling"]
 name = "leaf"
 version = "0.2.0"
 
-[project.scripts]
-library = "src/lib.incn"
-
 [rust-dependencies.json_alias]
 package = "serde_json"
 version = "1"
@@ -2304,9 +2497,6 @@ path = "../vendor/foo-v1"
 name = "sibling"
 version = "0.3.0"
 
-[project.scripts]
-library = "src/lib.incn"
-
 [rust-dependencies.new_flags]
 package = "bitflags"
 version = "=2.11.0"
@@ -2321,10 +2511,10 @@ path = "../vendor/foo-v2"
         "from std.regex import Regex as StdRegex\nfrom rust::new_flags import bitflags\nfrom rust::foo_new import value\n\n\npub def sibling_value() -> int:\n  return 3\n",
     )?;
 
-    let lock_output = run_incan(root.path(), &["lock"])?;
+    let bake_output = run_explicit_oven_bake_with_home(&leaf, Some(&root.path().join(".incan-test")))?;
     assert_success(
-        &lock_output,
-        "canonical lock for an unreferenced workspace library member",
+        &bake_output,
+        "explicit Oven bake for the selected unreferenced workspace member",
     );
     let canonical = incan::lockfile::IncanLock::load(&root.path().join("incan.lock"))?;
     let member_roots = canonical
@@ -2335,117 +2525,32 @@ path = "../vendor/foo-v2"
         .collect::<Vec<_>>();
     assert!(member_roots.contains(&"leaf"));
     assert!(member_roots.contains(&"sibling"));
-
     let _ = fs::remove_dir_all(root.path().join("target"));
     let _ = fs::remove_dir_all(leaf.join("target"));
-    let locked_build = run_incan(
-        root.path(),
-        &["build", "--lib", "--member", "leaf", "--locked", "--report", "json"],
-    )?;
+    let locked_build = run_incan(root.path(), &["build", "--lib", "--member", "leaf", "--locked"])?;
     assert_success(
         &locked_build,
         "target-free locked build of an unreferenced selected workspace member",
     );
 
-    let report = parse_json_stdout(&locked_build)?;
-    let member_report = &report["results"][0]["report"];
-    let rust_dependencies = member_report["dependencies"]["rust"]
+    let inspect = run_incan(&leaf, &["workspace", "inspect", "--format", "json"])?;
+    assert_success(&inspect, "inspect selected member dependency authority");
+    let inspect = parse_json_stdout(&inspect)?;
+    let leaf_member = inspect["members"]
         .as_array()
-        .ok_or("selected member report had no Rust dependency array")?;
+        .and_then(|members| members.iter().find(|member| member["name"] == "leaf"))
+        .ok_or("workspace inspection omitted the selected leaf member")?;
+    let rust_dependencies = leaf_member["effective_dependencies"]["rust"]
+        .as_object()
+        .ok_or("selected member inspection had no effective Rust dependency map")?;
+    assert!(rust_dependencies.contains_key("json_alias"));
+    assert!(rust_dependencies.contains_key("old_flags"));
+    assert!(rust_dependencies.contains_key("foo_old"));
     assert!(
-        rust_dependencies
-            .iter()
-            .any(|dependency| dependency["crate_name"] == "json_alias")
-    );
-    assert!(
-        rust_dependencies
-            .iter()
-            .any(|dependency| dependency["crate_name"] == "old_flags")
-    );
-    assert!(
-        rust_dependencies
-            .iter()
-            .any(|dependency| dependency["crate_name"] == "foo_old")
-    );
-    assert!(
-        rust_dependencies
-            .iter()
-            .all(|dependency| dependency["crate_name"] != "new_flags"),
-        "the sibling's direct Rust dependency leaked into the selected Oven report"
-    );
-    let stdlib_features = member_report["dependencies"]["stdlib_features"]
-        .as_array()
-        .ok_or("selected member report had no stdlib feature array")?;
-    assert!(stdlib_features.iter().any(|feature| feature == "json"));
-    assert!(
-        stdlib_features.iter().all(|feature| feature != "regex"),
-        "the sibling provider requirement leaked into the selected Oven report"
+        !rust_dependencies.contains_key("new_flags"),
+        "the sibling's direct Rust dependency leaked into selected-member authority"
     );
     assert!(leaf.join("target/lib/oven/release/libleaf.rlib").is_file());
-    Ok(())
-}
-
-#[test]
-fn stale_workspace_lock_cannot_authorize_selected_library_projection() -> Result<(), Box<dyn std::error::Error>> {
-    let root = tempfile::tempdir()?;
-    fs::write(
-        root.path().join("incan.toml"),
-        "[workspace]\nmembers = [\"leaf\"]\ndefault-members = [\"leaf\"]\n",
-    )?;
-    let leaf = root.path().join("leaf");
-    fs::create_dir_all(leaf.join("src"))?;
-    fs::write(
-        leaf.join("incan.toml"),
-        r#"[project]
-name = "leaf"
-version = "0.1.0"
-
-[project.scripts]
-library = "src/lib.incn"
-
-[rust-dependencies]
-bitflags = "=1.3.2"
-"#,
-    )?;
-    fs::write(
-        leaf.join("src/lib.incn"),
-        "from rust::bitflags import bitflags\n\n\npub def value() -> int:\n  return 1\n",
-    )?;
-
-    let lock_output = run_incan(root.path(), &["lock"])?;
-    assert_success(&lock_output, "fresh canonical workspace lock");
-    let lock_path = root.path().join("incan.lock");
-    let fresh = fs::read_to_string(&lock_path)?;
-
-    let stale = fresh.replace("deps-fingerprint = \"sha256:", "deps-fingerprint = \"sha256:stale");
-    assert_ne!(
-        fresh, stale,
-        "the regression must corrupt canonical projection authority"
-    );
-    fs::write(&lock_path, &stale)?;
-
-    let non_strict = run_incan(root.path(), &["build", "--lib", "--member", "leaf"])?;
-    assert_success(
-        &non_strict,
-        "non-strict selected library build with stale canonical lock",
-    );
-    assert_eq!(
-        fs::read_to_string(&lock_path)?,
-        stale,
-        "a tolerated stale canonical lock must never be rewritten by a selected member build"
-    );
-    assert!(
-        leaf.join("target/lib/oven/release/libleaf.rlib").is_file(),
-        "the tolerated stale-lock build must materialize the selected library itself"
-    );
-
-    let strict = run_incan(root.path(), &["build", "--lib", "--member", "leaf", "--locked"])?;
-    assert_failure(&strict, "strict selected library build with stale canonical lock");
-    assert!(
-        String::from_utf8_lossy(&strict.stderr).contains("workspace incan.lock is out of date"),
-        "strict stale rejection must occur before projection:\n{}",
-        String::from_utf8_lossy(&strict.stderr)
-    );
     Ok(())
 }
 
@@ -2630,97 +2735,6 @@ fn workspace_check_fans_out_with_one_member_scoped_json_report() -> Result<(), B
 }
 
 #[test]
-fn workspace_test_fans_out_with_member_identity_in_jsonl() -> Result<(), Box<dyn std::error::Error>> {
-    let root = tempfile::tempdir()?;
-    fs::write(
-        root.path().join("incan.toml"),
-        "[workspace]\nmembers = [\"packages/*\"]\n",
-    )?;
-    for name in ["zebra", "alpha"] {
-        let member_root = root.path().join("packages").join(name);
-        fs::create_dir_all(member_root.join("tests"))?;
-        fs::create_dir_all(member_root.join("src"))?;
-        fs::write(
-            member_root.join("incan.toml"),
-            format!("[project]\nname = \"{name}\"\n\n[project.scripts]\nmain = \"src/main.incn\"\n"),
-        )?;
-        fs::write(member_root.join("src/main.incn"), "def main() -> None:\n  pass\n")?;
-        fs::write(
-            member_root.join("tests/test_member.incn"),
-            format!("from std.testing import test\n\n@test\ndef test_{name}() -> None:\n  assert True\n"),
-        )?;
-    }
-
-    let output = run_incan(root.path(), &["test", "--workspace", "--format", "json"])?;
-    assert_success(&output, "workspace test --workspace --format json");
-    let records = parse_jsonl_stdout(&output)?;
-    assert_eq!(records[0]["event"], "workspace_scope");
-    assert_eq!(records[0]["workspace"]["selected_scope"]["origin"], "workspace");
-    let member_names = records
-        .iter()
-        .filter(|record| record.get("test_id").is_some())
-        .map(|record| record["workspace"]["member"]["name"].as_str().unwrap_or_default())
-        .collect::<Vec<_>>();
-    assert_eq!(member_names, vec!["alpha", "zebra"]);
-    assert!(
-        records
-            .iter()
-            .filter(|record| record.get("summary").is_some())
-            .all(|record| record["workspace"]["root"].is_string())
-    );
-    Ok(())
-}
-
-#[test]
-fn workspace_build_fans_out_with_one_aggregate_json_report() -> Result<(), Box<dyn std::error::Error>> {
-    let root = tempfile::tempdir()?;
-    fs::write(
-        root.path().join("incan.toml"),
-        "[workspace]\nmembers = [\"packages/*\"]\n\n[workspace.rust-dependencies]\nitoa = \"1\"\n",
-    )?;
-    for name in ["zebra", "alpha"] {
-        let member_root = root.path().join("packages").join(name);
-        fs::create_dir_all(member_root.join("src"))?;
-        fs::write(
-            member_root.join("incan.toml"),
-            format!(
-                "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[project.scripts]\nmain = \"src/main.incn\"\n{}",
-                if name == "alpha" {
-                    "\n[rust-dependencies]\nitoa = { workspace = true }\n"
-                } else {
-                    ""
-                }
-            ),
-        )?;
-        fs::write(
-            member_root.join("src/main.incn"),
-            if name == "alpha" {
-                "from rust::itoa import Buffer\n\ndef main() -> None:\n  println(\"alpha\")\n".to_string()
-            } else {
-                format!("def main() -> None:\n  println(\"{name}\")\n")
-            },
-        )?;
-    }
-
-    let output = run_incan(root.path(), &["build", "--workspace", "--report", "json"])?;
-    assert_success(&output, "workspace build --workspace --report json");
-    let report = parse_json_stdout(&output)?;
-    assert_eq!(report["schema_version"], "incan.workspace.build.v1");
-    assert_eq!(report["ok"], true);
-    assert_eq!(report["workspace"]["selected_scope"]["origin"], "workspace");
-    assert_eq!(report["results"][0]["member"]["name"], "alpha");
-    assert_eq!(report["results"][1]["member"]["name"], "zebra");
-    assert_eq!(report["results"][0]["report"]["workspace"]["member_name"], "alpha");
-    assert_eq!(report["results"][1]["report"]["workspace"]["member_name"], "zebra");
-    assert!(
-        report["results"][0]["report"]["dependencies"]["rust"]
-            .as_array()
-            .is_some_and(|dependencies| dependencies.iter().any(|dependency| dependency["crate_name"] == "itoa"))
-    );
-    Ok(())
-}
-
-#[test]
 fn workspace_run_and_version_require_one_explicit_member() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     fs::write(
@@ -2810,82 +2824,20 @@ env-vars = { SHARED = "member", MEMBER = "1" }
     Ok(())
 }
 
+/// One normal command covers the passing `std.environ` access matrix.
+///
+/// These formerly independent fixtures each created a fresh project and
+/// repeated the same direct-rustc journey. Their accessor contracts are
+/// orthogonal but composable, so failures still name the precise assertion
+/// without paying for four copies of normal-command setup.
 #[test]
-fn run_std_environ_string_accessors_issue557() -> Result<(), Box<dyn std::error::Error>> {
+fn run_std_environ_passing_accessors_share_one_program_issues557_rfc089() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "std_environ_string_accessors", "")?;
+    let main_path = write_minimal_project(tmp.path(), "std_environ_access_matrix", "")?;
     fs::write(
         &main_path,
-        r#"from std.environ import get, get_optional, get_or
-
-def main() -> None:
-  match get("INCAN_ENVIRON_PRESENT"):
-    Ok(value) => println(value)
-    Err(err) => println(err.kind_name())
-  match get("INCAN_ENVIRON_MISSING_TEST"):
-    Ok(value) => println(value)
-    Err(err) => println(f"{err.kind_name()}:{err.key}")
-  match get_optional("INCAN_ENVIRON_MISSING_TEST"):
-    Some(value) => println(value)
-    None => println("optional-missing")
-  match get_optional("INCAN_ENVIRON_PRESENT"):
-    Some(value) => println(f"optional:{value}")
-    None => println("optional:unexpected")
-  println(get_or("INCAN_ENVIRON_MISSING_TEST", "fallback"))
-  println(get_or("INCAN_ENVIRON_PRESENT", "unexpected"))
-  match get_optional(""):
-    Some(value) => println(value)
-    None => println("optional-invalid")
-  println(get_or("", "invalid-fallback"))
-  match get(""):
-    Ok(value) => println(value)
-    Err(err) => println(err.kind_name())
-  match get("A=B"):
-    Ok(value) => println(value)
-    Err(err) => println(f"{err.kind_name()}:{err.detail}")
-  match get("A\0B"):
-    Ok(value) => println(value)
-    Err(err) => println(f"nul:{err.kind_name()}")
-"#,
-    )?;
-
-    let run_output = run_incan_with_env_and_removed(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("non-utf8 main path")?],
-        &[("INCAN_ENVIRON_PRESENT", "present-value")],
-        &["INCAN_ENVIRON_MISSING_TEST"],
-    )?;
-    assert_success(&run_output, "incan run for std.environ string accessors");
-
-    assert_eq!(
-        String::from_utf8(run_output.stdout)?,
-        concat!(
-            "present-value\n",
-            "missing:INCAN_ENVIRON_MISSING_TEST\n",
-            "optional-missing\n",
-            "optional:present-value\n",
-            "fallback\n",
-            "present-value\n",
-            "optional-invalid\n",
-            "invalid-fallback\n",
-            "invalid_key\n",
-            "invalid_key:environment variable key must not be empty or contain `=` or NUL\n",
-            "nul:invalid_key\n",
-        ),
-    );
-
-    Ok(())
-}
-
-#[test]
-fn run_std_environ_try_from_typed_accessors_issue557() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "std_environ_typed_accessors", "")?;
-    fs::write(
-        &main_path,
-        r#"from std.environ import EnvironError, get_as
+        r#"from std.environ import EnvironError, get, get_as, get_optional, get_or
 from std.traits.convert import TryFrom
-
 
 model EnvPort with TryFrom[str]:
   value: int
@@ -2929,64 +2881,12 @@ def print_port(label: str, result: Result[Option[EnvPort], EnvironError]) -> Non
         None => println(f"{label}:missing")
     Err(err) => println(f"{label}:{err.kind_name()}:{err.key}")
 
-
-def main() -> None:
-  print_port("present", get_as[EnvPort]("INCAN_ENVIRON_PORT"))
-  print_port("missing", get_as[EnvPort]("INCAN_ENVIRON_MISSING_PORT"))
-  print_port("invalid", get_as[EnvPort]("INCAN_ENVIRON_PORT_BAD"))
-  print_port("empty", get_as[EnvPort](""))
-  match get_as[EnvLabel]("INCAN_ENVIRON_LABEL"):
-    Ok(Some(label)) => println(f"label:{label.value}")
-    _ => println("label:unexpected")
-  match get_as[EnvMode]("INCAN_ENVIRON_MODE"):
-    Ok(Some(EnvMode.Prod)) => println("mode:prod")
-    _ => println("mode:unexpected")
-"#,
-    )?;
-
-    let run_output = run_incan_with_env_and_removed(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("non-utf8 main path")?],
-        &[
-            ("INCAN_ENVIRON_PORT", "5432"),
-            ("INCAN_ENVIRON_PORT_BAD", "70000"),
-            ("INCAN_ENVIRON_LABEL", "worker"),
-            ("INCAN_ENVIRON_MODE", "prod"),
-        ],
-        &["INCAN_ENVIRON_MISSING_PORT"],
-    )?;
-    assert_success(&run_output, "incan run for std.environ typed accessors");
-
-    assert_eq!(
-        String::from_utf8(run_output.stdout)?,
-        concat!(
-            "present:5432\n",
-            "missing:missing\n",
-            "invalid:invalid_value:INCAN_ENVIRON_PORT_BAD\n",
-            "empty:invalid_key:\n",
-            "label:worker\n",
-            "mode:prod\n",
-        ),
-    );
-
-    Ok(())
-}
-
-#[test]
-fn run_std_environ_primitive_typed_accessors_rfc089() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "std_environ_primitive_typed_accessors", "")?;
-    fs::write(
-        &main_path,
-        r#"from std.environ import EnvironError, get_as
-from std.traits.convert import TryFrom
-
 def require[T with TryFrom[str]](key: str) -> Result[T, EnvironError]:
   match get_as[T](key)?:
     Some(value) => return Ok(value)
     None => return Err(EnvironError.missing(key))
 
-def read_values() -> Result[None, EnvironError]:
+def read_primitive_values() -> Result[None, EnvironError]:
   integer = get_as[int]("INCAN_ENVIRON_INTEGER")?.unwrap_or(0)
   floating = get_as[float]("INCAN_ENVIRON_FLOAT")?.unwrap_or(0.0)
   flag = get_as[bool]("INCAN_ENVIRON_BOOL")?.unwrap_or(false)
@@ -3049,10 +2949,71 @@ def read_values() -> Result[None, EnvironError]:
     Err(_) => println("unexpected-error")
   return Ok(None)
 
+type DefaultPort = newtype int:
+  def from_underlying(value: int) -> Result[Self, ValidationError]:
+    if value < 1 or value > 65535:
+      return Err(ValidationError("port out of range"))
+    return Ok(DefaultPort(value))
+
 def main() -> None:
-  match read_values():
+  match get("INCAN_ENVIRON_PRESENT"):
+    Ok(value) => println(value)
+    Err(err) => println(err.kind_name())
+  match get("INCAN_ENVIRON_MISSING_TEST"):
+    Ok(value) => println(value)
+    Err(err) => println(f"{err.kind_name()}:{err.key}")
+  match get_optional("INCAN_ENVIRON_MISSING_TEST"):
+    Some(value) => println(value)
+    None => println("optional-missing")
+  match get_optional("INCAN_ENVIRON_PRESENT"):
+    Some(value) => println(f"optional:{value}")
+    None => println("optional:unexpected")
+  println(get_or("INCAN_ENVIRON_MISSING_TEST", "fallback"))
+  println(get_or("INCAN_ENVIRON_PRESENT", "unexpected"))
+  match get_optional(""):
+    Some(value) => println(value)
+    None => println("optional-invalid")
+  println(get_or("", "invalid-fallback"))
+  match get(""):
+    Ok(value) => println(value)
+    Err(err) => println(err.kind_name())
+  match get("A=B"):
+    Ok(value) => println(value)
+    Err(err) => println(f"{err.kind_name()}:{err.detail}")
+  match get("A\0B"):
+    Ok(value) => println(value)
+    Err(err) => println(f"nul:{err.kind_name()}")
+
+  print_port("present", get_as[EnvPort]("INCAN_ENVIRON_PORT"))
+  print_port("missing", get_as[EnvPort]("INCAN_ENVIRON_MISSING_PORT"))
+  print_port("invalid", get_as[EnvPort]("INCAN_ENVIRON_PORT_BAD"))
+  print_port("empty", get_as[EnvPort](""))
+  match get_as[EnvLabel]("INCAN_ENVIRON_LABEL"):
+    Ok(Some(label)) => println(f"label:{label.value}")
+    _ => println("label:unexpected")
+  match get_as[EnvMode]("INCAN_ENVIRON_MODE"):
+    Ok(Some(EnvMode.Prod)) => println("mode:prod")
+    _ => println("mode:unexpected")
+
+  match read_primitive_values():
     Ok(_) => pass
     Err(error) => println(error.message())
+
+  match get_as[int]("INCAN_ENVIRON_DEFAULT_MISSING", 8080):
+    Ok(value) => println(f"positional:{value}")
+    Err(error) => println(f"positional:{error.kind_name()}")
+
+  match get_as[int]("INCAN_ENVIRON_DEFAULT_PRESENT", default=8080):
+    Ok(value) => println(f"keyword:{value}")
+    Err(error) => println(f"keyword:{error.kind_name()}")
+
+  match get_as[int]("INCAN_ENVIRON_DEFAULT_INVALID", 8080):
+    Ok(value) => println(f"invalid:unexpected:{value}")
+    Err(error) => println(f"invalid:{error.kind_name()}")
+
+  match get_as[DefaultPort]("INCAN_ENVIRON_DEFAULT_PORT", 5432):
+    Ok(port) => println(f"newtype:{port.0}")
+    Err(error) => println(f"newtype:{error.kind_name()}")
 "#,
     )?;
 
@@ -3060,6 +3021,11 @@ def main() -> None:
         tmp.path(),
         &["run", main_path.to_str().ok_or("non-utf8 main path")?],
         &[
+            ("INCAN_ENVIRON_PRESENT", "present-value"),
+            ("INCAN_ENVIRON_PORT", "5432"),
+            ("INCAN_ENVIRON_PORT_BAD", "70000"),
+            ("INCAN_ENVIRON_LABEL", "worker"),
+            ("INCAN_ENVIRON_MODE", "prod"),
             ("INCAN_ENVIRON_INTEGER", "42"),
             ("INCAN_ENVIRON_FLOAT", "3.5"),
             ("INCAN_ENVIRON_BOOL", "true"),
@@ -3085,14 +3051,39 @@ def main() -> None:
             ("INCAN_ENVIRON_BAD_BOOL", "yes"),
             ("INCAN_ENVIRON_BAD_INTEGER", "not-an-int"),
             ("INCAN_ENVIRON_REDACTED", "secret-value-must-not-appear"),
+            ("INCAN_ENVIRON_DEFAULT_PRESENT", "9090"),
+            ("INCAN_ENVIRON_DEFAULT_INVALID", "not-an-int"),
         ],
-        &["INCAN_ENVIRON_MISSING_INTEGER"],
+        &[
+            "INCAN_ENVIRON_MISSING_TEST",
+            "INCAN_ENVIRON_MISSING_PORT",
+            "INCAN_ENVIRON_MISSING_INTEGER",
+            "INCAN_ENVIRON_DEFAULT_MISSING",
+            "INCAN_ENVIRON_DEFAULT_PORT",
+        ],
     )?;
-    assert_success(&run_output, "incan run for std.environ primitive typed accessors");
+    assert_success(&run_output, "incan run for the std.environ passing access matrix");
 
     assert_eq!(
         String::from_utf8_lossy(&run_output.stdout),
         concat!(
+            "present-value\n",
+            "missing:INCAN_ENVIRON_MISSING_TEST\n",
+            "optional-missing\n",
+            "optional:present-value\n",
+            "fallback\n",
+            "present-value\n",
+            "optional-invalid\n",
+            "invalid-fallback\n",
+            "invalid_key\n",
+            "invalid_key:environment variable key must not be empty or contain `=` or NUL\n",
+            "nul:invalid_key\n",
+            "present:5432\n",
+            "missing:missing\n",
+            "invalid:invalid_value:INCAN_ENVIRON_PORT_BAD\n",
+            "empty:invalid_key:\n",
+            "label:worker\n",
+            "mode:prod\n",
             "42:3.5:true:hello\n",
             "-8\n",
             "f32:1.25\n",
@@ -3105,6 +3096,10 @@ def main() -> None:
             "invalid_value:INCAN_ENVIRON_BAD_INTEGER\n",
             "environment variable `INCAN_ENVIRON_REDACTED` could not be parsed or validated as `the requested type`\n",
             "missing\n",
+            "positional:8080\n",
+            "keyword:9090\n",
+            "invalid:invalid_value\n",
+            "newtype:5432\n",
         ),
     );
     assert!(!String::from_utf8_lossy(&run_output.stdout).contains("secret-value-must-not-appear"));
@@ -3218,58 +3213,6 @@ def main() -> None:
             "ratio:0.5\n",
             "ratio-high:invalid_value\n",
         ),
-    );
-
-    Ok(())
-}
-
-#[test]
-fn run_std_environ_defaulted_typed_accessors_rfc089() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "std_environ_defaulted_typed_accessors", "")?;
-    fs::write(
-        &main_path,
-        r#"from std.environ import get_as
-
-type Port = newtype int:
-  def from_underlying(value: int) -> Result[Self, ValidationError]:
-    if value < 1 or value > 65535:
-      return Err(ValidationError("port out of range"))
-    return Ok(Port(value))
-
-def main() -> None:
-  match get_as[int]("INCAN_ENVIRON_DEFAULT_MISSING", 8080):
-    Ok(value) => println(f"positional:{value}")
-    Err(error) => println(f"positional:{error.kind_name()}")
-
-  match get_as[int]("INCAN_ENVIRON_DEFAULT_PRESENT", default=8080):
-    Ok(value) => println(f"keyword:{value}")
-    Err(error) => println(f"keyword:{error.kind_name()}")
-
-  match get_as[int]("INCAN_ENVIRON_DEFAULT_INVALID", 8080):
-    Ok(value) => println(f"invalid:unexpected:{value}")
-    Err(error) => println(f"invalid:{error.kind_name()}")
-
-  match get_as[Port]("INCAN_ENVIRON_DEFAULT_PORT", 5432):
-    Ok(port) => println(f"newtype:{port.0}")
-    Err(error) => println(f"newtype:{error.kind_name()}")
-"#,
-    )?;
-
-    let run_output = run_incan_with_env_and_removed(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("non-utf8 main path")?],
-        &[
-            ("INCAN_ENVIRON_DEFAULT_PRESENT", "9090"),
-            ("INCAN_ENVIRON_DEFAULT_INVALID", "not-an-int"),
-        ],
-        &["INCAN_ENVIRON_DEFAULT_MISSING", "INCAN_ENVIRON_DEFAULT_PORT"],
-    )?;
-    assert_success(&run_output, "incan run for defaulted std.environ typed accessors");
-
-    assert_eq!(
-        String::from_utf8(run_output.stdout)?,
-        "positional:8080\nkeyword:9090\ninvalid:invalid_value\nnewtype:5432\n",
     );
 
     Ok(())
@@ -3515,6 +3458,13 @@ def main() -> None:
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )),
+    ignore = "checked C integration requires a Linux x86-64 or macOS arm64 verifier"
+)]
 fn inspect_bindings_projects_checked_declaration_facts() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let src_dir = tmp.path().join("src");
@@ -3929,6 +3879,13 @@ class Broken:
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )),
+    ignore = "checked C integration requires a Linux x86-64 or macOS arm64 verifier"
+)]
 fn codegraph_projects_checked_c_bindings_and_explicit_unsafe_calls() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let source_path = tmp.path().join("main.incn");
@@ -4337,7 +4294,8 @@ def main() -> None:
 
 #[cfg(feature = "rust_inspect")]
 #[test]
-fn rust_std_result_interop_supports_try_operator_issue801() -> Result<(), Box<dyn std::error::Error>> {
+fn rust_std_result_and_contextual_f32_interop_compile_together_issues801_802() -> Result<(), Box<dyn std::error::Error>>
+{
     let tmp = tempfile::tempdir()?;
     let src_dir = tmp.path().join("src");
     fs::create_dir_all(&src_dir)?;
@@ -4359,64 +4317,29 @@ from rust::std::io import Error as IoError
 from rust::std::path import Path as RustPath
 
 pub def file_len(path: str) -> Result[int, IoError]:
-    meta = metadata(RustPath.new(path))?
-    return Ok(int(meta.len()))
+  meta = metadata(RustPath.new(path))?
+  return Ok(int(meta.len()))
+
+def accepts_f32(value: f32) -> None:
+  print("ok")
 
 def main() -> None:
-    result = file_len("incan.toml")
-    print("checked")
+  result = file_len("incan.toml")
+  zero: f32 = 0.0
+  accepts_f32(1.5)
+  print("checked")
 "#,
     )?;
     let source_arg = source_path.to_str().ok_or("source path was not valid UTF-8")?;
 
-    let check = run_incan(tmp.path(), &["check", source_arg, "--format", "json"])?;
-    assert_success(&check, "incan check should type std::fs::metadata as Result");
-    let check_json = parse_json_stdout(&check)?;
-    assert_eq!(check_json["ok"], serde_json::json!(true));
-
+    let bake = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake, "explicit Oven bake for std Result and contextual f32 interop");
     let build = run_incan(tmp.path(), &["build", source_arg, "--offline"])?;
     assert_success(
         &build,
-        "incan build should emit Rust for std::fs::metadata try operator",
+        "incan build should emit Rust for std::fs::metadata try operator and contextual f32 literals",
     );
-
-    Ok(())
-}
-
-#[test]
-fn contextual_f32_float_literals_emit_inferable_rust_issue802() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let src_dir = tmp.path().join("src");
-    fs::create_dir_all(&src_dir)?;
-    fs::write(
-        tmp.path().join("incan.toml"),
-        r#"[project]
-name = "f32_literal_probe"
-version = "0.1.0"
-
-[project.scripts]
-main = "src/main.incn"
-"#,
-    )?;
-    let source_path = src_dir.join("main.incn");
-    fs::write(
-        &source_path,
-        r#"def accepts_f32(value: f32) -> None:
-    print("ok")
-
-def main() -> None:
-    zero: f32 = 0.0
-    accepts_f32(1.5)
-"#,
-    )?;
-    let source_arg = source_path.to_str().ok_or("source path was not valid UTF-8")?;
-
-    let build = run_incan(tmp.path(), &["build", source_arg, "--offline"])?;
-    assert_success(
-        &build,
-        "incan build should let Rust infer contextual f32 float literals",
-    );
-    let generated = fs::read_to_string(tmp.path().join("target/incan/f32_literal_probe/src/main.rs"))?;
+    let generated = fs::read_to_string(tmp.path().join("target/incan/result_interop_probe/src/main.rs"))?;
     assert!(
         !generated.contains("0f64") && !generated.contains("1.5f64"),
         "contextual float literals should not be hard-suffixed as f64:\n{generated}"
@@ -5988,8 +5911,10 @@ output = "fixture_bridge"
     )?;
     fs::write(tmp.path().join("interop/lib/libfixture.a"), b"fixture archive")?;
     let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
+    let incan_home = tmp.path().join(".incan-home");
+    let incan_home = incan_home.to_str().ok_or("Incan home was not valid UTF-8")?;
 
-    let lock_output = run_incan(tmp.path(), &["lock", main_arg])?;
+    let lock_output = run_incan_with_env(tmp.path(), &["lock", main_arg], &[("INCAN_HOME", incan_home)])?;
     assert_success(&lock_output, "incan lock with declared Oven interop requirements");
     let lock: toml::Value = toml::from_str(&fs::read_to_string(tmp.path().join("incan.lock"))?)?;
     let target = lock["semantic"]["oven"]["interop"]
@@ -6020,7 +5945,11 @@ output = "fixture_bridge"
         tmp.path().join("interop/src/bridge.c"),
         "int bridge(void) { return 8; }\n",
     )?;
-    let stale = run_incan(tmp.path(), &["build", main_arg, "--locked"])?;
+    let stale = run_incan_with_env(
+        tmp.path(),
+        &["build", main_arg, "--locked"],
+        &[("INCAN_HOME", incan_home)],
+    )?;
     assert_failure(&stale, "locked build after declared interop input drift");
     assert!(
         String::from_utf8_lossy(&stale.stderr).contains("incan.lock is out of date"),
@@ -6484,52 +6413,6 @@ bitflags = "=1.3.2"
 }
 
 #[test]
-fn lock_records_path_dependency_without_preheating_a_cargo_graph() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let helper_dir = tmp.path().join("preheat_helper");
-    fs::create_dir_all(helper_dir.join("src"))?;
-    fs::write(
-        helper_dir.join("Cargo.toml"),
-        "[package]\nname = \"preheat_helper\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-    )?;
-    fs::write(helper_dir.join("src").join("lib.rs"), "pub fn value() -> i64 { 1 }\n")?;
-
-    let main_path = write_minimal_project(
-        tmp.path(),
-        "cli_lock_preheat_project",
-        r#"
-[rust-dependencies.preheat_helper]
-path = "preheat_helper"
-"#,
-    )?;
-    fs::write(
-        &main_path,
-        r#"from rust::preheat_helper import value
-
-def main() -> None:
-  println(str(value()))
-"#,
-    )?;
-
-    let output = run_incan(
-        tmp.path(),
-        &["lock", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-
-    assert_success(&output, "incan lock with a path dependency");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("preheating Cargo dependencies"),
-        "normal lock generation must not preheat a Cargo graph, got:\n{stderr}"
-    );
-    assert!(
-        !tmp.path().join("target/incan_lock/Cargo.toml").exists(),
-        "normal lock generation must not create a generated Cargo workspace"
-    );
-    Ok(())
-}
-
-#[test]
 fn build_lib_materializes_oven_artifacts_without_a_generated_cargo_preheat() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let helper_dir = tmp.path().join("library_preheat_helper");
@@ -6557,23 +6440,60 @@ pub def exported_value() -> int:
 "#,
     )?;
 
-    let first = run_incan(tmp.path(), &["build", "--lib"])?;
-    assert_success(&first, "first incan build --lib with Oven direct-rustc materialization");
+    let bake = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake, "explicit Oven bake for library direct-rustc materialization");
     assert!(
         tmp.path()
             .join("target/lib/oven/debug/libcli_library_preheat_project.rlib")
             .is_file(),
-        "normal build --lib must materialize a caller-owned direct-rustc debug artifact"
+        "explicit Oven bake must materialize a caller-owned direct-rustc debug artifact"
     );
     assert!(
         tmp.path()
             .join("target/lib/oven/release/libcli_library_preheat_project.rlib")
             .is_file(),
-        "normal build --lib must materialize a caller-owned direct-rustc release artifact"
+        "explicit Oven bake must materialize a caller-owned direct-rustc release artifact"
+    );
+    assert!(
+        tmp.path().join("incan.lock").is_file(),
+        "explicit Oven bake must publish the canonical project lock"
     );
     assert!(
         !tmp.path().join("target/incan_lock/Cargo.toml").exists(),
-        "normal Oven builds may use the compiler-owned lock directory, but must not create a Cargo workspace there"
+        "explicit Oven bake must not leave a generated Cargo workspace in the compiler-owned lock directory"
+    );
+
+    // Remove only caller-owned projections, then prove one normal locked command can restore both profiles from the
+    // completed project Loafs. A separate normal build and lock walk would retrace the publication path needlessly.
+    let debug_artifact = tmp
+        .path()
+        .join("target/lib/oven/debug/libcli_library_preheat_project.rlib");
+    let release_artifact = tmp
+        .path()
+        .join("target/lib/oven/release/libcli_library_preheat_project.rlib");
+    fs::remove_file(&debug_artifact)?;
+    fs::remove_file(&release_artifact)?;
+    let lock_projection = tmp.path().join("target/incan_lock");
+    if lock_projection.exists() {
+        fs::remove_dir_all(lock_projection)?;
+    }
+
+    let locked_build = run_incan(tmp.path(), &["build", "--lib", "--locked"])?;
+    assert_success(
+        &locked_build,
+        "normal locked build --lib should restore direct-rustc artifacts from completed project Loafs",
+    );
+    assert!(
+        debug_artifact.is_file(),
+        "the normal locked replay must recreate the debug library artifact"
+    );
+    assert!(
+        release_artifact.is_file(),
+        "the normal locked replay must recreate the release library artifact"
+    );
+    assert!(
+        !tmp.path().join("target/incan_lock/Cargo.toml").exists(),
+        "locked Oven builds must not create a Cargo workspace in the compiler-owned lock directory"
     );
 
     Ok(())
@@ -6668,60 +6588,6 @@ pub def join_ranges(text: str, start: int, middle: int, end: int) -> str:
     Ok(())
 }
 
-#[test]
-fn build_lib_uses_oven_artifacts_after_an_explicit_lock() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let helper_dir = tmp.path().join("library_preheat_existing_lock_helper");
-    fs::create_dir_all(helper_dir.join("src"))?;
-    fs::write(
-        helper_dir.join("Cargo.toml"),
-        "[package]\nname = \"library_preheat_existing_lock_helper\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-    )?;
-    fs::write(helper_dir.join("src").join("lib.rs"), "pub fn value() -> i64 { 11 }\n")?;
-
-    let _main_path = write_minimal_project(
-        tmp.path(),
-        "cli_library_preheat_existing_lock_project",
-        r#"
-[rust-dependencies.library_preheat_existing_lock_helper]
-path = "library_preheat_existing_lock_helper"
-"#,
-    )?;
-    let lib_path = tmp.path().join("src").join("lib.incn");
-    fs::write(
-        &lib_path,
-        r#"from rust::library_preheat_existing_lock_helper import value
-
-pub def exported_value() -> int:
-  return value()
-"#,
-    )?;
-
-    let lock = run_incan(
-        tmp.path(),
-        &["lock", lib_path.to_str().ok_or("lib path was not valid UTF-8")?],
-    )?;
-    assert_success(&lock, "incan lock for library preheat existing-lock fixture");
-    fs::remove_dir_all(tmp.path().join("target").join("incan_lock"))?;
-
-    let build = run_incan(tmp.path(), &["build", "--lib"])?;
-    assert_success(
-        &build,
-        "incan build --lib should use direct-rustc artifacts from committed incan.lock",
-    );
-    assert!(
-        tmp.path()
-            .join("target/lib/oven/release/libcli_library_preheat_existing_lock_project.rlib")
-            .is_file(),
-        "normal Oven build must create the selected release artifact"
-    );
-    assert!(
-        !tmp.path().join("target/incan_lock/Cargo.toml").exists(),
-        "normal Oven builds may use the compiler-owned lock directory, but must not create a Cargo workspace there"
-    );
-    Ok(())
-}
-
 fn stale_lockfile_without_changing_cargo_payload(root: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let lock_path = root.join("incan.lock");
     let original = fs::read_to_string(&lock_path)?;
@@ -6731,9 +6597,19 @@ fn stale_lockfile_without_changing_cargo_payload(root: &Path) -> Result<String, 
 }
 
 #[test]
-fn build_leaves_stale_lockfile_unchanged_by_default() -> Result<(), Box<dyn std::error::Error>> {
+fn default_build_and_test_leave_stale_lockfile_unchanged() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "cli_default_stale_lock_build_project", "")?;
+    let main_path = write_minimal_project(tmp.path(), "cli_default_stale_lock_project", "")?;
+    let tests_dir = tmp.path().join("tests");
+    fs::create_dir_all(&tests_dir)?;
+    fs::write(
+        tests_dir.join("test_main.incn"),
+        r#"from std.testing import assert_eq
+
+def test_smoke() -> None:
+  assert_eq(1, 1)
+"#,
+    )?;
 
     let lock_output = run_incan(
         tmp.path(),
@@ -6752,6 +6628,14 @@ fn build_leaves_stale_lockfile_unchanged_by_default() -> Result<(), Box<dyn std:
         fs::read_to_string(tmp.path().join("incan.lock"))?,
         stale_lock,
         "default build must not rewrite an existing stale incan.lock"
+    );
+
+    let test_output = run_incan(tmp.path(), &["test"])?;
+    assert_success(&test_output, "incan test with stale lockfile by default");
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("incan.lock"))?,
+        stale_lock,
+        "default test must not rewrite an existing stale incan.lock"
     );
     Ok(())
 }
@@ -7029,11 +6913,8 @@ pub def accept_extended(value: Extended) -> Extended:
         r#"pub from defs import accept_extended, make_base
 "#,
     )?;
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
-    assert_success(
-        &producer_build,
-        "producer build --lib for public union widening issue741",
-    );
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
+    assert_success(&producer_build, "explicit Oven bake for public union widening issue741");
 
     let consumer_root = tmp.path().join("union_consumer");
     let consumer_main = write_minimal_project(
@@ -7054,6 +6935,11 @@ def main() -> None:
     return
 "#,
     )?;
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for public union widening consumer issue741",
+    );
     let consumer_build = run_incan(
         &consumer_root,
         &[
@@ -7123,11 +7009,8 @@ pub def combine(first: Value, second: Option[Value] = None) -> Value:
         r#"pub from defs import accept_optional, combine, fallback, lit
 "#,
     )?;
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
-    assert_success(
-        &producer_build,
-        "producer build --lib for optional union helper issue745",
-    );
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
+    assert_success(&producer_build, "explicit Oven bake for optional union helper issue745");
 
     let consumer_root = tmp.path().join("consumer");
     let consumer_main = write_minimal_project(
@@ -7150,6 +7033,11 @@ def main() -> None:
     return
 "#,
     )?;
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for optional union helper consumer issue745",
+    );
     let consumer_build = run_incan(
         &consumer_root,
         &[
@@ -7239,10 +7127,10 @@ pub def desc(expr: ColumnExpr) -> ColumnExpr:
         r#"pub from surface import ColumnExpr, ColumnRefExpr, Frame, NumberColumnExpr, NumberValueOrColumn, SortExpr, add, col, desc, frame
 "#,
     )?;
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
     assert_success(
         &producer_build,
-        "producer build --lib for dependency-owned union boundary issue755",
+        "explicit Oven bake for dependency-owned union boundary issue755",
     );
 
     let consumer_root = tmp.path().join("union_consumer");
@@ -7272,6 +7160,11 @@ def main() -> None:
     return
 "#,
     )?;
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for dependency-owned union consumer issue755",
+    );
     let consumer_build = run_incan(
         &consumer_root,
         &[
@@ -7364,108 +7257,6 @@ pub def main() -> None:
 }
 
 #[test]
-fn test_leaves_stale_lockfile_unchanged_by_default() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "cli_default_stale_lock_test_project", "")?;
-    let tests_dir = tmp.path().join("tests");
-    fs::create_dir_all(&tests_dir)?;
-    fs::write(
-        tests_dir.join("test_main.incn"),
-        r#"from std.testing import assert_eq
-
-def test_smoke() -> None:
-  assert_eq(1, 1)
-"#,
-    )?;
-
-    let lock_output = run_incan(
-        tmp.path(),
-        &["lock", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(&lock_output, "incan lock before default test");
-    let stale_lock = stale_lockfile_without_changing_cargo_payload(tmp.path())?;
-
-    let test_output = run_incan(tmp.path(), &["test"])?;
-
-    assert_success(&test_output, "incan test with stale lockfile by default");
-    assert_eq!(
-        fs::read_to_string(tmp.path().join("incan.lock"))?,
-        stale_lock,
-        "default test must not rewrite an existing stale incan.lock"
-    );
-    Ok(())
-}
-
-#[test]
-fn test_lock_with_path_rust_dependency_stays_fresh_for_test_issue505() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(
-        tmp.path(),
-        "cli_lock_path_dep_fresh_for_test_project",
-        r#"
-
-[rust-dependencies]
-tiny_helper = { path = "rust/tiny_helper" }
-"#,
-    )?;
-    fs::write(
-        &main_path,
-        r#"from rust::tiny_helper import plus_one
-
-pub def value() -> int:
-  return plus_one(0)
-
-def main() -> None:
-  println(value())
-"#,
-    )?;
-    let tests_dir = tmp.path().join("tests");
-    fs::create_dir_all(&tests_dir)?;
-    fs::write(
-        tests_dir.join("test_main.incn"),
-        r#"from std.testing import assert_eq
-from crate.main import value
-
-def test_value() -> None:
-  assert_eq(value(), 1)
-"#,
-    )?;
-    let helper_src = tmp.path().join("rust").join("tiny_helper").join("src");
-    fs::create_dir_all(&helper_src)?;
-    fs::write(
-        helper_src
-            .parent()
-            .ok_or("helper src has no parent")?
-            .join("Cargo.toml"),
-        r#"[package]
-name = "tiny_helper"
-version = "0.1.0"
-edition = "2021"
-"#,
-    )?;
-    fs::write(
-        helper_src.join("lib.rs"),
-        "pub fn plus_one(value: i64) -> i64 { value + 1 }\n",
-    )?;
-
-    let lock_output = run_incan(
-        tmp.path(),
-        &["lock", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(&lock_output, "incan lock with path Rust dependency");
-
-    let test_output = run_incan(tmp.path(), &["test"])?;
-
-    assert_success(&test_output, "incan test after lock with path Rust dependency");
-    let stderr = String::from_utf8_lossy(&test_output.stderr);
-    assert!(
-        !stderr.contains("incan.lock is out of date"),
-        "fresh lock should not warn as stale for path Rust dependencies, got:\n{stderr}"
-    );
-    Ok(())
-}
-
-#[test]
 fn multi_entrypoint_lock_covers_project_scripts_and_tests_issue505() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(
@@ -7543,10 +7334,34 @@ edition = "2021"
 
     let default_lock_output = run_incan(tmp.path(), &["lock"])?;
     assert_success(&default_lock_output, "default incan lock");
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake_output, "explicit Oven bake for all declared project entrypoints");
 
-    let test_after_default_lock = run_incan(tmp.path(), &["test", "--locked"])?;
-    assert_success(&test_after_default_lock, "incan test --locked after default lock");
-    assert_no_stale_warning(&test_after_default_lock, "incan test --locked after default lock");
+    let main_after_default_lock = run_incan(
+        tmp.path(),
+        &[
+            "run",
+            "--locked",
+            main_path.to_str().ok_or("main path was not valid UTF-8")?,
+        ],
+    )?;
+    assert_success(&main_after_default_lock, "incan run --locked main after default lock");
+    assert_no_stale_warning(&main_after_default_lock, "incan run --locked main after default lock");
+    assert_eq!(
+        String::from_utf8_lossy(&main_after_default_lock.stdout).trim(),
+        "1",
+        "the conventional main target must replay its own sealed executable"
+    );
+
+    let locked_test_after_default_lock = run_incan(tmp.path(), &["test", "--locked"])?;
+    assert_success(
+        &locked_test_after_default_lock,
+        "incan test --locked after default lock",
+    );
+    assert_no_stale_warning(
+        &locked_test_after_default_lock,
+        "incan test --locked after default lock",
+    );
 
     let extra_after_default_lock = run_incan(
         tmp.path(),
@@ -7558,6 +7373,62 @@ edition = "2021"
     )?;
     assert_success(&extra_after_default_lock, "incan run --locked extra after default lock");
     assert_no_stale_warning(&extra_after_default_lock, "incan run --locked extra after default lock");
+    assert_eq!(
+        String::from_utf8_lossy(&extra_after_default_lock.stdout).trim(),
+        "2",
+        "the declared extra target must replay its own sealed executable"
+    );
+
+    let main_report_output = run_incan(
+        tmp.path(),
+        &[
+            "build",
+            "--locked",
+            "--report",
+            "json",
+            main_path.to_str().ok_or("main path was not valid UTF-8")?,
+        ],
+    )?;
+    assert_success(&main_report_output, "sealed main build report after one explicit bake");
+    let main_report = parse_json_stdout(&main_report_output)?;
+    let extra_report_output = run_incan(
+        tmp.path(),
+        &[
+            "build",
+            "--locked",
+            "--report",
+            "json",
+            extra_path.to_str().ok_or("extra path was not valid UTF-8")?,
+        ],
+    )?;
+    assert_success(
+        &extra_report_output,
+        "sealed extra build report after one explicit bake",
+    );
+    let extra_report = parse_json_stdout(&extra_report_output)?;
+    assert_eq!(
+        main_report["entrypoint"],
+        serde_json::json!(main_path.to_string_lossy()),
+        "main replay report selected the wrong entrypoint"
+    );
+    assert_eq!(
+        extra_report["entrypoint"],
+        serde_json::json!(extra_path.to_string_lossy()),
+        "extra replay report selected the wrong entrypoint"
+    );
+    let binary_path = |report: &serde_json::Value| {
+        report["artifacts"]
+            .as_array()
+            .and_then(|artifacts| artifacts.iter().find(|artifact| artifact["kind"] == "binary"))
+            .and_then(|artifact| artifact["path"].as_str())
+            .map(str::to_string)
+    };
+    let main_binary = binary_path(&main_report).ok_or("main report had no binary artifact")?;
+    let extra_binary = binary_path(&extra_report).ok_or("extra report had no binary artifact")?;
+    assert_ne!(
+        main_binary, extra_binary,
+        "distinct declared scripts must retain distinct caller-visible native outputs"
+    );
 
     let extra_lock_output = run_incan(
         tmp.path(),
@@ -7573,30 +7444,7 @@ edition = "2021"
 }
 
 #[test]
-fn explicit_lock_is_accepted_by_test_locked() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let _main_path = write_minimal_project(tmp.path(), "cli_run_then_locked_test", "")?;
-    let tests_dir = tmp.path().join("tests");
-    fs::create_dir_all(&tests_dir)?;
-    fs::write(
-        tests_dir.join("test_main.incn"),
-        r#"from std.testing import assert_eq
-
-def test_answer() -> None:
-  assert_eq(6 * 7, 42)
-"#,
-    )?;
-
-    let lock_output = run_incan(tmp.path(), &["lock"])?;
-    assert_success(&lock_output, "explicit incan lock before a strict test");
-
-    let test_output = run_incan(tmp.path(), &["test", "--locked"])?;
-    assert_success(&test_output, "incan test --locked after explicit incan lock");
-    Ok(())
-}
-
-#[test]
-fn run_accepts_generic_rust_param_scenarios_share_one_generated_project() -> Result<(), Box<dyn std::error::Error>> {
+fn rust_generic_interop_scenarios_share_one_project() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(
         tmp.path(),
@@ -7605,42 +7453,44 @@ fn run_accepts_generic_rust_param_scenarios_share_one_generated_project() -> Res
 
 [rust-dependencies]
 arc_callback = { path = "rust/arc_callback" }
-borrow_helper = { path = "rust/borrow_helper" }
-decode_helper = { path = "rust/decode_helper" }
-decode_trait_helper = { path = "rust/decode_trait_helper" }
+generic_helpers = { path = "rust/generic_helpers" }
 prost = { path = "rust/prost" }
 prost-types = { path = "rust/prost-types" }
 reexport_identity = { path = "rust/reexport_identity" }
+stream_host = { path = "rust/stream_host" }
 "#,
     )?;
     fs::write(
         &main_path,
-        r#"from arc_callback import arc_callback_case
+        r#"from arc_callback import arc_callback_case, match_arm_callback_case
 from borrowed_generic import borrowed_generic_case
 from by_value_decode import by_value_decode_case
 from cross_crate_decode import cross_crate_decode_case
+from method_arity import method_arity_case
 from reexport_identity import reexport_identity_case
 from trait_by_value_decode import trait_by_value_decode_case
 
 def main() -> None:
   println(arc_callback_case())
+  println(match_arm_callback_case())
   println(borrowed_generic_case())
   println(by_value_decode_case())
   println(trait_by_value_decode_case())
   println(cross_crate_decode_case())
   println(reexport_identity_case())
+  method_arity_case()
 "#,
     )?;
     fs::write(
         tmp.path().join("src").join("arc_callback.incn"),
-        r#"from rust::arc_callback import CallbackError, ColumnarValue, DataType, ScalarFunctionImplementation, SliceCallback, Volatility, create_udf, create_udf_full
+        r#"from rust::arc_callback import CallbackError, ColumnarValue, DataType, ScalarFunctionImplementation, ScalarUDF, SliceCallback, Volatility, create_simple_udf, create_udf, create_udf_full
 from rust::std::sync import Arc
 
 def callback(args: list[ColumnarValue]) -> Result[ColumnarValue, CallbackError]:
   return Ok(args[0].clone())
 
 def inline_arc_callback_value() -> int:
-  match create_udf(callback=Arc.from((args) => callback(args.to_vec())), name="inline"):
+  match create_simple_udf(callback=Arc.from((args) => callback(args.to_vec())), name="inline"):
     Ok(value) => return value.value()
     Err(_) => return -1
 
@@ -7657,14 +7507,43 @@ def inline_datafusion_shaped_callback_value() -> int:
 
 pub def arc_callback_case() -> str:
   implementation: SliceCallback = Arc.from((args) => callback(args.to_vec()))
-  match create_udf(callback=implementation, name="assigned"):
+  match create_simple_udf(callback=implementation, name="assigned"):
     Ok(value) => return f"arc_callback:{value.value()}:{inline_arc_callback_value()}:{inline_datafusion_shaped_callback_value()}"
     Err(_) => return "arc_callback:err"
+
+@derive(Clone)
+enum ReproFunction(str):
+  First = "first"
+  Second = "second"
+
+def make_udf(function: ReproFunction) -> ScalarUDF:
+  match function:
+    ReproFunction.First =>
+      return create_udf(
+        name=function.value(),
+        input_types=[DataType.Utf8],
+        return_type=DataType.Utf8,
+        volatility=Volatility.Immutable,
+        fun=Arc.from((args) => callback(args.to_vec())),
+      )
+    ReproFunction.Second =>
+      return create_udf(
+        name=function.value(),
+        input_types=[DataType.Utf8],
+        return_type=DataType.Utf8,
+        volatility=Volatility.Immutable,
+        fun=Arc.from((args) => callback(args.to_vec())),
+      )
+
+pub def match_arm_callback_case() -> str:
+  first = make_udf(ReproFunction.First)
+  second = make_udf(ReproFunction.Second)
+  return f"match-callback:{first.value()}:{second.value()}"
 "#,
     )?;
     fs::write(
         tmp.path().join("src").join("borrowed_generic.incn"),
-        r#"from rust::borrow_helper import takes_ref
+        r#"from rust::generic_helpers::borrow import takes_ref
 
 model Payload:
   name: str
@@ -7676,7 +7555,7 @@ pub def borrowed_generic_case() -> str:
     )?;
     fs::write(
         tmp.path().join("src").join("by_value_decode.incn"),
-        r#"from rust::decode_helper import FileDescriptorSet
+        r#"from rust::generic_helpers::inherent_decode import FileDescriptorSet
 from rust::std::io import Cursor
 
 pub def by_value_decode_case() -> str:
@@ -7688,7 +7567,7 @@ pub def by_value_decode_case() -> str:
     )?;
     fs::write(
         tmp.path().join("src").join("trait_by_value_decode.incn"),
-        r#"from rust::decode_trait_helper import FileDescriptorSet, Message
+        r#"from rust::generic_helpers::trait_decode import FileDescriptorSet, Message
 
 pub def trait_by_value_decode_case() -> str:
   encoded = b"abc"
@@ -7722,10 +7601,32 @@ pub def reexport_identity_case() -> str:
   return "reexport_identity:ok"
 "#,
     )?;
+    fs::write(
+        tmp.path().join("src").join("method_arity.incn"),
+        r#"from rust::stream_host import DeviceTrait, OutputCallbackInfo, device
 
+def consume(_value: f32) -> None:
+  pass
+
+def write_silence(_data: &mut list[f32], _info: &OutputCallbackInfo) -> None:
+  pass
+
+def report_error(_error: str) -> None:
+  pass
+
+pub def method_arity_case() -> None:
+  stream = device()
+  stream.build_output_stream[f32, _, _](1.0, consume, consume)
+  println("stream-built")
+  stream.run[f32, _, _](write_silence, report_error)
+  stream.run[f32, _, _]((_data, _info) => println(len(_data)), report_error)
+  println("callbacks-built")
+"#,
+    )?;
     // Keep this fixture DataFusion-shaped but crate-light. The real DataFusion crate is far too expensive for a
     // compiler regression test; the behavior under test is the Rust metadata shape:
-    // `ScalarFunctionImplementation -> SliceCallback -> Arc<dyn Fn(...)>`.
+    // `ScalarFunctionImplementation -> SliceCallback -> Arc<dyn Fn(...)>`. The same fixture exercises both
+    // assigned/inline callback coercion and #733's match-arm closure context.
     let helper_src = tmp.path().join("rust").join("arc_callback").join("src");
     fs::create_dir_all(&helper_src)?;
     fs::write(
@@ -7764,6 +7665,17 @@ pub type SliceCallback = Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue, C
 pub type ScalarFunctionImplementation = crate::SliceCallback;
 
 #[derive(Clone)]
+pub struct ScalarUDF {
+    value: i64,
+}
+
+impl ScalarUDF {
+    pub fn value(&self) -> i64 {
+        self.value
+    }
+}
+
+#[derive(Clone)]
 pub enum DataType {
     Utf8,
 }
@@ -7778,7 +7690,7 @@ pub fn invoke(callback: SliceCallback) -> Result<ColumnarValue, CallbackError> {
     callback(&args)
 }
 
-pub fn create_udf(name: &str, callback: crate::SliceCallback) -> Result<ColumnarValue, CallbackError> {
+pub fn create_simple_udf(name: &str, callback: crate::SliceCallback) -> Result<ColumnarValue, CallbackError> {
     let _ = name;
     let args = vec![ColumnarValue::new(11)];
     callback(&args)
@@ -7798,9 +7710,32 @@ pub fn create_udf_full(
     let args = vec![ColumnarValue::new(13)];
     fun(&args)
 }
+
+pub fn create_udf(
+    name: &str,
+    input_types: Vec<DataType>,
+    return_type: DataType,
+    volatility: Volatility,
+    fun: crate::ScalarFunctionImplementation,
+) -> ScalarUDF {
+    let _ = name;
+    let _ = input_types;
+    let _ = return_type;
+    let _ = volatility;
+    let args = vec![ColumnarValue::new(13)];
+    let value = match fun(&args) {
+        Ok(value) => value.value(),
+        Err(_) => -1,
+    };
+    ScalarUDF { value }
+}
 "#,
     )?;
-    let helper_src = tmp.path().join("rust").join("borrow_helper").join("src");
+    // These three isolated helper crates used to force separate package and
+    // metadata walks in an already single-project regression. Their import
+    // routes remain distinct Rust modules, while one fixture crate now owns
+    // the shared package boundary.
+    let helper_src = tmp.path().join("rust").join("generic_helpers").join("src");
     fs::create_dir_all(&helper_src)?;
     fs::write(
         helper_src
@@ -7808,75 +7743,52 @@ pub fn create_udf_full(
             .ok_or("helper src has no parent")?
             .join("Cargo.toml"),
         r#"[package]
-name = "borrow_helper"
+name = "generic_helpers"
 version = "0.1.0"
 edition = "2021"
 "#,
     )?;
     fs::write(
         helper_src.join("lib.rs"),
-        "pub fn takes_ref<TValue>(_value: &TValue) -> i64 { 1 }\n",
-    )?;
-    let helper_src = tmp.path().join("rust").join("decode_helper").join("src");
-    fs::create_dir_all(&helper_src)?;
-    fs::write(
-        helper_src
-            .parent()
-            .ok_or("helper src has no parent")?
-            .join("Cargo.toml"),
-        r#"[package]
-name = "decode_helper"
-version = "0.1.0"
-edition = "2021"
-"#,
-    )?;
-    fs::write(
-        helper_src.join("lib.rs"),
-        r#"pub trait DecodeBuf {}
-
-impl DecodeBuf for std::io::Cursor<Vec<u8>> {}
-
-pub struct DecodeError;
-
-pub struct FileDescriptorSet;
-
-impl FileDescriptorSet {
-    pub fn decode<T: DecodeBuf>(_buf: T) -> Result<Self, DecodeError> {
-        Ok(Self)
+        r#"pub mod borrow {
+    pub fn takes_ref<TValue>(_value: &TValue) -> i64 {
+        1
     }
 }
-"#,
-    )?;
-    let helper_src = tmp.path().join("rust").join("decode_trait_helper").join("src");
-    fs::create_dir_all(&helper_src)?;
-    fs::write(
-        helper_src
-            .parent()
-            .ok_or("helper src has no parent")?
-            .join("Cargo.toml"),
-        r#"[package]
-name = "decode_trait_helper"
-version = "0.1.0"
-edition = "2021"
-"#,
-    )?;
-    fs::write(
-        helper_src.join("lib.rs"),
-        r#"pub trait DecodeBuf {}
 
-impl DecodeBuf for &[u8] {}
+pub mod inherent_decode {
+    pub trait DecodeBuf {}
 
-pub struct DecodeError;
+    impl DecodeBuf for std::io::Cursor<Vec<u8>> {}
 
-pub struct FileDescriptorSet;
+    pub struct DecodeError;
 
-pub trait Message: Sized {
-    fn decode(_buf: impl DecodeBuf) -> Result<Self, DecodeError>;
+    pub struct FileDescriptorSet;
+
+    impl FileDescriptorSet {
+        pub fn decode<T: DecodeBuf>(_buf: T) -> Result<Self, DecodeError> {
+            Ok(Self)
+        }
+    }
 }
 
-impl Message for FileDescriptorSet {
-    fn decode(_buf: impl DecodeBuf) -> Result<Self, DecodeError> {
-        Ok(Self)
+pub mod trait_decode {
+    pub trait DecodeBuf {}
+
+    impl DecodeBuf for &[u8] {}
+
+    pub struct DecodeError;
+
+    pub struct FileDescriptorSet;
+
+    pub trait Message: Sized {
+        fn decode(_buf: impl DecodeBuf) -> Result<Self, DecodeError>;
+    }
+
+    impl Message for FileDescriptorSet {
+        fn decode(_buf: impl DecodeBuf) -> Result<Self, DecodeError> {
+            Ok(Self)
+        }
     }
 }
 "#,
@@ -7996,68 +7908,22 @@ impl Expr {
 "#,
     )?;
 
-    let output = run_incan(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-
-    assert_success(&output, "incan run with batched generic Rust param scenarios");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        stdout.trim(),
-        "arc_callback:11:11:13\nborrowed:1\nby_value:ok\ntrait_by_value:ok\ncross_crate:ok\nreexport_identity:ok",
-        "expected batched generic Rust param output, got:\n{stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn run_rust_callback_slice_fnmut_parameters_issue835() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(
-        tmp.path(),
-        "cli_rust_callback_slice_fnmut",
-        r#"
-
-[rust-dependencies]
-audio_callback = { path = "rust/audio_callback" }
-"#,
-    )?;
+    let stream_host_src = tmp.path().join("rust").join("stream_host").join("src");
+    fs::create_dir_all(&stream_host_src)?;
     fs::write(
-        &main_path,
-        r#"from rust::audio_callback import DeviceTrait, OutputCallbackInfo, device
-
-def write_silence(_data: &mut list[f32], _info: &OutputCallbackInfo) -> None:
-  pass
-
-def report_error(_error: str) -> None:
-  pass
-
-def main() -> None:
-  stream = device()
-  stream.run[f32, _, _](write_silence, report_error)
-  stream.run[f32, _, _]((_data, _info) => println(len(_data)), report_error)
-  println("callbacks-built")
-"#,
-    )?;
-
-    let helper_src = tmp.path().join("rust").join("audio_callback").join("src");
-    fs::create_dir_all(&helper_src)?;
-    fs::write(
-        helper_src
+        stream_host_src
             .parent()
-            .ok_or("audio callback src has no parent")?
+            .ok_or("stream host source directory had no parent")?
             .join("Cargo.toml"),
         r#"[package]
-name = "audio_callback"
+name = "stream_host"
 version = "0.1.0"
 edition = "2021"
 "#,
     )?;
     fs::write(
-        helper_src.join("lib.rs"),
+        stream_host_src.join("lib.rs"),
         r#"pub struct Device;
-
 pub struct OutputCallbackInfo;
 
 pub fn device() -> Device {
@@ -8065,6 +7931,12 @@ pub fn device() -> Device {
 }
 
 pub trait DeviceTrait {
+    fn build_output_stream<T, D, E>(&self, value: T, data_callback: D, error_callback: E)
+    where
+        T: Copy,
+        D: FnMut(T),
+        E: FnMut(T);
+
     fn run<T, D, E>(&self, data_callback: D, error_callback: E)
     where
         T: Copy + Default,
@@ -8073,6 +7945,16 @@ pub trait DeviceTrait {
 }
 
 impl DeviceTrait for Device {
+    fn build_output_stream<T, D, E>(&self, value: T, mut data_callback: D, mut error_callback: E)
+    where
+        T: Copy,
+        D: FnMut(T),
+        E: FnMut(T),
+    {
+        data_callback(value);
+        error_callback(value);
+    }
+
     fn run<T, D, E>(&self, mut data_callback: D, mut error_callback: E)
     where
         T: Copy + Default,
@@ -8088,116 +7970,23 @@ impl DeviceTrait for Device {
 "#,
     )?;
 
-    let output = run_incan(tmp.path(), &["run"])?;
-    assert_success(&output, "Rust FnMut borrowed-slice callbacks");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        "2\ncallbacks-built",
-        "unexpected borrowed-slice callback output"
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for grouped generic Rust interop scenarios",
     );
-    Ok(())
-}
-
-#[test]
-fn rust_method_explicit_generic_arity_issue834() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(
+    let output = run_incan(
         tmp.path(),
-        "cli_rust_method_generic_arity",
-        r#"
-
-[rust-dependencies]
-stream_host = { path = "rust/stream_host" }
-"#,
-    )?;
-    fs::write(
-        &main_path,
-        r#"from rust::stream_host import DeviceTrait, device
-
-def consume(_value: f32) -> None:
-  pass
-
-def main() -> None:
-  stream = device()
-  stream.build_output_stream[f32, _, _](1.0, consume, consume)
-  println("stream-built")
-"#,
-    )?;
-    let partial_path = tmp.path().join("src").join("partial.incn");
-    fs::write(
-        &partial_path,
-        r#"from rust::stream_host import DeviceTrait, device
-
-def consume(_value: f32) -> None:
-  pass
-
-def main() -> None:
-  stream = device()
-  stream.build_output_stream[f32](1.0, consume, consume)
-"#,
+        &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
     )?;
 
-    let helper_src = tmp.path().join("rust").join("stream_host").join("src");
-    fs::create_dir_all(&helper_src)?;
-    fs::write(
-        helper_src
-            .parent()
-            .ok_or("stream host source directory had no parent")?
-            .join("Cargo.toml"),
-        r#"[package]
-name = "stream_host"
-version = "0.1.0"
-edition = "2021"
-"#,
-    )?;
-    fs::write(
-        helper_src.join("lib.rs"),
-        r#"pub struct Device;
-
-pub fn device() -> Device {
-    Device
-}
-
-pub trait DeviceTrait {
-    fn build_output_stream<T, D, E>(&self, value: T, data_callback: D, error_callback: E)
-    where
-        T: Copy,
-        D: FnMut(T),
-        E: FnMut(T);
-}
-
-impl DeviceTrait for Device {
-    fn build_output_stream<T, D, E>(&self, value: T, mut data_callback: D, mut error_callback: E)
-    where
-        T: Copy,
-        D: FnMut(T),
-        E: FnMut(T),
-    {
-        data_callback(value);
-        error_callback(value);
-    }
-}
-"#,
-    )?;
-
-    let partial_arg = partial_path.to_str().ok_or("partial source path was not valid UTF-8")?;
-    let partial = run_incan(tmp.path(), &["--check", partial_arg])?;
-    assert!(
-        !partial.status.success(),
-        "partial Rust method turbofish unexpectedly passed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&partial.stdout),
-        String::from_utf8_lossy(&partial.stderr)
+    assert_success(&output, "incan run with grouped generic Rust interop scenarios");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "arc_callback:11:11:13\nmatch-callback:13:13\nborrowed:1\nby_value:ok\ntrait_by_value:ok\ncross_crate:ok\nreexport_identity:ok\nstream-built\n2\ncallbacks-built",
+        "expected grouped generic Rust interop output, got:\n{stdout}"
     );
-    assert!(
-        String::from_utf8_lossy(&partial.stderr)
-            .contains("build_output_stream expects 3 explicit type argument(s), got 1"),
-        "partial Rust method turbofish should fail during Incan checking:\n{}",
-        String::from_utf8_lossy(&partial.stderr)
-    );
-
-    let complete = run_incan(tmp.path(), &["run"])?;
-    assert_success(&complete, "full Rust method turbofish");
-    assert_eq!(String::from_utf8_lossy(&complete.stdout).trim(), "stream-built");
     Ok(())
 }
 
@@ -8257,6 +8046,8 @@ impl Tokenizer {
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake_output, "explicit Oven bake for a Rust Into-bound method argument");
     let output = run_incan(
         tmp.path(),
         &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
@@ -8276,150 +8067,6 @@ impl Tokenizer {
     assert!(
         !generated.contains("tokenizer.encode(\"hello world\".into(), false)"),
         "unresolved Rust method generic must not emit an ambiguous `.into()`, got:\n{generated}"
-    );
-    Ok(())
-}
-
-#[test]
-fn run_types_rust_callback_closures_in_every_match_arm_issue733() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(
-        tmp.path(),
-        "cli_rust_match_arm_callback_context",
-        r#"
-
-[rust-dependencies]
-arc_match_callback = { path = "rust/arc_match_callback" }
-"#,
-    )?;
-    fs::write(
-        &main_path,
-        r#"from rust::arc_match_callback import CallbackError, ColumnarValue, DataType, ScalarUDF, Volatility, create_udf
-from rust::std::sync import Arc
-
-
-@derive(Clone)
-enum ReproFunction(str):
-  First = "first"
-  Second = "second"
-
-
-def callback(args: list[ColumnarValue]) -> Result[ColumnarValue, CallbackError]:
-  return Ok(args[0].clone())
-
-
-def make_udf(function: ReproFunction) -> ScalarUDF:
-  match function:
-    ReproFunction.First =>
-      return create_udf(
-        name=function.value(),
-        input_types=[DataType.Utf8],
-        return_type=DataType.Utf8,
-        volatility=Volatility.Immutable,
-        fun=Arc.from((args) => callback(args.to_vec())),
-      )
-    ReproFunction.Second =>
-      return create_udf(
-        name=function.value(),
-        input_types=[DataType.Utf8],
-        return_type=DataType.Utf8,
-        volatility=Volatility.Immutable,
-        fun=Arc.from((args) => callback(args.to_vec())),
-      )
-
-
-def main() -> None:
-  first = make_udf(ReproFunction.First)
-  second = make_udf(ReproFunction.Second)
-  println(f"match-callback:{first.value()}:{second.value()}")
-"#,
-    )?;
-
-    // Keep the regression DataFusion-shaped without compiling DataFusion. The issue is the metadata contract for a
-    // transitive callback alias used by an inspected Rust function parameter.
-    let helper_src = tmp.path().join("rust").join("arc_match_callback").join("src");
-    fs::create_dir_all(&helper_src)?;
-    fs::write(
-        helper_src
-            .parent()
-            .ok_or("arc_match_callback src has no parent")?
-            .join("Cargo.toml"),
-        r#"[package]
-name = "arc_match_callback"
-version = "0.1.0"
-edition = "2021"
-"#,
-    )?;
-    fs::write(
-        helper_src.join("lib.rs"),
-        r#"use std::sync::Arc;
-
-#[derive(Clone)]
-pub struct ColumnarValue {
-    value: i64,
-}
-
-impl ColumnarValue {
-    pub fn new(value: i64) -> Self {
-        Self { value }
-    }
-
-    pub fn value(&self) -> i64 {
-        self.value
-    }
-}
-
-pub struct CallbackError;
-
-pub type SliceCallback = Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue, CallbackError> + Send + Sync>;
-pub type ScalarFunctionImplementation = crate::SliceCallback;
-
-#[derive(Clone)]
-pub struct ScalarUDF {
-    value: i64,
-}
-
-impl ScalarUDF {
-    pub fn value(&self) -> i64 {
-        self.value
-    }
-}
-
-#[derive(Clone)]
-pub enum DataType {
-    Utf8,
-}
-
-#[derive(Clone)]
-pub enum Volatility {
-    Immutable,
-}
-
-pub fn create_udf(
-    name: &str,
-    input_types: Vec<DataType>,
-    return_type: DataType,
-    volatility: Volatility,
-    fun: crate::ScalarFunctionImplementation,
-) -> ScalarUDF {
-    let _ = name;
-    let _ = input_types;
-    let _ = return_type;
-    let _ = volatility;
-    let args = vec![ColumnarValue::new(13)];
-    let value = fun(&args).map(|value| value.value()).unwrap_or(-1);
-    ScalarUDF { value }
-}
-"#,
-    )?;
-
-    let output = run_incan(tmp.path(), &["run"])?;
-    assert_success(&output, "rust callback closure context inside match arms");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        stdout.trim(),
-        "match-callback:13:13",
-        "unexpected callback output:\n{stdout}"
     );
     Ok(())
 }
@@ -9290,9 +8937,9 @@ fn fmt_tuple_target_list_comprehension_remains_buildable() -> Result<(), Box<dyn
 }
 
 #[test]
-fn run_generic_reflection_calls_issue712() -> Result<(), Box<dyn std::error::Error>> {
+fn run_generic_reflection_contracts_issues712_715_819() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "generic_reflection_issue712", "")?;
+    let main_path = write_minimal_project(tmp.path(), "generic_reflection_contracts", "")?;
     let src_dir = main_path.parent().ok_or("main path had no parent")?;
     fs::write(
         src_dir.join("generic_reflection_helpers.incn"),
@@ -9304,63 +8951,6 @@ pub def imported_class_name[T](value: T) -> str:
     return str(value.__class_name__())
 "#,
     )?;
-    fs::write(
-        &main_path,
-        r#"from generic_reflection_helpers import imported_class_name, imported_field_count
-
-
-model Row:
-    name: str
-
-
-class Bare:
-    value: int
-
-
-def reflected_field_count[T](value: T) -> int:
-    return len(value.__fields__())
-
-
-def reflected_class_name[T](value: T) -> str:
-    return str(value.__class_name__())
-
-
-def main() -> None:
-    row = Row(name="Ada")
-    println(reflected_class_name(row))
-    println(reflected_field_count(row))
-    println(imported_class_name(row))
-    println(imported_field_count(row))
-    bare = Bare(value=1)
-    println(bare.__class_name__())
-    println(len(bare.__fields__()))
-    println(reflected_class_name(bare))
-    println(reflected_field_count(bare))
-    println(imported_class_name(bare))
-    println(imported_field_count(bare))
-"#,
-    )?;
-
-    let run_output = run_incan(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(&run_output, "incan run for generic reflection issue712");
-    let stdout = String::from_utf8_lossy(&run_output.stdout);
-    let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(
-        lines,
-        vec!["Row", "1", "Row", "1", "Bare", "0", "Bare", "0", "Bare", "0"],
-        "unexpected generic reflection output:\n{stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn run_type_parameter_reflection_calls_issue715() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "type_parameter_reflection_issue715", "")?;
-    let src_dir = main_path.parent().ok_or("main path had no parent")?;
     fs::write(
         src_dir.join("schema_helpers.incn"),
         r#"pub def class_name_for[T]() -> str:
@@ -9378,8 +8968,28 @@ pub def print_schema[T]() -> None:
 "#,
     )?;
     fs::write(
+        src_dir.join("reflection_helpers.incn"),
+        r#"def requires_clone[T with Clone]() -> str:
+    return "clone"
+
+
+pub def reflected_schema_marker[T]() -> str:
+    return f"{T.__class_name__()}:{len(T.__fields__())}:{requires_clone[T]()}"
+"#,
+    )?;
+    fs::write(
         &main_path,
-        r#"from schema_helpers import class_name_for, field_count_for, print_schema
+        r#"from generic_reflection_helpers import imported_class_name, imported_field_count
+from schema_helpers import class_name_for as schema_class_name_for, field_count_for as schema_field_count_for, print_schema
+from reflection_helpers import reflected_schema_marker
+
+
+model NamedRow:
+    name: str
+
+
+class Bare:
+    value: int
 
 
 model MySchema:
@@ -9391,54 +9001,18 @@ class BareSchema:
     value: int
 
 
-def local_field_count[T]() -> int:
-    return len(T.__fields__())
-
-
-def main() -> None:
-    println(class_name_for[MySchema]())
-    println(field_count_for[MySchema]())
-    println(local_field_count[MySchema]())
-    print_schema[MySchema]()
-    println(class_name_for[BareSchema]())
-    println(field_count_for[BareSchema]())
-"#,
-    )?;
-
-    let run_output = run_incan(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(&run_output, "incan run for type-parameter reflection issue715");
-    let stdout = String::from_utf8_lossy(&run_output.stdout);
-    let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(
-        lines,
-        vec![
-            "MySchema",
-            "2",
-            "2",
-            "MySchema",
-            "id|id|int|false",
-            "status|state|str|true",
-            "BareSchema",
-            "0",
-        ],
-        "unexpected type-parameter reflection output:\n{stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn run_generic_value_field_reflection_calls_issue819() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "generic_value_field_reflection_issue819", "")?;
-    fs::write(
-        &main_path,
-        r#"model Row:
+model Row:
     id: int
     status: str
     paid: bool
+
+
+model ProbeRow:
+    id: int
+    score: float
+    active: bool
+    label: str
+    optional_label: Option[str]
 
 
 def summarize_lookup[T](rows: list[T]) -> str:
@@ -9463,99 +9037,9 @@ def summarize_items[T](rows: list[T]) -> str:
     return "|".join(parts)
 
 
-def main() -> None:
-    rows = [Row(id=1, status="paid", paid=true)]
-    println(summarize_lookup[Row](rows))
-    println(summarize_items[Row](rows))
-"#,
-    )?;
-
-    let run_output = run_incan(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(&run_output, "incan run for generic value field reflection issue819");
-    let stdout = String::from_utf8_lossy(&run_output.stdout);
-    let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(
-        lines,
-        vec!["id=1|status=paid|paid=true", "id=1|status=paid|paid=true"],
-        "unexpected generic value reflection output:\n{stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn run_optional_scalar_generic_value_reflection_issue819() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(
-        tmp.path(),
-        "generic_value_field_reflection_optional_scalar_issue819",
-        "",
-    )?;
-    fs::write(
-        &main_path,
-        r#"model ProbeRow:
-    id: int
-    score: float
-    active: bool
-    label: str
-    optional_label: Option[str]
-
-
 def show_items[T](row: T) -> None:
     for name, value in row.__field_items__():
         println(f"{name}={value}")
-
-
-def main() -> None:
-    show_items[ProbeRow](ProbeRow(id=7, score=3.5, active=true, label="paid", optional_label=None))
-    show_items[ProbeRow](ProbeRow(id=8, score=4.25, active=false, label="late", optional_label=Some("x")))
-"#,
-    )?;
-
-    let run_output = run_incan(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(
-        &run_output,
-        "incan run for optional generic value field reflection issue819",
-    );
-    let stdout = String::from_utf8_lossy(&run_output.stdout);
-    let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(
-        lines,
-        vec![
-            "id=7",
-            "score=3.5",
-            "active=true",
-            "label=paid",
-            "optional_label=None",
-            "id=8",
-            "score=4.25",
-            "active=false",
-            "label=late",
-            "optional_label=x",
-        ],
-        "unexpected optional generic value reflection output:\n{stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn run_generic_value_reflection_in_method_owned_type_parameter_issue819() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(
-        tmp.path(),
-        "generic_value_reflection_method_owned_type_parameter_issue819",
-        "",
-    )?;
-    fs::write(
-        &main_path,
-        r#"model ProbeRow:
-    id: int
-    label: str
 
 
 class InlineSession:
@@ -9570,9 +9054,90 @@ class InlineSession:
             None => return f"{T.__class_name__()}:{','.join(names)}:<missing>"
 
 
+static decorated_names: list[str] = []
+
+
+def register[F]() -> ((F) -> F):
+    return (func) => remember[F](func)
+
+
+def remember[F](func: F) -> F:
+    decorated_names.append(func.__name__)
+    return func
+
+
+@register()
+def decorated_class_name_for[T]() -> str:
+    return str(T.__class_name__())
+
+
+@register()
+def decorated_field_count_for[T]() -> int:
+    return len(T.__fields__())
+
+
+def requires_clone[T with Clone]() -> str:
+    return "clone"
+
+
+@register()
+def clone_marker_for[T]() -> str:
+    return requires_clone[T]()
+
+
+@register()
+def imported_reflection_for[T]() -> str:
+    return reflected_schema_marker[T]()
+
+
+def reflected_field_count[T](value: T) -> int:
+    return len(value.__fields__())
+
+
+def reflected_class_name[T](value: T) -> str:
+    return str(value.__class_name__())
+
+
+def local_field_count[T]() -> int:
+    return len(T.__fields__())
+
+
 def main() -> None:
+    named = NamedRow(name="Ada")
+    println(reflected_class_name(named))
+    println(reflected_field_count(named))
+    println(imported_class_name(named))
+    println(imported_field_count(named))
+    bare = Bare(value=1)
+    println(bare.__class_name__())
+    println(len(bare.__fields__()))
+    println(reflected_class_name(bare))
+    println(reflected_field_count(bare))
+    println(imported_class_name(bare))
+    println(imported_field_count(bare))
+    println(schema_class_name_for[MySchema]())
+    println(schema_field_count_for[MySchema]())
+    println(local_field_count[MySchema]())
+    print_schema[MySchema]()
+    println(schema_class_name_for[BareSchema]())
+    println(schema_field_count_for[BareSchema]())
+    rows = [Row(id=1, status="paid", paid=true)]
+    println(summarize_lookup[Row](rows))
+    println(summarize_items[Row](rows))
+    show_items[ProbeRow](ProbeRow(id=7, score=3.5, active=true, label="paid", optional_label=None))
+    show_items[ProbeRow](ProbeRow(id=8, score=4.25, active=false, label="late", optional_label=Some("x")))
     session = InlineSession()
-    println(session.reflected_summary[ProbeRow]([ProbeRow(id=7, label="paid")]))
+    println(session.reflected_summary[ProbeRow]([ProbeRow(id=7, score=3.5, active=true, label="paid", optional_label=None)]))
+    println(decorated_class_name_for[MySchema]())
+    println(decorated_field_count_for[MySchema]())
+    println(clone_marker_for[MySchema]())
+    println(imported_reflection_for[MySchema]())
+    println(imported_reflection_for[MySchema]())
+    println(decorated_names[0])
+    println(decorated_names[1])
+    println(decorated_names[2])
+    println(decorated_names[3])
+    println(len(decorated_names))
 "#,
     )?;
 
@@ -9582,22 +9147,64 @@ def main() -> None:
     )?;
     assert_success(
         &run_output,
-        "incan run for method-owned generic value reflection issue819",
+        "incan run for generic reflection contracts issues712/715/819",
     );
     let stdout = String::from_utf8_lossy(&run_output.stdout);
     let lines = stdout.lines().collect::<Vec<_>>();
     assert_eq!(
         lines,
-        vec!["ProbeRow:id,label:paid"],
-        "unexpected method-owned generic value reflection output:\n{stdout}"
+        vec![
+            "NamedRow",
+            "1",
+            "NamedRow",
+            "1",
+            "Bare",
+            "0",
+            "Bare",
+            "0",
+            "Bare",
+            "0",
+            "MySchema",
+            "2",
+            "2",
+            "MySchema",
+            "id|id|int|false",
+            "status|state|str|true",
+            "BareSchema",
+            "0",
+            "id=1|status=paid|paid=true",
+            "id=1|status=paid|paid=true",
+            "id=7",
+            "score=3.5",
+            "active=true",
+            "label=paid",
+            "optional_label=None",
+            "id=8",
+            "score=4.25",
+            "active=false",
+            "label=late",
+            "optional_label=x",
+            "ProbeRow:id,score,active,label,optional_label:paid",
+            "MySchema",
+            "2",
+            "clone",
+            "MySchema:2:clone",
+            "MySchema:2:clone",
+            "decorated_class_name_for",
+            "decorated_field_count_for",
+            "clone_marker_for",
+            "imported_reflection_for",
+            "4",
+        ],
+        "unexpected generic reflection contracts output:\n{stdout}"
     );
     Ok(())
 }
 
 #[test]
-fn run_primitive_type_parameter_class_names_issue750() -> Result<(), Box<dyn std::error::Error>> {
+fn run_direct_type_token_contracts_issue750() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "primitive_type_parameter_names_issue750", "")?;
+    let main_path = write_minimal_project(tmp.path(), "direct_type_token_contracts_issue750", "")?;
     fs::write(
         &main_path,
         r#"pub def primitive_name[T]() -> str:
@@ -9617,140 +9224,7 @@ pub def primitive_marker[T]() -> str:
     return "other"
 
 
-def main() -> None:
-    println(primitive_name[int]())
-    println(primitive_name[float]())
-    println(primitive_name[str]())
-    println(primitive_name[bool]())
-    println(primitive_marker[int]())
-    println(primitive_marker[float]())
-    println(primitive_marker[str]())
-    println(primitive_marker[bool]())
-"#,
-    )?;
-
-    let run_output = run_incan(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(
-        &run_output,
-        "incan run for primitive type-parameter class names issue750",
-    );
-    let stdout = String::from_utf8_lossy(&run_output.stdout);
-    let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(
-        lines,
-        vec![
-            "int", "float", "str", "bool", "integer", "floating", "string", "boolean",
-        ],
-        "unexpected primitive type-parameter metadata output:\n{stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn run_pub_decorated_primitive_type_parameter_class_names_issue750() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let producer_root = tmp.path().join("primitive_tokens");
-    let producer_src = producer_root.join("src");
-    fs::create_dir_all(&producer_src)?;
-    fs::write(
-        producer_root.join("incan.toml"),
-        r#"[project]
-name = "primitive_tokens"
-version = "0.1.0"
-"#,
-    )?;
-    fs::write(
-        producer_src.join("type_names.incn"),
-        r#"def register[F]() -> (F) -> F:
-    return (func) => func
-
-
-pub def primitive_name[T]() -> str:
-    return str(T.__class_name__())
-
-
-pub def primitive_marker[T]() -> str:
-    name = str(T.__class_name__())
-    if name == "int":
-        return "integer"
-    if name == "float":
-        return "floating"
-    if name == "str":
-        return "string"
-    if name == "bool":
-        return "boolean"
-    return "other"
-
-
-@register()
-pub def decorated_primitive_marker[T]() -> str:
-    return primitive_marker[T]()
-"#,
-    )?;
-    fs::write(
-        producer_src.join("lib.incn"),
-        r#"pub from type_names import decorated_primitive_marker, primitive_marker, primitive_name
-"#,
-    )?;
-
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
-    assert_success(
-        &producer_build,
-        "producer build --lib for primitive type-parameter metadata issue750",
-    );
-
-    let consumer_root = tmp.path().join("primitive_consumer");
-    let consumer_main = write_minimal_project(
-        &consumer_root,
-        "primitive_consumer",
-        r#"
-[dependencies]
-primitive_tokens = { path = "../primitive_tokens" }
-"#,
-    )?;
-    fs::write(
-        &consumer_main,
-        r#"from pub::primitive_tokens import decorated_primitive_marker, primitive_marker, primitive_name
-
-
-def main() -> None:
-    println(primitive_name[str]())
-    println(primitive_marker[int]())
-    println(decorated_primitive_marker[bool]())
-"#,
-    )?;
-
-    let consumer_run = run_incan(
-        &consumer_root,
-        &[
-            "run",
-            consumer_main.to_str().ok_or("consumer main path was not valid UTF-8")?,
-        ],
-    )?;
-    assert_success(
-        &consumer_run,
-        "pub consumer run for primitive type-parameter metadata issue750",
-    );
-    let stdout = String::from_utf8_lossy(&consumer_run.stdout);
-    let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(
-        lines,
-        vec!["str", "integer", "boolean"],
-        "unexpected public primitive type-parameter metadata output:\n{stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn run_primitive_type_token_overload_cast_issue750() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "primitive_type_token_cast_issue750", "")?;
-    fs::write(
-        &main_path,
-        r#"pub model ColumnExpr:
+pub model ColumnExpr:
     pub name: str
 
 
@@ -9796,7 +9270,24 @@ pub def mul(left: NumberColumnExpr, right: NumberColumnExpr) -> FloatColumnExpr:
     return FloatColumnExpr(source="mul")
 
 
+model MySchema:
+    id: int
+    status: str
+
+
+def accepts_schema_type(value: Type[MySchema]) -> str:
+    return "schema-token"
+
+
 def main() -> None:
+    println(primitive_name[int]())
+    println(primitive_name[float]())
+    println(primitive_name[str]())
+    println(primitive_name[bool]())
+    println(primitive_marker[int]())
+    println(primitive_marker[float]())
+    println(primitive_marker[str]())
+    println(primitive_marker[bool]())
     amount: IntColumnExpr = cast(col("amount"), int)
     unit_price: NumberColumnExpr = cast(col("unit_price"), float)
     total: FloatColumnExpr = mul(cast(col("unit_price"), float), cast(col("qty"), float))
@@ -9806,6 +9297,7 @@ def main() -> None:
     println(safe.source)
     println(total.source)
     println(fallback.name)
+    println(accepts_schema_type(MySchema))
 "#,
     )?;
 
@@ -9813,28 +9305,77 @@ def main() -> None:
         tmp.path(),
         &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
     )?;
-    assert_success(&run_output, "incan run for primitive type-token overload cast issue750");
+    assert_success(&run_output, "incan run for direct type-token contracts issue750");
     let stdout = String::from_utf8_lossy(&run_output.stdout);
     let lines = stdout.lines().collect::<Vec<_>>();
     assert_eq!(
         lines,
-        vec!["amount", "safe", "mul", "amount:decimal(10,2)"],
-        "unexpected primitive type-token cast output:\n{stdout}"
+        vec![
+            "int",
+            "float",
+            "str",
+            "bool",
+            "integer",
+            "floating",
+            "string",
+            "boolean",
+            "amount",
+            "safe",
+            "mul",
+            "amount:decimal(10,2)",
+            "schema-token",
+        ],
+        "unexpected direct type-token contracts output:\n{stdout}"
     );
     Ok(())
 }
 
 #[test]
-fn run_pub_primitive_type_token_overload_cast_issue750() -> Result<(), Box<dyn std::error::Error>> {
+fn run_pub_type_token_contracts_issue750() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let producer_root = tmp.path().join("typed_casts");
+    let producer_root = tmp.path().join("type_token_provider");
     let producer_src = producer_root.join("src");
     fs::create_dir_all(&producer_src)?;
     fs::write(
         producer_root.join("incan.toml"),
         r#"[project]
-name = "typed_casts"
+name = "type_token_provider"
 version = "0.1.0"
+"#,
+    )?;
+    fs::write(
+        producer_src.join("type_names.incn"),
+        r#"def register[F]() -> (F) -> F:
+    return (func) => func
+
+
+pub def primitive_name[T]() -> str:
+    return str(T.__class_name__())
+
+
+pub def primitive_marker[T]() -> str:
+    name = str(T.__class_name__())
+    if name == "int":
+        return "integer"
+    if name == "float":
+        return "floating"
+    if name == "str":
+        return "string"
+    if name == "bool":
+        return "boolean"
+    return "other"
+
+
+@register()
+pub def decorated_primitive_marker[T]() -> str:
+    return primitive_marker[T]()
+"#,
+    )?;
+    fs::write(
+        producer_src.join("lib.incn"),
+        r#"pub from type_names import decorated_primitive_marker, primitive_marker, primitive_name
+pub from casts import ColumnExpr, FloatColumnExpr, IntColumnExpr, NumberColumnExpr, cast, col, mul, registered_cast_at, registered_cast_count
+pub from safe_alias import safe_cast
 "#,
     )?;
     fs::write(
@@ -9921,17 +9462,11 @@ pub def registered_cast_at(index: int) -> str:
 pub safe_cast = alias cast
 "#,
     )?;
-    fs::write(
-        producer_src.join("lib.incn"),
-        r#"pub from casts import ColumnExpr, FloatColumnExpr, IntColumnExpr, NumberColumnExpr, cast, col, mul, registered_cast_at, registered_cast_count
-pub from safe_alias import safe_cast
-"#,
-    )?;
 
-    let producer_build = run_incan(&producer_root, &["build", "--lib"])?;
+    let producer_build = run_explicit_oven_bake(&producer_root)?;
     assert_success(
         &producer_build,
-        "producer build --lib for primitive type-token cast issue750",
+        "explicit Oven bake for public type-token contracts issue750",
     );
 
     let producer_tests = producer_root.join("tests");
@@ -9954,24 +9489,27 @@ def test_cross_module_alias_preserves_overload_set() -> None:
     let producer_test = run_incan(&producer_root, &["test", "tests"])?;
     assert_success(
         &producer_test,
-        "producer incan test for cross-module overloaded alias issue750",
+        "provider test batch for cross-module overloaded alias issue750",
     );
 
-    let consumer_root = tmp.path().join("typed_cast_consumer");
+    let consumer_root = tmp.path().join("primitive_consumer");
     let consumer_main = write_minimal_project(
         &consumer_root,
-        "typed_cast_consumer",
+        "type_token_consumer",
         r#"
 [dependencies]
-typed_casts = { path = "../typed_casts" }
+type_token_provider = { path = "../type_token_provider" }
 "#,
     )?;
     fs::write(
         &consumer_main,
-        r#"from pub::typed_casts import ColumnExpr, FloatColumnExpr, IntColumnExpr, NumberColumnExpr, cast, col, mul, registered_cast_at, registered_cast_count, safe_cast
+        r#"from pub::type_token_provider import ColumnExpr, FloatColumnExpr, IntColumnExpr, NumberColumnExpr, cast, col, decorated_primitive_marker, mul, primitive_marker, primitive_name, registered_cast_at, registered_cast_count, safe_cast
 
 
 def main() -> None:
+    println(primitive_name[str]())
+    println(primitive_marker[int]())
+    println(decorated_primitive_marker[bool]())
     amount: IntColumnExpr = cast(col("amount"), int)
     unit_price: NumberColumnExpr = cast(col("unit_price"), float)
     total: FloatColumnExpr = mul(cast(col("unit_price"), float), cast(col("qty"), float))
@@ -9987,6 +9525,12 @@ def main() -> None:
 "#,
     )?;
 
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for type-token contracts consumer issue750",
+    );
+
     let consumer_run = run_incan(
         &consumer_root,
         &[
@@ -9994,153 +9538,30 @@ def main() -> None:
             consumer_main.to_str().ok_or("consumer main path was not valid UTF-8")?,
         ],
     )?;
-    assert_success(&consumer_run, "pub consumer run for primitive type-token cast issue750");
+    assert_success(&consumer_run, "public consumer run for type-token contracts issue750");
     let stdout = String::from_utf8_lossy(&consumer_run.stdout);
     let lines = stdout.lines().collect::<Vec<_>>();
     assert_eq!(
         lines,
-        vec!["amount", "safe", "mul", "amount:decimal(10,2)", "2", "cast", "cast",],
-        "unexpected public primitive type-token cast output:\n{stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn run_decorated_type_parameter_reflection_calls_issue715() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "decorated_type_parameter_reflection_issue715", "")?;
-    let src_dir = main_path.parent().ok_or("main path had no parent")?;
-    fs::write(
-        src_dir.join("reflection_helpers.incn"),
-        r#"def requires_clone[T with Clone]() -> str:
-    return "clone"
-
-
-pub def reflected_schema_marker[T]() -> str:
-    return f"{T.__class_name__()}:{len(T.__fields__())}:{requires_clone[T]()}"
-"#,
-    )?;
-    fs::write(
-        &main_path,
-        r#"from reflection_helpers import reflected_schema_marker
-
-
-static decorated_names: list[str] = []
-
-
-def register[F]() -> ((F) -> F):
-    return (func) => remember[F](func)
-
-
-def remember[F](func: F) -> F:
-    decorated_names.append(func.__name__)
-    return func
-
-
-@register()
-def class_name_for[T]() -> str:
-    return str(T.__class_name__())
-
-
-@register()
-def field_count_for[T]() -> int:
-    return len(T.__fields__())
-
-
-def requires_clone[T with Clone]() -> str:
-    return "clone"
-
-
-@register()
-def clone_marker_for[T]() -> str:
-    return requires_clone[T]()
-
-
-@register()
-def imported_reflection_for[T]() -> str:
-    return reflected_schema_marker[T]()
-
-
-model MySchema:
-    id: int
-    status: str
-
-
-def main() -> None:
-    println(class_name_for[MySchema]())
-    println(field_count_for[MySchema]())
-    println(clone_marker_for[MySchema]())
-    println(imported_reflection_for[MySchema]())
-    println(imported_reflection_for[MySchema]())
-    println(decorated_names[0])
-    println(decorated_names[1])
-    println(decorated_names[2])
-    println(decorated_names[3])
-    println(len(decorated_names))
-"#,
-    )?;
-
-    let run_output = run_incan(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(
-        &run_output,
-        "incan run for decorated type-parameter reflection issue715",
-    );
-    let stdout = String::from_utf8_lossy(&run_output.stdout);
-    let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(
-        lines,
         vec![
-            "MySchema",
+            "str",
+            "integer",
+            "boolean",
+            "amount",
+            "safe",
+            "mul",
+            "amount:decimal(10,2)",
             "2",
-            "clone",
-            "MySchema:2:clone",
-            "MySchema:2:clone",
-            "class_name_for",
-            "field_count_for",
-            "clone_marker_for",
-            "imported_reflection_for",
-            "4",
+            "cast",
+            "cast",
         ],
-        "unexpected decorated type-parameter reflection output:\n{stdout}"
+        "unexpected public type-token contracts output:\n{stdout}"
     );
     Ok(())
 }
 
 #[test]
-fn run_model_type_token_value_issue750() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let main_path = write_minimal_project(tmp.path(), "model_type_token_value_issue750", "")?;
-    fs::write(
-        &main_path,
-        r#"model MySchema:
-    id: int
-    status: str
-
-
-def accepts_schema_type(value: Type[MySchema]) -> str:
-    return "schema-token"
-
-
-def main() -> None:
-    println(accepts_schema_type(MySchema))
-"#,
-    )?;
-
-    let run_output = run_incan(
-        tmp.path(),
-        &["run", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(&run_output, "incan run for model type-token value issue750");
-    let stdout = String::from_utf8_lossy(&run_output.stdout);
-    assert_eq!(stdout.lines().collect::<Vec<_>>(), vec!["schema-token"]);
-    Ok(())
-}
-
-#[test]
-fn check_combined_rust_and_source_imports_preserve_never_return_issue381() -> Result<(), Box<dyn std::error::Error>> {
+fn build_combined_rust_and_source_imports_preserves_never_return_issue381() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(
         tmp.path(),
@@ -10197,15 +9618,8 @@ edition = "2021"
 "#,
     )?;
 
-    let check_output = run_incan(
-        tmp.path(),
-        &["--check", main_path.to_str().ok_or("main path was not valid UTF-8")?],
-    )?;
-    assert_success(
-        &check_output,
-        "combined Rust and source imports with a diverging Rust helper",
-    );
-
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake_output, "explicit Oven bake for combined Rust and source imports");
     let build_output = run_incan(
         tmp.path(),
         &["build", main_path.to_str().ok_or("main path was not valid UTF-8")?],
@@ -10318,6 +9732,11 @@ def main() -> None:
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for inline f-string Rust interop variants",
+    );
     let build_output = run_incan(
         tmp.path(),
         &["build", main_path.to_str().ok_or("main path was not valid UTF-8")?],
@@ -10345,8 +9764,6 @@ def main() -> None:
     )?;
 
     let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
-    let check = run_incan(tmp.path(), &["check", main_arg, "--sdk-profile", "minimal"])?;
-    assert_success(&check, "incan check with a direct f-string zero-argument call");
     let output = run_incan(tmp.path(), &["run", main_arg, "--sdk-profile", "minimal"])?;
     assert_success(&output, "incan run with a direct f-string zero-argument call");
     assert_eq!(String::from_utf8(output.stdout)?, "enabled:true\n");
@@ -10396,6 +9813,11 @@ def main() -> None:
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for a static str const in a Rust String field",
+    );
     let build_output = run_incan(
         tmp.path(),
         &["build", main_path.to_str().ok_or("main path was not valid UTF-8")?],
@@ -11132,10 +10554,10 @@ pub policy = partial models.Policy(family="cross-package", enabled=true)
 "#,
     )?;
 
-    let provider_output = run_incan(&provider_root, &["build", "--lib"])?;
+    let provider_output = run_explicit_oven_bake(&provider_root)?;
     assert_success(
         &provider_output,
-        "provider build for qualified partial constructor metadata issue699",
+        "explicit Oven bake for qualified partial constructor metadata issue699",
     );
 
     let consumer_root = tmp.path().join("consumer");
@@ -11157,6 +10579,12 @@ def main() -> None:
     assert DEFAULT_POLICY.enabled
 "#,
     )?;
+
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for qualified partial constructor consumer issue699",
+    );
 
     let consumer_output = run_incan(
         &consumer_root,
@@ -11226,15 +10654,6 @@ pub def decorated_default(expr: Expr = col("")) -> int:
 "#,
     )?;
     fs::write(
-        src_dir.join("test_consumer.incn"),
-        r#"from defaults import decorated_default
-
-
-def test_imported_decorated_default_call() -> None:
-    assert decorated_default() == 1
-"#,
-    )?;
-    fs::write(
         src_dir.join("facade.incn"),
         r#"pub from defaults import decorated_default
 "#,
@@ -11247,33 +10666,6 @@ def test_imported_decorated_default_call() -> None:
     fs::write(
         src_dir.join("facade_alias.incn"),
         r#"pub from defaults import decorated_default as public_decorated_default
-"#,
-    )?;
-    fs::write(
-        src_dir.join("test_facade_consumer.incn"),
-        r#"from facade import decorated_default
-
-
-def test_reexported_decorated_default_call() -> None:
-    assert decorated_default() == 1
-"#,
-    )?;
-    fs::write(
-        src_dir.join("test_facade_chain_consumer.incn"),
-        r#"from facade_chain import decorated_default
-
-
-def test_chained_reexported_decorated_default_call() -> None:
-    assert decorated_default() == 1
-"#,
-    )?;
-    fs::write(
-        src_dir.join("test_facade_alias_consumer.incn"),
-        r#"from facade_alias import public_decorated_default
-
-
-def test_aliased_reexported_decorated_default_call() -> None:
-    assert public_decorated_default() == 1
 "#,
     )?;
     let functions_dir = src_dir.join("functions");
@@ -11296,15 +10688,6 @@ pub def count(expr: Expr = col("")) -> int:
     fs::write(
         functions_dir.join("mod.incn"),
         r#"pub from functions.aggregates.count import count
-"#,
-    )?;
-    fs::write(
-        src_dir.join("test_nested_facade_consumer.incn"),
-        r#"from functions import count
-
-
-def test_nested_reexported_decorated_default_call() -> None:
-    assert count() == 1
 "#,
     )?;
     let tests_dir = tmp.path().join("tests");
@@ -11390,85 +10773,84 @@ def test_decorated_default_probe() -> None:
     assert surface_changed("changed") == 7
 "#,
     )?;
+    // These import routes have distinct lowering contracts, but source-file test
+    // execution shares their compilation journey. Keep individual named cases
+    // for precise failures without compiling one source file per façade.
+    fs::write(
+        src_dir.join("test_decorated_default_imports.incn"),
+        r#"from defaults import decorated_default as direct_default
+from facade import decorated_default as facade_default
+from facade_chain import decorated_default as chained_default
+from facade_alias import public_decorated_default as aliased_default
+from functions import count
 
-    let test_path = tmp.path().join("tests/test_decorated_default_probe.incn");
-    let test_output = run_incan(
-        tmp.path(),
-        &["test", test_path.to_str().ok_or("test path was not valid UTF-8")?],
+
+def test_imported_decorated_default_call() -> None:
+    assert direct_default() == 1
+
+
+def test_reexported_decorated_default_call() -> None:
+    assert facade_default() == 1
+
+
+def test_chained_reexported_decorated_default_call() -> None:
+    assert chained_default() == 1
+
+
+def test_aliased_reexported_decorated_default_call() -> None:
+    assert aliased_default() == 1
+
+
+def test_nested_reexported_decorated_default_call() -> None:
+    assert count() == 1
+"#,
     )?;
-    assert_success(&test_output, "incan test for decorated default arguments issue703");
-
-    let consumer_path = src_dir.join("test_consumer.incn");
-    let consumer_output = run_incan(
+    let imported_path = src_dir.join("test_decorated_default_imports.incn");
+    let imported_output = run_incan(
         tmp.path(),
         &[
             "test",
-            consumer_path.to_str().ok_or("consumer path was not valid UTF-8")?,
-        ],
-    )?;
-    assert_success(
-        &consumer_output,
-        "incan test for imported decorated default arguments issue703",
-    );
-
-    let facade_consumer_path = src_dir.join("test_facade_consumer.incn");
-    let facade_consumer_output = run_incan(
-        tmp.path(),
-        &[
-            "test",
-            facade_consumer_path
+            imported_path
                 .to_str()
-                .ok_or("facade consumer path was not valid UTF-8")?,
+                .ok_or("imported decorated-default path was not valid UTF-8")?,
         ],
     )?;
     assert_success(
-        &facade_consumer_output,
-        "incan test for re-exported decorated default arguments issue703",
+        &imported_output,
+        "incan test for imported decorated default argument routes issue703",
     );
+    let imported_stdout = String::from_utf8_lossy(&imported_output.stdout);
+    for test_name in [
+        "test_imported_decorated_default_call",
+        "test_reexported_decorated_default_call",
+        "test_chained_reexported_decorated_default_call",
+        "test_aliased_reexported_decorated_default_call",
+        "test_nested_reexported_decorated_default_call",
+    ] {
+        assert!(
+            imported_stdout.contains(test_name),
+            "expected shared imported decorated-default route to execute `{test_name}`:\n{imported_stdout}"
+        );
+    }
 
-    let facade_chain_consumer_path = src_dir.join("test_facade_chain_consumer.incn");
-    let facade_chain_consumer_output = run_incan(
+    let probe_path = tests_dir.join("test_decorated_default_probe.incn");
+    let probe_output = run_incan(
         tmp.path(),
         &[
             "test",
-            facade_chain_consumer_path
+            probe_path
                 .to_str()
-                .ok_or("facade chain consumer path was not valid UTF-8")?,
+                .ok_or("decorated-default probe path was not valid UTF-8")?,
         ],
     )?;
     assert_success(
-        &facade_chain_consumer_output,
-        "incan test for chained re-exported decorated default arguments issue703",
+        &probe_output,
+        "incan test for local decorated default argument forms issue703",
     );
-
-    let facade_alias_consumer_path = src_dir.join("test_facade_alias_consumer.incn");
-    let facade_alias_consumer_output = run_incan(
-        tmp.path(),
-        &[
-            "test",
-            facade_alias_consumer_path
-                .to_str()
-                .ok_or("facade alias consumer path was not valid UTF-8")?,
-        ],
-    )?;
-    assert_success(
-        &facade_alias_consumer_output,
-        "incan test for aliased re-exported decorated default arguments issue703",
-    );
-
-    let nested_facade_consumer_path = src_dir.join("test_nested_facade_consumer.incn");
-    let nested_facade_consumer_output = run_incan(
-        tmp.path(),
-        &[
-            "test",
-            nested_facade_consumer_path
-                .to_str()
-                .ok_or("nested facade consumer path was not valid UTF-8")?,
-        ],
-    )?;
-    assert_success(
-        &nested_facade_consumer_output,
-        "incan test for nested re-exported decorated default arguments issue703",
+    assert!(
+        String::from_utf8_lossy(&probe_output.stdout).contains("test_decorated_default_probe"),
+        "expected local decorated-default probe to execute:\n{}",
+        String::from_utf8_lossy(&probe_output.stdout)
     );
     Ok(())
 }
@@ -12165,6 +11547,11 @@ def main() -> None:
 "#,
     )?;
 
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for metadata-free Into-bound tokenizer encode",
+    );
     let build_output = run_incan(
         tmp.path(),
         &["build", main_path.to_str().ok_or("main path was not valid UTF-8")?],

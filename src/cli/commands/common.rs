@@ -8,7 +8,7 @@ use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 
 #[cfg(feature = "rust_inspect")]
@@ -74,6 +74,8 @@ static PREPARED_LIBRARY_DEPENDENCIES: LazyLock<Mutex<HashMap<PathBuf, BTreeSet<S
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static SDK_PROVIDER_COMPILER_DIGESTS: LazyLock<Mutex<HashMap<PathBuf, [u8; 32]>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Shared immutable provider projections indexed by the canonical modules an invocation uses.
+type ProviderPlanCache = Arc<Mutex<BTreeMap<BTreeSet<Vec<String>>, Arc<ProviderPlan>>>>;
 pub(crate) const INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV: &str = "INCAN_INTERNAL_LIBRARY_ARTIFACT_ONLY";
 /// Internal marker for a nested `pub::` dependency library build.
 ///
@@ -361,23 +363,32 @@ fn hash_sdk_provider_source_tree(root: &Path, current: &Path, hasher: &mut Sha25
 
 /// Derive the immutable provider-store identity from every input that can change generated Rust or its dependency
 /// closure. The identity is content based, so a stale provider set is never accepted because a directory exists.
+///
+/// Development binaries are rebuilt when test-only Rust changes, and their raw bytes are not a stable description of
+/// compiler behavior. A checkout therefore contributes its compiler source closure; an installed toolchain, which has
+/// no source closure to inspect, falls back to the executable digest.
 fn sdk_provider_store_identity(
-    source_root: &Path,
+    stdlib_root: &Path,
     executable: &Path,
     workspace_lock: Option<&Path>,
     distribution_profile: &str,
 ) -> CliResult<String> {
     let mut hasher = Sha256::new();
-    hasher.update(b"incan-sdk-provider-store-v2\0");
-    hash_sdk_provider_source_tree(source_root, source_root, &mut hasher)?;
+    hasher.update(b"incan-sdk-provider-store-v3\0");
+    hash_sdk_provider_source_tree(stdlib_root, stdlib_root, &mut hasher)?;
     hasher.update(b"compiler-version\0");
     hasher.update(crate::version::INCAN_VERSION.as_bytes());
     hasher.update(b"distribution-profile\0");
     hasher.update(distribution_profile.as_bytes());
 
-    hasher.update(b"compiler-executable-content\0");
     let executable = fs::canonicalize(executable).unwrap_or_else(|_| executable.to_path_buf());
-    hasher.update(sdk_provider_compiler_digest(&executable)?);
+    if let Some(checkout_root) = sdk_provider_compiler_checkout_root(stdlib_root) {
+        hasher.update(b"compiler-source-closure\0");
+        hash_sdk_provider_compiler_source_tree(&checkout_root, &checkout_root, &mut hasher)?;
+    } else {
+        hasher.update(b"compiler-executable-content\0");
+        hasher.update(sdk_provider_compiler_digest(&executable)?);
+    }
 
     hasher.update(b"workspace-lock\0");
     if let Some(workspace_lock) = workspace_lock {
@@ -389,6 +400,136 @@ fn sdk_provider_store_identity(
         })?);
     }
     Ok(hex::encode(hasher.finalize()))
+}
+
+/// Return the compiler-owned SDK provider identity for one source checkout.
+///
+/// This is intentionally exposed only to repository automation after it has built the matching CLI. The cache key
+/// must follow the same source closure as provider publication; hashing development executable bytes would make
+/// identical source checkouts miss after unrelated test builds.
+pub(crate) fn sdk_provider_store_identity_for_compiler_root(compiler_root: &Path) -> CliResult<String> {
+    let stdlib_root = fs::canonicalize(compiler_root.join("crates/incan_stdlib/stdlib")).map_err(|error| {
+        CliError::failure(format!(
+            "failed to canonicalize built-in stdlib source directory below {}: {error}",
+            compiler_root.display()
+        ))
+    })?;
+    let executable = env::current_exe()
+        .map_err(|error| CliError::failure(format!("failed to resolve current incan executable: {error}")))?;
+    let executable = sdk_provider_builder_executable(None, executable)?;
+    let workspace_lock = sdk_provider_workspace_lock(&stdlib_root);
+    let distribution_profile = env::var(INTERNAL_SDK_DISTRIBUTION_PROFILE_ENV)
+        .ok()
+        .filter(|profile| !profile.is_empty())
+        .unwrap_or_else(|| "full".to_string());
+    sdk_provider_store_identity(
+        &stdlib_root,
+        &executable,
+        workspace_lock.as_deref(),
+        &distribution_profile,
+    )
+}
+
+/// Resolve the source checkout that owns a discovered SDK tree, if this is a development layout.
+fn sdk_provider_compiler_checkout_root(stdlib_root: &Path) -> Option<PathBuf> {
+    let explicit = env::var_os("INCAN_SOURCE_ROOT")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    explicit
+        .into_iter()
+        .chain(stdlib_root.ancestors().map(Path::to_path_buf))
+        .find(|candidate| is_sdk_provider_compiler_checkout(candidate, stdlib_root))
+}
+
+/// Check the exact source layout before treating a directory tree as compiler authority.
+fn is_sdk_provider_compiler_checkout(candidate: &Path, stdlib_root: &Path) -> bool {
+    if !candidate.join("Cargo.toml").is_file() || !candidate.join("src").is_dir() {
+        return false;
+    }
+    let expected_stdlib_root = candidate.join("crates/incan_stdlib/stdlib");
+    fs::canonicalize(&expected_stdlib_root).ok() == fs::canonicalize(stdlib_root).ok()
+}
+
+/// Hash only compiler-authoritative checkout inputs, excluding generated output and test-only trees.
+fn hash_sdk_provider_compiler_source_tree(root: &Path, current: &Path, hasher: &mut Sha256) -> CliResult<()> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| {
+            CliError::failure(format!(
+                "failed to read compiler source directory {}: {error}",
+                current.display()
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            CliError::failure(format!(
+                "failed to enumerate compiler source directory {}: {error}",
+                current.display()
+            ))
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let path = entry.path();
+        let relative = path.strip_prefix(root).map_err(|error| {
+            CliError::failure(format!(
+                "failed to make compiler source path {} relative: {error}",
+                path.display()
+            ))
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            CliError::failure(format!(
+                "failed to inspect compiler source path {}: {error}",
+                path.display()
+            ))
+        })?;
+        if file_type.is_dir()
+            && relative.components().any(|component| {
+                matches!(
+                    component.as_os_str().to_str(),
+                    Some(
+                        ".agents"
+                            | ".git"
+                            | ".incan"
+                            | "benches"
+                            | "docs"
+                            | "examples"
+                            | "target"
+                            | "tests"
+                            | "workspaces"
+                    )
+                )
+            })
+        {
+            continue;
+        }
+
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hasher.update([0]);
+        if file_type.is_dir() {
+            hasher.update(b"directory\0");
+            hash_sdk_provider_compiler_source_tree(root, &path, hasher)?;
+        } else if file_type.is_file() {
+            hasher.update(b"file\0");
+            let bytes = fs::read(&path).map_err(|error| {
+                CliError::failure(format!(
+                    "failed to read compiler source file {}: {error}",
+                    path.display()
+                ))
+            })?;
+            hasher.update(bytes);
+        } else if file_type.is_symlink() {
+            hasher.update(b"symlink\0");
+            let target = fs::read_link(&path).map_err(|error| {
+                CliError::failure(format!(
+                    "failed to read compiler source symlink {}: {error}",
+                    path.display()
+                ))
+            })?;
+            hasher.update(target.to_string_lossy().as_bytes());
+        }
+        hasher.update([0xff]);
+    }
+    Ok(())
 }
 
 /// Hash the running compiler once per process with BLAKE3's optimized implementation, independent of its path.
@@ -1469,6 +1610,22 @@ pub(crate) fn discover_effective_project_manifest(start_dir: &Path) -> CliResult
     else {
         return Ok(None);
     };
+    effective_project_manifest(manifest).map(Some)
+}
+
+/// Load one exact project root and materialize RFC 077 inheritance without applying command-discovery overrides.
+///
+/// Recursive source-authority traversal already owns the exact dependency root it is inspecting. Rediscovering from
+/// that root could honor a nested command override and silently bind a different project, so this boundary loads the
+/// named manifest directly while sharing the same workspace resolution as ordinary command discovery.
+pub(crate) fn effective_project_manifest_for_exact_root(project_root: &Path) -> CliResult<ProjectManifest> {
+    let manifest = ProjectManifest::load(&project_root.join(MANIFEST_FILENAME))
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    effective_project_manifest(manifest)
+}
+
+/// Resolve one parsed manifest against its active RFC 077 workspace, if any.
+fn effective_project_manifest(manifest: ProjectManifest) -> CliResult<ProjectManifest> {
     let workspace =
         WorkspaceGraph::discover(manifest.project_root()).map_err(|error| CliError::failure(error.to_string()))?;
     let Some(workspace) = workspace else {
@@ -1478,7 +1635,7 @@ pub(crate) fn discover_effective_project_manifest(start_dir: &Path) -> CliResult
                 manifest.path().display()
             )));
         }
-        return Ok(Some(manifest));
+        return Ok(manifest);
     };
     let canonical_root = std::fs::canonicalize(manifest.project_root()).map_err(|error| {
         CliError::failure(format!(
@@ -1495,7 +1652,6 @@ pub(crate) fn discover_effective_project_manifest(start_dir: &Path) -> CliResult
     })?;
     workspace
         .effective_member_manifest(member)
-        .map(Some)
         .map_err(|error| CliError::failure(error.to_string()))
 }
 
@@ -1590,6 +1746,11 @@ pub(crate) struct CompilationSession {
     pub library_manifest_index: LibraryManifestIndex,
     /// Immutable provider projection shared by compiler stages for ordinary package dependencies and SDK providers.
     pub provider_plan: Arc<ProviderPlan>,
+    /// Module-usage projections already derived from the immutable session inputs.
+    ///
+    /// Collection, requirement discovery, and semantic analysis all need the same projection. Rebuilding it makes
+    /// every command rehash provider source roots and, worse, lets a mutable local cache dominate the warm path.
+    provider_plans_by_modules: ProviderPlanCache,
     /// Integrity-checked active SDK catalog, when this toolchain is component-aware.
     pub sdk_inventory: Option<Arc<SdkInventory>>,
     /// Project-selected SDK component closure, when an inventory is active.
@@ -1787,12 +1948,17 @@ impl CompilationSession {
             .map_err(|error| CliError::failure(error.to_string()))?
             .with_bootstrap_sdk_namespace_roots(bootstrap_sdk_namespace_roots),
         );
+        let provider_plans_by_modules = Arc::new(Mutex::new(BTreeMap::from([(
+            BTreeSet::new(),
+            Arc::clone(&provider_plan),
+        )])));
 
         Ok(Self {
             manifest,
             source_root,
             library_manifest_index,
             provider_plan,
+            provider_plans_by_modules,
             sdk_inventory,
             sdk_components,
             package_feature_plan,
@@ -1806,18 +1972,52 @@ impl CompilationSession {
 
     /// Resolve module participation from this session's immutable provider, feature, and SDK inputs.
     pub(crate) fn provider_plan_for_modules(&self, modules: &[ParsedModule]) -> CliResult<Arc<ProviderPlan>> {
-        ProviderPlan::from_resolved_inputs(
+        self.provider_plan_for_used_module_paths(provider_used_module_paths(modules))
+    }
+
+    /// Resolve one provider projection from canonical module paths while retaining the session's authority snapshot.
+    ///
+    /// Callers with nested source constructs can derive their complete module-use set once, then enter the same cache
+    /// as ordinary compilation without rebuilding SDK, package-feature, or library-manifest inputs.
+    pub(crate) fn provider_plan_for_used_module_paths(
+        &self,
+        used_module_paths: BTreeSet<Vec<String>>,
+    ) -> CliResult<Arc<ProviderPlan>> {
+        if let Some(plan) = self
+            .provider_plans_by_modules
+            .lock()
+            .map_err(|_| CliError::failure("provider-plan cache lock was poisoned"))?
+            .get(&used_module_paths)
+            .cloned()
+        {
+            return Ok(plan);
+        }
+        let plan = ProviderPlan::from_resolved_inputs(
             self.provider_plan.library_manifest_index().clone(),
             self.package_feature_plan.as_ref(),
             self.sdk_inventory.as_deref(),
             self.sdk_components.as_ref(),
-            provider_used_module_paths(modules),
+            used_module_paths.clone(),
         )
         .map(|plan| {
             plan.with_bootstrap_sdk_namespace_roots(self.provider_plan.bootstrap_sdk_namespace_roots().cloned())
         })
         .map(Arc::new)
-        .map_err(|error| CliError::failure(error.to_string()))
+        .map_err(|error| CliError::failure(error.to_string()))?;
+        let mut cached = self
+            .provider_plans_by_modules
+            .lock()
+            .map_err(|_| CliError::failure("provider-plan cache lock was poisoned"))?;
+        Ok(cached.entry(used_module_paths).or_insert(plan).clone())
+    }
+
+    /// Return the number of provider projections cached by this compilation session.
+    #[cfg(test)]
+    pub(crate) fn provider_plan_cache_entry_count(&self) -> CliResult<usize> {
+        self.provider_plans_by_modules
+            .lock()
+            .map(|cached| cached.len())
+            .map_err(|_| CliError::failure("provider-plan cache lock was poisoned"))
     }
 
     /// Analyze one collected module graph exactly once.
@@ -2206,6 +2406,7 @@ fn prepare_library_dependency_artifacts(
                     || matches!(preparation, LibraryDependencyPreparation::OvenDirectRustc)
                         && has_source_manifest
                         && !oven_library_dependency_has_verified_profile_receipts(&dependency.path)
+                        && !super::build::oven_library_dependency_declares_package_loaf(&dependency.path)
             }
             Some(LibraryManifestIndexEntry::Failed(failure)) => {
                 failure.kind == LibraryManifestFailureKind::ArtifactMissing
@@ -2218,6 +2419,13 @@ fn prepare_library_dependency_artifacts(
     }
 
     for (dependency_key, dependency_root, active_features) in required {
+        if matches!(preparation, LibraryDependencyPreparation::OvenDirectRustc) {
+            return Err(CliError::failure(format!(
+                "Oven Alpha requires a baked package Loaf for pub::{dependency_key} at {}; run `incan oven bake --project {}` in that provider before preparing this consumer. Normal build, run, test, lock, and consumer bake will not compile the provider or invoke Cargo on its behalf",
+                dependency_root.display(),
+                dependency_root.display()
+            )));
+        }
         prepare_library_dependency_artifact(&dependency_key, &dependency_root, &active_features, preparation)?;
     }
 
@@ -2261,6 +2469,9 @@ fn prepare_library_dependency_artifact(
         LibraryDependencyPreparation::LegacyManifestOnly => "metadata artifact",
         LibraryDependencyPreparation::OvenDirectRustc => "Oven direct-rustc library",
     };
+    // A parent `--report json` reserves stdout for exactly one machine-readable document. The internal compiler
+    // child inherits no report options, so route its progress through stderr before it can corrupt the parent's
+    // aggregate report. The normal human command retains the existing concise progress line below.
     eprintln!(
         "Preparing missing pub::{dependency_key} {preparation_label} with `incan build --lib` in {}",
         dependency_root.display()
@@ -2273,7 +2484,8 @@ fn prepare_library_dependency_artifact(
         .current_dir(dependency_root)
         .env_remove(INTERNAL_MANIFEST_OVERRIDE_ENV)
         .env_remove(INTERNAL_PROJECT_ROOT_OVERRIDE_ENV)
-        .env(INTERNAL_LIBRARY_DEPENDENCY_PREPARATION_ENV, "1");
+        .env(INTERNAL_LIBRARY_DEPENDENCY_PREPARATION_ENV, "1")
+        .stdout(Stdio::null());
     match preparation {
         LibraryDependencyPreparation::LegacyManifestOnly => {
             command.env(INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV, "1");
@@ -2524,7 +2736,7 @@ fn merge_requirement_dependency(
 }
 
 /// Compare dependency specs while treating equivalent path spellings as the same dependency.
-fn dependency_specs_match(left: &DependencySpec, right: &DependencySpec) -> bool {
+pub(crate) fn dependency_specs_match(left: &DependencySpec, right: &DependencySpec) -> bool {
     if left == right {
         return true;
     }
@@ -2709,7 +2921,10 @@ fn rust_inspect_workspace_fingerprint(
     cargo_target_dir: &Path,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"incan_rust_inspect_workspace/3\0");
+    // Version 4 records a generated projection whose local package metadata matches the canonical Incan manifest.
+    // This prevents `cargo metadata --locked` from rejecting an otherwise exact dependency lock solely because the
+    // inspectable local root was previously emitted with the compiler's version.
+    hasher.update(b"incan_rust_inspect_workspace/4\0");
     hasher.update(project_name.as_bytes());
     hasher.update(b"\0");
     hasher.update(cargo_package_name.as_bytes());
@@ -3080,6 +3295,10 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
     cargo_target_dir: &Path,
     cargo_policy_flags: &[String],
 ) -> CliResult<PathBuf> {
+    let project_manifest =
+        ProjectManifest::discover(project_root).map_err(|error| CliError::failure(error.to_string()))?;
+    let cargo_lock_payload =
+        project_rust_inspect_lock_projection(cargo_lock_payload, cargo_package_name, project_manifest.as_ref())?;
     let fingerprint = rust_inspect_workspace_fingerprint(
         project_name,
         cargo_package_name,
@@ -3114,6 +3333,9 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
 
     let mut generator = ProjectGenerator::new(&rust_inspect_manifest_dir, project_name, true);
     generator.set_package_name(Some(cargo_package_name.to_string()));
+    if let Some(project) = project_manifest.as_ref().and_then(|manifest| manifest.project.as_ref()) {
+        generator.set_package_metadata(project.version.clone(), project.license.clone());
+    }
     generator.set_dependencies(resolved.dependencies.clone());
     generator.set_dev_dependencies(resolved.dev_dependencies.clone());
     generator.set_include_dev_dependencies(true);
@@ -3160,6 +3382,60 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
     }
 
     Ok(rust_inspect_manifest_dir)
+}
+
+/// Project a canonical dependency lock into the generated rust-inspect root without re-resolving dependencies.
+///
+/// A Cargo lock records the local package's version alongside registry packages. Incan's dependency fingerprint
+/// intentionally excludes that local version because it cannot alter the resolved third-party graph. When a project
+/// changes only its own version, passing the old root record to Cargo with `--locked` spuriously rejects the source
+/// inspection projection. Rewrite only that source-less root record to the current manifest version; registry package
+/// entries, checksums, and dependency edges remain selected from the canonical lock. This stays a projection, never
+/// a lock publication or dependency resolver.
+#[cfg(feature = "rust_inspect")]
+fn project_rust_inspect_lock_projection(
+    cargo_lock_payload: Option<String>,
+    cargo_package_name: &str,
+    manifest: Option<&ProjectManifest>,
+) -> CliResult<Option<String>> {
+    let Some(payload) = cargo_lock_payload else {
+        return Ok(None);
+    };
+    let Some(version) = manifest
+        .and_then(|manifest| manifest.project.as_ref())
+        .and_then(|project| project.version.as_deref())
+    else {
+        return Ok(Some(payload));
+    };
+    let mut lock = toml::from_str::<toml::Value>(&payload).map_err(|error| {
+        CliError::failure(format!(
+            "failed to parse canonical Cargo.lock for rust-inspect projection: {error}"
+        ))
+    })?;
+    let Some(packages) = lock.get_mut("package").and_then(toml::Value::as_array_mut) else {
+        // Modern semantic Incan locks intentionally have no Cargo package graph until the explicit Oven publisher
+        // creates one. They are not a Cargo projection and must remain untouched here.
+        return Ok(Some(payload));
+    };
+    let mut matching_roots = packages
+        .iter_mut()
+        .filter_map(|package| {
+            let table = package.as_table_mut()?;
+            let name = table.get("name")?.as_str()?;
+            (name == cargo_package_name && !table.contains_key("source")).then_some(table)
+        })
+        .collect::<Vec<_>>();
+    let [root] = matching_roots.as_mut_slice() else {
+        // A provider-only or workspace lock can legitimately omit the generated inspection package. It is still an
+        // exact external dependency authority, so leave it intact rather than manufacturing a local root record.
+        return Ok(Some(payload));
+    };
+    root.insert("version".to_string(), toml::Value::String(version.to_string()));
+    toml::to_string_pretty(&lock).map(Some).map_err(|error| {
+        CliError::failure(format!(
+            "failed to serialize rust-inspect Cargo.lock projection: {error}"
+        ))
+    })
 }
 
 /// Collect canonical rust-inspect query paths from parsed `rust::` imports.
@@ -4616,6 +4892,38 @@ mod tests {
     }
 
     #[test]
+    fn compilation_session_reuses_provider_plan_for_identical_module_usage() -> Result<(), Box<dyn std::error::Error>> {
+        let library_manifest_index = LibraryManifestIndex::default();
+        let provider_plan = Arc::new(ProviderPlan::default());
+        let session = CompilationSession {
+            manifest: None,
+            source_root: PathBuf::from("fixture"),
+            library_imported_vocab: library_manifest_index.library_imported_vocab(),
+            library_imported_dsl_surfaces: library_manifest_index.library_imported_dsl_surfaces(),
+            library_manifest_index,
+            provider_plans_by_modules: Arc::new(Mutex::new(BTreeMap::from([(
+                BTreeSet::new(),
+                Arc::clone(&provider_plan),
+            )]))),
+            provider_plan,
+            sdk_inventory: None,
+            sdk_components: None,
+            package_feature_plan: None,
+            active_features: BTreeSet::new(),
+            declared_features: BTreeSet::new(),
+            contract_model_bundles: Vec::new(),
+        };
+        let module = parsed_module_for_test("from std.io import stdout\n\ndef main() -> None:\n    pass\n")?;
+
+        let first = session.provider_plan_for_modules(std::slice::from_ref(&module))?;
+        let second = session.provider_plan_for_modules(std::slice::from_ref(&module))?;
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(session.provider_plan_cache_entry_count()?, 2);
+        Ok(())
+    }
+
+    #[test]
     fn package_declared_c_header_is_resolved_only_for_verification() -> Result<(), Box<dyn std::error::Error>> {
         let manifest = ProjectManifest::from_str(
             "[project]\nname = \"c_header_fixture\"\n\n[oven.interop]\nschema = 1\n\n[[oven.interop.targets]]\ntarget = \"aarch64-apple-darwin\"\nheaders = [\"interop/include/bridge.h\"]\n",
@@ -4878,6 +5186,67 @@ mod tests {
         assert_ne!(
             lock_changed, minimal,
             "distribution profiles must not share provider-store identities"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sdk_provider_store_identity_ignores_rebuilt_development_executable_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = tempfile::tempdir()?;
+        let checkout = temp_dir.path().join("checkout");
+        let stdlib_root = checkout.join("crates/incan_stdlib/stdlib");
+        fs::create_dir_all(checkout.join("src"))?;
+        fs::create_dir_all(stdlib_root.join("components"))?;
+        fs::write(checkout.join("Cargo.toml"), "[workspace]\nmembers = []\n")?;
+        fs::write(checkout.join("Cargo.lock"), "first lock closure")?;
+        fs::write(checkout.join("src/compiler.rs"), "pub fn compile() {}\n")?;
+        fs::write(
+            stdlib_root.join("components/core.incn"),
+            "pub def core() -> int:\n  return 1\n",
+        )?;
+        let executable = checkout.join("target/debug/incan");
+        fs::create_dir_all(executable.parent().ok_or("compiler executable had no parent")?)?;
+        fs::write(&executable, "first development compiler bytes")?;
+
+        let initial =
+            sdk_provider_store_identity(&stdlib_root, &executable, Some(&checkout.join("Cargo.lock")), "full")?;
+        let rebuilt_executable = checkout.join("target/rebuilt/incan");
+        fs::create_dir_all(
+            rebuilt_executable
+                .parent()
+                .ok_or("rebuilt compiler executable had no parent")?,
+        )?;
+        fs::write(&rebuilt_executable, "rebuilt development compiler bytes")?;
+        let rebuilt_executable = sdk_provider_store_identity(
+            &stdlib_root,
+            &rebuilt_executable,
+            Some(&checkout.join("Cargo.lock")),
+            "full",
+        )?;
+        assert_eq!(
+            initial, rebuilt_executable,
+            "a rebuilt development executable with unchanged compiler source must reuse SDK providers"
+        );
+
+        fs::create_dir_all(checkout.join("tests"))?;
+        fs::write(checkout.join("tests/only_test.rs"), "#[test]\nfn regression() {}\n")?;
+        let changed_test =
+            sdk_provider_store_identity(&stdlib_root, &executable, Some(&checkout.join("Cargo.lock")), "full")?;
+        assert_eq!(
+            initial, changed_test,
+            "test-only source must not republish SDK providers"
+        );
+
+        fs::write(
+            checkout.join("src/compiler.rs"),
+            "pub fn compile() { let changed = true; }\n",
+        )?;
+        let changed_source =
+            sdk_provider_store_identity(&stdlib_root, &executable, Some(&checkout.join("Cargo.lock")), "full")?;
+        assert_ne!(
+            initial, changed_source,
+            "a compiler source change must still invalidate SDK provider artifacts"
         );
         Ok(())
     }
@@ -6406,6 +6775,53 @@ pub def main() -> int:
             Path::new("/cache/target"),
         );
         assert_ne!(fp_one, fp_two);
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn rust_inspect_lock_projection_updates_only_the_local_package_version() -> Result<(), Box<dyn std::error::Error>> {
+        let manifest = ProjectManifest::from_str(
+            "[project]\nname = \"probe\"\nversion = \"1.2.3\"\n",
+            Path::new("probe/incan.toml"),
+        )?;
+        let payload = r#"version = 4
+
+[[package]]
+name = "probe"
+version = "0.1.0"
+dependencies = ["serde"]
+
+[[package]]
+name = "serde"
+version = "1.0.219"
+source = "registry+https://example.invalid/index"
+checksum = "fixture-checksum"
+"#;
+        let projected =
+            super::project_rust_inspect_lock_projection(Some(payload.to_string()), "probe", Some(&manifest))?
+                .ok_or("rust-inspect lock projection unexpectedly removed its lock")?;
+        let lock = toml::from_str::<toml::Value>(&projected)?;
+        let packages = lock
+            .get("package")
+            .and_then(toml::Value::as_array)
+            .ok_or("projected lock omitted its package array")?;
+        let local = packages
+            .iter()
+            .find(|package| {
+                package.get("name").and_then(toml::Value::as_str) == Some("probe") && package.get("source").is_none()
+            })
+            .ok_or("projected lock omitted its local package")?;
+        assert_eq!(local.get("version").and_then(toml::Value::as_str), Some("1.2.3"));
+        let registry = packages
+            .iter()
+            .find(|package| package.get("name").and_then(toml::Value::as_str) == Some("serde"))
+            .ok_or("projected lock omitted its registry package")?;
+        assert_eq!(registry.get("version").and_then(toml::Value::as_str), Some("1.0.219"));
+        assert_eq!(
+            registry.get("checksum").and_then(toml::Value::as_str),
+            Some("fixture-checksum")
+        );
+        Ok(())
     }
 
     #[cfg(feature = "rust_inspect")]
