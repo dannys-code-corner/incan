@@ -46,7 +46,7 @@ jobs:
               # The two generated reference pages are derived from the compiler,
               # so they must retain the full generated-reference check.
               case "$file" in
-                workspaces/docs-site/docs/language/reference/language.md|workspaces/docs-site/docs/language/reference/feature_inventory.md)
+                workspaces/docs-site/docs/language/reference/language.md|workspaces/docs-site/docs/language/reference/feature_inventory.md|workspaces/docs-site/docs/_snippets/language/examples/verified_*.incn)
                   docs_only=false
                   break
                   ;;
@@ -213,6 +213,11 @@ jobs:
         run: |
           CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
           CARGO_BUILD_JOBS=2 cargo build --locked -p incan_core --bin generate_lang_reference
+      - name: Check verified documentation examples
+        run: >-
+          INCAN_TEST_COMPILER_ALREADY_BUILT=1
+          INCAN_TEST_PREWARM_TOOLCHAIN=stable
+          make -s check-docs-examples
       - name: Upload compiler and reference generators
         uses: actions/upload-artifact@v6
         with:
@@ -608,7 +613,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-docs.txt
       - name: Build docs site (strict)
-        run: python -m mkdocs build --strict
+        run: make docs-build
 
   generated-reference:
     name: Generated Reference Up-to-date

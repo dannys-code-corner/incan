@@ -62,6 +62,10 @@ The 1.0 direction is:
 
 ## Where to go next
 
+- If the fit is clear, [run the stable first-project loop](../tooling/tutorials/getting_started.md).
+- If you want a representative executable project, [build a typed workflow step](../tooling/tutorials/pipeline_mini_project.md).
+- If you want to study package boundaries, [build and consume an Incan library](../tooling/tutorials/build_and_consume_library.md).
+- If you want typed files and JSON at a real application boundary, [build the typed data processor](../language/tutorials/typed_data_processor.md).
 - If you are comparing against Python, read [Incan vs Python](../comparisons/python.md).
 - If you need Python compatibility details, read the compatibility boundary in [Incan vs Python](../comparisons/python.md#compatibility-boundary).
 - If you are evaluating the 1.0 category, read [1.0 domain-native demo target](domain_native_demo.md).

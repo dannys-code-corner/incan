@@ -1,6 +1,9 @@
 # Async Programming in Incan
 
-Incan supports async/await through the current Tokio-backed runtime path. This guide covers the current `std.async` surface available in Incan.
+Incan's language and API contracts include async/await through a Tokio-backed runtime path. This guide covers that `std.async` source surface.
+
+!!! info "0.5 runtime boundary"
+    The 0.5 toolchain ships the checked task and timeout closure in its full-standard-library Loaf. Complete programs using those supported surfaces can build and run through normal Incan commands without an implicit Cargo fallback. Sections labelled with a compiler limitation remain contract documentation rather than runnable examples.
 
 !!! important "Async is import-activated"
     `async` and `await` are **soft keywords**: they become reserved keywords only after importing `std.async` (for example `import std.async` or `from std.async.time import sleep`).
@@ -8,7 +11,21 @@ Incan supports async/await through the current Tokio-backed runtime path. This g
 !!! note "Coming from Python?"
     Incan keeps the familiar `async def` and `await` authoring shape, but it is not an `asyncio` compatibility layer. Task spawning, timeouts, cancellation, and runtime behavior follow Incan's `std.async` contracts and the current Tokio-backed runtime path.
 
-    The key difference is under the hood: the current beta builds through Rust and uses Tokio, giving you familiar Python-shaped syntax with a native async runtime.
+    The key difference is under the hood: Incan 0.5 reuses its checked async Loaf and a Tokio-backed native runtime, giving you familiar Python-shaped syntax without invoking Cargo on each normal build or run.
+
+```mermaid
+sequenceDiagram
+  participant Caller
+  participant Future
+  participant Runtime as Tokio-backed runtime
+  Caller->>Future: call async function
+  Caller->>Runtime: await or spawn
+  Runtime->>Future: poll until ready
+  Future-->>Runtime: value or join error
+  Runtime-->>Caller: resume with typed result
+```
+
+<p class="inc-diagram-caption">Calling creates async work; <code>await</code> or task APIs let the runtime drive it to a typed result.</p>
 
 ## Quick Start
 
@@ -230,6 +247,9 @@ async def cooperative_loop() -> None:
 ## Channels
 
 Channels enable safe message passing between concurrent tasks. They're the primary way to communicate between async tasks without shared mutable state.
+
+!!! warning "Current compiler limitation"
+    The channel declarations exist in `std.async.channel`, but the current compiler rejects the documented typed constructor and imported `Sender`/`Receiver` methods. Treat the channel material below as the intended library contract, not as a currently runnable authoring path. Task spawning, joining, and timeouts are runnable in [Build an asynchronous worker pipeline](../tutorials/async_worker_pipeline.md).
 
 ### MPSC Channel (Multi-Producer, Single-Consumer)
 
@@ -739,5 +759,5 @@ This pattern is important for reliability. If a channel closes unexpectedly, you
 - [Error handling recipes](../how-to/error_handling_recipes.md) - Patterns and best practices
 - [Error trait](../reference/stdlib_traits/error.md) - Stdlib trait reference
 - [Examples: Async Tasks](https://github.com/encero-systems/incan/blob/main/examples/advanced/async_tasks.incn)
-- [Examples: Channels](https://github.com/encero-systems/incan/blob/main/examples/advanced/async_channels.incn)
+- [Examples: Async concurrency](https://github.com/encero-systems/incan/blob/main/examples/advanced/async_channels.incn)
 - [Examples: Synchronization](https://github.com/encero-systems/incan/blob/main/examples/advanced/async_sync.incn)
