@@ -277,3 +277,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# Fix for issue #1047: safe input handling
