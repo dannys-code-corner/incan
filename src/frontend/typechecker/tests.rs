@@ -8828,6 +8828,36 @@ class Bad with Inc:
 }
 
 #[test]
+fn test_trait_required_method_alias_with_exact_signature_is_accepted_issue1055() {
+    let source = r#"
+trait Renamable:
+  def where(self, value: int) -> int: ...
+
+class Example with Renamable:
+  where = alias filter
+
+  def filter(self, value: int) -> int:
+    return value
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_trait_required_method_alias_with_incompatible_signature_is_rejected_issue1055() {
+    let source = r#"
+trait Renamable:
+  def where(self, value: int) -> int: ...
+
+class BadExample with Renamable:
+  where = alias filter
+
+  def filter(self, value: str) -> int:
+    return 0
+"#;
+    assert!(check_str(source).is_err());
+}
+
+#[test]
 fn test_trait_required_method_allows_nested_self_return_for_generic_model() {
     let source = r#"
 model Wrapper[T]:

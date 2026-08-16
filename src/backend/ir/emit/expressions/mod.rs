@@ -424,6 +424,7 @@ impl<'a> IrEmitter<'a> {
             ValueUseSite::ReturnValue { .. } => ValueUseSite::ReturnValue { target_ty },
             ValueUseSite::MatchScrutinee { .. } => ValueUseSite::MatchScrutinee { target_ty },
             ValueUseSite::MethodArg => ValueUseSite::MethodArg,
+            ValueUseSite::MembershipProbe => ValueUseSite::MembershipProbe,
         }
     }
 

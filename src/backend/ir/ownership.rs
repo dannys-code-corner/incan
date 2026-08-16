@@ -80,6 +80,11 @@ pub enum ValueUseSite<'a> {
     },
     /// Method-style argument boundary where the method implementation controls final borrowing.
     MethodArg,
+    /// Probe passed to a known collection membership operation.
+    ///
+    /// Membership compares against collection-owned values without taking ownership of the probe. In particular, an
+    /// owned `String` loop binding must be borrowed so a later expression in the same branch can still use it.
+    MembershipProbe,
 }
 
 /// Receiver and lookup facts needed to choose the value-use site for one ordinary method-call argument.
@@ -210,6 +215,13 @@ pub fn plan_value_use(expr: &IrExpr, site: ValueUseSite<'_>) -> OwnershipPlan {
             determine_conversion(expr, target_ty, ConversionContext::MatchScrutinee)
         }
         ValueUseSite::MethodArg => determine_conversion(expr, None, ConversionContext::MethodArg),
+        ValueUseSite::MembershipProbe => {
+            if is_owned_string_type(&expr.ty) && !expr_has_rust_reference_shape(expr) {
+                OwnershipPlan::Borrow
+            } else {
+                OwnershipPlan::None
+            }
+        }
     }
 }
 
@@ -234,7 +246,7 @@ pub fn value_use_site_target_ty<'a>(site: ValueUseSite<'a>) -> Option<&'a IrType
         | ValueUseSite::Assignment { target_ty }
         | ValueUseSite::ReturnValue { target_ty }
         | ValueUseSite::MatchScrutinee { target_ty } => target_ty,
-        ValueUseSite::MethodArg => None,
+        ValueUseSite::MethodArg | ValueUseSite::MembershipProbe => None,
     }
 }
 
