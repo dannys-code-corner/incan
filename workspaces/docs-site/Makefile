@@ -16,6 +16,7 @@ docs-install:
 .PHONY: docs-check-components  ## docs - Validate Incapunk component and asset contracts
 docs-check-components:
 	@echo "\033[1mChecking Incapunk component contracts...\033[0m"
+	@python utils/gen_rfc_index_snippet.py >/dev/null
 	@python scripts/check_incapunk_components.py
 	@node scripts/check_incan_mermaid_runtime.mjs
 	@echo "\033[32m✓ Incapunk component contracts passed\033[0m"
