@@ -584,18 +584,38 @@ pub(crate) fn prepare_rust_inspect_workspace(
             if command_authority_installed {
                 // The command-local context owns every output, entry, and base-Loaf lease through this workspace.
             } else if explicit_oven_bake {
-                let release_loaf = resolve_toolchain_loaf(&receipt, OvenLoafSelection::CompilerOwnedProviderSuperset)
-                    .map_err(|error| CliError::failure(error.to_string()))?;
-                let release_registry_lock = release_loaf
-                    .as_ref()
-                    .map(|loaf| loaf.artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH));
-                acquire_explicit_project_inspection_sources(
-                    &rust_inspect_manifest_dir,
-                    authority_request.features,
-                    authority_request.registry_dependencies,
-                    release_registry_lock.as_deref(),
-                )?;
-                source_loaf = release_loaf;
+                if let Some(selected) =
+                    resolve_toolchain_loaf_for_registry_sources(&receipt, authority_request.registry_dependencies)
+                        .map_err(|error| CliError::failure(error.to_string()))?
+                {
+                    install_oven_inspection_source_authority(
+                        &rust_inspect_manifest_dir,
+                        &selected.artifacts.registry_sources,
+                        &selected.artifact_root,
+                        None,
+                        None,
+                    )?;
+                    install_required_oven_registry_lock(
+                        !selected.artifacts.registry_sources.is_empty(),
+                        &selected.artifact_root,
+                        &rust_inspect_manifest_dir.join("Cargo.lock"),
+                    )?;
+                    source_loaf = Some(selected);
+                } else {
+                    let release_loaf =
+                        resolve_toolchain_loaf(&receipt, OvenLoafSelection::CompilerOwnedProviderSuperset)
+                            .map_err(|error| CliError::failure(error.to_string()))?;
+                    let release_registry_lock = release_loaf
+                        .as_ref()
+                        .map(|loaf| loaf.artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH));
+                    acquire_explicit_project_inspection_sources(
+                        &rust_inspect_manifest_dir,
+                        authority_request.features,
+                        authority_request.registry_dependencies,
+                        release_registry_lock.as_deref(),
+                    )?;
+                    source_loaf = release_loaf;
+                }
             } else if let Some(selected) =
                 resolve_toolchain_loaf_for_registry_sources(&receipt, authority_request.registry_dependencies)
                     .map_err(|error| CliError::failure(error.to_string()))?

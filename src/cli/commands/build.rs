@@ -4889,6 +4889,7 @@ fn prepare_oven_project(
     let rust_inspect_manifest_dir = {
         let metadata_query_paths = loaf_rust_inspect_query_paths(&modules, &compilation_session)?;
         let prepared_project_source_authorities = if oven_plan_mode == OvenProjectPlanMode::ConsumeOnly
+            && !loaf_codegen_mode()
             && manifest.is_some()
             && !metadata_query_paths.is_empty()
         {
