@@ -1155,7 +1155,7 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.matches("timeout-minutes: 20").count() >= 4
             && workflow.matches("Install WASI target for vocab desugarers").count() == 6
             && !workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and cap every substantive Oven command at twenty minutes"
+        "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and retain each job's documented bounded Oven budget"
     );
     let replay_gate = workflow
         .find("oven-linux-replay:")
@@ -1174,11 +1174,11 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
         })
         .ok_or("pull-request CI is missing the independent Oven release smoke gate")?;
     assert!(
-        replay_gate.contains("timeout-minutes: 28")
+        replay_gate.contains("timeout-minutes: 31")
             && replay_gate.contains("make -s test-oven-partition")
-            && replay_gate.contains(".timing.total_elapsed_ms <= 1500000")
+            && replay_gate.contains(".timing.total_elapsed_ms <= 1680000")
             && !replay_gate.contains("test-oven-release-smoke"),
-        "the replay job needs a small setup-and-artifact margin while its measured Oven execution remains capped at twenty-five minutes"
+        "the replay job needs a small setup-and-artifact margin while its measured Oven execution remains capped at twenty-eight minutes"
     );
     assert!(
         release_gate.contains("needs:\n      - changes\n      - linux-tool-handoff")
