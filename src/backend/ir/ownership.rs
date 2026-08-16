@@ -216,7 +216,10 @@ pub fn plan_value_use(expr: &IrExpr, site: ValueUseSite<'_>) -> OwnershipPlan {
         }
         ValueUseSite::MethodArg => determine_conversion(expr, None, ConversionContext::MethodArg),
         ValueUseSite::MembershipProbe => {
-            if is_owned_string_type(&expr.ty) && !expr_has_rust_reference_shape(expr) {
+            if is_owned_string_type(&expr.ty)
+                && matches!(&expr.kind, IrExprKind::Var { .. })
+                && !expr_has_rust_reference_shape(expr)
+            {
                 OwnershipPlan::Borrow
             } else {
                 OwnershipPlan::None

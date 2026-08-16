@@ -1943,7 +1943,7 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.4.0/manifest.json";
+    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-dev.47/manifest.json";
 
     let output = Command::new("node")
         .arg(npm_installer_wrapper())
@@ -1998,7 +1998,7 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.4.0/manifest.json";
+    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-dev.47/manifest.json";
 
     let output = Command::new("python3")
         .arg(pip_installer_wrapper())
