@@ -8648,7 +8648,7 @@
 <li><strong>Ship native artifacts</strong></li>
 <li><strong>Use Rust crates when you need a Rust boundary</strong></li>
 </ul>
-<p>That means you can keep a high-level surface for most of your code, while still having a real boundary into the Rust ecosystem for performance, libraries, and integration. In the documented Oven Alpha envelope, current beta build, test, and run commands use receipt-bound direct <code>rustc</code>, while the hidden <code>legacy_cargo</code> Loaf baker is the only Cargo-backed compatibility publisher. Generated Rust is inspectable backend output, not the permanent public semantic contract.</p>
+<p>That means you can keep a high-level surface for most of your code, while still having a real boundary into the Rust ecosystem for performance, libraries, and integration. In the documented Oven Alpha envelope, current beta build, test, and run commands use receipt-bound direct <code>rustc</code>, while the internal compatibility publisher is the only Cargo-backed producer. Generated Rust is inspectable backend output, not the permanent public semantic contract.</p>
 <h2 id="who-its-for">Who it’s for<a class="headerlink" href="#who-its-for" title="Permanent link">&para;</a></h2>
 <p>Incan is useful when you want:</p>
 <ul>

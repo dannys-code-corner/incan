@@ -9071,16 +9071,9 @@ to version control</strong> so normal commands can validate that the project sti
 selection. The lock is not permission for a normal command to resolve missing crates with Cargo.</p>
 <p>For compiled SDK providers, the fingerprint identifies checked provider contracts, dependency and feature choices, and authored Incan inputs. Native Rust output and host-derived ABI metadata remain covered by each installed provider artifact's exact integrity digest, but do not make an otherwise equivalent macOS and Linux SDK selection semantically different. User-authored path dependencies remain part of the semantic fingerprint.</p>
 <h3 id="legacy-generated-cargo-behavior-pre-oven-alpha">Legacy generated-Cargo behavior (pre-Oven Alpha)<a class="headerlink" href="#legacy-generated-cargo-behavior-pre-oven-alpha" title="Permanent link">&para;</a></h3>
-<p>The generated-Cargo cache, preheat controls, Cargo policy flags, and target-directory overrides describe the former
-0.5 execution backend. They are not controls for ordinary Oven Alpha commands. See
-<a href="../../explanation/generated_build_storage/">Generated-build storage model</a> only when auditing that historical backend
-or the explicit compatibility-publisher boundary.</p>
+<p>The generated-Cargo cache, preheat controls, Cargo policy flags, and target-directory overrides describe the former 0.5 execution backend. They are not controls for ordinary Oven Alpha commands. See <a href="../../explanation/generated_build_storage/">Generated-build storage model</a> only when auditing that historical backend or the explicit compatibility-publisher boundary.</p>
 <h3 id="ci-and-offline-use">CI and offline use<a class="headerlink" href="#ci-and-offline-use" title="Permanent link">&para;</a></h3>
-<p>Normal Oven Alpha <code>build</code>, <code>run</code>, and <code>test</code> do not launch Cargo or access a registry, so Cargo's <code>--offline</code>,
-<code>--locked</code>, and <code>--frozen</code> policies are not normal-command controls. Commit <code>incan.lock</code>, install the required
-Oven-enabled toolchain before entering the restricted environment, and let receipt/lock validation fail closed if
-the project no longer matches the sealed Loaf. Maintainer publication can separately constrain the explicit
-<code>legacy_cargo</code> baker with Cargo policy; that does not change the consumer contract.</p>
+<p>Normal Oven Alpha <code>build</code>, <code>run</code>, and <code>test</code> do not launch Cargo or access a registry, so Cargo's <code>--offline</code>, <code>--locked</code>, and <code>--frozen</code> policies are not normal-command controls. Commit <code>incan.lock</code>, install the required Oven-enabled toolchain before entering the restricted environment, and let receipt/lock validation fail closed if the project no longer matches the sealed Loaf. Maintainer publication can separately constrain the internal compatibility publisher with Cargo policy; that does not change the consumer contract.</p>
 <h2 id="resolution-rules">Resolution rules<a class="headerlink" href="#resolution-rules" title="Permanent link">&para;</a></h2>
 <p>When the compiler resolves a dependency, it follows this precedence:</p>
 <table>
@@ -9121,13 +9114,8 @@ the project no longer matches the sealed Loaf. Maintainer publication can separa
 <li>Known-good defaults only apply when there is no <code>incan.toml</code> entry and no inline annotation.</li>
 </ul>
 <h2 id="rust-dependency-feature-boundary">Rust dependency feature boundary<a class="headerlink" href="#rust-dependency-feature-boundary" title="Permanent link">&para;</a></h2>
-<p>Declare Rust dependency features in the inline import or <code>[rust-dependencies]</code> entry before running <code>incan lock</code>.
-The resulting requirement participates in semantic lock and receipt identity. A normal Oven command accepts it only
-when a sealed Loaf authorizes the exact dependency/feature closure.</p>
-<p>Cargo feature and argument passthrough options are not accepted by normal Oven Alpha <code>build</code>, <code>run</code>, or <code>test</code>.
-They remain only on explicit compatibility surfaces such as lock preparation and the hidden maintainer baker. If a
-required closure is absent, change the declaration and install or bake a matching Loaf instead of trying to mutate
-Cargo resolution during the consumer command.</p>
+<p>Declare Rust dependency features in the inline import or <code>[rust-dependencies]</code> entry before running <code>incan lock</code>. The resulting requirement participates in semantic lock and receipt identity. A normal Oven command accepts it only when a sealed Loaf authorizes the exact dependency/feature closure.</p>
+<p>Cargo feature and argument passthrough options are not accepted by normal Oven Alpha <code>build</code>, <code>run</code>, or <code>test</code>. They remain only on explicit compatibility surfaces such as lock preparation and the internal compatibility publisher. If a required closure is absent, change the declaration and install or bake a matching Loaf instead of trying to mutate Cargo resolution during the consumer command.</p>
 <h2 id="common-errors-and-fixes">Common errors and fixes<a class="headerlink" href="#common-errors-and-fixes" title="Permanent link">&para;</a></h2>
 <h3 id="unknown-crate-without-version">Unknown crate without version<a class="headerlink" href="#unknown-crate-without-version" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code>error: unknown Rust crate `my_crate`: no version specified

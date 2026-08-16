@@ -8683,7 +8683,7 @@
 <div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>build<span class="w"> </span>path/to/main.incn
 </code></pre></div>
 <p>Incan checks the source and generates caller-owned Rust, then Oven verifies the build receipt, selects and leases a compatible Loaf, and executes its stored direct-<code>rustc</code> plan. For the documented Alpha envelope, the normal command neither launches Cargo nor reads a Cargo target directory. A compatibility miss stops with actionable guidance rather than changing backend.</p>
-<p>Cargo currently remains at one explicit maintainer boundary: the hidden <code>incan oven legacy-cargo bake-loafs</code> command can prepare a supported Loaf envelope. That publication step is not part of an ordinary build, run, or test command. See <a href="../oven_alpha/">Oven Alpha</a> for the rationale, architecture, and current limitations.</p>
+<p>Cargo currently remains at one explicit maintainer boundary: the internal release publisher can prepare a supported Loaf envelope. That publication step is not part of an ordinary build, run, or test command. See <a href="../oven_alpha/">Oven Alpha</a> for the rationale, architecture, and current limitations.</p>
 <div class="admonition note">
 <p class="admonition-title">Contributor source-build fallback</p>
 <p>If you are working from a compiler checkout instead of a toolchain install, you can run the repository-built binary directly:</p>
