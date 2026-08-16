@@ -19,6 +19,13 @@ use incan_core::lang::magic_methods::{self, MagicMethodId};
 use incan_core::lang::traits as core_traits;
 use incan_core::lang::traits::TraitId;
 
+/// Instantiated trait signature used while matching concrete and alias-backed implementation methods.
+#[derive(Clone, Copy)]
+struct TraitImplSignature<'a> {
+    type_params: &'a [ast::TypeParam],
+    type_args: &'a [IrType],
+}
+
 impl AstLowering {
     /// Return whether a method carries a resolved builtin decorator.
     fn method_has_decorator(method: &ast::MethodDecl, id: DecoratorId) -> bool {
@@ -890,6 +897,46 @@ impl AstLowering {
         })
     }
 
+    /// Return an alias-backed implementation for a required trait method.
+    ///
+    /// Same-type aliases are call-site rebindings, so they do not appear in a declaration's authored method list.
+    /// A trait impl must still emit the required method name; clone the checked target body under that name only after
+    /// confirming that the target is eligible for this trait impl and has the exact instantiated signature.
+    fn aliased_trait_impl_override(
+        &mut self,
+        type_name: &str,
+        trait_method: &ast::MethodDecl,
+        impl_methods: &[Spanned<ast::MethodDecl>],
+        trait_name: &str,
+        trait_signature: TraitImplSignature<'_>,
+        owner_type_param_names: &std::collections::HashSet<&str>,
+    ) -> Option<ast::MethodDecl> {
+        let target_name = self
+            .type_method_rebindings
+            .get(type_name)
+            .and_then(|aliases| aliases.get(&trait_method.name))?
+            .clone();
+        let target = impl_methods.iter().find(|method| {
+            method.node.name == target_name
+                && self.method_trait_target_matches_impl(
+                    &method.node,
+                    trait_name,
+                    trait_signature.type_args,
+                    owner_type_param_names,
+                )
+                && self.trait_impl_override_matches(
+                    trait_method,
+                    &method.node,
+                    trait_signature.type_params,
+                    trait_signature.type_args,
+                    owner_type_param_names,
+                )
+        })?;
+        let mut alias = target.node.clone();
+        alias.name = trait_method.name.clone();
+        Some(alias)
+    }
+
     /// Return whether a concrete method should be lowered only inside an adopted trait impl.
     fn method_matches_adopted_trait_impl(
         &mut self,
@@ -1051,6 +1098,10 @@ impl AstLowering {
                 });
             };
             let trait_type_params = trait_decl.type_params;
+            let trait_signature = TraitImplSignature {
+                type_params: &trait_type_params,
+                type_args: &trait_type_args,
+            };
             let trait_properties = trait_decl.properties;
             let mut trait_methods = trait_decl.methods;
             if trait_name == core_traits::as_str(TraitId::Iterator) {
@@ -1120,6 +1171,18 @@ impl AstLowering {
                 }
                 if let Some(m) = found_override {
                     methods.push(self.lower_impl_method_for_trait(m, Some(&type_param_names))?);
+                    continue;
+                }
+
+                if let Some(alias_override) = self.aliased_trait_impl_override(
+                    type_name,
+                    &trait_method.node,
+                    impl_methods,
+                    trait_name,
+                    trait_signature,
+                    &type_param_names,
+                ) {
+                    methods.push(self.lower_impl_method_for_trait(&alias_override, Some(&type_param_names))?);
                     continue;
                 }
 

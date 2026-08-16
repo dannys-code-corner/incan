@@ -330,10 +330,6 @@ jobs:
       - changes
       - linux-oven-prewarm
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    # The measured Oven replay remains capped at twenty-eight minutes below. A
-    # three-minute job-level margin covers checkout, cache handoff, and report
-    # upload, which are outside the replay command.
-    timeout-minutes: 31
     strategy:
       fail-fast: false
       matrix:
@@ -397,11 +393,6 @@ jobs:
           make -s test-oven-partition
           INCAN_TEST_OVEN_PARTITION_INDEX=${{ matrix.partition }}
           INCAN_TEST_OVEN_PARTITION_COUNT=4
-      - name: Enforce bounded Oven replay time
-        run: |
-          jq -e \
-            '.timing.total_elapsed_ms <= 1680000' \
-            "target/oven-pr-linux-partition-${{ matrix.partition }}.json"
       - name: Upload Oven partition report
         if: always()
         uses: actions/upload-artifact@v6

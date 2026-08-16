@@ -10598,6 +10598,60 @@ def main() -> None:
 }
 
 #[test]
+fn oven_baked_public_direct_rust_provider_composes_into_consumer_issue1053() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let provider_root = tmp.path().join("uuid_provider");
+    fs::create_dir_all(provider_root.join("src"))?;
+    fs::write(
+        provider_root.join("incan.toml"),
+        r#"[project]
+name = "uuid_provider"
+version = "0.1.0"
+
+[rust-dependencies.uuid]
+version = "1"
+features = ["v4"]
+"#,
+    )?;
+    fs::write(
+        provider_root.join("src/lib.incn"),
+        r#"from rust::uuid import Uuid
+
+
+pub def provider_token() -> str:
+    return Uuid.new_v4().to_string()
+"#,
+    )?;
+    let provider_bake = run_explicit_oven_bake(&provider_root)?;
+    assert_success(
+        &provider_bake,
+        "explicit Oven bake for the public direct-Rust UUID provider",
+    );
+
+    let consumer_root = tmp.path().join("consumer");
+    fs::create_dir_all(consumer_root.join("src"))?;
+    fs::write(
+        consumer_root.join("incan.toml"),
+        "[project]\nname = \"consumer\"\n\n[dependencies]\nuuid_provider = { path = \"../uuid_provider\" }\n",
+    )?;
+    fs::write(
+        consumer_root.join("src/main.incn"),
+        r#"from pub::uuid_provider import provider_token
+
+
+def main() -> None:
+    assert len(provider_token()) == 36
+"#,
+    )?;
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for a consumer of the public direct-Rust UUID provider",
+    );
+    Ok(())
+}
+
+#[test]
 fn test_decorated_functions_preserve_default_argument_calls_issue703() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(tmp.path(), "decorated_default_argument_calls", "")?;
