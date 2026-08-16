@@ -5,7 +5,7 @@ This tutorial builds and runs the included web application, then traces one requ
 <aside class="inc-tutorial-meta" aria-label="Tutorial details">
   <dl>
     <div><dt>Reader</dt><dd>Service or application developer</dd></div>
-    <div><dt>Prerequisites</dt><dd>Getting Started and the prepared 0.5 development toolchain</dd></div>
+    <div><dt>Prerequisites</dt><dd>Getting Started with the Incan 0.5 toolchain</dd></div>
     <div><dt>Time</dt><dd>15–20 minutes</dd></div>
     <div><dt>Verified</dt><dd>Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code>; native build and execution exercised with the full-standard-library Loaf</dd></div>
     <div><dt>Status</dt><dd>Release-envelope executable</dd></div>
@@ -20,7 +20,7 @@ This tutorial builds and runs the included web application, then traces one requ
   <li><strong>Trace</strong>Follow typed responses</li>
 </ol>
 
-Prerequisite: [Install and prepare the development toolchain](../../tooling/how-to/install_and_run.md#follow-the-05-development-docs).
+Prerequisite: [Install the Incan 0.5 toolchain](../../tooling/how-to/install_and_run.md#install-the-05-toolchain).
 
 ## Step 1: Run the hello web example
 

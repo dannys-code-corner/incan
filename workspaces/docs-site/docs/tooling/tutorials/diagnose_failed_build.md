@@ -7,7 +7,7 @@ This tutorial introduces a deliberate type error, captures the compiler's struct
     <div><dt>Reader</dt><dd>Project author debugging a failed check or build</dd></div>
     <div><dt>Prerequisites</dt><dd>Getting Started and <code>jq</code></dd></div>
     <div><dt>Time</dt><dd>15–20 minutes</dd></div>
-    <div><dt>Verified</dt><dd>Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code> development docs; diagnostic, inspection, and repaired build exercised with the prepared 0.5 release envelope</dd></div>
+    <div><dt>Verified</dt><dd>Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code>; diagnostic, inspection, and repaired build exercised with the 0.5 release envelope</dd></div>
     <div><dt>Status</dt><dd>Release-envelope executable</dd></div>
     <div><dt>Outcome</dt><dd>A repeatable diagnostic-to-fix workflow</dd></div>
     <div><dt>Artifacts</dt><dd>Diagnostic JSON and Rust inspection JSON</dd></div>

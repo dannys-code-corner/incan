@@ -7,7 +7,7 @@ This tutorial walks you through setting up a real Incan project from scratch: cr
     <div><dt>Reader</dt><dd>New Incan project author</dd></div>
     <div><dt>Prerequisites</dt><dd>Getting Started completed</dd></div>
     <div><dt>Time</dt><dd>15–25 minutes</dd></div>
-    <div><dt>Verified</dt><dd>Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code> development docs; run and tests exercised with the prepared 0.5 release envelope</dd></div>
+    <div><dt>Verified</dt><dd>Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code>; run and tests exercised with the 0.5 release envelope</dd></div>
     <div><dt>Status</dt><dd>Release-envelope executable</dd></div>
     <div><dt>Outcome</dt><dd>A multi-module command-line project</dd></div>
     <div><dt>Artifacts</dt><dd>Manifest, modules, entry point, and tests</dd></div>

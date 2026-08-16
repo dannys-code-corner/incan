@@ -1,9 +1,9 @@
-The project tutorials in the development docs target the current 0.5 development line. Build that compiler and its bounded release Loaf envelope from the matching repository checkout:
+To build the 0.5 toolchain from source, use the matching release checkout and prepare its bounded release Loaf envelope:
 
 ```bash
 git clone https://github.com/encero-systems/incan.git
 cd incan
-git switch main
+git switch --detach v0.5.0
 export INCAN_CHECKOUT="$PWD"
 make build
 make test-prewarm-oven-release-loafs \
@@ -17,4 +17,4 @@ export PATH="$INCAN_CHECKOUT/target/oven-alpha-release-toolchain/bin:$PATH"
 incan --version
 ```
 
-`make build` compiles the compiler and language server. The explicit prewarm target then assembles the complete 0.5 release envelope used by repository smoke tests—including the debug and release full-standard-library Loaf families—and puts its compiler under `target/oven-alpha-release-toolchain/bin`. The checkout variables keep examples tied to the same compiler and standard library after you change directories. This is a source-checkout preparation step, not a normal project build command. Keep that prepared binary first on `PATH` while following 0.5 development tutorials, and repeat both commands after updating the checkout.
+`make build` compiles the compiler and language server. The explicit prewarm target then assembles the complete 0.5 release envelope used by repository smoke tests—including the debug and release full-standard-library Loaf families—and puts its compiler under `target/oven-alpha-release-toolchain/bin`. The checkout variables keep examples tied to the same compiler and standard library after you change directories. This is a source-checkout preparation step, not a normal project build command. Keep that prepared binary first on `PATH` while using the source-built toolchain, and repeat both commands after updating the checkout.

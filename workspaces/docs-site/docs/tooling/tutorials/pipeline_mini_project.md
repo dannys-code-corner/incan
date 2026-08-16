@@ -7,7 +7,7 @@ This tutorial is a lightweight, CI-friendly walkthrough for “step-based” aut
     <div><dt>Reader</dt><dd>Automation or pipeline developer</dd></div>
     <div><dt>Prerequisites</dt><dd>Getting Started and basic Result handling</dd></div>
     <div><dt>Time</dt><dd>15–20 minutes</dd></div>
-    <div><dt>Verified</dt><dd>Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code> development docs; run and tests exercised with the prepared 0.5 release envelope</dd></div>
+    <div><dt>Verified</dt><dd>Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code>; run and tests exercised with the 0.5 release envelope</dd></div>
     <div><dt>Status</dt><dd>Release-envelope executable</dd></div>
     <div><dt>Outcome</dt><dd>A deterministic typed workflow step</dd></div>
     <div><dt>Artifacts</dt><dd>Runnable step and focused tests</dd></div>

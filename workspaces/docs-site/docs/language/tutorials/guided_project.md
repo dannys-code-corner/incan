@@ -7,7 +7,7 @@ The Incan Book teaches language concepts in small programs. This guided spine gi
     <div><dt>Reader</dt><dd>Learner who wants continuity between Book chapters</dd></div>
     <div><dt>Prerequisites</dt><dd>Getting Started completed</dd></div>
     <div><dt>Time</dt><dd>1–2 focused sessions</dd></div>
-    <div><dt>Verified</dt><dd>Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code> development docs; run and tests exercised with the prepared 0.5 release envelope</dd></div>
+    <div><dt>Verified</dt><dd>Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code>; run and tests exercised with the 0.5 release envelope</dd></div>
     <div><dt>Status</dt><dd>Release-envelope executable</dd></div>
     <div><dt>Outcome</dt><dd>A deterministic typed workflow step</dd></div>
     <div><dt>Artifacts</dt><dd>Manifest, public step module, tests, lockfile, and native binary</dd></div>
@@ -91,7 +91,7 @@ The same source, manifest, and lock authority now drive local execution, tests, 
 
 <section class="inc-learning-panel inc-learning-panel--complete inc-incus-slot" data-label="Complete" data-incus-category="success" markdown="1">
 
-You carried one workflow from a small typed function through explicit fallibility, a public module boundary, focused tests, a canonical lock, and a native build—all inside the prepared 0.5 release envelope.
+You carried one workflow from a small typed function through explicit fallibility, a public module boundary, focused tests, a canonical lock, and a native build—all inside the 0.5 release envelope.
 
 </section>
 

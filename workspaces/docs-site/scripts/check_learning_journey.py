@@ -43,7 +43,7 @@ SOURCE_VERIFIED_PREVIEWS = {
     "tooling/tutorials/project_to_ci_artifact.md",
 }
 VERIFIED_RANGES = {
-    "tooling/tutorials/getting_started.md": "Incan <code>&gt;=0.4.0,&lt;0.5.0</code> stable release",
+    "tooling/tutorials/getting_started.md": "Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code> release line",
 }
 DEFAULT_VERIFIED_RANGE = "Incan <code>&gt;=0.5.0-0,&lt;0.6.0</code>"
 BRIDGES = (
@@ -63,7 +63,6 @@ CANONICAL_SETUP_REFERENCES = {
     },
     "_snippets/learning/development_toolchain.md": {
         "tooling/how-to/install_and_run.md",
-        "tooling/tutorials/getting_started.md",
     },
 }
 
@@ -140,10 +139,10 @@ def main() -> int:
                 f"{relative_path} does not explain its 0.5 release-envelope boundary",
             )
 
-    development_setup = (DOCS / "_snippets/learning/development_toolchain.md").read_text(encoding="utf-8")
+    source_setup = (DOCS / "_snippets/learning/development_toolchain.md").read_text(encoding="utf-8")
     require(
-        "make test-prewarm-oven-release-loafs" in development_setup,
-        "development toolchain setup does not prepare the bounded 0.5 release envelope",
+        "make test-prewarm-oven-release-loafs" in source_setup,
+        "source toolchain setup does not prepare the bounded 0.5 release envelope",
     )
 
     mkdocs = MKDOCS.read_text(encoding="utf-8")
