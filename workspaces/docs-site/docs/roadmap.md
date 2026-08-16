@@ -24,109 +24,81 @@ Incan's current direction is:
 
 That means Incan should not compete as a small systems language or as a generic Python clone. The compiler, standard library, and tooling should make domain packages, capability metadata, policy, generated artifacts, diagnostics, and backend facts inspectable by humans and agents.
 
-The near-term roadmap is therefore split into six release lanes:
+The completed releases below show how Incan reached its current compiler and project foundation. The forward roadmap is split into five release lanes:
 
-- Tooling and first-contact inspection.
-- Backend replacement foundation.
-- Backend cutover.
-- Broader feature reopening after the compiler architecture is no longer split between old and new semantic paths.
-- Freestanding target foundations.
-- Kernel capability proof before 1.0 stabilization.
+- 0.6: backend cutover.
+- 0.7: broader feature reopening after the compiler architecture is no longer split between old and new semantic paths.
+- 0.8: freestanding target foundations.
+- 0.9: kernel capability proof.
+- 1.0: stabilization and public contracts.
 
 ## Release Milestones
 
-### 0.4 Release: tooling, inspection, and first contact
+The completed release lines are kept here as a compact history. Expand a release for its outcome and boundary; follow the release-note link for the complete change inventory. The active roadmap begins with 0.6 below.
 
-The 0.4 release established the first-contact and inspection baseline:
+**Completed release history**
 
-> 0.3 made real programs credible. 0.4 makes the stack tryable.
+??? abstract "0.1 — The first published Incan release"
 
-The release was deliberately not a broad language/runtime reopening. It made Incan easier to install, start, inspect, diagnose, and debug without requiring users or agents to clone the repository or reverse-engineer compiler internals. The release baseline is that a new evaluator can install Incan, create a starter project, understand failures through stable diagnostics, inspect generated artifacts and semantic graph facts, and see where Incan fits in the Encero stack.
+    **Outcome:** establish a usable language, compiler, CLI, and documentation baseline.
 
-0.4 landed across seven stages:
+    Incan 0.1 shipped the core Python-shaped language surface, typed models and control flow, `Result`/`Option`, modules, early Rust interop, `incan build` / `run` / `fmt` / `test`, generated language reference material, and the first multi-file typed web applications. It proved that Incan could be used as a language rather than only explored as a compiler experiment.
 
-1. Scope guard, direction notes, and RFC inspectability prompts.
-2. Boundary identity and compact release-parity fixtures.
-3. Test runner and Rust preheat observability.
-4. Stable machine-readable diagnostics and `incan explain`.
-5. Build reports and generated Rust inspection.
-6. Semantic inspection and codegraph export.
-7. Installer, starter flow, first-contact docs, and release hardening.
+    **Boundary:** the package and standard-library model was still young, Rust interop used a narrower known-good surface, and several compiler/library capabilities were explicitly incomplete.
 
-#### Release-gating work
+    [Read the 0.1 release notes](release_notes/0_1.md)
 
-These issues defined the minimum coherent 0.4 release surface:
+??? abstract "0.2 — Explicit modules, libraries, and a serious Rust boundary"
 
-- [#223](https://github.com/encero-systems/incan/issues/223): umbrella delivery issue for the tooling, inspection, and first-contact release.
-- [#554](https://github.com/encero-systems/incan/issues/554): release direction notes and scope guard.
-- [#592](https://github.com/encero-systems/incan/issues/592): RFC inspectability prompts, so new designs name their metadata, diagnostic, provenance, artifact, or command surface.
-- [#760](https://github.com/encero-systems/incan/issues/760): compact boundary parity fixture suite, focused on the import/package/vocab/test-batch failures that made 0.3 expensive to stabilize.
-- [#699](https://github.com/encero-systems/incan/issues/699): unified symbol identity across import and package boundaries.
-- [#753](https://github.com/encero-systems/incan/issues/753): partial presets constructing const metadata values, handled as part of callable identity and metadata parity.
-- [#707](https://github.com/encero-systems/incan/issues/707), [#723](https://github.com/encero-systems/incan/issues/723), [#697](https://github.com/encero-systems/incan/issues/697), and [#769](https://github.com/encero-systems/incan/issues/769): visible test/build preheat progress, generated-library preheat cache alignment, Rust metadata prewarm reuse, and cache split evidence so long-running phases are explainable instead of silent.
-- [#589](https://github.com/encero-systems/incan/issues/589): stable machine-readable diagnostics output.
-- [#590](https://github.com/encero-systems/incan/issues/590): diagnostic explain command and help catalog.
-- [#591](https://github.com/encero-systems/incan/issues/591): build artifact reports.
-- [#567](https://github.com/encero-systems/incan/issues/567): generated Rust inspection tooling and quality gates.
-- [#666](https://github.com/encero-systems/incan/issues/666): RFC 102 semantic inspection umbrella, used to keep the inspection surfaces coherent.
-- [#778](https://github.com/encero-systems/incan/issues/778): RFC 106 first slice for compiler-backed codegraph JSONL export.
-- [#428](https://github.com/encero-systems/incan/issues/428): canonical toolchain installer and release manifest.
-- [#553](https://github.com/encero-systems/incan/issues/553): zero-clone starter project flow.
-- [#551](https://github.com/encero-systems/incan/issues/551): first-contact quickstart and positioning docs.
+    **Outcome:** turn the first language surface into a more coherent platform.
 
-#### Useful but evidence-dependent work
+    Incan 0.2 moved standard-library and decorator surfaces under explicit `std.*` modules, separated Incan dependencies from Rust crate dependencies, introduced experimental Incan libraries, strengthened `rust::` interop and `rusttype`, added module-owned `static` state, and made generic call sites and package boundaries more explicit. The release replaced ambient compiler magic with named, import-driven capabilities.
 
-No current 0.4 milestone item remains in this bucket. Generated-library preheat alignment was promoted into the release-gating work after downstream timing evidence showed that silent cold dependency work was part of the first-contact and downstream package experience.
+    **Boundary:** libraries remained experimental and the release did not yet provide a complete package ecosystem or remove generated-Rust ownership friction.
 
-#### Explicit 0.4 exclusions
+    [Read the 0.2 release notes](release_notes/0_2.md)
 
-The following were kept as design constraints and future lanes, not 0.4 implementation slices:
+??? abstract "0.3 — Real application code, broader stdlib, and stronger tooling"
 
-- RFC 037 `std.web` and RFC 066 `std.http` implementation work.
-- Source-local feature metadata beyond maintaining the generated feature inventory for public 0.4 capabilities.
-- Rust caller, Rust-hosted consumption, ABI, and backend-replacement architecture.
-- RFC 106 follow-up graph layers tracked by [#573](https://github.com/encero-systems/incan/issues/573), [#770](https://github.com/encero-systems/incan/issues/770), [#771](https://github.com/encero-systems/incan/issues/771), [#772](https://github.com/encero-systems/incan/issues/772), [#773](https://github.com/encero-systems/incan/issues/773), [#774](https://github.com/encero-systems/incan/issues/774), [#775](https://github.com/encero-systems/incan/issues/775), [#776](https://github.com/encero-systems/incan/issues/776), and [#777](https://github.com/encero-systems/incan/issues/777), including resolved targets, Rust graph records, MCP serving, task context packing, process-risk signals, external importers, and Architect findings.
-- Hees.ai, IncQL, and Pallay product work beyond proof lanes that validate frozen 0.4 commands.
-- Broad language/runtime features that are not required by the installer, starter, diagnostics, inspection, build-report, or codegraph path.
+    **Outcome:** make larger programs feel deliberate instead of improvised.
 
-### 0.5 Release: backend foundation and Hees.ai proof lane
+    Incan 0.3 expanded expression-oriented control flow, typed numerics, enums, protocols, decorators, partial callables, generators, lazy iteration, and `Result` combinators. It also broadened the source-authored standard library across collections, graphs, JSON, regex, datetime, logging, encoding, hashing, compression, filesystem, I/O, and UUIDs while strengthening tests, formatting, locks, Rust interop, and generated-output discipline.
 
-The 0.5 milestone begins deprecating the Rust-source backend as the semantic path. It introduces the compiler foundations needed for a backend-neutral middle end:
+    **Boundary:** real programs became credible, but installation, first-contact diagnostics, machine-readable inspection, and cross-boundary parity still needed a dedicated release.
 
-- stable compiler IDs;
-- backend-neutral semantic facts;
-- `IncanType` and semantic type modeling;
-- ABI v0 design hooks;
-- HIR v0;
-- behavior inventory;
-- backend migration scaffolding.
+    [Read the 0.3 release notes](release_notes/0_3.md)
 
-Stdlib RFC/work is allowed in this lane. Hees.ai is also allowed, but only as a constrained commercial and dogfood proof path that validates compiler, stdlib, runtime, and tooling direction. Hees.ai work should consume general Incan surfaces, not quietly become broad product scope inside the language milestone.
+??? abstract "0.4 — Tooling, inspection, and first contact"
 
-RFC 077 workspace foundations are a targeted tooling dependency in 0.5 rather than a general lifecycle reopening. The IncQL and IncQL-DB monorepo direction needs explicit root/member topology, shared dependency and lock semantics, deterministic member selection, machine-readable inspection, and lifecycle command fan-out. Pulling that foundation forward lets the monorepo begin with stable package boundaries; registry publication, nested workspaces, remote execution, and broad workspace product surfaces remain outside this exception.
+    **Outcome:** make the stack tryable without cloning the compiler repository or reverse-engineering its internals.
 
-Core tracking issues:
+    Incan 0.4 delivered the canonical installer and zero-clone starter flow, stable machine-readable diagnostics, `incan explain`, build reports, generated-Rust inspection, compiler-backed codegraph export, visible build/test preparation, and compact boundary-parity fixtures. A new evaluator could install Incan, create and run a project, understand failures, inspect generated artifacts, and export compiler facts for tools and agents.
 
-- [#634](https://github.com/encero-systems/incan/issues/634): v1.0 middle-end foundation umbrella.
-- [#646](https://github.com/encero-systems/incan/issues/646): current compiler behavior inventory.
-- [#647](https://github.com/encero-systems/incan/issues/647): deprecate Rust-source backend as semantic path.
-- [#648](https://github.com/encero-systems/incan/issues/648): stable compiler IDs and semantic facts database.
-- [#649](https://github.com/encero-systems/incan/issues/649): `IncanType` semantic type model and ABI v0 hooks.
-- [#650](https://github.com/encero-systems/incan/issues/650): HIR v0 and snapshot tests.
-- [#282](https://github.com/encero-systems/incan/issues/282): backend orchestration migration scaffolding.
-- [#224](https://github.com/encero-systems/incan/issues/224): `CompilationSession` semantic database transition.
-- [#549](https://github.com/encero-systems/incan/issues/549): Hees.ai governed workbench demo.
-- [#651](https://github.com/encero-systems/incan/issues/651): Hees.ai dependency inventory and guardrails.
-- [#405](https://github.com/encero-systems/incan/issues/405): RFC 077 workspace and multi-package project foundations.
-- [#829](https://github.com/encero-systems/incan/issues/829): crash-safe local publication and file coordination ([RFC 112](RFCs/closed/implemented/112_crash_safe_publication_and_file_coordination.md), implemented in [#833](https://github.com/encero-systems/incan/pull/833)).
+    **Boundary:** 0.4 deliberately did not reopen broad language/runtime scope, replace the backend, establish a public Rust ABI, or turn downstream Encero proof lanes into product releases.
 
-Phase-0 references:
+    [Read the 0.4 release notes](release_notes/0_4.md)
 
-- [Backend behavior inventory](contributing/reference/backend_behavior_inventory.md) seeds #646 with behavior categories, evidence lanes, hosted-runtime assumptions, and the current Rust interop bug cluster.
-- [Rust-source backend deprecation policy](contributing/reference/rust_source_backend_deprecation.md) seeds #647 with rules for compatibility fixes while semantic authority moves toward backend-neutral facts.
-- [Hees.ai v0.5 dependency inventory](contributing/reference/hees_ai_v05_dependency_inventory.md) seeds #651 with proof-lane dependencies, shim rules, and product-scope guardrails.
+??? abstract "0.5 — Compiler-owned foundations and checked project boundaries"
 
-Allowed stdlib work includes `std.http`, `std.ci`, CLI framework, `std.archive`, `std.process`, `std.web` lifecycle, `std.environ`, package-level timezones, fallible reader chunk streams, and selected stdlib compilation/source-authored behavior work.
+    **Outcome:** give ordinary applications, libraries, workspaces, packages, and native integrations one checked compiler view.
+
+    Incan 0.5 moved critical commands onto shared `CompilationSession` analysis and landed the backend-neutral foundations for stable compiler identities, semantic facts, `IncanType`, initial HIR, ABI hooks, and backend migration. Those foundations deprecate generated Rust as semantic authority without pretending the backend cutover is complete.
+
+    The same release made package and project boundaries materially stronger:
+
+    - implemented rooted and virtual multi-package workspaces with deterministic member selection, shared dependency and environment inheritance, portable locking, inspection, and lifecycle fan-out ([RFC 077](RFCs/closed/implemented/077_workspace_and_multi_package_projects.md));
+    - added compiled providers, SDK components, package-owned features, typed registries, declaration descriptors, crash-safe local publication, and more stable cross-machine identities;
+    - delivered operational standard-library surfaces and fallible iteration needed by representative applications and downstream proof lanes;
+    - delivered an experimental, deliberately bounded typed C ABI with checked signatures, ownership, layouts, artifacts, and target evidence ([RFC 116](RFCs/closed/implemented/116_typed_c_abi_interop.md)); and
+    - introduced Oven Alpha as a narrow evidence-backed build path inside the documented 0.5 envelope, not as the release's primary story or a claim of general Cargo-workspace replacement.
+
+    **Boundary:** generated Rust remains inspectable backend output; the replacement-backend cutover belongs to 0.6. Oven remains Alpha. The Hees.ai work validates the compiler, standard library, runtime, and tooling as a downstream proof lane; it is not a Hees.ai product release.
+
+    The original foundation trackers—[#634](https://github.com/encero-systems/incan/issues/634), [#646](https://github.com/encero-systems/incan/issues/646), [#647](https://github.com/encero-systems/incan/issues/647), [#648](https://github.com/encero-systems/incan/issues/648), [#649](https://github.com/encero-systems/incan/issues/649), [#650](https://github.com/encero-systems/incan/issues/650), [#282](https://github.com/encero-systems/incan/issues/282), and [#224](https://github.com/encero-systems/incan/issues/224)—are complete. The release notes retain the full user-facing and issue-level inventory.
+
+    [Test-drive Incan 0.5](release_notes/0_5.md#test-drive-05) · [Read the complete 0.5 release notes](release_notes/0_5.md)
+
+**Forward roadmap**
 
 ### 0.6 Release: backend cutover
 
@@ -242,7 +214,7 @@ The following items remain intentionally deferred until they have a focused RFC 
 
 ### Guides
 
-- Web framework guide: [Web framework](language/tutorials/web_framework.md)
+- Web framework guide: [Web framework guide](language/tutorials/web_framework.md)
 - Rust interop guide: [Rust interop](language/how-to/rust_interop.md)
 - Testing guide: [Testing](tooling/how-to/testing.md)
 

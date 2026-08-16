@@ -7,14 +7,9 @@ This example demonstrates:
 - Path parameters
 - Model serialization
 
-Run with:
+Build and run from the repository root:
     incan build examples/web/hello_web.incn
-    ./target/release/hello_web
-
-Then visit:
-    http://localhost:8080/
-    http://localhost:8080/api/greet/World
-    http://localhost:8080/api/user/42
+    incan run examples/web/hello_web.incn
 """
 
 from std.web import App, route, Response, Json, GET
@@ -33,9 +28,8 @@ model User:
     id: int
     name: str
     email: str
-
-
 # Routes
+
 
 @route("/")
 async def index() -> Response:
