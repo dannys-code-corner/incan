@@ -11,7 +11,7 @@
       
       
       
-        <link rel="prev" href="../what_incan_is_for/">
+        <link rel="prev" href="../incan_or_incql/">
       
       
         <link rel="next" href="../coming_from_rust/">
@@ -53,7 +53,7 @@
     
       <link rel="stylesheet" href="../../stylesheets/pygments.css">
     
-      <link rel="stylesheet" href="/shared/incapunk/incapunk.css">
+      <link rel="stylesheet" href="/shared/incapunk/incapunk.css?v=20260816-release-05-4">
     
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
@@ -65,8 +65,6 @@
   
   
     
-    
-      
     
     
     
@@ -127,19 +125,7 @@
     </div>
     
       
-        <form class="md-header__option" data-md-component="palette">
-  
     
-    
-    
-    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="amber"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
-    
-  
-</form>
-      
-    
-    
-      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
     
     
     
@@ -239,7 +225,7 @@
   
     
   
-  Start here
+  Learn
 
         </a>
       </li>
@@ -361,15 +347,8 @@
   
     
     
-      
-  
-  
-  
-  
-    
-    
       <li class="md-tabs__item">
-        <a href="../../whitepapers/" class="md-tabs__link">
+        <a href="../../project/" class="md-tabs__link">
           
   
   
@@ -379,9 +358,6 @@
 
         </a>
       </li>
-    
-  
-
     
   
 
@@ -498,6 +474,8 @@
       
         
       
+        
+      
     
     
     
@@ -523,7 +501,7 @@
   <span class="md-ellipsis">
     
   
-    Start here
+    Learn
   
 
     
@@ -545,7 +523,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Start here
+    Learn
   
 
           </label>
@@ -568,6 +546,34 @@
     
   
     What Incan is for
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../incan_or_incql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Incan or IncQL?
   
 
     
@@ -648,10 +654,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#install-first" class="md-nav__link">
+  <a href="#choose-your-route" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install first
+        Choose your route
       
     </span>
   </a>
@@ -659,10 +665,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-you-should-do-next" class="md-nav__link">
+  <a href="#build-an-application-shaped-project" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What you should do next
+        Build an application-shaped project
       
     </span>
   </a>
@@ -670,10 +676,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#explanation" class="md-nav__link">
+  <a href="#install-once" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Explanation
+        Install once
       
     </span>
   </a>
@@ -681,10 +687,43 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#mental-model-translations-high-level" class="md-nav__link">
+  <a href="#what-transfers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Mental model translations (high level)
+        What transfers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What changes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-not-to-expect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What not to expect
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#continue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Continue
       
     </span>
   </a>
@@ -882,7 +921,7 @@
   <span class="md-ellipsis">
     
   
-    Beginner
+    New to typed programming
   
 
     
@@ -922,10 +961,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12" >
         
           
-          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_12" id="__nav_2_12_label" tabindex="0">
             
   
   
@@ -943,8 +982,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1134,6 +1173,14 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
       
         
       
@@ -1690,6 +1737,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../language/tutorials/typed_data_processor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build a typed data processor
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../language/tutorials/build_your_first_api/" class="md-nav__link">
         
   
@@ -1698,6 +1773,90 @@
     
   
     Build your first API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../language/tutorials/async_worker_pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build an asynchronous worker pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../language/tutorials/add_a_rust_crate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a Rust crate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../language/tutorials/guided_project/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guided project spine
   
 
     
@@ -5750,6 +5909,12 @@
       
         
       
+        
+      
+        
+      
+        
+      
     
     
     
@@ -5856,6 +6021,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../tooling/tutorials/build_and_consume_library/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build and consume a library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../tooling/tutorials/pipeline_mini_project/" class="md-nav__link">
         
   
@@ -5864,6 +6057,62 @@
     
   
     Pipeline mini-project
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tooling/tutorials/project_to_ci_artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local project to CI artifact
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tooling/tutorials/diagnose_failed_build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Diagnose a failed build
   
 
     
@@ -6803,8 +7052,6 @@
       
         
           
-        
-      
         
       
         
@@ -7992,34 +8239,6 @@
 
               
             
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../RFCs/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    RFCs
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
           </ul>
         </nav>
       
@@ -8259,6 +8478,18 @@
     
       
         
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
       
         
       
@@ -8278,8 +8509,9 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
         
           
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
+          <div class="md-nav__link md-nav__container">
+            <a href="../../project/" class="md-nav__link ">
+              
   
   
   <span class="md-ellipsis">
@@ -8293,8 +8525,14 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_8">
@@ -8306,6 +8544,36 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../RFCs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RFCs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -8335,7 +8603,154 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../design_records/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design records
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8_3" id="__nav_8_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design records
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design_records/TEMPLATE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Template
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--Draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design_records/0001_gpu_target_capability_deferred/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DD-0001: GPU capability deferral
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--Accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8_4" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -8357,14 +8772,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_8_1" id="__nav_8_1_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_8_4" id="__nav_8_4_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_1_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8_1">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -8489,6 +8904,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../project/learning_journey/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning journey QA
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../stability/" class="md-nav__link">
         
   
@@ -8497,6 +8940,34 @@
     
   
     Stability policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/incus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Meet Incus
   
 
     
@@ -8544,10 +9015,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#install-first" class="md-nav__link">
+  <a href="#choose-your-route" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install first
+        Choose your route
       
     </span>
   </a>
@@ -8555,10 +9026,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-you-should-do-next" class="md-nav__link">
+  <a href="#build-an-application-shaped-project" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What you should do next
+        Build an application-shaped project
       
     </span>
   </a>
@@ -8566,10 +9037,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#explanation" class="md-nav__link">
+  <a href="#install-once" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Explanation
+        Install once
       
     </span>
   </a>
@@ -8577,10 +9048,43 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#mental-model-translations-high-level" class="md-nav__link">
+  <a href="#what-transfers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Mental model translations (high level)
+        What transfers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What changes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-not-to-expect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What not to expect
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#continue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Continue
       
     </span>
   </a>
@@ -8608,51 +9112,49 @@
 
 
 <h1 id="coming-from-python-apps">Coming from Python (apps)<a class="headerlink" href="#coming-from-python-apps" title="Permanent link">&para;</a></h1>
-<p>This page routes Python developers who are evaluating Incan for application code, services, typed domain packages, and deployment-oriented tooling.</p>
-<h2 id="install-first">Install first<a class="headerlink" href="#install-first" title="Permanent link">&para;</a></h2>
-<p>If you use Python tooling day to day, <code>pipx</code> is the cleanest package-manager entrypoint because it keeps the command package isolated from project environments while still installing the verified Incan toolchain archive. The installer also provisions the Rust backend when needed, so a fresh machine can move straight from install to <code>incan run</code>:</p>
-<div class="language-bash highlight"><pre><span></span><code>pipx<span class="w"> </span>install<span class="w"> </span>incan
-incan<span class="w"> </span>--version
-</code></pre></div>
-<p>The direct installer is the same toolchain release path and is useful in shell scripts, CI images, and environments where you do not want another package manager involved:</p>
-<div class="language-bash highlight"><pre><span></span><code>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://github.com/encero-systems/incan/releases/latest/download/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>bash
+<p>This route is for Python developers evaluating Incan for application code, services, typed domain packages, and deployment-oriented tools.</p>
+<aside class="inc-bridge-note inc-incus-slot" data-incus-category="python" aria-label="Python to Incan mental model">
+  <span class="inc-eyebrow">Python → Incan</span>
+  <strong>Keep the readable application-code shape. Move more failure, type, and deployment facts into contracts the compiler can check.</strong>
+</aside>
 
-<span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/.local/bin:</span><span class="nv">$PATH</span><span class="s2">&quot;</span>
-incan<span class="w"> </span>--version
-</code></pre></div>
-<p>After installation, create a project and run the normal first-contact loop:</p>
-<div class="language-bash highlight"><pre><span></span><code>incan<span class="w"> </span>new<span class="w"> </span>hello<span class="w"> </span>--yes
-<span class="nb">cd</span><span class="w"> </span>hello
-incan<span class="w"> </span>run
-incan<span class="w"> </span><span class="nb">test</span>
-incan<span class="w"> </span>build<span class="w"> </span>--release
-</code></pre></div>
-<h2 id="what-you-should-do-next">What you should do next<a class="headerlink" href="#what-you-should-do-next" title="Permanent link">&para;</a></h2>
+<h2 id="choose-your-route">Choose your route<a class="headerlink" href="#choose-your-route" title="Permanent link">&para;</a></h2>
+<div class="inc-route-grid">
+  <a class="inc-route-card" href="../tooling/tutorials/getting_started/"><span class="inc-eyebrow">Start</span><strong>Run the first project</strong><span>Use the canonical installer and complete the run, test, and release-build loop.</span></a>
+  <a class="inc-route-card" href="../tooling/tutorials/your_first_project/"><span class="inc-eyebrow">First project</span><strong>Build a small native command</strong><span>Keep the readable function-and-module shape while adding explicit exports, tests, and a locked native build.</span></a>
+  <a class="inc-route-card" href="../tooling/tutorials/pipeline_mini_project/"><span class="inc-eyebrow">Workflow</span><strong>Compose a typed processing step</strong><span>Model an input, return a typed result, split the project into modules, and test both paths.</span></a>
+  <a class="inc-route-card" href="../comparisons/python/"><span class="inc-eyebrow">Evaluate</span><strong>Compare Python and Incan</strong><span>Check ecosystem, runtime, deployment, type, and error-model tradeoffs before adopting.</span></a>
+</div>
+
+<h2 id="build-an-application-shaped-project">Build an application-shaped project<a class="headerlink" href="#build-an-application-shaped-project" title="Permanent link">&para;</a></h2>
+<p>The <a href="../../language/tutorials/typed_data_processor/">typed data processor</a> and <a href="../../language/tutorials/build_your_first_api/">typed API</a> carry familiar model, JSON, file, and service shapes into native 0.5 projects. Their standard-library closures are part of the toolchain's full Loaf, so both tutorials finish with runtime evidence rather than source inspection alone.</p>
+<h2 id="install-once">Install once<a class="headerlink" href="#install-once" title="Permanent link">&para;</a></h2>
+<p>Follow <a href="../../tooling/tutorials/getting_started/">Getting Started</a> for the current installer choices and canonical <code>new</code> → <code>run</code> → <code>test</code> → <code>build</code> loop. If you use Python tooling every day, the <code>pipx</code> option keeps the <code>incan</code> command isolated from project environments; it does not make Incan a Python package runtime.</p>
+<h2 id="what-transfers">What transfers<a class="headerlink" href="#what-transfers" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Install the toolchain and create a starter project: <a href="../../tooling/tutorials/getting_started/">Getting Started</a></li>
-<li>If anything fails: <a href="../../tooling/how-to/troubleshooting/">Troubleshooting</a></li>
-<li>Learn the basics: <a href="../../language/tutorials/book/">The Incan Book (Basics)</a></li>
-<li>Build your first API: <a href="../../language/tutorials/build_your_first_api/">Build your first API</a></li>
-<li>Multi-file apps: <a href="../../language/how-to/imports_and_modules/">Imports and modules (how-to)</a></li>
-<li>Write tests: <a href="../../language/how-to/testing_stdlib/">Testing in Incan</a></li>
-<li>Set up your workflow:<ul>
-<li><a href="../../tooling/how-to/formatting/">Formatting</a></li>
-<li><a href="../../tooling/how-to/testing/">Testing CLI</a></li>
-<li><a href="../../tooling/how-to/editor_setup/">Editor setup</a> (LSP, syntax highlighting)</li>
+<li>Readable functions, named arguments, modules, collections, comprehensions, and model-shaped application code</li>
+<li>Familiar function, module, and result composition for application work</li>
+<li>A small amount of syntax around an explicit, testable application core</li>
 </ul>
-</li>
-</ul>
-<h2 id="explanation">Explanation<a class="headerlink" href="#explanation" title="Permanent link">&para;</a></h2>
+<h2 id="what-changes">What changes<a class="headerlink" href="#what-changes" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../../language/explanation/why_incan/">Why Incan?</a></li>
-<li><a href="../../language/explanation/how_incan_works/">How Incan works</a></li>
+<li><code>Result</code>, <code>Option</code>, and <code>?</code> make ordinary fallibility part of the function contract instead of an exception-only convention.</li>
+<li>Models and derives move validation and serialization behavior into compiler-visible types.</li>
+<li>The toolchain produces native binaries through Rust rather than executing source in CPython.</li>
+<li>A manifest and lockfile own project and dependency facts that Python tools often distribute across several files.</li>
 </ul>
-<h2 id="mental-model-translations-high-level">Mental model translations (high level)<a class="headerlink" href="#mental-model-translations-high-level" title="Permanent link">&para;</a></h2>
+<h2 id="what-not-to-expect">What not to expect<a class="headerlink" href="#what-not-to-expect" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>errors</strong>: exceptions vs Result/Option (see: <a href="../../language/explanation/error_handling/">Error Handling</a>)</li>
-<li><strong>models</strong>: dataclasses/Pydantic vs models/derives (see: <a href="../../language/explanation/models_and_classes/">Models &amp; Classes</a>)</li>
-<li><strong>interfaces</strong>: Protocols/ABCs vs traits/derives (see: <a href="../../language/reference/derives_and_traits/">Derives &amp; Traits</a>)</li>
-<li><strong>async</strong>: asyncio mental model mapping (see: <a href="../../language/how-to/async_programming/">Async Programming</a>)</li>
+<li>CPython compatibility, Python package compatibility, or the ability to import arbitrary PyPI packages</li>
+<li>Notebook or dataframe compatibility merely because the source syntax is familiar</li>
+<li>Dynamic monkey-patching as an application extension model</li>
+</ul>
+<h2 id="continue">Continue<a class="headerlink" href="#continue" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../language/tutorials/book/">The Incan Book</a> for a linear fundamentals route</li>
+<li><a href="../../language/explanation/error_handling/">Error handling</a> for the <code>Result</code> and <code>Option</code> model</li>
+<li><a href="../../language/explanation/models_and_classes/">Models and classes</a> for data and behavior types</li>
+<li><a href="../../tooling/how-to/editor_setup/">Editor setup</a> and <a href="../../tooling/how-to/troubleshooting/">Troubleshooting</a> for the working loop</li>
 </ul>
 
 
@@ -8711,6 +9213,14 @@ incan<span class="w"> </span>build<span class="w"> </span>--release
       <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../../_snippets/javascripts/mathjax.js"></script>
+      
+        <script src="../../_snippets/javascripts/incan_home_motion.js?v=20260810-learning-refresh-1"></script>
+      
+        <script src="../../shared/incapunk/incus-library/manifest.js?v=20260810-learning-refresh-1"></script>
+      
+        <script src="../../_snippets/javascripts/incan_docs_components.js?v=20260810-learning-refresh-1"></script>
+      
+        <script src="../../_snippets/javascripts/incan_mermaid.js?v=20260810-learning-refresh-1"></script>
       
         <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
       
