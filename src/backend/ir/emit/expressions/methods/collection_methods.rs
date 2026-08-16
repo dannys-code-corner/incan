@@ -173,28 +173,31 @@ pub(super) fn emit_collection_method(
         }
         CollectionMethodKind::Contains => {
             if let Some(arg) = args.first() {
-                let a = emitter.emit_expr(arg)?;
                 match &receiver.ty {
                     IrType::List(_) | IrType::Ref(_) | IrType::RefMut(_)
                         if collection_element_type(&receiver.ty).is_some_and(is_string_storage_type) =>
                     {
+                        let a = emitter.emit_expr_for_use(arg, ValueUseSite::MembershipProbe)?;
                         return Ok(quote! {{
                             let __incan_probe = #a;
-                            let __incan_probe = <_ as AsRef<str>>::as_ref(&__incan_probe);
+                            let __incan_probe = <_ as AsRef<str>>::as_ref(__incan_probe);
                             #r.iter().any(|__incan_item| <_ as AsRef<str>>::as_ref(__incan_item) == __incan_probe)
                         }});
                     }
                     IrType::Set(_) if collection_element_type(&receiver.ty).is_some_and(is_string_storage_type) => {
+                        let a = emitter.emit_expr_for_use(arg, ValueUseSite::MembershipProbe)?;
                         return Ok(quote! {{
                             let __incan_probe = #a;
-                            let __incan_probe = <_ as AsRef<str>>::as_ref(&__incan_probe);
+                            let __incan_probe = <_ as AsRef<str>>::as_ref(__incan_probe);
                             #r.contains(__incan_probe)
                         }});
                     }
                     IrType::List(_) | IrType::Set(_) | IrType::Ref(_) | IrType::RefMut(_) => {
+                        let a = emitter.emit_expr(arg)?;
                         return Ok(quote! { #r.contains(&#a) });
                     }
                     IrType::Dict(_, _) => {
+                        let a = emitter.emit_expr(arg)?;
                         let key = emit_dict_lookup_key(receiver, arg, a);
                         return Ok(quote! { #r.contains_key(#key) });
                     }

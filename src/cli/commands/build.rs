@@ -16663,6 +16663,109 @@ pub model Nested:
     }
 
     #[test]
+    fn direct_plan_package_loaf_composes_from_provider_into_consumer() -> Result<(), Box<dyn std::error::Error>> {
+        let intent = crate::oven::OvenBuildIntent {
+            target: "aarch64-apple-darwin".to_string(),
+            toolchain: "rustc fixture".to_string(),
+            profile: "debug".to_string(),
+            features: Vec::new(),
+        };
+        let provider = tempfile::tempdir()?;
+        let provider_source = provider.path().join("src/lib.rs");
+        fs::create_dir_all(provider_source.parent().ok_or("provider source has no parent")?)?;
+        fs::write(&provider_source, "pub fn provider() {}\n")?;
+        let provider_receipt = receipt_generated_project(
+            &OvenGeneratedProjectRequest::new(
+                provider.path(),
+                "provider",
+                "0.1.0",
+                intent.target.clone(),
+                intent.toolchain.clone(),
+                intent.profile.clone(),
+                Vec::new(),
+            )
+            .with_generated_source("generated-root", &provider_source),
+        )?;
+        let consumer = tempfile::tempdir()?;
+        let consumer_source = consumer.path().join("src/main.rs");
+        fs::create_dir_all(consumer_source.parent().ok_or("consumer source has no parent")?)?;
+        fs::write(&consumer_source, "fn main() {}\n")?;
+        let consumer_receipt = receipt_generated_project(
+            &OvenGeneratedProjectRequest::new(
+                consumer.path(),
+                "consumer",
+                "0.1.0",
+                intent.target.clone(),
+                intent.toolchain.clone(),
+                intent.profile.clone(),
+                Vec::new(),
+            )
+            .with_generated_source("generated-root", &consumer_source),
+        )?;
+        let mut artifacts = package_loaf_manifest(intent, "provider", "sha256:provider");
+        let materialized_files = artifacts
+            .externs
+            .iter_mut()
+            .enumerate()
+            .map(|(index, artifact)| {
+                let source = provider.path().join(format!("sealed-{index}.rlib"));
+                fs::write(&source, format!("sealed {} artifact", artifact.crate_name))?;
+                artifact.digest = digest_bytes(&fs::read(&source)?);
+                Ok(OvenArtifactMaterializedFile {
+                    source_path: source,
+                    relative_path: artifact.relative_path.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, std::io::Error>>()?;
+        let limits = crate::oven::store::OvenStoreLimits::new(1024 * 1024, 1024 * 1024, 1024 * 1024);
+        let artifact_root = provider.path().join("target/incan/provider");
+        let package_store = OvenStore::new(packaged_library_loaf_store_root(&artifact_root), limits);
+        let stored = package_store.publish(&OvenArtifactPublishRequest {
+            receipt: provider_receipt.clone(),
+            domain: "provider-package".to_string(),
+            kind: OvenArtifactKind::DirectRustcPlan,
+            payload: serde_json::to_vec(&artifacts)?,
+            materialized_files,
+        })?;
+        let checked = CheckedPackagedProviderProfile {
+            dependency_key: "provider".to_string(),
+            artifact_root,
+            profile: "debug".to_string(),
+            package: OvenPackagedLibraryLoafProfile {
+                receipt: provider_receipt.clone(),
+                entries: vec![OvenPackagedLibraryLoafEntry {
+                    receipt: provider_receipt,
+                    identity: stored.identity.clone(),
+                    kind: OvenArtifactKind::DirectRustcPlan,
+                    base_loaf_identity: None,
+                }],
+                library_relative_path: "oven/debug/libprovider.rlib".to_string(),
+                library_digest: "sha256:provider-library".to_string(),
+            },
+        };
+        let consumer_store_root = tempfile::tempdir()?;
+        let consumer_store = OvenStore::new(consumer_store_root.path(), limits);
+        import_checked_packaged_library_loaf(&consumer_store, &checked)?;
+        let selected = select_packaged_provider_plan(&consumer_store, &[checked], "debug", &consumer_receipt)?
+            .ok_or("consumer should select the imported direct-plan package Loaf")?;
+        let OvenDirectRustcPlanSelection::PackagedProvider(packages) = selected else {
+            return Err("consumer did not retain the packaged provider closure".into());
+        };
+        assert!(matches!(&*packages, OvenPackagedProviderExecutionPlan::Direct(_)));
+        assert_eq!(
+            packages
+                .artifact_plan()
+                .externs
+                .iter()
+                .map(|(crate_name, _)| crate_name.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["incan_stdlib", "provider"])
+        );
+        assert!(packages.report_identity().contains(&stored.identity));
+        Ok(())
+    }
+
+    #[test]
     fn package_loaf_collection_exposes_missing_roots_from_one_release_cohort() -> Result<(), Box<dyn std::error::Error>>
     {
         let intent = crate::oven::OvenBuildIntent {

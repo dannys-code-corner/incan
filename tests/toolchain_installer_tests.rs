@@ -1175,11 +1175,11 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
         })
         .ok_or("pull-request CI is missing the independent Oven release smoke gate")?;
     assert!(
-        replay_gate.contains("timeout-minutes: 31")
+        !replay_gate.contains("timeout-minutes:")
             && replay_gate.contains("make -s test-oven-partition")
-            && replay_gate.contains(".timing.total_elapsed_ms <= 1680000")
+            && replay_gate.contains("Upload Oven partition report")
             && !replay_gate.contains("test-oven-release-smoke"),
-        "the replay job needs a small setup-and-artifact margin while its measured Oven execution remains capped at twenty-eight minutes"
+        "the replay job must retain its partition report without imposing a temporary execution cap"
     );
     assert!(
         release_gate.contains("needs:\n      - changes\n      - linux-tool-handoff")
@@ -1943,7 +1943,7 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.4.0/manifest.json";
+    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-dev.47/manifest.json";
 
     let output = Command::new("node")
         .arg(npm_installer_wrapper())
@@ -1998,7 +1998,7 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.4.0/manifest.json";
+    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-dev.47/manifest.json";
 
     let output = Command::new("python3")
         .arg(pip_installer_wrapper())

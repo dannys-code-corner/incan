@@ -1982,6 +1982,34 @@ mod tests {
     }
 
     #[test]
+    fn trait_method_alias_emits_required_adopted_method_issue1055() {
+        let code = generate(
+            r#"
+trait Renamable:
+  def where(self, value: int) -> int: ...
+
+class Example with Renamable:
+  where = alias filter
+
+  def filter(self, value: int) -> int:
+    return value
+
+def main() -> None:
+  println(Example().where(7))
+"#,
+        );
+
+        assert!(
+            code.contains("impl Renamable for Example") && code.contains("fn r#where(&self, value: i64) -> i64"),
+            "expected the trait alias to emit the required method name, got:\n{code}"
+        );
+        assert!(
+            code.contains("pub fn filter(&self, value: i64) -> i64"),
+            "expected the alias target to remain available as an inherent method, got:\n{code}"
+        );
+    }
+
+    #[test]
     fn partial_function_codegen_emits_wrapper_with_defaulted_preset() {
         let code = generate(
             r#"
@@ -2881,6 +2909,44 @@ def main() -> None:
             "{code}"
         );
         assert_no_generated_unused_lint_allows(&code);
+    }
+
+    #[test]
+    fn string_membership_probe_borrows_loop_binding_used_later_in_branch_issue1057() {
+        let code = generate(
+            r#"
+def names() -> list[str]:
+  return ["orders", "missing"]
+
+def first_missing() -> str:
+  registered = set(["orders"])
+  for name in names():
+    if name not in registered:
+      return f"missing:{name}"
+  return ""
+
+def main() -> None:
+  assert first_missing() == "missing:missing"
+"#,
+        );
+
+        assert!(
+            code.contains("let __incan_probe = &name;"),
+            "membership must borrow the loop binding before its later branch use:\n{code}"
+        );
+        assert!(
+            code.contains("AsRef::<str>::as_ref(__incan_probe)")
+                || code.contains("<_ as AsRef<str>>::as_ref(__incan_probe)"),
+            "membership should consume the planned borrow rather than reborrow an owned probe:\n{code}"
+        );
+        assert!(
+            !code.contains("let __incan_probe = name;"),
+            "membership must not move the loop binding into its probe:\n{code}"
+        );
+        assert!(
+            !code.contains("name.clone()"),
+            "the ownership planner should borrow, not synthesize a clone:\n{code}"
+        );
     }
 
     #[test]
