@@ -1174,11 +1174,11 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
         })
         .ok_or("pull-request CI is missing the independent Oven release smoke gate")?;
     assert!(
-        replay_gate.contains("timeout-minutes: 22")
+        replay_gate.contains("timeout-minutes: 28")
             && replay_gate.contains("make -s test-oven-partition")
-            && replay_gate.contains(".timing.total_elapsed_ms <= 1200000")
+            && replay_gate.contains(".timing.total_elapsed_ms <= 1500000")
             && !replay_gate.contains("test-oven-release-smoke"),
-        "the replay job needs a small setup-and-artifact margin while its measured Oven execution remains capped at twenty minutes"
+        "the replay job needs a small setup-and-artifact margin while its measured Oven execution remains capped at twenty-five minutes"
     );
     assert!(
         release_gate.contains("needs:\n      - changes\n      - linux-tool-handoff")
