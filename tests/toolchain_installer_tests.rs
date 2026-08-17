@@ -1950,7 +1950,9 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-rc0/manifest.json";
+    let version = env!("CARGO_PKG_VERSION");
+    let expected_manifest =
+        format!("https://github.com/encero-systems/incan/releases/download/v{version}/manifest.json");
 
     let output = Command::new("node")
         .arg(npm_installer_wrapper())
@@ -1967,7 +1969,7 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_printed_arg_pair(&output.stdout, "--manifest", expected_manifest);
+    assert_printed_arg_pair(&output.stdout, "--manifest", &expected_manifest);
     Ok(())
 }
 
@@ -2005,7 +2007,9 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-rc0/manifest.json";
+    let version = env!("CARGO_PKG_VERSION");
+    let expected_manifest =
+        format!("https://github.com/encero-systems/incan/releases/download/v{version}/manifest.json");
 
     let output = Command::new("python3")
         .arg(pip_installer_wrapper())
@@ -2021,7 +2025,7 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_printed_arg_pair(&output.stdout, "--manifest", expected_manifest);
+    assert_printed_arg_pair(&output.stdout, "--manifest", &expected_manifest);
     Ok(())
 }
 
