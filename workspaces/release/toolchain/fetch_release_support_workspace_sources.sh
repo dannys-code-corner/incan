@@ -19,6 +19,17 @@ fail() {
   exit 1
 }
 
+# Clear ambient Cargo/rustc-wrapper state before the internal Cargo invocation below, mirroring
+# `clear_inherited_cargo_environment` in src/oven/rustc.rs and package_archive.sh's own copy.
+# Deliberately keeps `CARGO_HOME` -- callers rely on it to name the cache this script warms.
+clear_inherited_cargo_environment() {
+  local name
+  for name in CARGO "${!CARGO_@}" RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER; do
+    [ "$name" = "CARGO_HOME" ] && continue
+    unset "$name"
+  done
+}
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$repo_root"
 
@@ -117,5 +128,7 @@ git show HEAD:Cargo.lock > "$package_dir/Cargo.lock" \
   || fail "could not stage the verified workspace Cargo.lock"
 
 cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
-"$cargo_bin" fetch --manifest-path "$package_dir/Cargo.toml" \
-  || fail "could not fetch the release support workspace's registry dependencies"
+(
+  clear_inherited_cargo_environment
+  "$cargo_bin" fetch --manifest-path "$package_dir/Cargo.toml"
+) || fail "could not fetch the release support workspace's registry dependencies"

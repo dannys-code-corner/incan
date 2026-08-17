@@ -28,6 +28,22 @@ fail() {
   exit 1
 }
 
+# Clear ambient Cargo/rustc-wrapper state before an internal Cargo invocation, mirroring
+# `clear_inherited_cargo_environment` in src/oven/rustc.rs. This script's own `cargo metadata`
+# calls are the release support workspace's authority; they must not inherit CARGO_* state
+# (target dir, build jobs, an rustc wrapper meant for a different build, etc.) from an
+# already-running, possibly nested Cargo/toolchain-managed parent process such as `cargo test`.
+# Unlike the Rust helper, this deliberately keeps `CARGO_HOME` -- callers (CI, local testing) rely
+# on it to name the prewarmed registry cache, and this script has no explicit replacement value to
+# re-inject the way Rust call sites do immediately after clearing.
+clear_inherited_cargo_environment() {
+  local name
+  for name in CARGO "${!CARGO_@}" RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER; do
+    [ "$name" = "CARGO_HOME" ] && continue
+    unset "$name"
+  done
+}
+
 if [ "$#" -lt 1 ]; then
   usage >&2
   exit 2
@@ -263,22 +279,31 @@ cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release
 # The archive ships a deliberately reduced support workspace, so its lock must describe that workspace rather than the
 # complete compiler repository. Seed resolution from the verified repository lock, reconcile only the removed workspace
 # members without network access, then prove the shipped closure is stable under Cargo's locked mode.
+#
+# Each call runs in its own `( ... )` subshell so `clear_inherited_cargo_environment` only scopes that one Cargo
+# invocation; the SDK component build later in this script still needs its own ambient Cargo/rustc-wrapper state.
 set +e
-metadata_error="$("$cargo_bin" metadata \
-  --offline \
-  --format-version 1 \
-  --manifest-path "$package_dir/crates/Cargo.toml" 2>&1 >/dev/null)"
+metadata_error="$(
+  clear_inherited_cargo_environment
+  "$cargo_bin" metadata \
+    --offline \
+    --format-version 1 \
+    --manifest-path "$package_dir/crates/Cargo.toml" 2>&1 >/dev/null
+)"
 metadata_exit=$?
 set -e
 if [ "$metadata_exit" -ne 0 ]; then
   fail "could not derive the release support workspace lock from the verified repository lock (exit ${metadata_exit}): ${metadata_error}"
 fi
 set +e
-metadata_error="$("$cargo_bin" metadata \
-  --locked \
-  --offline \
-  --format-version 1 \
-  --manifest-path "$package_dir/crates/Cargo.toml" 2>&1 >/dev/null)"
+metadata_error="$(
+  clear_inherited_cargo_environment
+  "$cargo_bin" metadata \
+    --locked \
+    --offline \
+    --format-version 1 \
+    --manifest-path "$package_dir/crates/Cargo.toml" 2>&1 >/dev/null
+)"
 metadata_exit=$?
 set -e
 if [ "$metadata_exit" -ne 0 ]; then
