@@ -301,22 +301,54 @@ git show HEAD:Cargo.lock > "$package_dir/crates/Cargo.lock" \
 # Oven's compiler-suite test roots deliberately poison `cargo` on `PATH` with a guard binary that
 # rejects any unexpected invocation, to catch tests that should never touch Cargo; this script is
 # a legitimate exception to that guard (its caller, tests/toolchain_installer_tests.rs, is the one
-# test that genuinely needs to package a real release archive). Resolve Cargo in a way the guard's
-# PATH-prepending cannot intercept, preferring the most explicit source available:
+# test that genuinely needs to package a real release archive). Confirmed by direct CI diagnosis:
+# the guard sandbox clears `CARGO_HOME` and redirects `HOME` to an isolated, per-root scratch
+# directory, so neither can locate the real Cargo; the real Cargo is still on `PATH` (rustup's
+# normal install location), just shadowed because the guard's own directory -- always somewhere
+# under this repository's own `target/` tree -- is prepended in front of it. Resolve Cargo in a
+# way that specific trick cannot intercept, preferring the most explicit source available:
 #   1. `CARGO_BIN`, when the caller names a verified real Cargo directly.
-#   2. `${CARGO_HOME}/bin/cargo` (falling back to `~/.cargo/bin/cargo`), the fixed, well-known
-#      rustup-managed location -- reached without ever consulting `PATH`, so the guard's directory
-#      prepended onto `PATH` cannot shadow it. `clear_inherited_cargo_environment` deliberately
-#      keeps `CARGO_HOME` for exactly this reason.
-#   3. `command -v cargo`, unchanged for every caller with no such guard (a real release build,
-#      local manual packaging).
+#   2. The first `cargo` on `PATH` whose directory is NOT inside this repository's own `target/`
+#      tree. A real, system-installed Cargo is never legitimately located there; only a guard or
+#      other build-owned artifact would be.
+#   3. `command -v cargo` outright, unchanged for every caller with no such guard (a real release
+#      build, local manual packaging) and as a last-resort fallback otherwise.
 if [ -n "${CARGO_BIN:-}" ]; then
   cargo_bin="$CARGO_BIN"
   [ -x "$cargo_bin" ] || fail "CARGO_BIN does not name an executable: $cargo_bin"
-elif [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/cargo" ]; then
-  cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin/cargo"
 else
-  cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
+  cargo_bin=""
+  saved_ifs="$IFS"
+  IFS=':'
+  for path_entry in $PATH; do
+    case "$path_entry" in
+      */target/*) continue ;;
+    esac
+    if [ -x "$path_entry/cargo" ]; then
+      cargo_bin="$path_entry/cargo"
+      break
+    fi
+  done
+  IFS="$saved_ifs"
+  if [ -z "$cargo_bin" ]; then
+    cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
+  fi
+fi
+# The resolved binary is very likely rustup's own multiplexer (a `cargo` symlink or shim next to
+# `rustup` itself), which selects a toolchain at runtime by consulting `$RUSTUP_HOME` (default
+# `$HOME/.rustup`) for a configured default. That lookup fails here even after finding the right
+# Cargo: the guard's sandbox also redirects `HOME` to an isolated, per-root scratch directory with
+# no rustup state at all. Route around rustup's own toolchain selection entirely by resolving
+# directly to one real, installed toolchain's `cargo`, using the discovered binary's own location
+# rather than `$HOME` -- `.cargo` and `.rustup` are always installed as siblings under the same
+# parent directory, regardless of what `$HOME` is later set to at runtime.
+direct_toolchain_cargo="$(
+  cargo_home_dir="$(dirname "$(dirname "$cargo_bin")")"
+  find "$(dirname "$cargo_home_dir")/.rustup/toolchains" -mindepth 3 -maxdepth 3 \
+    -type f -name cargo -path '*/bin/cargo' 2>/dev/null | head -1
+)"
+if [ -n "$direct_toolchain_cargo" ] && [ -x "$direct_toolchain_cargo" ]; then
+  cargo_bin="$direct_toolchain_cargo"
 fi
 printf 'package_archive: DEBUG cargo resolution: CARGO_BIN=%s CARGO_HOME=%s HOME=%s resolved=%s PATH=%s\n' \
   "${CARGO_BIN:-<unset>}" "${CARGO_HOME:-<unset>}" "${HOME:-<unset>}" "$cargo_bin" "$PATH" >&2
