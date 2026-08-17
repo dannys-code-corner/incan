@@ -507,23 +507,27 @@ fn package_fixture_archive_with_profile(
     // Compiler-suite roots run with `cargo` deliberately poisoned on `PATH` (and `CARGO`/`CARGO_*`
     // stripped from the environment) so an Oven test that should never touch Cargo fails loudly if
     // it does. This test is the one legitimate exception: it packages a real release archive and
-    // needs real Cargo. `env!("CARGO")` is resolved at compile time into this test binary, so it
-    // names the Cargo that built it regardless of anything the guard does to the runtime
-    // environment; pass it through explicitly rather than letting package_archive.sh fall back to
-    // `command -v cargo`, which would resolve to the guard's poison-pill binary instead.
-    let output = Command::new("bash")
+    // needs real Cargo. When this binary is built by a normal `cargo test` invocation, Cargo sets
+    // `CARGO` in the environment of the rustc/build process, and -- because that's an ordinary
+    // runtime env var here, not a build-time constant -- it is only actually visible in this
+    // process if the guard hasn't already stripped it; pass it through when present, but
+    // package_archive.sh does not depend on it (see its own `${CARGO_HOME}/bin/cargo` fallback).
+    let mut command = Command::new("bash");
+    command
         .arg(toolchain_package_archive_script())
         .arg(target)
         .args(["--out-dir", root.to_str().ok_or("output path is not UTF-8")?])
         .env("INCAN_BIN", incan)
         .env("INCAN_LSP_BIN", incan_lsp)
-        .env("CARGO_BIN", env!("CARGO"))
         .env("INCAN_SDK_PROVIDER_SEED_DIR", seed)
         .env("INCAN_OVEN_LOAF_DIR", loafs)
         .env("INCAN_OVEN_LOAF_OVERRIDE_TEST_ONLY", "1")
         .env("INCAN_SDK_DISTRIBUTION_PROFILE", profile)
-        .current_dir(repo_root())
-        .output()?;
+        .current_dir(repo_root());
+    if let Ok(cargo) = std::env::var("CARGO") {
+        command.env("CARGO_BIN", cargo);
+    }
+    let output = command.output()?;
 
     assert!(
         output.status.success(),

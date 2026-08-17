@@ -298,16 +298,23 @@ git show HEAD:src/oven/fixtures/release_stdlib.toml \
   || fail "could not stage the checked release Loaf inspection dependency authority"
 git show HEAD:Cargo.lock > "$package_dir/crates/Cargo.lock" \
   || fail "could not stage the verified workspace Cargo.lock"
-# `CARGO_BIN`, when set, names a caller-verified real Cargo explicitly. Oven's compiler-suite test
-# roots deliberately poison `cargo` on `PATH` with a guard binary that rejects any unexpected
-# invocation, to catch tests that should never touch Cargo; this script is a legitimate exception
-# to that guard, and its caller (tests/toolchain_installer_tests.rs) passes the exact Cargo that
-# built it via `env!("CARGO")`, which the guard's runtime PATH/environment tampering cannot affect.
-# Every other caller (a real release build, local manual packaging) has no such guard and continues
-# to resolve Cargo from `PATH` as before.
+# Oven's compiler-suite test roots deliberately poison `cargo` on `PATH` with a guard binary that
+# rejects any unexpected invocation, to catch tests that should never touch Cargo; this script is
+# a legitimate exception to that guard (its caller, tests/toolchain_installer_tests.rs, is the one
+# test that genuinely needs to package a real release archive). Resolve Cargo in a way the guard's
+# PATH-prepending cannot intercept, preferring the most explicit source available:
+#   1. `CARGO_BIN`, when the caller names a verified real Cargo directly.
+#   2. `${CARGO_HOME}/bin/cargo` (falling back to `~/.cargo/bin/cargo`), the fixed, well-known
+#      rustup-managed location -- reached without ever consulting `PATH`, so the guard's directory
+#      prepended onto `PATH` cannot shadow it. `clear_inherited_cargo_environment` deliberately
+#      keeps `CARGO_HOME` for exactly this reason.
+#   3. `command -v cargo`, unchanged for every caller with no such guard (a real release build,
+#      local manual packaging).
 if [ -n "${CARGO_BIN:-}" ]; then
   cargo_bin="$CARGO_BIN"
   [ -x "$cargo_bin" ] || fail "CARGO_BIN does not name an executable: $cargo_bin"
+elif [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/cargo" ]; then
+  cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin/cargo"
 else
   cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
 fi
