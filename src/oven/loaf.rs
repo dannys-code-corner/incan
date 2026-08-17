@@ -1126,16 +1126,7 @@ fn export_loaf(
     }
     merge_loaf_inspection_sources(&mut plan, staging.path(), context.inspection_sources)?;
     seal_registry_lock_from_temporary_store(&mut plan, &artifact_root, staging.path())?;
-    let vocab_transient_peak = bake_compiler_vocab_support(
-        &mut plan,
-        staging.path(),
-        context.compiler_root,
-        context.cargo,
-        context.rustc,
-        context.compiler_support_target,
-        &context.capacity_roots,
-        context.transient_limit,
-    )?;
+    let vocab_transient_peak = bake_compiler_vocab_support(&mut plan, staging.path(), context)?;
     plan.materialized_artifacts(staging.path(), &receipt.intent)?;
     let (payload_logical_bytes, payload_physical_bytes) = loaf_directory_byte_counts(staging.path())?;
     // Export rewrites publisher-store paths and adds compiler-owned runtime/vocabulary inputs. Report the identity
@@ -1515,13 +1506,14 @@ fn run_bounded_loaf_cargo(
 fn bake_compiler_vocab_support(
     plan: &mut OvenRustcArtifactManifest,
     loaf_staging: &Path,
-    compiler_root: &Path,
-    cargo: &Path,
-    rustc: &Path,
-    cargo_target: &Path,
-    capacity_roots: &[&Path],
-    transient_limit: u64,
+    context: &OvenLoafBakerContext<'_>,
 ) -> Result<u64, OvenLoafError> {
+    let compiler_root = context.compiler_root;
+    let cargo = context.cargo;
+    let rustc = context.rustc;
+    let cargo_target = context.compiler_support_target;
+    let capacity_roots: &[&Path] = &context.capacity_roots;
+    let transient_limit = context.transient_limit;
     const INCAN_VOCAB: &str = "incan_vocab";
     const VOCAB_DESUGARER_TARGET: &str = "wasm32-wasip1";
     if plan.externs.iter().any(|artifact| artifact.crate_name == INCAN_VOCAB) {

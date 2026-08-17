@@ -9,10 +9,14 @@ use super::types::IrType;
 /// Return whether an IR type is already represented as a Rust reference-like value.
 #[must_use]
 pub fn type_has_rust_reference_shape(ty: &IrType) -> bool {
-    matches!(
-        ty,
-        IrType::Ref(_) | IrType::RefMut(_) | IrType::StrRef | IrType::StaticStr
-    )
+    match ty {
+        IrType::Ref(_) | IrType::RefMut(_) | IrType::StrRef | IrType::StaticStr => true,
+        // Callback parameters from inspected Rust APIs retain their exact emitted spelling in `RustDisplay` because
+        // the Incan surface type model cannot otherwise represent every borrowed Rust shape. They already evaluate
+        // to references, so ownership planning must not clone or add a second borrow.
+        IrType::RustDisplay(display) => display.trim_start().starts_with('&'),
+        _ => false,
+    }
 }
 
 /// Return whether an expression already emits a Rust reference-shaped value despite carrying an owned Incan surface
@@ -33,4 +37,23 @@ pub fn expr_has_rust_reference_shape(expr: &IrExpr) -> bool {
         IrExprKind::MethodCall { method, args, .. }
             if args.is_empty() && matches!(method.as_str(), "as_slice" | "as_str")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::type_has_rust_reference_shape;
+    use crate::backend::ir::IrType;
+
+    #[test]
+    fn borrowed_callback_display_preserves_reference_shape() {
+        assert!(type_has_rust_reference_shape(&IrType::RustDisplay(
+            "&mut egui::Ui".to_string()
+        )));
+        assert!(type_has_rust_reference_shape(&IrType::RustDisplay(
+            "&eframe::CreationContext".to_string()
+        )));
+        assert!(!type_has_rust_reference_shape(&IrType::RustDisplay(
+            "egui::Ui".to_string()
+        )));
+    }
 }

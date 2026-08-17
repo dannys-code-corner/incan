@@ -10651,6 +10651,79 @@ def main() -> None:
     Ok(())
 }
 
+/// An explicit consumer bake owns its direct registry closure even when it imports a separately baked provider.
+///
+/// The provider's package Loaf remains a receipt-checked input, but it cannot become the registry authority for the
+/// consumer's independently declared `arboard` root. A later locked run proves the selected consumer Loaf remains
+/// sufficient after the explicit publisher has completed.
+#[test]
+fn oven_baked_provider_and_direct_registry_consumer_bake_issue1054() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let provider_root = tmp.path().join("provider");
+    fs::create_dir_all(provider_root.join("src"))?;
+    fs::write(
+        provider_root.join("incan.toml"),
+        "[project]\nname = \"provider\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(
+        provider_root.join("src/lib.incn"),
+        "pub def provided() -> int:\n  return 7\n",
+    )?;
+    let provider_bake = run_explicit_oven_bake(&provider_root)?;
+    assert_success(&provider_bake, "explicit Oven bake for #1054 provider");
+
+    let consumer_root = tmp.path().join("consumer");
+    let consumer_main = write_minimal_project(
+        &consumer_root,
+        "consumer",
+        r#"
+[dependencies]
+provider = { path = "../provider" }
+
+[rust-dependencies]
+arboard = "3.6.1"
+"#,
+    )?;
+    fs::write(
+        &consumer_main,
+        r#"from pub::provider import provided
+from rust::arboard import Clipboard
+
+
+def main() -> None:
+  assert provided() == 7
+  println("provider and direct registry closure")
+"#,
+    )?;
+    fs::write(
+        consumer_root.join("src/lib.incn"),
+        r#"from pub::provider import provided
+from rust::arboard import Clipboard
+
+
+pub def provider_value() -> int:
+  return provided()
+"#,
+    )?;
+
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for #1054 provider plus direct arboard consumer",
+    );
+
+    let consumer_run = run_incan(&consumer_root, &["run", "--locked"])?;
+    assert_success(
+        &consumer_run,
+        "locked Oven run for #1054 provider plus direct arboard consumer",
+    );
+    assert_eq!(
+        String::from_utf8(consumer_run.stdout)?,
+        "provider and direct registry closure\n"
+    );
+    Ok(())
+}
+
 #[test]
 fn test_decorated_functions_preserve_default_argument_calls_issue703() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;

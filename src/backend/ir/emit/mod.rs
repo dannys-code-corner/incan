@@ -934,7 +934,60 @@ impl<'a> IrEmitter<'a> {
         }
         let left = self.resolve_type_aliases_for_emit(left);
         let right = self.resolve_type_aliases_for_emit(right);
-        left == right || Self::semantic_signature_type(&left) == Self::semantic_signature_type(&right)
+        left == right
+            || Self::semantic_signature_type(&left) == Self::semantic_signature_type(&right)
+            || Self::imported_nominal_matches_source_nominal(&left, &right)
+            || Self::rust_callback_reference_matches_nominal(&left, &right)
+            || Self::rust_callback_reference_matches_nominal(&right, &left)
+    }
+
+    /// Return whether a fully-qualified imported nominal type is the source annotation's unqualified spelling.
+    ///
+    /// Source annotations retain the imported name (`Ui`), while inspected callable metadata uses its canonical
+    /// spelling (`egui::Ui`). The source name was already resolved during lowering, so accepting this one-sided
+    /// qualification difference preserves the source-owned parameter ABI without conflating two qualified types.
+    fn imported_nominal_matches_source_nominal(left: &IrType, right: &IrType) -> bool {
+        let (left, right) = match (left, right) {
+            (
+                IrType::Struct(left) | IrType::NamedGeneric(left, _),
+                IrType::Struct(right) | IrType::NamedGeneric(right, _),
+            ) => (left, right),
+            _ => return false,
+        };
+        (left.contains("::") ^ right.contains("::")) && left.rsplit("::").next() == right.rsplit("::").next()
+    }
+
+    /// Return whether an exact borrowed callback display represents an Incan nominal parameter surface.
+    ///
+    /// Inspected Rust callbacks retain `&mut crate::Ui`, while the source function they immediately invoke owns the
+    /// Incan-level `Ui` annotation and emits its parameter as `&mut Ui`. Treat the nominal payload as the same
+    /// callable surface so source mutability remains available to argument planning without erasing the Rust borrow.
+    fn rust_callback_reference_matches_nominal(reference: &IrType, nominal: &IrType) -> bool {
+        let IrType::RustDisplay(display) = reference else {
+            return false;
+        };
+        let display = display.trim_start();
+        let display = display
+            .strip_prefix("&mut ")
+            .or_else(|| display.strip_prefix("& "))
+            .or_else(|| display.strip_prefix('&'))
+            .map(str::trim_start);
+        let Some(display) = display else {
+            return false;
+        };
+        let display_name = display
+            .split('<')
+            .next()
+            .unwrap_or(display)
+            .trim()
+            .rsplit("::")
+            .next()
+            .unwrap_or(display);
+        let nominal_name = match nominal {
+            IrType::Struct(name) | IrType::NamedGeneric(name, _) => name.rsplit("::").next(),
+            _ => None,
+        };
+        nominal_name == Some(display_name)
     }
 
     /// Return the semantic type shape used for callable-surface comparisons.
@@ -2871,6 +2924,25 @@ mod tests {
     };
     use crate::backend::ir::expr::{IrExprKind, TypedExpr};
     use crate::backend::ir::{FunctionRegistry, IrProgram, IrType};
+
+    #[test]
+    fn callback_reference_matches_imported_source_parameter_surface() {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+
+        assert!(emitter.call_signature_type_matches(
+            &IrType::RustDisplay("&mut egui::Ui".to_string()),
+            &IrType::Struct("Ui".to_string()),
+        ));
+        assert!(emitter.call_signature_type_matches(
+            &IrType::Struct("egui::Ui".to_string()),
+            &IrType::Struct("Ui".to_string()),
+        ));
+        assert!(!emitter.call_signature_type_matches(
+            &IrType::RustDisplay("&mut egui::Ui".to_string()),
+            &IrType::Struct("Frame".to_string()),
+        ));
+    }
 
     fn checked_source_class(
         private_ty: IrType,

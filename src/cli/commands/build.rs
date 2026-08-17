@@ -3891,6 +3891,29 @@ fn caller_owned_library_rust_dependencies(artifact: &LibraryArtifactMetadata) ->
     Ok(dependencies.into_values().collect())
 }
 
+/// Omit the generated Cargo projection's unconditional derive support when its Rust source does not invoke it.
+///
+/// Every generated package declares the compiler-owned `incan_derive` path dependency, but direct `rustc` needs a
+/// procedural macro only when the generated source names it. Treating an unused declaration as a caller-owned
+/// dependency would recursively resolve the macro's private registry build closure, even though the provider itself
+/// is being rebuilt only to share the consumer's already selected runtime cohort.
+fn caller_owned_library_dependencies_without_unused_incan_derive(
+    artifact: &LibraryArtifactMetadata,
+    dependencies: Vec<DependencySpec>,
+) -> CliResult<Vec<DependencySpec>> {
+    let source = fs::read_to_string(&artifact.crate_lib_path).map_err(|error| {
+        CliError::failure(format!(
+            "Oven Alpha cannot read generated provider source for pub::{} at {}: {error}",
+            artifact.dependency_key,
+            artifact.crate_lib_path.display()
+        ))
+    })?;
+    Ok(dependencies
+        .into_iter()
+        .filter(|dependency| dependency.crate_name != "incan_derive" || source.contains("incan_derive"))
+        .collect())
+}
+
 /// Validate every required package profile once for one consumer preparation.
 ///
 /// A public provider is an independently baked unit. Adding its registry dependencies to every consumer selection
@@ -4366,6 +4389,8 @@ fn rematerialize_caller_owned_provider_graph(
         let is_proc_macro = caller_owned_library_is_proc_macro(artifact)?;
         let provider_dependencies = caller_owned_library_rust_dependencies(artifact)?;
         let provider_dependencies =
+            caller_owned_library_dependencies_without_unused_incan_derive(artifact, provider_dependencies)?;
+        let provider_dependencies =
             caller_owned_library_dependencies_without_public_provider_edges(provider_dependencies, manifest);
         let provider_dependencies =
             caller_owned_library_dependencies_missing_from_selected_plan(&provider_dependencies, artifact_plan);
@@ -4572,6 +4597,39 @@ pub(crate) fn replace_caller_owned_package_libraries(
         ));
     }
     Ok(())
+}
+
+/// Replace receipt-selected historical package outputs with their current-cohort re-materializations.
+///
+/// An explicit project plan can retain a public provider as a generated-source root, but that stored rlib belongs to
+/// the producer's Rustc metadata cohort. Once the provider has been rebuilt from its receipt-checked source against
+/// the consumer's selected plan, retaining both `--extern` values would either duplicate the crate name or allow a
+/// mismatched provider closure to reach Rustc. Only direct package-root names are removed; registry leaves and every
+/// other immutable compiler artifact remain owned by the selected plan.
+fn replace_selected_package_library_externs(
+    artifact_plan: &mut OvenRustcArtifactPlan,
+    replacement_names: &BTreeSet<String>,
+) {
+    if replacement_names.is_empty() {
+        return;
+    }
+    let removed_parents = artifact_plan
+        .externs
+        .iter()
+        .filter(|(crate_name, _)| replacement_names.contains(crate_name))
+        .filter_map(|(_, path)| path.parent().map(Path::to_path_buf))
+        .collect::<BTreeSet<_>>();
+    artifact_plan
+        .externs
+        .retain(|(crate_name, _)| !replacement_names.contains(crate_name));
+    let retained_parents = artifact_plan
+        .externs
+        .iter()
+        .filter_map(|(_, path)| path.parent().map(Path::to_path_buf))
+        .collect::<BTreeSet<_>>();
+    artifact_plan
+        .dependency_search_paths
+        .retain(|search_path| !removed_parents.contains(search_path) || retained_parents.contains(search_path));
 }
 
 /// Select exactly the resolved dependency specifications used by caller-authored inline `rust::` imports.
@@ -5030,9 +5088,15 @@ fn prepare_oven_project(
     write_receipt(&receipt, crate::oven::default_receipt_path(&project_root))
         .map_err(|error| CliError::failure(error.to_string()))?;
     let required_registry_dependencies = format_oven_registry_dependency_requirements(&oven_plan_dependencies);
-    let plan_preparation = if let Some(selection) =
+    // An imported package Loaf is sufficient only for consume-only commands. The explicit baker must publish the
+    // consumer's own direct registry roots with its complete generated source closure; otherwise the provider's
+    // catalog would incorrectly become the registry authority for a consumer-declared dependency.
+    let packaged_provider_selection = if oven_plan_mode == OvenProjectPlanMode::ConsumeOnly {
         select_packaged_provider_plan(&oven_store, &checked_provider_profiles, profile, &receipt)?
-    {
+    } else {
+        None
+    };
+    let plan_preparation = if let Some(selection) = packaged_provider_selection {
         Some(OvenDirectRustcPlanPreparation {
             plan_selection: selection,
             materialization: OvenToolchainMaterialization::Reused,
@@ -6431,6 +6495,14 @@ fn publish_project_inspection_authority(
                 let owner = if extension_owns {
                     OvenProjectInspectionSourceOwner::Constituent { index: 1 }
                 } else {
+                    // Source-inspection authority only needs the same locked source text, not the same compiled
+                    // feature selection: `package`, `version`, and `source` (registry, checksum, staged content
+                    // digest) together already pin one exact, receipt-checked source archive. Two independently
+                    // resolved builds can unify a shared transitive dependency's Cargo features differently (for
+                    // example the base release Loaf's own closure enabling only `std` where a project's closure
+                    // also enables `default`) without the underlying vendored source ever differing. Compiled
+                    // artifact reuse remains governed separately by `registry_leaves`, which does still require an
+                    // exact feature match.
                     let matching_base = extension
                         .base
                         .artifacts
@@ -6439,7 +6511,6 @@ fn publish_project_inspection_authority(
                         .filter(|candidate| {
                             candidate.package == package.package
                                 && candidate.version == package.version
-                                && candidate.features == package.features
                                 && candidate.source == package.source
                         })
                         .count();
@@ -8161,6 +8232,7 @@ fn bake_oven_project(
     authority_context: Option<&mut OvenProjectBakeAuthorityContext>,
 ) -> CliResult<crate::oven::rustc::OvenDirectRustcBake> {
     let mut caller_owned_libraries = prepared.caller_owned_libraries.clone();
+    let mut re_materialized_package_library_names = BTreeSet::new();
     let registry_authority = registry_leaf_authority_for_plan_selection(&prepared.plan_selection)?;
     if has_caller_owned_project_libraries(&prepared.provider_plan)
         && !prepared.plan_selection.uses_packaged_provider_closure()
@@ -8176,12 +8248,21 @@ fn bake_oven_project(
             registry_authority.as_ref(),
             authority_context,
         )?;
+        re_materialized_package_library_names.extend(
+            re_materialized
+                .iter()
+                .filter(|library| library.expose_extern)
+                .map(|library| library.crate_name.clone()),
+        );
         replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
     }
     let mut artifact_plan = prepared
         .plan_selection
         .source_artifact_plan("generated-root")
         .map_err(oven_rustc_error)?;
+    if !re_materialized_package_library_names.is_empty() {
+        replace_selected_package_library_externs(&mut artifact_plan, &re_materialized_package_library_names);
+    }
     artifact_plan.compile_environment =
         direct_rustc_compile_environment(prepared.generator.output_dir(), &prepared.generator.crate_root_path())
             .map_err(|error| CliError::failure(error.to_string()))?;
@@ -8229,6 +8310,7 @@ fn bake_oven_library(
         ))
     })?;
     let mut caller_owned_libraries = selected.caller_owned_libraries.clone();
+    let mut re_materialized_package_library_names = BTreeSet::new();
     let registry_authority = registry_leaf_authority_for_plan_selection(&selected.plan_selection)?;
     if has_caller_owned_project_libraries(&selected.provider_plan)
         && !selected.plan_selection.uses_packaged_provider_closure()
@@ -8244,12 +8326,21 @@ fn bake_oven_library(
             registry_authority.as_ref(),
             authority_context,
         )?;
+        re_materialized_package_library_names.extend(
+            re_materialized
+                .iter()
+                .filter(|library| library.expose_extern)
+                .map(|library| library.crate_name.clone()),
+        );
         replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
     }
     let mut artifact_plan = selected
         .plan_selection
         .source_artifact_plan("generated-root")
         .map_err(oven_rustc_error)?;
+    if !re_materialized_package_library_names.is_empty() {
+        replace_selected_package_library_externs(&mut artifact_plan, &re_materialized_package_library_names);
+    }
     artifact_plan.compile_environment =
         direct_rustc_compile_environment(prepared.generator.output_dir(), &prepared.generator.crate_root_path())
             .map_err(|error| CliError::failure(error.to_string()))?;
@@ -9271,9 +9362,14 @@ fn prepare_library_project(
             write_receipt(&receipt, receipt_path.clone()).map_err(|error| CliError::failure(error.to_string()))?;
             let required_registry_dependencies = format_oven_registry_dependency_requirements(&oven_plan_dependencies);
             let oven_select_direct_rustc_plan_start = Instant::now();
-            let plan_preparation = if let Some(selection) =
+            // An imported package Loaf is sufficient only for consume-only commands. An explicit library bake must
+            // instead publish the library's own direct registry roots with its complete generated source closure.
+            let packaged_provider_selection = if oven_plan_mode == OvenProjectPlanMode::ConsumeOnly {
                 select_packaged_provider_plan(store, &checked_provider_profiles, profile, &receipt)?
-            {
+            } else {
+                None
+            };
+            let plan_preparation = if let Some(selection) = packaged_provider_selection {
                 Some(OvenDirectRustcPlanPreparation {
                     plan_selection: selection,
                     materialization: OvenToolchainMaterialization::Reused,

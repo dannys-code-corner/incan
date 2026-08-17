@@ -30,7 +30,7 @@ use crate::provider::SDK_PROVIDER_BUILD_ENV;
 use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId};
 use incan_core::lang::surface::result_methods::ResultMethodId;
 use incan_core::lang::types::numerics::{self, NumericFamily};
-use incan_core::lang::{conventions, magic_methods, stdlib as core_stdlib, trait_capabilities};
+use incan_core::lang::{conventions, keywords, magic_methods, stdlib as core_stdlib, trait_capabilities};
 
 use super::super::decl::{
     IrDeclKind, IrEnum, IrEnumValue, IrEnumValueType, IrFunction, IrImportOrigin, IrImportQualifier, IrRustTraitImport,
@@ -80,6 +80,7 @@ struct GeneratedUseAnalyzer<'program> {
     rust_extension_trait_imports: HashMap<String, IrRustTraitImport>,
     preserve_public_items: bool,
     variable_types: HashMap<String, IrType>,
+    current_impl_target: Option<String>,
     struct_field_aliases: HashMap<(String, String), String>,
     analysis: GeneratedUseAnalysis,
     pending: Vec<String>,
@@ -99,6 +100,7 @@ impl<'program> GeneratedUseAnalyzer<'program> {
             rust_extension_trait_imports: HashMap::new(),
             preserve_public_items,
             variable_types: HashMap::new(),
+            current_impl_target: None,
             struct_field_aliases: HashMap::new(),
             analysis: GeneratedUseAnalysis::default(),
             pending: Vec::new(),
@@ -267,9 +269,7 @@ impl<'program> GeneratedUseAnalyzer<'program> {
                 analyzer.scan_decl(decl);
             }
             if let Some(impls) = analyzer.impls_by_target.get(&name).cloned() {
-                for impl_block in impls {
-                    analyzer.scan_impl(impl_block);
-                }
+                analyzer.scan_impl_blocks(impls.as_slice());
             }
         }
 
@@ -375,6 +375,7 @@ impl<'program> GeneratedUseAnalyzer<'program> {
 
     /// Scan an impl block attached to a reachable nominal type.
     fn scan_impl(&mut self, impl_block: &'program super::super::decl::IrImpl) {
+        let previous_impl_target = self.current_impl_target.replace(impl_block.target_type.clone());
         self.mark_reachable_item(&impl_block.target_type);
         self.scan_type_params(&impl_block.type_params);
         if let Some(trait_name) = &impl_block.trait_name {
@@ -396,6 +397,25 @@ impl<'program> GeneratedUseAnalyzer<'program> {
                 progressed = true;
             }
             if !progressed {
+                break;
+            }
+        }
+        self.current_impl_target = previous_impl_target;
+    }
+
+    /// Scan every impl for one target until helper reachability is stable across impl boundaries.
+    ///
+    /// Source-owned inherent helpers and imported-trait implementations lower into separate [`IrImpl`] blocks. A
+    /// trait callback can therefore discover an inherent helper only after that helper's block has already been
+    /// scanned once. Revisit the target's blocks when method reachability grows so the generated Rust retains the
+    /// complete source-owned helper graph.
+    fn scan_impl_blocks(&mut self, impl_blocks: &[&'program super::super::decl::IrImpl]) {
+        loop {
+            let used_method_count = self.analysis.used_methods.len();
+            for impl_block in impl_blocks {
+                self.scan_impl(impl_block);
+            }
+            if self.analysis.used_methods.len() == used_method_count {
                 break;
             }
         }
@@ -689,10 +709,8 @@ impl<'program> GeneratedUseAnalyzer<'program> {
             } => {
                 self.scan_expr(receiver);
                 self.mark_rust_extension_trait_imports(receiver, method, dispatch.as_ref());
-                if let Some(type_name) = Self::nominal_type_name(&receiver.ty) {
-                    self.analysis
-                        .used_methods
-                        .insert((type_name.to_string(), method.clone()));
+                if let Some(type_name) = self.object_nominal_type_name(receiver) {
+                    self.analysis.used_methods.insert((type_name, method.clone()));
                 } else if let IrExprKind::Var {
                     name,
                     ref_kind: VarRefKind::TypeName,
@@ -1332,6 +1350,11 @@ impl<'program> GeneratedUseAnalyzer<'program> {
                 .get(name)
                 .and_then(Self::nominal_type_name)
                 .map(str::to_string)
+                .or_else(|| {
+                    (name == keywords::as_str(keywords::KeywordId::SelfKw))
+                        .then(|| self.current_impl_target.clone())
+                        .flatten()
+                })
         })
     }
 
