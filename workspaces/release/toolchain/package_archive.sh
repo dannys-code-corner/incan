@@ -298,7 +298,19 @@ git show HEAD:src/oven/fixtures/release_stdlib.toml \
   || fail "could not stage the checked release Loaf inspection dependency authority"
 git show HEAD:Cargo.lock > "$package_dir/crates/Cargo.lock" \
   || fail "could not stage the verified workspace Cargo.lock"
-cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
+# `CARGO_BIN`, when set, names a caller-verified real Cargo explicitly. Oven's compiler-suite test
+# roots deliberately poison `cargo` on `PATH` with a guard binary that rejects any unexpected
+# invocation, to catch tests that should never touch Cargo; this script is a legitimate exception
+# to that guard, and its caller (tests/toolchain_installer_tests.rs) passes the exact Cargo that
+# built it via `env!("CARGO")`, which the guard's runtime PATH/environment tampering cannot affect.
+# Every other caller (a real release build, local manual packaging) has no such guard and continues
+# to resolve Cargo from `PATH` as before.
+if [ -n "${CARGO_BIN:-}" ]; then
+  cargo_bin="$CARGO_BIN"
+  [ -x "$cargo_bin" ] || fail "CARGO_BIN does not name an executable: $cargo_bin"
+else
+  cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
+fi
 # The archive ships a deliberately reduced support workspace, so its lock must describe that workspace rather than the
 # complete compiler repository. Seed resolution from the verified repository lock, reconcile only the removed workspace
 # members without network access, then prove the shipped closure is stable under Cargo's locked mode.
