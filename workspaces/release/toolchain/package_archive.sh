@@ -44,6 +44,29 @@ clear_inherited_cargo_environment() {
   done
 }
 
+# Re-run one failed Cargo invocation under `strace`, filtered to syscalls that could plausibly
+# explain an unusual, non-Cargo-typical exit status (network/socket address-family errors,
+# process/fork failures) with no diagnostic text on stderr. Best-effort only: installs a local
+# strace copy on demand when the host doesn't already have one, and silently produces no output
+# when that isn't possible (no network, no package manager, unsupported platform) rather than
+# masking the original failure. Prints at most a bounded tail so the caller's error stays legible.
+describe_failure_via_strace() {
+  if ! command -v strace >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y --no-install-recommends strace >/tmp/package_archive_strace_install.log 2>&1 || true
+    fi
+  fi
+  if ! command -v strace >/dev/null 2>&1; then
+    printf '<strace unavailable for follow-up diagnosis>'
+    return 0
+  fi
+  local trace_log
+  trace_log="$(mktemp)"
+  ( clear_inherited_cargo_environment; strace -f -yy -tt -e trace=network,process -o "$trace_log" "$@" >/dev/null 2>&1 ) || true
+  tail -c 6000 "$trace_log" 2>/dev/null
+  rm -f "$trace_log"
+}
+
 if [ "$#" -lt 1 ]; then
   usage >&2
   exit 2
@@ -293,7 +316,9 @@ metadata_error="$(
 metadata_exit=$?
 set -e
 if [ "$metadata_exit" -ne 0 ]; then
-  fail "could not derive the release support workspace lock from the verified repository lock (exit ${metadata_exit}): ${metadata_error}"
+  strace_summary="$(describe_failure_via_strace "$cargo_bin" metadata --offline --format-version 1 --manifest-path "$package_dir/crates/Cargo.toml")"
+  fail "could not derive the release support workspace lock from the verified repository lock (exit ${metadata_exit}): ${metadata_error}
+strace (network/process syscalls, tail): ${strace_summary}"
 fi
 set +e
 metadata_error="$(
@@ -307,7 +332,9 @@ metadata_error="$(
 metadata_exit=$?
 set -e
 if [ "$metadata_exit" -ne 0 ]; then
-  fail "release support workspace lock is not reproducible (exit ${metadata_exit}): ${metadata_error}"
+  strace_summary="$(describe_failure_via_strace "$cargo_bin" metadata --locked --offline --format-version 1 --manifest-path "$package_dir/crates/Cargo.toml")"
+  fail "release support workspace lock is not reproducible (exit ${metadata_exit}): ${metadata_error}
+strace (network/process syscalls, tail): ${strace_summary}"
 fi
 
 # Ship one immutable component-aware SDK seed. The fixed `share/incan/sdk` location is relocation-stable and contains
