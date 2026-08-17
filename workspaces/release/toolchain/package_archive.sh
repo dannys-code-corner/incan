@@ -318,6 +318,8 @@ elif [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/cargo" ]; then
 else
   cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
 fi
+printf 'package_archive: DEBUG cargo resolution: CARGO_BIN=%s CARGO_HOME=%s HOME=%s resolved=%s PATH=%s\n' \
+  "${CARGO_BIN:-<unset>}" "${CARGO_HOME:-<unset>}" "${HOME:-<unset>}" "$cargo_bin" "$PATH" >&2
 # The archive ships a deliberately reduced support workspace, so its lock must describe that workspace rather than the
 # complete compiler repository. Seed resolution from the verified repository lock, reconcile only the removed workspace
 # members without network access, then prove the shipped closure is stable under Cargo's locked mode.
