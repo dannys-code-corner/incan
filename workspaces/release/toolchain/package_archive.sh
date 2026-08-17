@@ -263,17 +263,17 @@ cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release
 # The archive ships a deliberately reduced support workspace, so its lock must describe that workspace rather than the
 # complete compiler repository. Seed resolution from the verified repository lock, reconcile only the removed workspace
 # members without network access, then prove the shipped closure is stable under Cargo's locked mode.
-"$cargo_bin" metadata \
+metadata_error="$("$cargo_bin" metadata \
   --offline \
   --format-version 1 \
-  --manifest-path "$package_dir/crates/Cargo.toml" >/dev/null \
-  || fail "could not derive the release support workspace lock from the verified repository lock"
-"$cargo_bin" metadata \
+  --manifest-path "$package_dir/crates/Cargo.toml" 2>&1 >/dev/null)" \
+  || fail "could not derive the release support workspace lock from the verified repository lock: ${metadata_error}"
+metadata_error="$("$cargo_bin" metadata \
   --locked \
   --offline \
   --format-version 1 \
-  --manifest-path "$package_dir/crates/Cargo.toml" >/dev/null \
-  || fail "release support workspace lock is not reproducible"
+  --manifest-path "$package_dir/crates/Cargo.toml" 2>&1 >/dev/null)" \
+  || fail "release support workspace lock is not reproducible: ${metadata_error}"
 
 # Ship one immutable component-aware SDK seed. The fixed `share/incan/sdk` location is relocation-stable and contains
 # only checked manifests, generated Rust crates, and resolved locks; mutable cache identities and Cargo targets stay out.
