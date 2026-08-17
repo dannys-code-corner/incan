@@ -972,7 +972,7 @@ fn loaf_envelope_evidence(
 /// recording named content digests rather than checkout paths.
 fn loaf_runtime_source_digest(compiler_root: &Path) -> CliResult<String> {
     let mut records = BTreeMap::new();
-    let manifest = compiler_root.join("Cargo.toml");
+    let manifest = loaf_compiler_manifest_path(compiler_root)?;
     let manifest_bytes = fs::read(&manifest).map_err(|error| {
         CliError::failure(format!(
             "could not read Loaf runtime manifest {}: {error}",
@@ -992,6 +992,21 @@ fn loaf_runtime_source_digest(compiler_root: &Path) -> CliResult<String> {
     let bytes = serde_json::to_vec(&records)
         .map_err(|error| CliError::failure(format!("could not encode Loaf runtime source evidence: {error}")))?;
     Ok(digest_bytes(&bytes))
+}
+
+/// Return the checked Cargo workspace manifest for a compiler checkout or packaged toolchain.
+///
+/// Source checkouts own the complete workspace at the compiler root. Release archives intentionally ship only the
+/// runtime support workspace under `crates/`; the Loaf baker must bind to that staged workspace instead of assuming
+/// the archive contains the compiler's development-only root manifest.
+fn loaf_compiler_manifest_path(compiler_root: &Path) -> CliResult<PathBuf> {
+    [
+        compiler_root.join("Cargo.toml"),
+        compiler_root.join("crates/Cargo.toml"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .ok_or_else(|| CliError::failure("Loaf compiler root has no canonical Cargo.toml input".to_string()))
 }
 
 /// Return the one checked compiler lock used by both envelope identity and cold fixture publication.
@@ -1291,16 +1306,17 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
             "could not create explicit baker Rust inspection authority directory: {error}"
         ))
     })?;
+    let compiler_manifest = loaf_compiler_manifest_path(&options.compiler_root)?;
     let envelope_inspection_sources = match envelope {
         OvenLoafEnvelope::CompilerSuite => legacy_cargo_resolved_registry_sources(
             &options.cargo,
-            &options.compiler_root.join("Cargo.toml"),
+            &compiler_manifest,
             &["lsp".to_string()],
             &authority_dir,
         ),
         OvenLoafEnvelope::Release => legacy_cargo_inspection_sources(
             &options.cargo,
-            &options.compiler_root.join("Cargo.toml"),
+            &compiler_manifest,
             &[],
             &envelope_inspection_packages,
             &authority_dir,
@@ -1436,6 +1452,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
         let result = prepare_loaf_from_generated_project(
             &staged_root,
             &OvenLoafBakerContext {
+                compiler_root: &options.compiler_root,
                 compiler_support_target: &compiler_support_target,
                 capacity_roots: [&options.output, scratch.path()],
                 transient_limit: max_physical_bytes,
@@ -5909,6 +5926,21 @@ mod tests {
         assert!(!super::loaf_fixture_probe_is_expected_miss(
             "Cargo failed while preparing a native provider/dependency unit"
         ));
+    }
+
+    #[test]
+    fn loaf_compiler_manifest_accepts_packaged_support_workspace() -> Result<(), Box<dyn std::error::Error>> {
+        let compiler_root = tempfile::tempdir()?;
+        let packaged_manifest = compiler_root.path().join("crates/Cargo.toml");
+        fs::create_dir_all(packaged_manifest.parent().ok_or("packaged manifest has no parent")?)?;
+        fs::write(&packaged_manifest, "[workspace]\nresolver = \"2\"\n")?;
+
+        assert_eq!(
+            super::loaf_compiler_manifest_path(compiler_root.path())?,
+            packaged_manifest,
+            "release packaging must bind Loaf evidence to the shipped support workspace"
+        );
+        Ok(())
     }
 
     #[cfg(unix)]

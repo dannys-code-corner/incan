@@ -215,6 +215,13 @@ members = [
     "incan_vocab",
     "incan_web_macros",
 ]
+default-members = [
+    "incan_core",
+    "incan_derive",
+    "incan_stdlib",
+    "incan_vocab",
+    "incan_web_macros",
+]
 resolver = "2"
 
 [workspace.package]
@@ -227,9 +234,46 @@ repository = "https://github.com/encero-systems/incan"
 homepage = "https://github.com/encero-systems/incan"
 keywords = ["programming-language", "compiler", "rust", "python"]
 categories = ["compilers", "development-tools"]
+
+# This non-default package keeps the locked registry-source authority used by the built-in release Loaf fixtures. It
+# is metadata-only release infrastructure; normal support-workspace commands operate on the default members above.
+[package]
+name = "incan-release-inspection-authority"
+version = "${version}"
+edition = "2024"
+publish = false
+
+[lib]
+path = "release-inspection-authority.rs"
 WORKSPACE
+printf '%s\n' '#![allow(dead_code)]' > "$package_dir/crates/release-inspection-authority.rs"
+git show HEAD:src/oven/fixtures/release_stdlib.toml \
+  | awk '
+      /^\[rust-dependencies\]$/ {
+        print "[dependencies]"
+        copy_dependencies = 1
+        next
+      }
+      copy_dependencies { print }
+    ' >> "$package_dir/crates/Cargo.toml" \
+  || fail "could not stage the checked release Loaf inspection dependency authority"
 git show HEAD:Cargo.lock > "$package_dir/crates/Cargo.lock" \
   || fail "could not stage the verified workspace Cargo.lock"
+cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
+# The archive ships a deliberately reduced support workspace, so its lock must describe that workspace rather than the
+# complete compiler repository. Seed resolution from the verified repository lock, reconcile only the removed workspace
+# members without network access, then prove the shipped closure is stable under Cargo's locked mode.
+"$cargo_bin" metadata \
+  --offline \
+  --format-version 1 \
+  --manifest-path "$package_dir/crates/Cargo.toml" >/dev/null \
+  || fail "could not derive the release support workspace lock from the verified repository lock"
+"$cargo_bin" metadata \
+  --locked \
+  --offline \
+  --format-version 1 \
+  --manifest-path "$package_dir/crates/Cargo.toml" >/dev/null \
+  || fail "release support workspace lock is not reproducible"
 
 # Ship one immutable component-aware SDK seed. The fixed `share/incan/sdk` location is relocation-stable and contains
 # only checked manifests, generated Rust crates, and resolved locks; mutable cache identities and Cargo targets stay out.
@@ -264,7 +308,6 @@ if [ -n "${INCAN_OVEN_LOAF_DIR:-}" ]; then
   mkdir -p "$(dirname "$loaf_root")"
   cp -R "$INCAN_OVEN_LOAF_DIR" "$loaf_root"
 else
-  cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release-only Loaf publisher"
   if [ -n "${RUSTC:-}" ]; then
     rustc_bin="$RUSTC"
   elif command -v rustup >/dev/null 2>&1; then

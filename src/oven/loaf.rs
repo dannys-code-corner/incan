@@ -789,6 +789,8 @@ pub struct OvenLoafPreparation {
 
 /// Explicit resources and bounded policy available to one hidden legacy-Cargo Loaf bake.
 pub struct OvenLoafBakerContext<'a> {
+    /// Compiler source root whose checked support crates and lock authority are being packaged.
+    pub compiler_root: &'a Path,
     pub compiler_support_target: &'a Path,
     /// Every baker-owned persistent or transient root charged to the replacement high-water mark.
     pub capacity_roots: [&'a Path; 2],
@@ -1127,6 +1129,7 @@ fn export_loaf(
     let vocab_transient_peak = bake_compiler_vocab_support(
         &mut plan,
         staging.path(),
+        context.compiler_root,
         context.cargo,
         context.rustc,
         context.compiler_support_target,
@@ -1512,6 +1515,7 @@ fn run_bounded_loaf_cargo(
 fn bake_compiler_vocab_support(
     plan: &mut OvenRustcArtifactManifest,
     loaf_staging: &Path,
+    compiler_root: &Path,
     cargo: &Path,
     rustc: &Path,
     cargo_target: &Path,
@@ -1538,8 +1542,7 @@ fn bake_compiler_vocab_support(
             ),
         });
     }
-    let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let crate_root = source_root.join("crates/incan_vocab");
+    let crate_root = compiler_root.join("crates/incan_vocab");
     let manifest = crate_root.join("Cargo.toml");
     if !manifest.is_file() {
         return Err(OvenLoafError::Preparation {

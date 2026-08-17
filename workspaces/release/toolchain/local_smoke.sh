@@ -8,7 +8,8 @@ case "$dist_dir" in
   /*) ;;
   *) dist_dir="${root}/${dist_dir}" ;;
 esac
-incan_run_bin="${TOOLCHAIN_INCAN_BIN:-${root}/target/release/incan}"
+incan_run_bin_override="${TOOLCHAIN_INCAN_BIN:-}"
+incan_run_bin=""
 # A caller that is already isolating generated-project state (notably the parallel Oven compiler suite) remains
 # authoritative.  Ordinary local release smoke keeps the historic task-local fallback.
 generated_cargo_target_dir="${INCAN_GENERATED_CARGO_TARGET_DIR:-${root}/target/incan_generated_shared_target}"
@@ -86,7 +87,23 @@ require_archive() {
   [ -f "${archive}.sha256" ] || fail "missing archive checksum: ${archive}.sha256"
 }
 
+resolve_incan_run_bin() {
+  if [ -n "$incan_run_bin_override" ]; then
+    printf '%s\n' "$incan_run_bin_override"
+    return
+  fi
+  if [ -f "${dist_dir}/toolchain-release.txt" ]; then
+    local packaged_bin="${dist_dir}/dist/incan-$(toolchain_release)-${host_target}/bin/incan"
+    if [ -x "$packaged_bin" ]; then
+      printf '%s\n' "$packaged_bin"
+      return
+    fi
+  fi
+  printf '%s\n' "${root}/target/release/incan"
+}
+
 require_incan_run_bin() {
+  incan_run_bin="$(resolve_incan_run_bin)"
   [ -x "$incan_run_bin" ] || fail "missing Incan runner: ${incan_run_bin}; run make toolchain-release-build first or set TOOLCHAIN_INCAN_BIN"
 }
 
@@ -107,6 +124,7 @@ write_assets() {
     INCAN_TOOLCHAIN_DIST_DIR="$dist_dir" \
     INCAN_TOOLCHAIN_SKIP_HOMEBREW=1 \
     INCAN_TOOLCHAIN_GENERATED_AT="$generated_at" \
+    INCAN_HOME="$dist_dir/asset-home" \
     INCAN_NO_BANNER=1 \
     CARGO_NET_OFFLINE=true \
     INCAN_SOURCE_ROOT="$root" \
@@ -148,6 +166,7 @@ smoke_direct() {
   rm -rf "${dist_dir}/starter-smoke"
   mkdir -p "${dist_dir}/starter-smoke"
   (
+    export INCAN_HOME="${dist_dir}/install-home"
     cd "${dist_dir}/starter-smoke"
     "${dist_dir}/install-bin/incan" new hello --yes
     cd hello
@@ -262,6 +281,7 @@ smoke_homebrew() {
   INCAN_REPO_ROOT="$root" \
     INCAN_TOOLCHAIN_DIST_DIR="$dist_dir" \
     INCAN_TOOLCHAIN_GENERATED_AT="$generated_at" \
+    INCAN_HOME="$dist_dir/asset-home" \
     INCAN_NO_BANNER=1 \
     CARGO_NET_OFFLINE=true \
     INCAN_SOURCE_ROOT="$root" \

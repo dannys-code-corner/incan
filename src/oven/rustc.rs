@@ -8597,7 +8597,7 @@ mod tests {
             schema_version: OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION,
             project_identity: "sha256:project".to_string(),
             source_authority_digest: "sha256:source".to_string(),
-            compiler_version: "0.5.0-dev.47".to_string(),
+            compiler_version: "0.5.0-rc0".to_string(),
             registry_lock_digest: digest_bytes(b"lock"),
             registry_source_dependencies: vec![root.clone()],
             dev_registry_source_dependencies: Vec::new(),
