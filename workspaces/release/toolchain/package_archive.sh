@@ -334,22 +334,32 @@ else
     cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
   fi
 fi
+# The resolved binary's own directory is the real Cargo home (`.cargo/bin/cargo`, whether reached
+# via `CARGO_BIN` or the `PATH` walk above), and `.cargo`/`.rustup` are always installed as
+# siblings under the same parent directory -- regardless of what `$HOME` is later set to at
+# runtime. Capture that real Cargo home now, before `$HOME` gets in the way of anything else that
+# needs it (the offline registry cache below).
+cargo_home_dir="$(dirname "$(dirname "$cargo_bin")")"
 # The resolved binary is very likely rustup's own multiplexer (a `cargo` symlink or shim next to
 # `rustup` itself), which selects a toolchain at runtime by consulting `$RUSTUP_HOME` (default
 # `$HOME/.rustup`) for a configured default. That lookup fails here even after finding the right
 # Cargo: the guard's sandbox also redirects `HOME` to an isolated, per-root scratch directory with
 # no rustup state at all. Route around rustup's own toolchain selection entirely by resolving
-# directly to one real, installed toolchain's `cargo`, using the discovered binary's own location
-# rather than `$HOME` -- `.cargo` and `.rustup` are always installed as siblings under the same
-# parent directory, regardless of what `$HOME` is later set to at runtime.
+# directly to one real, installed toolchain's `cargo`.
 direct_toolchain_cargo="$(
-  cargo_home_dir="$(dirname "$(dirname "$cargo_bin")")"
   find "$(dirname "$cargo_home_dir")/.rustup/toolchains" -mindepth 3 -maxdepth 3 \
     -type f -name cargo -path '*/bin/cargo' 2>/dev/null | head -1
 )"
 if [ -n "$direct_toolchain_cargo" ] && [ -x "$direct_toolchain_cargo" ]; then
   cargo_bin="$direct_toolchain_cargo"
 fi
+# `cargo metadata --offline` below resolves its registry cache from `$CARGO_HOME` (default
+# `$HOME/.cargo`), which is equally a victim of the guard's `$HOME` redirect: the offline cache
+# prewarmed into the real Cargo home would otherwise be invisible. `clear_inherited_cargo_environment`
+# deliberately preserves `CARGO_HOME`, so exporting the real value here, once, is sufficient for
+# every Cargo invocation this script makes afterward.
+: "${CARGO_HOME:=$cargo_home_dir}"
+export CARGO_HOME
 printf 'package_archive: DEBUG cargo resolution: CARGO_BIN=%s CARGO_HOME=%s HOME=%s resolved=%s PATH=%s\n' \
   "${CARGO_BIN:-<unset>}" "${CARGO_HOME:-<unset>}" "${HOME:-<unset>}" "$cargo_bin" "$PATH" >&2
 # The archive ships a deliberately reduced support workspace, so its lock must describe that workspace rather than the
