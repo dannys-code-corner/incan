@@ -411,6 +411,74 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
+  # TEMPORARY debug-only job for the Cargo-guard investigation on PR #1062. Runs just the one
+  # failing test root directly (not the full 4-way partitioned replay) so each diagnostic
+  # iteration doesn't cost the ~20-30 minutes of the other ~20 unrelated compiler-suite roots in
+  # a normal shard. Remove this job once the guard-resolution fix is confirmed working.
+  oven-linux-replay-debug-single-case:
+    name: DEBUG single-case cargo-guard repro
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - linux-oven-prewarm
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install WASI target for vocab desugarers
+        run: rustup target add wasm32-wasip1 --toolchain stable
+      - uses: ./.github/actions/install-nightly-toolchain
+        with:
+          toolchain: nightly-2026-03-24
+      - name: Restore Cargo sources
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
+          restore-keys: |
+            incan-oven-pr-sources-v1-stable-Linux-X64-
+      - name: Fetch locked compiler and Loaf publisher sources
+        run: |
+          make fetch-locked-cargo-sources
+          make fetch-oven-loaf-sources
+          make fetch-release-support-workspace-sources
+      - name: Download prewarmed compiler and reference generators
+        uses: actions/download-artifact@v7
+        with:
+          name: test-linux-tools
+          path: target/debug
+      - name: Restore executable permissions
+        run: chmod +x target/debug/incan target/debug/generate_lang_reference target/debug/generate_feature_inventory
+      - name: Restore immutable prepared Oven suite
+        uses: actions/cache/restore@v5
+        with:
+          key: ${{ needs.linux-oven-prewarm.outputs.oven_suite_cache_key }}
+          path: |
+            .incan/oven/compiler-libtests-receipt.json
+            target/share/incan/oven/loafs
+            target/oven-compiler-suite-store
+            target/incan_test_sdk_provider_store
+            target/incan_test_sdk_provider_path
+          fail-on-cache-miss: true
+      - name: Verify prepared suite handoff
+        run: |
+          test -s .incan/oven/compiler-libtests-receipt.json
+          test -d target/share/incan/oven/loafs
+          test -d target/oven-compiler-suite-store
+          test -s target/incan_test_sdk_provider_path
+      - name: Run just the one failing test root
+        run: >-
+          CARGO_NET_OFFLINE=true
+          INCAN_TEST_COMPILER_ALREADY_BUILT=1
+          INCAN_TEST_PREWARM_TOOLCHAIN=stable
+          INCAN_TEST_LOAF_TOOLCHAIN=stable
+          INCAN_TEST_SUITE_TOOLCHAIN=stable
+          make -s test-one
+          TEST_ROOT=tests/toolchain_installer_tests.rs
+          TEST_EXACT=default_sdk_archive_contains_every_default_profile_component
+
   oven-release-smoke:
     name: Oven release Loaf guard
     runs-on: ubuntu-latest
