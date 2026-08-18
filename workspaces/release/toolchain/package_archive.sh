@@ -339,7 +339,25 @@ fi
 # siblings under the same parent directory -- regardless of what `$HOME` is later set to at
 # runtime. Capture that real Cargo home now, before `$HOME` gets in the way of anything else that
 # needs it (the offline registry cache below).
-cargo_home_dir="$(dirname "$(dirname "$cargo_bin")")"
+#
+# This sibling derivation breaks for a package-manager rustup install: Homebrew's `rustup` formula
+# keeps its `cargo` shim under `<prefix>/opt/rustup/bin/`, so deriving two directories up lands on
+# the Homebrew prefix rather than a real Cargo home with a populated offline registry cache. `.cargo`
+# and `.rustup` are always siblings under the true user home even when that install's shim lives
+# elsewhere, and `$RUSTUP_HOME` reliably names the real `.rustup` even in the guarded/sandboxed case
+# where `$HOME` itself is redirected to an isolated scratch directory but `$RUSTUP_HOME` still points
+# at the real one (rustup exports it once initialized, independent of `$HOME`). Prefer deriving from
+# `${RUSTUP_HOME:-$HOME/.rustup}`'s sibling `.cargo` first; fall back to `$HOME/.cargo` for hosts
+# where neither `$RUSTUP_HOME` nor `.cargo`/`.rustup` are siblings of the resolved Cargo binary, and
+# finally to the original sibling-of-Cargo derivation.
+rustup_home_dir="${RUSTUP_HOME:-$HOME/.rustup}"
+if [ -d "$(dirname "$rustup_home_dir")/.cargo/registry" ]; then
+  cargo_home_dir="$(dirname "$rustup_home_dir")/.cargo"
+elif [ -d "$HOME/.cargo/registry" ]; then
+  cargo_home_dir="$HOME/.cargo"
+else
+  cargo_home_dir="$(dirname "$(dirname "$cargo_bin")")"
+fi
 # The resolved binary is very likely rustup's own multiplexer (a `cargo` symlink or shim next to
 # `rustup` itself), which selects a toolchain at runtime by consulting `$RUSTUP_HOME` (default
 # `$HOME/.rustup`) for a configured default. That lookup fails here even after finding the right
@@ -355,7 +373,7 @@ cargo_home_dir="$(dirname "$(dirname "$cargo_bin")")"
 # lookup is empty, which covers the guarded/sandboxed case above where `$HOME` itself is redirected
 # but the resolved Cargo binary's real location still has `.rustup` as a physical sibling.
 direct_toolchain_cargo="$(
-  find "${RUSTUP_HOME:-$HOME/.rustup}/toolchains" -mindepth 3 -maxdepth 3 \
+  find "$rustup_home_dir/toolchains" -mindepth 3 -maxdepth 3 \
     -type f -name cargo -path '*/bin/cargo' 2>/dev/null | head -1
 )"
 if [ -z "$direct_toolchain_cargo" ]; then
