@@ -10654,8 +10654,12 @@ def main() -> None:
 /// An explicit consumer bake owns its direct registry closure even when it imports a separately baked provider.
 ///
 /// The provider's package Loaf remains a receipt-checked input, but it cannot become the registry authority for the
-/// consumer's independently declared `arboard` root. A later locked run proves the selected consumer Loaf remains
-/// sufficient after the explicit publisher has completed.
+/// consumer's independently declared `itoa` root. A later locked run proves the selected consumer Loaf remains
+/// sufficient after the explicit publisher has completed. `itoa` is deliberately the same zero-dependency registry
+/// root already used by the other direct-dependency tests in this file (see e.g.
+/// `workspace_lock_is_published_once_at_the_root_from_any_member`): any external crate proves the registry-authority
+/// behavior under test, so picking one already covered by the Oven Loaf dependency prefetch manifest keeps this
+/// test's own registry closure from growing independently.
 #[test]
 fn oven_baked_provider_and_direct_registry_consumer_bake_issue1054() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
@@ -10681,13 +10685,13 @@ fn oven_baked_provider_and_direct_registry_consumer_bake_issue1054() -> Result<(
 provider = { path = "../provider" }
 
 [rust-dependencies]
-arboard = "3.6.1"
+itoa = "1"
 "#,
     )?;
     fs::write(
         &consumer_main,
         r#"from pub::provider import provided
-from rust::arboard import Clipboard
+from rust::itoa import Buffer
 
 
 def main() -> None:
@@ -10698,7 +10702,7 @@ def main() -> None:
     fs::write(
         consumer_root.join("src/lib.incn"),
         r#"from pub::provider import provided
-from rust::arboard import Clipboard
+from rust::itoa import Buffer
 
 
 pub def provider_value() -> int:
@@ -10709,13 +10713,13 @@ pub def provider_value() -> int:
     let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
     assert_success(
         &consumer_bake,
-        "explicit Oven bake for #1054 provider plus direct arboard consumer",
+        "explicit Oven bake for #1054 provider plus direct itoa consumer",
     );
 
     let consumer_run = run_incan(&consumer_root, &["run", "--locked"])?;
     assert_success(
         &consumer_run,
-        "locked Oven run for #1054 provider plus direct arboard consumer",
+        "locked Oven run for #1054 provider plus direct itoa consumer",
     );
     assert_eq!(
         String::from_utf8(consumer_run.stdout)?,
