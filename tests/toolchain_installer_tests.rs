@@ -504,7 +504,16 @@ fn package_fixture_archive_with_profile(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let seed = write_fixture_sdk_provider_seed(root, profile)?;
     let loafs = write_fixture_loafs(root)?;
-    let output = Command::new("bash")
+    // Compiler-suite roots run with `cargo` deliberately poisoned on `PATH` (and `CARGO`/`CARGO_*`
+    // stripped from the environment) so an Oven test that should never touch Cargo fails loudly if
+    // it does. This test is the one legitimate exception: it packages a real release archive and
+    // needs real Cargo. When this binary is built by a normal `cargo test` invocation, Cargo sets
+    // `CARGO` in the environment of the rustc/build process, and -- because that's an ordinary
+    // runtime env var here, not a build-time constant -- it is only actually visible in this
+    // process if the guard hasn't already stripped it; pass it through when present, but
+    // package_archive.sh does not depend on it (see its own `${CARGO_HOME}/bin/cargo` fallback).
+    let mut command = Command::new("bash");
+    command
         .arg(toolchain_package_archive_script())
         .arg(target)
         .args(["--out-dir", root.to_str().ok_or("output path is not UTF-8")?])
@@ -514,8 +523,11 @@ fn package_fixture_archive_with_profile(
         .env("INCAN_OVEN_LOAF_DIR", loafs)
         .env("INCAN_OVEN_LOAF_OVERRIDE_TEST_ONLY", "1")
         .env("INCAN_SDK_DISTRIBUTION_PROFILE", profile)
-        .current_dir(repo_root())
-        .output()?;
+        .current_dir(repo_root());
+    if let Ok(cargo) = std::env::var("CARGO") {
+        command.env("CARGO_BIN", cargo);
+    }
+    let output = command.output()?;
 
     assert!(
         output.status.success(),
@@ -1950,7 +1962,9 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-rc0/manifest.json";
+    let version = env!("CARGO_PKG_VERSION");
+    let expected_manifest =
+        format!("https://github.com/encero-systems/incan/releases/download/v{version}/manifest.json");
 
     let output = Command::new("node")
         .arg(npm_installer_wrapper())
@@ -1967,7 +1981,7 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_printed_arg_pair(&output.stdout, "--manifest", expected_manifest);
+    assert_printed_arg_pair(&output.stdout, "--manifest", &expected_manifest);
     Ok(())
 }
 
@@ -2005,7 +2019,9 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-rc0/manifest.json";
+    let version = env!("CARGO_PKG_VERSION");
+    let expected_manifest =
+        format!("https://github.com/encero-systems/incan/releases/download/v{version}/manifest.json");
 
     let output = Command::new("python3")
         .arg(pip_installer_wrapper())
@@ -2021,7 +2037,7 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_printed_arg_pair(&output.stdout, "--manifest", expected_manifest);
+    assert_printed_arg_pair(&output.stdout, "--manifest", &expected_manifest);
     Ok(())
 }
 

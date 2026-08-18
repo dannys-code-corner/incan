@@ -28,6 +28,45 @@ fail() {
   exit 1
 }
 
+# Clear ambient Cargo/rustc-wrapper state before an internal Cargo invocation, mirroring
+# `clear_inherited_cargo_environment` in src/oven/rustc.rs. This script's own `cargo metadata`
+# calls are the release support workspace's authority; they must not inherit CARGO_* state
+# (target dir, build jobs, an rustc wrapper meant for a different build, etc.) from an
+# already-running, possibly nested Cargo/toolchain-managed parent process such as `cargo test`.
+# Unlike the Rust helper, this deliberately keeps `CARGO_HOME` -- callers (CI, local testing) rely
+# on it to name the prewarmed registry cache, and this script has no explicit replacement value to
+# re-inject the way Rust call sites do immediately after clearing.
+clear_inherited_cargo_environment() {
+  local name
+  for name in CARGO "${!CARGO_@}" RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER; do
+    [ "$name" = "CARGO_HOME" ] && continue
+    unset "$name"
+  done
+}
+
+# Re-run one failed Cargo invocation under `strace`, filtered to syscalls that could plausibly
+# explain an unusual, non-Cargo-typical exit status (network/socket address-family errors,
+# process/fork failures) with no diagnostic text on stderr. Best-effort only: installs a local
+# strace copy on demand when the host doesn't already have one, and silently produces no output
+# when that isn't possible (no network, no package manager, unsupported platform) rather than
+# masking the original failure. Prints at most a bounded tail so the caller's error stays legible.
+describe_failure_via_strace() {
+  if ! command -v strace >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y --no-install-recommends strace >/tmp/package_archive_strace_install.log 2>&1 || true
+    fi
+  fi
+  if ! command -v strace >/dev/null 2>&1; then
+    printf '<strace unavailable for follow-up diagnosis>'
+    return 0
+  fi
+  local trace_log
+  trace_log="$(mktemp)"
+  ( clear_inherited_cargo_environment; strace -f -yy -tt -e trace=network,process -o "$trace_log" "$@" >/dev/null 2>&1 ) || true
+  tail -c 6000 "$trace_log" 2>/dev/null
+  rm -f "$trace_log"
+}
+
 if [ "$#" -lt 1 ]; then
   usage >&2
   exit 2
@@ -259,21 +298,107 @@ git show HEAD:src/oven/fixtures/release_stdlib.toml \
   || fail "could not stage the checked release Loaf inspection dependency authority"
 git show HEAD:Cargo.lock > "$package_dir/crates/Cargo.lock" \
   || fail "could not stage the verified workspace Cargo.lock"
-cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
+# Oven's compiler-suite test roots deliberately poison `cargo` on `PATH` with a guard binary that
+# rejects any unexpected invocation, to catch tests that should never touch Cargo; this script is
+# a legitimate exception to that guard (its caller, tests/toolchain_installer_tests.rs, is the one
+# test that genuinely needs to package a real release archive). Confirmed by direct CI diagnosis:
+# the guard sandbox clears `CARGO_HOME` and redirects `HOME` to an isolated, per-root scratch
+# directory, so neither can locate the real Cargo; the real Cargo is still on `PATH` (rustup's
+# normal install location), just shadowed because the guard's own directory -- always somewhere
+# under this repository's own `target/` tree -- is prepended in front of it. Resolve Cargo in a
+# way that specific trick cannot intercept, preferring the most explicit source available:
+#   1. `CARGO_BIN`, when the caller names a verified real Cargo directly.
+#   2. The first `cargo` on `PATH` whose directory is NOT inside this repository's own `target/`
+#      tree. A real, system-installed Cargo is never legitimately located there; only a guard or
+#      other build-owned artifact would be.
+#   3. `command -v cargo` outright, unchanged for every caller with no such guard (a real release
+#      build, local manual packaging) and as a last-resort fallback otherwise.
+if [ -n "${CARGO_BIN:-}" ]; then
+  cargo_bin="$CARGO_BIN"
+  [ -x "$cargo_bin" ] || fail "CARGO_BIN does not name an executable: $cargo_bin"
+else
+  cargo_bin=""
+  saved_ifs="$IFS"
+  IFS=':'
+  for path_entry in $PATH; do
+    case "$path_entry" in
+      */target/*) continue ;;
+    esac
+    if [ -x "$path_entry/cargo" ]; then
+      cargo_bin="$path_entry/cargo"
+      break
+    fi
+  done
+  IFS="$saved_ifs"
+  if [ -z "$cargo_bin" ]; then
+    cargo_bin="$(command -v cargo)" || fail "could not resolve Cargo for the release support workspace"
+  fi
+fi
+# The resolved binary's own directory is the real Cargo home (`.cargo/bin/cargo`, whether reached
+# via `CARGO_BIN` or the `PATH` walk above), and `.cargo`/`.rustup` are always installed as
+# siblings under the same parent directory -- regardless of what `$HOME` is later set to at
+# runtime. Capture that real Cargo home now, before `$HOME` gets in the way of anything else that
+# needs it (the offline registry cache below).
+cargo_home_dir="$(dirname "$(dirname "$cargo_bin")")"
+# The resolved binary is very likely rustup's own multiplexer (a `cargo` symlink or shim next to
+# `rustup` itself), which selects a toolchain at runtime by consulting `$RUSTUP_HOME` (default
+# `$HOME/.rustup`) for a configured default. That lookup fails here even after finding the right
+# Cargo: the guard's sandbox also redirects `HOME` to an isolated, per-root scratch directory with
+# no rustup state at all. Route around rustup's own toolchain selection entirely by resolving
+# directly to one real, installed toolchain's `cargo`.
+direct_toolchain_cargo="$(
+  find "$(dirname "$cargo_home_dir")/.rustup/toolchains" -mindepth 3 -maxdepth 3 \
+    -type f -name cargo -path '*/bin/cargo' 2>/dev/null | head -1
+)"
+if [ -n "$direct_toolchain_cargo" ] && [ -x "$direct_toolchain_cargo" ]; then
+  cargo_bin="$direct_toolchain_cargo"
+fi
+# `cargo metadata --offline` below resolves its registry cache from `$CARGO_HOME` (default
+# `$HOME/.cargo`), which is equally a victim of the guard's `$HOME` redirect: the offline cache
+# prewarmed into the real Cargo home would otherwise be invisible. `clear_inherited_cargo_environment`
+# deliberately preserves `CARGO_HOME`, so exporting the real value here, once, is sufficient for
+# every Cargo invocation this script makes afterward.
+: "${CARGO_HOME:=$cargo_home_dir}"
+export CARGO_HOME
+printf 'package_archive: DEBUG cargo resolution: CARGO_BIN=%s CARGO_HOME=%s HOME=%s resolved=%s PATH=%s\n' \
+  "${CARGO_BIN:-<unset>}" "${CARGO_HOME:-<unset>}" "${HOME:-<unset>}" "$cargo_bin" "$PATH" >&2
 # The archive ships a deliberately reduced support workspace, so its lock must describe that workspace rather than the
 # complete compiler repository. Seed resolution from the verified repository lock, reconcile only the removed workspace
 # members without network access, then prove the shipped closure is stable under Cargo's locked mode.
-"$cargo_bin" metadata \
-  --offline \
-  --format-version 1 \
-  --manifest-path "$package_dir/crates/Cargo.toml" >/dev/null \
-  || fail "could not derive the release support workspace lock from the verified repository lock"
-"$cargo_bin" metadata \
-  --locked \
-  --offline \
-  --format-version 1 \
-  --manifest-path "$package_dir/crates/Cargo.toml" >/dev/null \
-  || fail "release support workspace lock is not reproducible"
+#
+# Each call runs in its own `( ... )` subshell so `clear_inherited_cargo_environment` only scopes that one Cargo
+# invocation; the SDK component build later in this script still needs its own ambient Cargo/rustc-wrapper state.
+set +e
+metadata_error="$(
+  clear_inherited_cargo_environment
+  "$cargo_bin" metadata \
+    --offline \
+    --format-version 1 \
+    --manifest-path "$package_dir/crates/Cargo.toml" 2>&1 >/dev/null
+)"
+metadata_exit=$?
+set -e
+if [ "$metadata_exit" -ne 0 ]; then
+  strace_summary="$(describe_failure_via_strace "$cargo_bin" metadata --offline --format-version 1 --manifest-path "$package_dir/crates/Cargo.toml")"
+  fail "could not derive the release support workspace lock from the verified repository lock (exit ${metadata_exit}): ${metadata_error}
+strace (network/process syscalls, tail): ${strace_summary}"
+fi
+set +e
+metadata_error="$(
+  clear_inherited_cargo_environment
+  "$cargo_bin" metadata \
+    --locked \
+    --offline \
+    --format-version 1 \
+    --manifest-path "$package_dir/crates/Cargo.toml" 2>&1 >/dev/null
+)"
+metadata_exit=$?
+set -e
+if [ "$metadata_exit" -ne 0 ]; then
+  strace_summary="$(describe_failure_via_strace "$cargo_bin" metadata --locked --offline --format-version 1 --manifest-path "$package_dir/crates/Cargo.toml")"
+  fail "release support workspace lock is not reproducible (exit ${metadata_exit}): ${metadata_error}
+strace (network/process syscalls, tail): ${strace_summary}"
+fi
 
 # Ship one immutable component-aware SDK seed. The fixed `share/incan/sdk` location is relocation-stable and contains
 # only checked manifests, generated Rust crates, and resolved locks; mutable cache identities and Cargo targets stay out.

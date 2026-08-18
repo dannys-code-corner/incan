@@ -1383,6 +1383,20 @@ pub fn prepare_direct_rustc_plan(
             inspection_packages: request.inspection_packages.as_deref(),
         })?;
     supporting_artifacts.extend(registry_source_artifacts);
+    // The complete-graph source catalog only runs when sealing against a base release Loaf (`base_loaf.is_some()`).
+    // Fetch Cargo's own platform-filtered resolve for the receipt's exact target so that closure reflects what this
+    // target's build actually requires, not every platform's locked dependencies.
+    let platform_filtered_metadata = if request.base_loaf.is_some() {
+        Some(read_legacy_cargo_metadata_for_platform(
+            &request.cargo,
+            &cargo_manifest,
+            &request.receipt.intent.features,
+            true,
+            Some(request.receipt.intent.target.as_str()),
+        )?)
+    } else {
+        None
+    };
     let (registry_sources, transitive_registry_source_artifacts) = publisher_registry_source_catalog(
         &metadata,
         &cargo_lock_bytes,
@@ -1390,6 +1404,7 @@ pub fn prepare_direct_rustc_plan(
         request.inspection_packages.as_deref(),
         &registry_leaves,
         request.base_loaf.is_some(),
+        platform_filtered_metadata.as_ref(),
     )?;
     supporting_artifacts.extend(transitive_registry_source_artifacts);
     if !registry_sources.is_empty() {
@@ -5196,6 +5211,24 @@ fn read_legacy_cargo_metadata_with_lock_policy(
     features: &[String],
     require_existing_lock: bool,
 ) -> Result<CargoMetadata, OvenLegacyCargoError> {
+    read_legacy_cargo_metadata_for_platform(cargo, cargo_manifest, features, require_existing_lock, None)
+}
+
+/// Read publisher metadata with the caller's explicit Cargo.lock admission policy, optionally pruned to one target.
+///
+/// Without `filter_platform`, Cargo's resolve graph stays platform-agnostic: it retains every target's locked
+/// closure, including a dependency that Cargo itself would never build for the exact target being sealed (for
+/// example a Linux-only transitive dependency of a project-declared crate while baking for macOS). Passing the
+/// receipt's exact target reproduces Cargo's own `--filter-platform` resolver decision, so a caller that needs to
+/// know which locked packages a target's build actually requires gets Cargo's answer instead of a broader,
+/// platform-agnostic guess.
+fn read_legacy_cargo_metadata_for_platform(
+    cargo: &Path,
+    cargo_manifest: &Path,
+    features: &[String],
+    require_existing_lock: bool,
+    filter_platform: Option<&str>,
+) -> Result<CargoMetadata, OvenLegacyCargoError> {
     let cargo = canonical_tool_file(cargo, "cargo")?;
     let cargo_manifest = verified_regular_file(cargo_manifest, "Cargo manifest")?;
     let package_root = cargo_manifest
@@ -5213,6 +5246,9 @@ fn read_legacy_cargo_metadata_with_lock_policy(
         .args(["--offline", "--format-version", "1"]);
     if require_existing_lock {
         command.arg("--locked");
+    }
+    if let Some(target) = filter_platform {
+        command.args(["--filter-platform", target]);
     }
     // The package records must be resolved through the same feature selection as the unit graph. Otherwise an
     // optional dependency may occur in the graph but be absent from this identity lookup, which leaves the named
@@ -7638,6 +7674,7 @@ fn publisher_registry_source_catalog(
     inspection_packages: Option<&[OvenLegacyCargoInspectionPackage]>,
     registry_leaves: &[OvenRustcRegistryLeaf],
     complete_resolved_source_catalog: bool,
+    platform_applicable_metadata: Option<&CargoMetadata>,
 ) -> Result<(Vec<OvenRustcRegistrySourcePackage>, Vec<OvenRustcSupportingArtifact>), OvenLegacyCargoError> {
     let mut sources = registry_leaves
         .iter()
@@ -7656,8 +7693,12 @@ fn publisher_registry_source_catalog(
             InspectionPackageScope::CompleteResolvedGraph,
             staging,
         )?),
+        // The complete-graph catalog seals a single target's build. Prefer the platform-filtered resolve graph so
+        // this closure matches the packages Cargo actually selected for that target, rather than every platform's
+        // locked closure; a target-inapplicable package (for example a Linux-only transitive dependency while
+        // baking for macOS) must not be required to carry source authority it was never built with.
         None if complete_resolved_source_catalog => Some(legacy_cargo_inspection_sources_from_metadata(
-            metadata,
+            platform_applicable_metadata.unwrap_or(metadata),
             cargo_lock,
             &[],
             InspectionPackageScope::CompleteResolvedGraph,
@@ -9060,7 +9101,7 @@ mod tests {
         );
 
         let (sources, source_artifacts) =
-            publisher_registry_source_catalog(&metadata, lock.as_bytes(), &staging, None, &[], true)?;
+            publisher_registry_source_catalog(&metadata, lock.as_bytes(), &staging, None, &[], true, None)?;
 
         assert_eq!(
             sources.iter().map(|source| source.package.as_str()).collect::<Vec<_>>(),

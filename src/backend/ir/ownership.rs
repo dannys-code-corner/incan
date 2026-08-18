@@ -360,7 +360,7 @@ impl ArgumentPassingPlan {
             ..
         } = site
             && incan_mutable_param_passed_as_rust_mut_ref(param)
-            && !matches!(expr.ty, IrType::Ref(_) | IrType::RefMut(_))
+            && !expr_has_rust_reference_shape(expr)
         {
             passing = ArgumentPassingMode::MutableBorrow;
         }
@@ -969,6 +969,37 @@ mod tests {
             },
         );
         assert_eq!(render(plan.apply_after_value_plan(quote! { items })), "&mutitems");
+    }
+
+    #[test]
+    fn mutable_source_param_forwards_borrowed_rust_callback_value() {
+        let callback_ui = IrExpr::new(
+            IrExprKind::Var {
+                name: "ui".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            IrType::RustDisplay("&mut egui::Ui".to_string()),
+        );
+        let source_ui = FunctionParam {
+            name: "ui".to_string(),
+            ty: IrType::Struct("Ui".to_string()),
+            mutability: Mutability::Mutable,
+            is_self: false,
+            kind: crate::frontend::ast::ParamKind::Normal,
+            default: None,
+        };
+
+        let plan = ArgumentPassingPlan::for_use_site(
+            &callback_ui,
+            ValueUseSite::IncanCallArg {
+                target_ty: Some(&source_ui.ty),
+                callee_param: Some(&source_ui),
+                in_return: false,
+            },
+        );
+
+        assert_eq!(render(plan.apply_full(quote! { ui })), "ui");
     }
 
     #[test]

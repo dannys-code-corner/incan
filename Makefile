@@ -281,6 +281,10 @@ fetch-locked-cargo-sources:
 fetch-oven-loaf-sources:
 	@cargo fetch --manifest-path tests/fixtures/oven_loaf_dependencies/Cargo.toml --locked
 
+.PHONY: fetch-release-support-workspace-sources
+fetch-release-support-workspace-sources:
+	@bash workspaces/release/toolchain/fetch_release_support_workspace_sources.sh
+
 .PHONY: test-oven
 test-oven: test-prewarm-oven-loafs
 	@$(MAKE) --no-print-directory test-oven-replay
