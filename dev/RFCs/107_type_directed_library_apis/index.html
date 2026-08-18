@@ -9239,10 +9239,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#unresolved-questions" class="md-nav__link">
+  <a href="#design-decisions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Unresolved questions
+        Design Decisions
       
     </span>
   </a>
@@ -9271,20 +9271,23 @@
 
 <h1 id="rfc-107-type-directed-library-apis-and-compile-time-type-tokens">RFC 107: Type-directed library APIs and compile-time type tokens<a class="headerlink" href="#rfc-107-type-directed-library-apis-and-compile-time-type-tokens" title="Permanent link">&para;</a></h1>
 <ul>
-<li><strong>Status:</strong> Draft</li>
+<li><strong>Status:</strong> Planned</li>
 <li><strong>Created:</strong> 2026-06-03</li>
 <li><strong>Author(s):</strong> Danny Meijer (@dannymeijer)</li>
 <li><strong>Related:</strong><ul>
+<li>RFC 017 (validated newtypes with implicit coercion)</li>
+<li>RFC 025 (multi-instantiation trait dispatch)</li>
 <li>RFC 028 (overload-based dispatch)</li>
 <li>RFC 036 (user-defined decorators)</li>
 <li>RFC 048 (contract-backed models emit and tooling)</li>
 <li>RFC 054 (explicit call-site generic arguments)</li>
 <li>RFC 083 (symbol and method aliases)</li>
+<li>RFC 089 (<code>std.environ</code>)</li>
 <li>RFC 098 (native associated types)</li>
 </ul>
 </li>
 <li><strong>Issue:</strong> https://github.com/encero-systems/incan/issues/752</li>
-<li><strong>RFC PR:</strong> https://github.com/encero-systems/incan/pull/751</li>
+<li><strong>RFC PR:</strong> —</li>
 <li><strong>Written against:</strong> v0.3</li>
 <li><strong>Shipped in:</strong> —</li>
 </ul>
@@ -9369,10 +9372,17 @@
 <div class="language-incan highlight"><pre><span></span><code><span class="n">target</span><span class="p">:</span> <span class="nc">Type</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span>
 <span class="n">targets</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nc">Type</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">]</span>
 </code></pre></div>
-<p>The same API family should also support generic spelling when the library declares how <code>T</code> maps to its result type. A typed cast API should not need helper families or broad unions just because the caller prefers explicit call-site generics:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">amount</span> <span class="o">=</span> <span class="n">cast</span><span class="p">[</span><span class="nb">int</span><span class="p">](</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;amount&quot;</span><span class="p">))</span>
+<p>The same API family should also support generic spelling when the library declares how <code>T</code> maps to its result type. A typed cast API should not need helper families or broad unions just because the caller prefers explicit call-site generics. The library declares one overload body per admitted <code>T</code>, keyed on the type parameter itself rather than on a value-position argument, and the compiler selects among them the same way it already selects trait implementations by type argument:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">cast</span><span class="p">[</span><span class="nc">T</span><span class="p">:</span> <span class="nb">int</span><span class="p">](</span><span class="n">expr</span><span class="p">:</span> <span class="nc">ColumnExpr</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">IntColumnExpr</span><span class="p">:</span>
+    <span class="k">return</span> <span class="nc">IntColumnExpr</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">expr</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">cast</span><span class="p">[</span><span class="nc">T</span><span class="p">:</span> <span class="nb">float</span><span class="p">](</span><span class="n">expr</span><span class="p">:</span> <span class="nc">ColumnExpr</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">FloatColumnExpr</span><span class="p">:</span>
+    <span class="k">return</span> <span class="nc">FloatColumnExpr</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">expr</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+
+<span class="n">amount</span> <span class="o">=</span> <span class="n">cast</span><span class="p">[</span><span class="nb">int</span><span class="p">](</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;amount&quot;</span><span class="p">))</span>
 <span class="n">price</span> <span class="o">=</span> <span class="n">cast</span><span class="p">[</span><span class="nb">float</span><span class="p">](</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">))</span>
 </code></pre></div>
+<p>This does not require a parallel <code>cast(expr, target: Type[int])</code> overload to exist; the value-position and generic spellings may coexist, but neither is required by the other.</p>
 <p>Aliases preserve the overload set. A compatibility spelling does not need wrapper overloads:</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="n">safe_cast</span> <span class="o">=</span> <span class="n">alias</span> <span class="n">cast</span>
 
@@ -9400,7 +9410,7 @@
 <h2 id="reference-level-explanation">Reference-level explanation<a class="headerlink" href="#reference-level-explanation" title="Permanent link">&para;</a></h2>
 <h3 id="type-token-type-form">Type-token type form<a class="headerlink" href="#type-token-type-form" title="Permanent link">&para;</a></h3>
 <p><code>Type[T]</code> names a compiler-backed token whose payload is the checked type <code>T</code>. <code>Type[T]</code> is a type in the source type system. Values of this type are not user-constructed objects; they are introduced by expected-type checking when a visible type name appears in a value position that expects <code>Type[T]</code>.</p>
-<p>An implementation must support <code>Type[int]</code>, <code>Type[float]</code>, <code>Type[str]</code>, and <code>Type[bool]</code>. An implementation must support <code>Type[Model]</code> for visible model types. This RFC must settle whether enum tokens, trait tokens, type alias tokens, constrained scalar tokens, and associated type projection tokens are admitted before it can move from Draft to Planned.</p>
+<p>An implementation must support <code>Type[int]</code>, <code>Type[float]</code>, <code>Type[str]</code>, and <code>Type[bool]</code>. An implementation must support <code>Type[Model]</code> for visible model types. An implementation must also admit enum tokens, trait tokens, type-alias tokens, constrained-scalar tokens, and associated-type projection tokens in the same v0.6 pass; see Design Decisions.</p>
 <p><code>Type[T]</code> token values may be passed to functions, bound to variables, returned from functions, and stored in collections when the expected type is explicitly <code>Type[...]</code>. These operations preserve type evidence only; they must not imply ordinary runtime type-object behavior. <code>Type[T]</code> tokens must not support equality, ordering, hashing, serialization, pattern matching, field access, method dispatch, or arbitrary introspection unless this RFC explicitly admits that operation before it becomes Planned.</p>
 <h3 id="type-names-in-value-position">Type names in value position<a class="headerlink" href="#type-names-in-value-position" title="Permanent link">&para;</a></h3>
 <p>A type name in value position must be rejected unless the checker has an expected type that is compatible with <code>Type[T]</code>. The expected type may come from an explicit parameter type, an overload candidate, a variable annotation, a return position, a collection element context, or another ordinary expected-type source.</p>
@@ -9415,12 +9425,12 @@
 <div class="language-incan highlight"><pre><span></span><code><span class="n">amount</span> <span class="o">=</span> <span class="n">cast</span><span class="p">[</span><span class="nb">int</span><span class="p">](</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;amount&quot;</span><span class="p">))</span>
 <span class="n">price</span> <span class="o">=</span> <span class="n">cast</span><span class="p">[</span><span class="nb">float</span><span class="p">](</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">))</span>
 </code></pre></div>
-<p>The result type of <code>cast[float](...)</code> must be the library-specific float result type, not a broad union of every possible cast result. The mapping from source type argument to result type may be expressed through associated output types, constrained overloads, type functions, or another explicit mechanism settled by this RFC before it becomes Planned. Whatever mechanism is chosen must compose with aliases, decorators, package manifests, generated docs, and public reexports.</p>
+<p>The result type of <code>cast[float](...)</code> must be the library-specific float result type, not a broad union of every possible cast result. The mapping from source type argument to result type must be expressed through type-parameter-constrained overloads: one overload body per admitted <code>T</code>, selected the same way overload resolution already selects trait implementations by type argument under RFC 025's multi-instantiation dispatch model. This mechanism must compose with aliases, decorators, package manifests, generated docs, and public reexports; see Design Decisions.</p>
 <p>Type-directed return mapping must not be inferred from function names. A library must declare the mapping in a checked, inspectable way so metadata, docs, LSP, and package consumers see the same callable surface.</p>
 <h3 id="aliases-and-reexports">Aliases and reexports<a class="headerlink" href="#aliases-and-reexports" title="Permanent link">&para;</a></h3>
 <p>An alias of an overload set must preserve the overload set and canonical implementation identity. The alias must not create wrapper functions, duplicate overload declarations, erase decorator metadata, change default metadata, or collapse the selected return type.</p>
 <p>Public reexports must preserve the same callable surface. A consumer importing through a facade must see the same overloads, type-token parameters, aliases, decorators, and return types as a consumer importing from the declaring module.</p>
-<p>Alias spelling is still useful at the user boundary. Diagnostics, hovers, and generated docs may display the alias name at the call site, but canonical decorator side effects and registry metadata must default to the aliased implementation identity. If alias-local metadata overrides are admitted, RFC 107 must define the override rules before it becomes Planned.</p>
+<p>Alias spelling is still useful at the user boundary. Diagnostics, hovers, and generated docs may display the alias name at the call site, but canonical decorator side effects and registry metadata must default to the aliased implementation identity. Alias-local metadata overrides must not be admitted; see Design Decisions.</p>
 <h3 id="decorators-and-callable-metadata">Decorators and callable metadata<a class="headerlink" href="#decorators-and-callable-metadata" title="Permanent link">&para;</a></h3>
 <p>A decorator applied to a type-token overload must receive callable metadata for the canonical source callable surface. <code>func.__name__</code> must report the canonical source callable name by default, not the alias call-site spelling and not generated backend implementation names.</p>
 <p>Decorator side effects that are part of module static initialization must run for decorated overload implementations that are reachable through the public API. The behavior must not depend on whether the callable is invoked directly, through an alias, through a facade, or through a package import.</p>
@@ -9499,15 +9509,13 @@ Types are compile-time names. Use an API that expects `Type[int]`, such as `cast
 <li><strong>Formatter</strong>: should preserve ordinary call syntax and type annotations; no special formatting beyond existing type syntax is expected.</li>
 <li><strong>LSP / Tooling</strong>: should show type-token overloads, selected overloads, mapping explanations, alias targets, facade/reexport invariants, and degraded-state warnings in completion, hover, signature help, generated API docs, semantic inspection, and diagnostics.</li>
 </ul>
-<h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
+<h2 id="design-decisions">Design Decisions<a class="headerlink" href="#design-decisions" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Should enum tokens, trait tokens, type alias tokens, constrained scalar tokens, and associated type projection tokens be admitted together or in staged increments?</li>
-<li>What is the right mechanism for precise <code>cast[T](expr)</code>-style return specialization inside RFC 107: associated output types, type functions, constrained overloads, or something else?</li>
-<li>Which type-alias token identities remain visible in docs and diagnostics, and which normalize to target types for semantic compatibility?</li>
-<li>Should alias-local metadata overrides exist, or should aliases always preserve canonical decorated implementation identity while displaying alias spelling only at call sites?</li>
+<li><strong>Token kinds are admitted together:</strong> enum tokens, trait tokens, type-alias tokens, constrained-scalar tokens, and associated-type projection tokens are admitted in the same v0.6 pass as the required primitive (<code>int</code>, <code>float</code>, <code>str</code>, <code>bool</code>) and visible-model tokens, not staged into a later increment.</li>
+<li><strong>Return-mapping mechanism is type-parameter-constrained overloads:</strong> <code>cast[T](expr)</code>-style return specialization is resolved through ordinary overload resolution keyed on the compile-time type argument <code>T</code> itself, reusing the multi-instantiation trait dispatch model from RFC 025 (implemented, v0.3). A library declares one overload body per admitted <code>T</code>; the compiler selects among them the same way it already selects trait implementations by type argument. This does not require a parallel value-position <code>cast(expr, target: Type[T])</code> overload to exist -- the two spellings may coexist, but neither is required by the other -- and it introduces no new type-level construct. Associated output types (an RFC 098-style <code>type Output</code> binding on a generic trait implementation, mirroring Rust's <code>Add&lt;Rhs&gt;::Output</code>) remain a plausible future spelling once RFC 098 (native associated types, milestone 0.7) ships generally, but they are not this RFC's mechanism and are not a blocking dependency for v0.6. A dedicated type-function construct was considered and rejected as unnecessary net-new machinery for a problem Rust and Python both already solve without one.</li>
+<li><strong>Type-alias tokens normalize fully; newtype tokens stay distinct:</strong> a plain type alias (<code>type UserId = str</code>, structural, not a <code>newtype</code>) normalizes to its target type -- through the full alias chain, not one hop -- for both assignability and <code>Type[T]</code> overload dispatch. The alias spelling is retained only as display provenance in diagnostics, hovers, and generated docs, mirroring RFC 083's existing alias-identity rule. Two overloads keyed on different aliases of the same underlying type (for example <code>Type[UserId]</code> and <code>Type[ProductId]</code>, both aliasing <code>int</code>) are a duplicate-overload compile error, not independently selectable; <code>newtype</code> remains the correct tool when distinct dispatchable identity is wanted. When <code>T</code> is a newtype, construction through a <code>Type[T]</code> token goes through the newtype's <code>from_underlying</code> validated-conversion hook (RFC 017, implemented), consistent with the existing precedent in <code>std.environ.get_as[T]</code> (RFC 089, implemented) -- a <code>Type[T]</code> token must never bypass newtype validation.</li>
+<li><strong>No alias-local metadata overrides:</strong> aliases always preserve canonical decorated implementation identity -- decorator side effects, registry metadata, and <code>func.__name__</code> default to the aliased implementation, never to alias-local overrides. Alias spelling is display-only at the call site in diagnostics, hovers, and generated docs. This matches RFC 083's "aliases are not wrappers" rule without introducing a <code>Type[T]</code>-specific exception.</li>
 </ul>
-<!-- Rename this section to "Design Decisions" once all questions have been resolved.
-     An RFC cannot move from Draft to Planned until no unresolved questions remain. -->
 
 
 

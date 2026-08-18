@@ -9540,7 +9540,7 @@
 <li>RFC 034 (<code>incan.pub</code> package registry)</li>
 <li>RFC 075 (starter profiles and capability packs)</li>
 <li>RFC 076 (project mutation policy and recovery)</li>
-<li>RFC 117 (<code>Loaf.toml</code> and Oven's language-neutral project model)</li>
+<li>RFC 117 (<code>loaf.toml</code> and Oven's language-neutral project model)</li>
 </ul>
 </li>
 <li><strong>Issue:</strong> https://github.com/encero-systems/incan/issues/402</li>
@@ -9996,7 +9996,7 @@ oven template reset src/data/session.incn
 <ul>
 <li><strong>Parser:</strong> rendered Incan templates must parse before they are written when <code>language = "incan"</code>.</li>
 <li><strong>Formatter:</strong> rendered Incan templates should be formatted before write and before <code>rendered_hash</code> is recorded when a formatter is available.</li>
-<li><strong>Manifest schema / configuration validation:</strong> project tooling must support an explicit provenance location for tracked templates, whether in a typed <code>Loaf.toml</code> table or an explicit tool-owned state artifact. <code>Oven.lock</code> remains resolver state and must not become a general mutation-history store.</li>
+<li><strong>Manifest schema / configuration validation:</strong> project tooling must support an explicit provenance location for tracked templates, whether in a typed <code>loaf.toml</code> table or an explicit tool-owned state artifact. <code>Oven.lock</code> remains resolver state and must not become a general mutation-history store.</li>
 <li><strong>CLI / tooling:</strong> lifecycle tooling must implement deterministic template rendering, path validation, parameter validation, ownership handling, provenance recording, and check/status/values-file/diff/update/reset operations.</li>
 <li><strong>LSP / IDE tooling:</strong> editor-facing tools should consume machine-readable template provenance and lifecycle diagnostics rather than reimplementing template rendering.</li>
 <li><strong>Package integration:</strong> package-provided templates must be loaded as package data and rendered locally under the same safety rules as built-in templates. Package or registry metadata may feed version-aware status and upgrade previews.</li>
@@ -10004,7 +10004,7 @@ oven template reset src/data/session.incn
 </ul>
 <h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Should template provenance live in a typed <code>Loaf.toml</code> table or a separate tool-owned state file, and which facts must remain outside <code>Oven.lock</code>?</li>
+<li>Should template provenance live in a typed <code>loaf.toml</code> table or a separate tool-owned state file, and which facts must remain outside <code>Oven.lock</code>?</li>
 <li>Is the v1 parameter kind set sufficient, or should it include specific kinds for package names, dependency requirements, env names, and script ids?</li>
 <li>Which derived-value transforms should be standardized in v1?</li>
 <li>Should optional file groups live in RFC 074 as template renderer metadata, or should RFC 075 own them as starter/capability mutation metadata?</li>

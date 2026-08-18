@@ -9122,7 +9122,7 @@
 
 <h1 id="dd-0001-defer-gpu-target-capability-and-graphics-contracts">DD-0001: Defer GPU target capability and graphics contracts<a class="headerlink" href="#dd-0001-defer-gpu-target-capability-and-graphics-contracts" title="Permanent link">&para;</a></h1>
 <h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
-<p><a href="../../RFCs/092_interactive_runtime_stdlib_contracts/">RFC 092</a> defines the Incan-owned standard-library and artifact contracts needed by interactive runtime consumers. GPU target capability and graphics contracts are not required for that work, Incan v0.6's self-hosting direction, Oven authority, the direct-HIR backend cutover, or the first interactive runtime target.</p>
+<p><a href="../../RFCs/closed/rejected/092_interactive_runtime_stdlib_contracts/">RFC 092</a> defined the Incan-owned standard-library and artifact contracts needed by interactive runtime consumers (subsequently rejected; covered by RFC 104/036/117-119). GPU target capability and graphics contracts are not required for that work, Incan v0.6's self-hosting direction, Oven authority, the direct-HIR backend cutover, or the first interactive runtime target.</p>
 <p><a href="https://github.com/encero-systems/incan/issues/1041">Issue #1041</a> records the need for a separate, consumer-backed design before Incan admits a GPU capability family. Keeping that work inside RFC 092 would expand its scope without a concrete consumer and could prematurely constrain later graphics work.</p>
 <h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
 <p>GPU target capability and graphics contracts are deferred from the v0.6 and RFC 092 implementation scope.</p>
@@ -9153,7 +9153,7 @@
 <p>This record derives from RFC 092, issue #1041, and the design-record proposal developed in <a href="https://github.com/encero-systems/incan/pull/1044">PR #1044</a>. It records the accepted deferral and does not supersede those authorities.</p>
 <h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../../RFCs/092_interactive_runtime_stdlib_contracts/">RFC 092: Interactive Runtime Stdlib Contracts</a></li>
+<li><a href="../../RFCs/closed/rejected/092_interactive_runtime_stdlib_contracts/">RFC 092: Interactive Runtime Stdlib Contracts</a> (rejected)</li>
 <li><a href="https://github.com/encero-systems/incan/issues/1041">Issue #1041: GPU target capability and graphics contracts</a></li>
 <li><a href="https://github.com/encero-systems/incan/pull/1044">PR #1044: Add design doc deferring GPU target capability to v0.8</a></li>
 </ul>

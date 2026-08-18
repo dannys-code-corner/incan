@@ -9739,7 +9739,7 @@
 <td style="text-align: right;"><a href="/dev/RFCs/075_starter_profiles_and_capability_packs">RFC 075</a></td>
 <td>Draft</td>
 <td>proposed / active</td>
-<td>starter profiles and capability packs</td>
+<td>starter profiles and mixes</td>
 </tr>
 <tr>
 <td style="text-align: right;"><a href="/dev/RFCs/076_project_mutation_policy_and_recovery">RFC 076</a></td>
@@ -9773,7 +9773,7 @@
 </tr>
 <tr>
 <td style="text-align: right;"><a href="/dev/RFCs/081_language_shaped_dsl_embeddings">RFC 081</a></td>
-<td>Draft</td>
+<td>Planned</td>
 <td>proposed / active</td>
 <td>Language-shaped DSL embeddings</td>
 </tr>
@@ -9827,7 +9827,7 @@
 </tr>
 <tr>
 <td style="text-align: right;"><a href="/dev/RFCs/090_typed_cli_framework">RFC 090</a></td>
-<td>Draft</td>
+<td>Planned</td>
 <td>proposed / active</td>
 <td>typed CLI framework</td>
 </tr>
@@ -9838,9 +9838,9 @@
 <td>Constrained integer newtype storage carriers</td>
 </tr>
 <tr>
-<td style="text-align: right;"><a href="/dev/RFCs/092_interactive_runtime_stdlib_contracts">RFC 092</a></td>
-<td>Draft</td>
-<td>proposed / active</td>
+<td style="text-align: right;"><a href="/dev/RFCs/closed/rejected/092_interactive_runtime_stdlib_contracts">RFC 092</a></td>
+<td>Rejected</td>
+<td>closed / rejected</td>
 <td>Interactive Runtime Stdlib Contracts</td>
 </tr>
 <tr>
@@ -9911,7 +9911,7 @@
 </tr>
 <tr>
 <td style="text-align: right;"><a href="/dev/RFCs/104_ambient_runtime_capabilities_and_receipts">RFC 104</a></td>
-<td>Draft</td>
+<td>Planned</td>
 <td>proposed / active</td>
 <td>Ambient Runtime Capabilities and Receipts</td>
 </tr>
@@ -9929,7 +9929,7 @@
 </tr>
 <tr>
 <td style="text-align: right;"><a href="/dev/RFCs/107_type_directed_library_apis">RFC 107</a></td>
-<td>Draft</td>
+<td>Planned</td>
 <td>proposed / active</td>
 <td>Type-directed library APIs and compile-time type tokens</td>
 </tr>
@@ -9989,19 +9989,19 @@
 </tr>
 <tr>
 <td style="text-align: right;"><a href="/dev/RFCs/117_loaf_toml_and_oven_project_model">RFC 117</a></td>
-<td>Draft</td>
+<td>Planned</td>
 <td>proposed / active</td>
-<td><code>Loaf.toml</code> and Oven's language-neutral project model</td>
+<td><code>loaf.toml</code> and Oven's language-neutral project model</td>
 </tr>
 <tr>
 <td style="text-align: right;"><a href="/dev/RFCs/118_incan_and_oven_command_line_surfaces">RFC 118</a></td>
-<td>Draft</td>
+<td>Planned</td>
 <td>proposed / active</td>
 <td>Incan and Oven command-line surfaces</td>
 </tr>
 <tr>
 <td style="text-align: right;"><a href="/dev/RFCs/119_oven_native_rust_build_facets_and_cargo_interoperation">RFC 119</a></td>
-<td>Draft</td>
+<td>Planned</td>
 <td>proposed / active</td>
 <td>Oven-native Rust build facets and Cargo interoperation</td>
 </tr>
@@ -10084,7 +10084,7 @@
 <li><a href="https://github.com/encero-systems/incan/issues/225">#225</a>: semantic facts adoption on backend cutover paths.</li>
 <li><a href="https://github.com/encero-systems/incan/issues/656">#656</a>: Rust-facing ABI and Cargo-native Incan package direction.</li>
 <li><a href="https://github.com/encero-systems/incan/issues/752">#752</a>: RFC 107 type-directed library APIs and compile-time type tokens.</li>
-<li><a href="../RFCs/092_interactive_runtime_stdlib_contracts/">RFC 092</a>: interactive runtime stdlib contracts.</li>
+<li><a href="../RFCs/closed/rejected/092_interactive_runtime_stdlib_contracts/">RFC 092</a>: interactive runtime stdlib contracts (rejected, covered by RFC 104/036/117-119).</li>
 <li><a href="../RFCs/093_std_telemetry_opentelemetry_observability/">RFC 093</a>: <code>std.telemetry</code>.</li>
 <li><a href="../RFCs/094_context_managers/">RFC 094</a>: context managers.</li>
 <li><a href="../RFCs/107_type_directed_library_apis/">RFC 107</a>: type-directed library APIs and compile-time type tokens.</li>
@@ -10157,7 +10157,7 @@
 <li>Testing surface: see <a href="/dev/RFCs/closed/implemented/018_testing">RFC 018</a> / <a href="/dev/RFCs/closed/implemented/019_runner_testing">RFC 019</a> / <a href="/dev/RFCs/closed/implemented/004_async_fixtures">RFC 004</a>.</li>
 <li>Tooling and first-contact: install, starter, diagnostics, explain, codegraph, artifact inspection, and build reports are the immediate release surface.</li>
 <li>Rust interop: see <a href="/dev/RFCs/closed/implemented/005_rust_interop">RFC 005</a> / <a href="/dev/RFCs/closed/implemented/013_rust_crate_dependencies">RFC 013</a> and the <a href="../language/how-to/rust_interop/">Rust Interop guide</a>. Rust-hosted consumption should be reframed through ABI and Cargo-native package direction instead of generated Rust as the public semantic path.</li>
-<li>Web and interactive runtime: see the <a href="../language/tutorials/web_framework/">Web Framework guide</a>, <a href="../RFCs/092_interactive_runtime_stdlib_contracts/">RFC 092</a>, and related runtime/DSL RFCs.</li>
+<li>Web and interactive runtime: see the <a href="../language/tutorials/web_framework/">Web Framework guide</a>, <a href="../RFCs/closed/rejected/092_interactive_runtime_stdlib_contracts/">RFC 092</a> (rejected, covered by RFC 104/036/117-119), and related runtime/DSL RFCs.</li>
 <li>Standard library: stdlib work is allowed in the backend-foundation lane where it helps real programs and dogfood paths validate compiler/runtime direction.</li>
 </ul>
 <h2 id="deferred-later">Deferred / Later<a class="headerlink" href="#deferred-later" title="Permanent link">&para;</a></h2>

@@ -9308,7 +9308,7 @@
 <li>RFC 034 (<code>incan.pub</code> package registry)</li>
 <li>RFC 074 (template rendering and boilerplate provenance)</li>
 <li>RFC 075 (starter profiles and capability packs)</li>
-<li>RFC 117 (<code>Loaf.toml</code> and Oven's language-neutral project model)</li>
+<li>RFC 117 (<code>loaf.toml</code> and Oven's language-neutral project model)</li>
 <li>RFC 118 (Incan and Oven command-line surfaces)</li>
 </ul>
 </li>
@@ -9546,7 +9546,7 @@ Recovery options:
 <p>The same policy result should power terminal diagnostics, machine-readable JSON, IDE code actions, CI checks, and automation-generated proposals. Tooling should avoid duplicating policy logic in editor plugins or agents.</p>
 <h2 id="layers-affected">Layers affected<a class="headerlink" href="#layers-affected" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Manifest schema / configuration validation:</strong> project tooling needs a place to describe project-local policy and record policy-related audit metadata, whether in a typed <code>Loaf.toml</code> policy table or an explicit tool-owned policy state artifact. <code>Oven.lock</code> is not a general policy store.</li>
+<li><strong>Manifest schema / configuration validation:</strong> project tooling needs a place to describe project-local policy and record policy-related audit metadata, whether in a typed <code>loaf.toml</code> policy table or an explicit tool-owned policy state artifact. <code>Oven.lock</code> is not a general policy store.</li>
 <li><strong>CLI / tooling:</strong> lifecycle commands must evaluate policy before applying template, starter, capability, update, reset, refresh, or recovery mutations.</li>
 <li><strong>LSP / IDE tooling:</strong> editor-facing tools should surface policy outcomes, blocked mutation reasons, review requirements, and recovery actions from machine-readable lifecycle output.</li>
 <li><strong>Package and catalog integration:</strong> registries and catalogs may provide source identity, integrity, yanking, revocation, advisory, compatibility, and trust-tier metadata that policy can consume.</li>
@@ -9555,7 +9555,7 @@ Recovery options:
 </ul>
 <h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Should project-local mutation policy live in a typed <code>Loaf.toml</code> table or an explicit tool-owned policy state artifact, and which audit facts belong in receipts rather than either location?</li>
+<li>Should project-local mutation policy live in a typed <code>loaf.toml</code> table or an explicit tool-owned policy state artifact, and which audit facts belong in receipts rather than either location?</li>
 <li>What is the minimum useful policy syntax for v1?</li>
 <li>Which risk categories should be standardized in v1, and which should remain extension labels?</li>
 <li>Should policy support explicit reviewer or owner requirements, or should it only emit categories for external review systems to interpret?</li>

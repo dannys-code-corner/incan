@@ -9272,10 +9272,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#unresolved-questions" class="md-nav__link">
+  <a href="#design-decisions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Unresolved questions
+        Design Decisions
       
     </span>
   </a>
@@ -9304,7 +9304,7 @@
 
 <h1 id="rfc-104-ambient-runtime-capabilities-and-receipts">RFC 104: Ambient Runtime Capabilities and Receipts<a class="headerlink" href="#rfc-104-ambient-runtime-capabilities-and-receipts" title="Permanent link">&para;</a></h1>
 <ul>
-<li><strong>Status:</strong> Draft</li>
+<li><strong>Status:</strong> Planned</li>
 <li><strong>Created:</strong> 2026-05-24</li>
 <li><strong>Author(s):</strong> Danny Meijer (@dannymeijer)</li>
 <li><strong>Related:</strong><ul>
@@ -9363,6 +9363,9 @@
 <li>Make receipts consumable by RFC 102 semantic inspection, RFC 078 typed actions, RFC 093 telemetry, RFC 076 policy, CI, LSP, docs tooling, and agents.</li>
 <li>Align typed action dry-runs and runtime reports so declared capability requirements can be compared with actual receipt emission.</li>
 <li>Keep ordinary source readable and low ceremony.</li>
+<li>Make capability identities checked symbols, resolved from where they are declared, rather than string literals a caller can misspell or a package can spoof.</li>
+<li>Let the compiler statically verify that a typed action's declared capabilities match what its body actually calls, so a mismatch is a compile-time diagnostic rather than a runtime capability denial discovered later.</li>
+<li>Allow a host to supply a capability ceiling that bounds an invocation's effective grants regardless of what that invocation requests, so an untrusted or agent-driven caller cannot widen its own authority.</li>
 </ul>
 <h2 id="non-goals">Non-Goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
 <ul>
@@ -9375,7 +9378,7 @@
 <li>This RFC does not replace <code>std.telemetry</code>, <code>std.logging</code>, diagnostics, or semantic inspection.</li>
 <li>This RFC does not require every package to publish capability metadata.</li>
 <li>This RFC does not allow libraries to grant themselves host authority.</li>
-<li>This RFC does not define the final CLI flag spelling for governed runs or reports.</li>
+<li>This RFC does not define global CLI flags unrelated to capability grants and reports, such as verbosity, color, or profile selection.</li>
 <li>This RFC does not define a secret-value type; it only requires receipts to preserve sensitivity and redaction metadata from the owning subsystem.</li>
 </ul>
 <h2 id="guide-level-explanation">Guide-level explanation<a class="headerlink" href="#guide-level-explanation" title="Permanent link">&para;</a></h2>
@@ -9428,29 +9431,35 @@ Granted capabilities:
   host.env.read
   host.http.request
 </code></pre></div>
-<p>Library authors should be able to participate without depending on stdlib-private hooks. A package can define a domain capability:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="n">capability</span> <span class="n">example</span><span class="o">.</span><span class="n">policy</span><span class="o">.</span><span class="n">evaluate</span><span class="p">:</span>
+<p>Library authors should be able to participate without depending on stdlib-private hooks. A package can define a domain capability, declared inside its own module tree so its identity comes from where it lives rather than from a string the author types:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># declared inside the package&#39;s own `policy` submodule</span>
+<span class="n">capability</span> <span class="n">evaluate</span><span class="p">:</span>
     <span class="n">description</span> <span class="o">=</span> <span class="s2">&quot;Evaluate an input against a policy&quot;</span>
-    <span class="n">emits</span> <span class="o">=</span> <span class="s2">&quot;policy.evaluation&quot;</span>
+    <span class="n">requires</span> <span class="o">=</span> <span class="p">[</span><span class="n">host</span><span class="o">.</span><span class="n">fs</span><span class="o">.</span><span class="n">read</span><span class="p">]</span>
 </code></pre></div>
-<p>The exact declaration syntax is unresolved. The important contract is that packages can publish stable capability identities, descriptions, receipt schemas, and relationships to host capabilities.</p>
-<p>Library code can then emit a receipt through a low-ceremony boundary:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">std.runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">receipts</span>
+<p>This resolves to a fully-qualified identity such as <code>example_lib.policy.evaluate</code>, namespaced by the declaring package's own registered identity so two packages can never collide on the same name. <code>requires</code> documents that evaluating a policy needs <code>host.fs.read</code> to load the policy file; it does not grant that authority by implication -- see "Import, request, grant, and use."</p>
+<p>Library code can then emit a receipt through a low-ceremony boundary, referencing the capability as a checked symbol rather than a string:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">example_lib.capabilities</span><span class="w"> </span><span class="kn">import</span> <span class="n">policy_evaluate</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">std.runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">receipts</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">evaluate</span><span class="p">(</span><span class="n">policy</span><span class="p">:</span> <span class="nc">Policy</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="nc">Input</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">Decision</span><span class="p">:</span>
-    <span class="k">with</span> <span class="n">receipts</span><span class="o">.</span><span class="n">event</span><span class="p">(</span><span class="s2">&quot;example.policy.evaluate&quot;</span><span class="p">,</span> <span class="n">subject</span><span class="o">=</span><span class="n">policy</span><span class="o">.</span><span class="n">id</span><span class="p">):</span>
+    <span class="k">with</span> <span class="n">receipts</span><span class="o">.</span><span class="n">event</span><span class="p">(</span><span class="n">policy_evaluate</span><span class="p">,</span> <span class="n">subject</span><span class="o">=</span><span class="n">policy</span><span class="o">.</span><span class="n">id</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">policy</span><span class="o">.</span><span class="n">evaluate</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
 </code></pre></div>
-<p>For common entrypoints, typed actions can declare the capabilities they require:</p>
-<div class="language-incan highlight"><pre><span></span><code><span class="nd">@action</span><span class="p">(</span><span class="n">caps</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;example.policy.evaluate&quot;</span><span class="p">,</span> <span class="s2">&quot;host.model.invoke&quot;</span><span class="p">])</span>
+<p>For common entrypoints, typed actions declare the capabilities they require the same way:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">example_lib.capabilities</span><span class="w"> </span><span class="kn">import</span> <span class="n">policy_evaluate</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">std.runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">host</span>
+
+<span class="nd">@action</span><span class="p">(</span><span class="n">caps</span><span class="o">=</span><span class="p">[</span><span class="n">policy_evaluate</span><span class="p">,</span> <span class="n">host</span><span class="o">.</span><span class="k">model</span><span class="o">.</span><span class="n">invoke</span><span class="p">])</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">review</span><span class="p">(</span><span class="nb">input</span><span class="p">:</span> <span class="nc">ReviewInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nc">ReviewReport</span><span class="p">:</span>
     <span class="o">...</span>
 </code></pre></div>
-<p>Granting a domain capability does not automatically let a package bypass host policy. If <code>example.policy.evaluate</code> needs <code>host.fs.read</code> to load a policy file, that relationship must be visible in metadata and accepted by the runtime or host policy. Libraries can name and explain authority; the runtime grants authority.</p>
+<p>Granting a domain capability does not automatically let a package bypass host policy. <code>policy_evaluate</code> declares that it <code>requires</code> <code>host.fs.read</code>, but that relationship is inspectable documentation the runtime and host policy can check and warn against when it is missing -- it is never an implicit grant. Libraries can name and explain authority; the runtime grants authority.</p>
 <h2 id="reference-level-explanation">Reference-level explanation<a class="headerlink" href="#reference-level-explanation" title="Permanent link">&para;</a></h2>
 <h3 id="capability-identities">Capability identities<a class="headerlink" href="#capability-identities" title="Permanent link">&para;</a></h3>
-<p>A capability identity must be a stable string. The exact naming grammar is unresolved, but this RFC reserves the <code>host.*</code> namespace for host authority capabilities owned by the Incan toolchain and runtime.</p>
-<p>Initial host capability families should include:</p>
+<p>A capability identity must be a checked symbol, not a string literal that source code writes out by hand. A capability declaration's fully-qualified identity must be derived from where it is declared, the same way any other Incan symbol's fully-qualified path is derived from its declaration site rather than from a string the author types. A package capability declared inside a package's own module tree resolves to <code>&lt;package_identity&gt;.&lt;module_path&gt;.&lt;name&gt;</code>, where <code>&lt;package_identity&gt;</code> is the package's own registered identity (the same identity a registry already enforces as unique), never a prefix the author writes literally. Two packages must never collide on the same capability name, because the namespace segment is derived from an identity the registry already guarantees is unique, not from an author-chosen string.</p>
+<p><code>host.*</code> is reserved for capabilities owned by the Incan toolchain and runtime. It must use the same declaration mechanism as package capabilities -- a <code>capability</code> declaration with the same fully-qualified-identity-from-location rule -- except that only the compiler's own bundled <code>std.runtime</code> source may declare under it. A package that attempts to declare a capability under <code>host.*</code> must be rejected with a reserved-namespace diagnostic, the same enforcement class as a package trying to claim another package's registered identity. There is exactly one capability-declaration mechanism in this RFC; <code>host.*</code> capabilities look fixed because <code>std.runtime</code>'s source is fixed between releases, not because host and package capabilities are two different kinds of thing.</p>
+<p>The minimum stable host capability set for this RFC is exactly:</p>
 <ul>
 <li><code>host.env.read</code></li>
 <li><code>host.fs.read</code></li>
@@ -9462,12 +9471,13 @@ Granted capabilities:
 <li><code>host.model.invoke</code></li>
 <li><code>host.tool.invoke</code></li>
 </ul>
-<p>Implementations may define narrower capabilities such as scoped filesystem paths, hostnames, methods, or model families, but the broad families must remain understandable in diagnostics and reports.</p>
-<p>Package-defined capabilities must be namespaced so two packages cannot accidentally define the same authority name. Package-defined capabilities may describe domain operations, typed actions, generated artifacts, policy checks, workflow steps, or library-specific effects.</p>
+<p>This set must not be extensible by packages. A package that needs narrower or additional authority defines its own capability and, where applicable, declares which of these host capabilities it <code>requires</code> -- see "Capability declarations."</p>
+<p>A capability reference at a use site (an <code>@action(caps=[...])</code> list, a <code>receipts.event(...)</code> call, an <code>--allow</code> grant) must resolve against the declaration the same way an import resolves against a definition. A misspelled or nonexistent capability reference must be an unresolved-symbol compile error, not a runtime capability-denial diagnostic discovered later.</p>
 <h3 id="import-request-grant-and-use">Import, request, grant, and use<a class="headerlink" href="#import-request-grant-and-use" title="Permanent link">&para;</a></h3>
 <p>Importing a module must not grant authority. Importing <code>std.process</code> is allowed even in a run that has not granted <code>host.process.spawn</code>. Authority is checked when an authority-bearing operation is invoked.</p>
 <p>A package, action, function, descriptor, or runtime operation may request capabilities. A run, host, action invoker, test harness, package manager, CI environment, or policy system may grant capabilities. Only the runtime or host authority boundary may decide whether a request is granted.</p>
 <p>When an operation requiring a capability is invoked in governed mode and the capability is not granted, the operation must fail before performing the authority-bearing behavior. The diagnostic must identify the required capability and should include the source span, import/module/function path, and a suggested grant spelling when available.</p>
+<p>A host may also supply a capability ceiling: a maximum grant set sourced from outside the invocation itself, such as a policy file a harness writes before starting an agent or CI job. The effective grant for any invocation must be the intersection of its ceiling, if one is supplied, and whatever it requests via <code>--allow</code> or a typed action's declared caps -- never their union. An invocation cannot widen its own authority by requesting more than its ceiling allows; it can only receive less. This applies uniformly to host and package capabilities alike. The exact mechanism for supplying a ceiling is illustrative, not normative; what is normative is that a ceiling source exists, is distinct from per-invocation requests, and is enforced as an intersection. Whether that source is itself protected from tampering by the process it bounds is an operating-system/sandbox concern this RFC does not define -- see Non-Goals.</p>
 <h3 id="runtime-modes">Runtime modes<a class="headerlink" href="#runtime-modes" title="Permanent link">&para;</a></h3>
 <p>The runtime should support at least these conceptual modes:</p>
 <ul>
@@ -9475,26 +9485,28 @@ Granted capabilities:
 <li><code>observe</code>: operations run normally and receipts are emitted.</li>
 <li><code>governed</code>: operations require granted capabilities and receipts are emitted.</li>
 </ul>
-<p>The exact CLI spelling is not normative. A natural user-facing shape is:</p>
+<p>The user-facing shape is:</p>
 <div class="language-text highlight"><pre><span></span><code>incan run app.incn --report json
 incan run app.incn --allow host.env.read,host.http.request --report json
 </code></pre></div>
-<p>The default mode for ordinary local development is unresolved. The default must not surprise users by silently exporting data or sending reports to remote services.</p>
+<p><code>incan run</code> defaults to <code>permissive</code>: ordinary local development stays ordinary, and nothing is denied or exported without an explicit flag. <code>incan test</code> defaults to <code>governed</code> with nothing pre-granted, so a test that unexpectedly reaches the real filesystem or network fails with a capability diagnostic instead of silently succeeding -- the same test-isolation property most test frameworks already enforce by convention, made structural here instead. A typed action runs under whatever mode and grants its invoking context provides (a CI job's explicit <code>--allow</code>, a host's policy-selected grant set); this RFC does not define a third default distinct from <code>incan run</code> and <code>incan test</code>, since actions are never invoked in a vacuum.</p>
 <h3 id="capability-declarations">Capability declarations<a class="headerlink" href="#capability-declarations" title="Permanent link">&para;</a></h3>
-<p>A capability declaration should include:</p>
+<p>Capability declarations live in source, as a first-class <code>capability</code> declaration form -- not in package manifest metadata, generated descriptors, or capability packs. This is required, not a style preference: deriving a capability's fully-qualified identity from its declaration location (see "Capability identities") only works if the declaration site is something the compiler resolves, the same way it resolves a function or type declaration.</p>
+<p>A capability declaration must include:</p>
 <ul>
-<li>stable identity;</li>
-<li>human-readable description;</li>
-<li>owning package or toolchain component;</li>
-<li>capability kind, such as host, library, action, artifact, or policy;</li>
-<li>optional implied or requested capabilities;</li>
-<li>optional scope schema, such as path, hostname, method, model, artifact kind, or action id;</li>
-<li>receipt event kinds emitted by the capability;</li>
-<li>redaction and sensitivity rules for receipt attributes;</li>
-<li>docs and diagnostic labels.</li>
+<li>a human-readable description;</li>
+<li>an optional <code>scope</code> schema: a typed set of named scope dimensions the capability accepts, such as <code>tenant: str</code> or <code>path: str</code>. A grant may constrain zero or more of a capability's declared scope dimensions; a grant referencing a scope key the capability did not declare is a checked error, not a silently ignored key;</li>
+<li>an optional <code>requires</code> list of other capabilities (checked symbol references, typically host capabilities) whose authority this capability's implementation needs.</li>
 </ul>
-<p>Capability declarations may live in source, package metadata, manifest metadata, generated descriptors, or capability packs. Wherever they live, RFC 102 semantic inspection must be able to expose them as project facts.</p>
-<p>Package-defined capabilities must not grant host authority by implication alone. If a domain capability requests or implies <code>host.fs.read</code>, the runtime must resolve that relationship through host policy before allowing filesystem reads.</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">capability</span> <span class="n">refund</span><span class="p">:</span>
+    <span class="n">description</span> <span class="o">=</span> <span class="s2">&quot;Issue a refund for a captured charge&quot;</span>
+    <span class="n">scope</span><span class="p">:</span>
+        <span class="n">tenant</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">requires</span> <span class="o">=</span> <span class="p">[</span><span class="n">host</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">request</span><span class="p">]</span>
+</code></pre></div>
+<p>RFC 102 semantic inspection must be able to expose capability declarations, their scope schemas, and their <code>requires</code> relationships as project facts.</p>
+<p>Package-defined capabilities must not grant host authority by implication alone. <code>requires</code> documents that a domain capability's implementation needs a host capability; it is metadata the runtime, host policy, and the static check in "Typed action alignment" can inspect and warn against when missing, but granting the domain capability never automatically grants the capabilities it <code>requires</code>. Those must always be granted separately.</p>
+<p>Scope values are never written into a static declaration such as <code>@action(caps=[...])</code> -- a static declaration only names which capabilities, generically, an action needs. Scope values bind at grant time (<code>--allow example_lib.policy.refund:tenant=acct_a</code>) and are checked against the actual attributes of the operation being performed at the moment it happens, independent of whatever the calling code decided. This holds for both host and package capabilities: a scoped <code>host.http.request</code> grant is checked against the real outbound host at the point <code>std.http</code> makes the request, not against anything decided when the action was defined.</p>
 <h3 id="receipts">Receipts<a class="headerlink" href="#receipts" title="Permanent link">&para;</a></h3>
 <p>A receipt is a structured runtime fact emitted by a capability-aware operation. A receipt must include:</p>
 <ul>
@@ -9528,22 +9540,33 @@ incan run app.incn --allow host.env.read,host.http.request --report json
 </ul>
 <p>Reports may include artifact references, span trees, telemetry correlation ids, package versions, lockfile identity, source snapshot identity, and semantic package references.</p>
 <p>Reports must not include raw secret values or sensitive payloads unless a separate, explicit reveal policy approves that exposure.</p>
+<p>Report output reuses the existing <code>--report</code>/<code>--report-output</code> contract <code>incan build</code> already established, rather than defining a new one: <code>--report json</code> writes to stdout by default, and <code>--report-output &lt;PATH&gt;</code> redirects it to a file. Receipts and run reports use a numeric <code>schema_version</code>, matching the same convention already used by <code>incan check --format json</code>, <code>incan build --report json</code>, and other existing JSON report surfaces; this RFC does not define a new versioning scheme.</p>
 <h3 id="typed-action-alignment">Typed action alignment<a class="headerlink" href="#typed-action-alignment" title="Permanent link">&para;</a></h3>
 <p>Typed actions from RFC 078 provide the expected authority contract before execution. A typed action may declare required capabilities, optional capabilities, receipt schemas, mutation categories, network or model access, input and output artifacts, replay expectations, and non-plannable behavior. Those declarations are static metadata; they do not grant authority.</p>
 <p>When a typed action runs under this RFC, the run report must preserve the action identity and should include enough metadata to compare declared capability requirements with runtime behavior. If the action emits a receipt for a capability that was not declared by the action, package, or selected capability pack, the report should mark the mismatch. If the action declares a required capability that is never requested during a successful run, the report may mark the declaration as unused rather than treating it as an error by default. Policy may choose to reject undeclared capability use, require review for unused broad grants, or allow either case in permissive workflows.</p>
 <p>Dry-run output from RFC 078 and run reports from this RFC should use compatible capability identities, action identities, risk categories, redaction markers, artifact identities, and replay classifications. A user, CI job, LSP client, or agent should be able to read the dry-run plan, run the action, and compare the actual receipts without interpreting separate schemas.</p>
-<h3 id="replay-classification">Replay classification<a class="headerlink" href="#replay-classification" title="Permanent link">&para;</a></h3>
-<p>Each receipt and run report should classify replayability. Initial replay classifications should include:</p>
+<p>The declared-versus-actual comparison this section already requires for runtime reports must also happen statically, before a typed action ever runs. The typechecker must resolve every call inside an <code>@action</code>-decorated function body, union the host and package capabilities those calls require (via the existing stdlib-to-host-capability mapping in "Relationship to stdlib modules" and via any called capability's own <code>requires</code> metadata), and compare that computed set against the function's declared <code>caps=[...]</code> list:</p>
 <ul>
-<li><code>deterministic</code>: the operation can be replayed from recorded local inputs.</li>
-<li><code>fixture-required</code>: replay requires recorded fixtures or test doubles.</li>
-<li><code>external</code>: replay depends on external systems and cannot be exact without a recording.</li>
-<li><code>unavailable</code>: replay is not supported for this operation.</li>
-<li><code>redacted</code>: replay data exists but is intentionally hidden or incomplete.</li>
+<li>if the body requires a capability the declaration omits, this is a compile error ("incomplete action caps"), not a warning -- an action whose declared caps are incomplete is guaranteed to fail at runtime the first time a governed run reaches the undeclared operation, so catching it statically is strictly better than discovering it as a runtime denial;</li>
+<li>if the declaration lists a capability the body never actually uses, this is a warning, matching the non-error default this section already establishes for runtime-observed unused declarations, not a new stricter policy for the static case.</li>
 </ul>
+<p>This diagnostic must be available through the same channel as any other typechecker diagnostic, including LSP, so it is visible while authoring the decorator, not only at build time. An editor may offer a quick fix that inserts a missing capability into the declared list, the same shape as a quick fix for a missing import.</p>
+<h3 id="replay-classification">Replay classification<a class="headerlink" href="#replay-classification" title="Permanent link">&para;</a></h3>
+<p>Each receipt and run report must classify replayability. This RFC requires four classifications for the first implementation, each motivated by an operation this RFC already describes:</p>
+<ul>
+<li><code>deterministic</code>: the operation can be replayed from recorded local inputs, such as a filesystem write whose output is fully determined by its recorded arguments.</li>
+<li><code>external</code>: replay depends on an external system and cannot be exact without a recording, such as an HTTP call to a partner API whose response can change between calls.</li>
+<li><code>fixture-required</code>: replay requires a recorded fixture or test double, such as the same HTTP call made under <code>incan test</code>'s default governed, ungranted mode.</li>
+<li><code>redacted</code>: replay data existed but was intentionally not persisted, such as a receipt whose attributes were redacted before reaching a sink.</li>
+</ul>
+<p><code>unavailable</code> (replay is not supported for this operation) remains a trivial always-available fallback classification and needs no further design work in this RFC.</p>
 <p>This RFC does not require the runtime to implement full replay. It requires the runtime to avoid dishonest replay claims.</p>
 <h3 id="budgets">Budgets<a class="headerlink" href="#budgets" title="Permanent link">&para;</a></h3>
 <p>Capability grants may include budgets. Budgets are optional constraints over granted authority, such as maximum request count, maximum bytes written, allowed path roots, allowed hosts, allowed process names, timeout limits, model-token limits, or artifact count.</p>
+<p>Budgets are expressed through the same grant syntax as scope, not a separate mechanism, using a reserved <code>budget.</code> key prefix alongside a capability's own scope keys:</p>
+<div class="language-text highlight"><pre><span></span><code>--allow &quot;host.http.request:host=partner.example.com,budget.max_requests=100&quot;
+</code></pre></div>
+<p>CLI grants, package metadata, and typed action declarations all use this same <code>budget.&lt;key&gt;=&lt;value&gt;</code> shape wherever a budget needs to be expressed; there is no separate budget-specific declaration form.</p>
 <p>If a budget is exhausted in governed mode, the runtime must deny the operation before performing it where practical and must emit a denial receipt. If the operation cannot be prevented before partial work occurs, the receipt must describe the partial state honestly.</p>
 <h3 id="library-participation">Library participation<a class="headerlink" href="#library-participation" title="Permanent link">&para;</a></h3>
 <p>Library authors may define capabilities and receipt schemas. Libraries should not need to import stdlib-private modules or manually construct the full run report.</p>
@@ -9571,8 +9594,8 @@ incan run app.incn --allow host.env.read,host.http.request --report json
 <p>Pure computation, parsing, formatting, local model construction, and in-memory transformations should not require host capabilities.</p>
 <h2 id="design-details">Design details<a class="headerlink" href="#design-details" title="Permanent link">&para;</a></h2>
 <h3 id="syntax">Syntax<a class="headerlink" href="#syntax" title="Permanent link">&para;</a></h3>
-<p>This RFC intentionally does not require new syntax. Capability declarations may eventually use source syntax, declaration metadata, package metadata, or manifest descriptors. The required contract is capability identity, declaration, grant, enforcement, receipt emission, and inspection.</p>
-<p>Illustrative source syntax such as <code>capability example.policy.evaluate:</code> is non-normative.</p>
+<p>This RFC requires new syntax: <code>capability</code> is a first-class declaration form, with an optional <code>scope</code> schema and an optional <code>requires</code> list, as shown in "Capability declarations." This is necessary, not merely convenient -- a capability's fully-qualified identity being derived from its declaration location, rather than typed by the author, only works if the declaration is real source syntax the compiler resolves.</p>
+<p><code>host.*</code> capabilities use the same declaration form; only <code>std.runtime</code>'s own bundled source may declare under that reserved namespace.</p>
 <h3 id="semantics">Semantics<a class="headerlink" href="#semantics" title="Permanent link">&para;</a></h3>
 <p>Capability checks occur at authority-bearing operation boundaries. In ordinary source, a helper function that calls <code>std.http.get</code> does not need to declare an effect type merely because it may perform HTTP. If the program runs in governed mode without <code>host.http.request</code>, the operation fails at the boundary with a capability diagnostic.</p>
 <p>Static capability declarations are still useful for actions, packages, generated artifacts, docs, and policy review. They should describe expected authority before a run happens. Runtime receipts describe actual authority use during a run.</p>
@@ -9621,29 +9644,29 @@ incan run app.incn --allow host.env.read,host.http.request --report json
 <h2 id="layers-affected">Layers affected<a class="headerlink" href="#layers-affected" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Stdlib / Runtime (<code>incan_stdlib</code>)</strong>: host-boundary modules need capability checks, receipt emission, redaction handling, and report integration.</li>
-<li><strong>Tooling / CLI</strong>: run, test, action, and build commands need report output, governed-mode grants, denial diagnostics, and machine-readable schemas.</li>
+<li><strong>Tooling / CLI</strong>: run, test, action, and build commands need report output, governed-mode grants, denial diagnostics, machine-readable schemas, and host-ceiling resolution.</li>
 <li><strong>Package metadata</strong>: packages need a way to publish capability declarations and receipt schemas.</li>
 <li><strong>Typechecker / Semantic metadata</strong>: static capability declarations and action requirements should be exposed as checked metadata where available.</li>
 <li><strong>IR Lowering / Backend</strong>: source spans and semantic identities should be preserved well enough for receipts to point back to source and semantic objects.</li>
 <li><strong>LSP / Docs tooling</strong>: editors and docs can surface capability declarations, required grants, denial diagnostics, and report artifacts.</li>
 <li><strong>Policy / CI / Agents</strong>: policy and automation can consume capability declarations, action dry-runs, receipt schemas, and actual receipts to decide whether runs, actions, generated artifacts, or proposed changes are acceptable.</li>
 </ul>
-<h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
+<h2 id="design-decisions">Design Decisions<a class="headerlink" href="#design-decisions" title="Permanent link">&para;</a></h2>
 <ul>
-<li>What is the exact grammar for capability identities?</li>
-<li>Should capability declarations live in source syntax, declaration metadata, package manifests, or all of them?</li>
-<li>What should the default run mode be for <code>incan run</code>, <code>incan test</code>, and typed actions?</li>
-<li>What is the minimum stable host capability set?</li>
-<li>How should scoped grants be represented for paths, hosts, methods, models, tools, and artifacts?</li>
-<li>Should package-defined capabilities be allowed to imply host capabilities automatically when a user grants the package capability, or should host grants always be listed separately?</li>
-<li>What is the first stable receipt schema version?</li>
-<li>How should receipt sinks be configured, and where should reports be written by default?</li>
-<li>Which replay classifications are required for the first implementation?</li>
-<li>How should telemetry export represent receipts without making telemetry a dependency of receipt generation?</li>
-<li>How should capability budgets be expressed in CLI, package metadata, and typed action declarations?</li>
+<li><strong>Capability identities are checked symbols, not strings:</strong> a capability's fully-qualified identity is derived from where it is declared (package or toolchain identity plus module path), never typed by the author. Two packages cannot collide on a capability name because the namespace segment comes from an identity a registry already enforces as unique. A capability reference at a use site resolves like an import; a misspelled or nonexistent reference is a compile error, not a runtime surprise.</li>
+<li><strong>Capability declarations live in source</strong>, as a first-class <code>capability</code> declaration form, because deriving identity from declaration location requires the declaration to be real, compiler-resolved syntax rather than manifest or metadata.</li>
+<li><strong>Default run modes:</strong> <code>incan run</code> defaults to <code>permissive</code>; <code>incan test</code> defaults to <code>governed</code> with nothing pre-granted, enforcing the same test-isolation property most test frameworks already assume by convention. Typed actions run under whatever mode and grants their invoking context provides; there is no third default.</li>
+<li><strong>Minimum stable host capability set is exactly the nine already proposed</strong> in Reference-level explanation (<code>host.env.read</code>, <code>host.fs.read</code>, <code>host.fs.write</code>, <code>host.process.spawn</code>, <code>host.http.request</code>, <code>host.clock.read</code>, <code>host.random</code>, <code>host.model.invoke</code>, <code>host.tool.invoke</code>), fixed and not package-extensible.</li>
+<li><strong>Scoped grants:</strong> a capability declares its own typed <code>scope</code> schema (host capabilities via <code>std.runtime</code>'s own declarations, package capabilities via their own). Scope values bind at grant time, never in a static declaration such as <code>@action(caps=[...])</code>, and are checked against the real operation's attributes at the moment it happens, independent of the declaring code.</li>
+<li><strong>No implicit host-capability grants:</strong> a package capability's <code>requires</code> list documents which host capabilities its implementation needs, for tooling and policy to inspect, but granting the package capability never automatically grants what it requires. Those must always be listed and granted separately.</li>
+<li><strong>Receipt/report schema versioning is not this RFC's decision to make</strong> -- it is already established product convention. Receipts and run reports use a numeric <code>schema_version</code>, matching <code>incan check</code>, <code>incan build</code>, and other existing JSON report surfaces exactly. There is no starting version number for this RFC to bless.</li>
+<li><strong>Report output reuses <code>incan build</code>'s existing <code>--report</code>/<code>--report-output</code> contract</strong> rather than defining a new one.</li>
+<li><strong>Four required replay classifications</strong> for the first implementation: <code>deterministic</code>, <code>external</code>, <code>fixture-required</code>, <code>redacted</code>. <code>unavailable</code> remains a trivial fallback needing no further design.</li>
+<li><strong>Telemetry export is confirmed orthogonal</strong> to receipt generation, per this RFC's existing text: receipts remain available to local reports and policy regardless of whether <code>std.telemetry</code> is configured; telemetry is a second consumer of the same stream, not a dependency of producing it.</li>
+<li><strong>Capability budgets use the same grant syntax as scope</strong>, via a reserved <code>budget.&lt;key&gt;=&lt;value&gt;</code> prefix, in CLI grants, package metadata, and typed action declarations alike -- no separate budget declaration form.</li>
+<li><strong>Typed actions get a static caps-completeness check</strong>, extending "Typed action alignment" from a runtime-only comparison to a compile-time one: the typechecker resolves every call in an <code>@action</code>-decorated body, unions the capabilities it actually requires, and diffs that against the declared <code>caps=[...]</code> list. A missing required capability is a compile error; an unused declared capability is a warning, matching the non-error default this RFC already gives runtime-observed unused declarations. The diagnostic is available through LSP the same way any other typechecker diagnostic is, including a quick fix to insert a missing capability.</li>
+<li><strong>Host-supplied capability ceilings bound effective grants via intersection, never union:</strong> a host may supply a maximum grant set sourced from outside the invocation itself -- for example, a harness-written policy file for an agent or CI job. The effective grant for any invocation is always the intersection of its ceiling and what it requests; an invocation can only receive less than its ceiling, never more, regardless of what it asks for. This RFC defines the ceiling as a distinct grant source and the intersection rule; it does not define how the ceiling's own source is protected from tampering, which is an operating-system/sandbox concern already excluded by this RFC's Non-Goals.</li>
 </ul>
-<!-- Rename this section to "Design Decisions" once all questions have been resolved.
-     An RFC cannot move from Draft to Planned until no unresolved questions remain. -->
 
 
 

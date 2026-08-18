@@ -9300,7 +9300,7 @@
 <li>RFC 077 (workspace and multi-package projects)</li>
 <li>RFC 079 (<code>incan.pub</code> artifact graph)</li>
 <li>RFC 080 (AI assets and agent metadata)</li>
-<li>RFC 117 (<code>Loaf.toml</code> and Oven's language-neutral project model)</li>
+<li>RFC 117 (<code>loaf.toml</code> and Oven's language-neutral project model)</li>
 <li>RFC 118 (Incan and Oven command-line surfaces)</li>
 </ul>
 </li>
@@ -9489,7 +9489,7 @@ oven tool run pub:docs-preview --port 8000
 <li>Policy-gated action execution may feel heavier than simple scripts.</li>
 </ul>
 <h2 id="implementation-architecture">Implementation architecture<a class="headerlink" href="#implementation-architecture" title="Permanent link">&para;</a></h2>
-<p>The recommended implementation shape is to build an action registry from built-ins, <code>Loaf.toml</code> project and workspace data, package metadata, starter/capability descriptors, and AI assets. <code>oven action list</code> and IDE tooling consume this registry. <code>oven action run</code> resolves source, inherited workspace scope, env, policy, target context, and execution mode before invoking anything. RFC 118 may expose an Incan convenience that delegates downward to this operation, but it must not resolve or execute actions independently.</p>
+<p>The recommended implementation shape is to build an action registry from built-ins, <code>loaf.toml</code> project and workspace data, package metadata, starter/capability descriptors, and AI assets. <code>oven action list</code> and IDE tooling consume this registry. <code>oven action run</code> resolves source, inherited workspace scope, env, policy, target context, and execution mode before invoking anything. RFC 118 may expose an Incan convenience that delegates downward to this operation, but it must not resolve or execute actions independently.</p>
 <h2 id="layers-affected">Layers affected<a class="headerlink" href="#layers-affected" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Manifest schema / configuration validation:</strong> projects need typed action metadata, tool source references, execution modes, inputs, outputs, and mutation categories.</li>

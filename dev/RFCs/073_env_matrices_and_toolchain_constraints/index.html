@@ -9319,7 +9319,7 @@
 <li>RFC 018 (language primitives for testing)</li>
 <li>RFC 019 (test runner, CLI, and ecosystem)</li>
 <li>RFC 020 (Cargo offline and locked policy)</li>
-<li>RFC 117 (<code>Loaf.toml</code> and Oven's language-neutral project model)</li>
+<li>RFC 117 (<code>loaf.toml</code> and Oven's language-neutral project model)</li>
 <li>RFC 118 (Incan and Oven command-line surfaces)</li>
 </ul>
 </li>
@@ -9329,7 +9329,7 @@
 <li><strong>Shipped in:</strong> —</li>
 </ul>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
-<p>This RFC defines two parts of the Oven-managed environment model: enforceable Incan toolchain constraints and matrix-expanded environments. <code>Loaf.toml</code> projects and named environments may declare <code>requires-incan</code> constraints that the active toolchain must satisfy before project-aware execution begins, and environments may define matrices that expand one logical env into multiple concrete env instances. Environment and matrix constraints only narrow inherited compatibility; they do not loosen it. Matrix execution stays at the Oven lifecycle layer: it repeats env scripts across resolved env cells, but it does not define test-runner semantics, parallel scheduling policy, or toolchain installation.</p>
+<p>This RFC defines two parts of the Oven-managed environment model: enforceable Incan toolchain constraints and matrix-expanded environments. <code>loaf.toml</code> projects and named environments may declare <code>requires-incan</code> constraints that the active toolchain must satisfy before project-aware execution begins, and environments may define matrices that expand one logical env into multiple concrete env instances. Environment and matrix constraints only narrow inherited compatibility; they do not loosen it. Matrix execution stays at the Oven lifecycle layer: it repeats env scripts across resolved env cells, but it does not define test-runner semantics, parallel scheduling policy, or toolchain installation.</p>
 <h2 id="core-model">Core model<a class="headerlink" href="#core-model" title="Permanent link">&para;</a></h2>
 <p>Read this RFC as four foundations plus three mechanisms:</p>
 <ol>
@@ -9338,7 +9338,7 @@
 <li><strong>Foundation:</strong> A matrix env is still one named env in the manifest, but it expands into multiple concrete env instances at execution time.</li>
 <li><strong>Foundation:</strong> Matrix orchestration belongs to Oven, not to the test runner. RFC 019 remains the owner of test collection, parametrization, fixtures, reporting, and parallel test execution semantics.</li>
 <li><strong>Mechanism A:</strong> Execution commands compute an effective <code>requires-incan</code> constraint and fail early when the active toolchain does not satisfy it, while inspection commands surface compatibility without being blocked by it.</li>
-<li><strong>Mechanism B:</strong> <code>[[oven.envs.&lt;name&gt;.matrix]]</code> in <code>Loaf.toml</code> declares one or more axes that generate concrete env instances by Cartesian product.</li>
+<li><strong>Mechanism B:</strong> <code>[[oven.envs.&lt;name&gt;.matrix]]</code> in <code>loaf.toml</code> declares one or more axes that generate concrete env instances by Cartesian product.</li>
 <li><strong>Mechanism C:</strong> Selecting a concrete env instance runs one resolved env; selecting a matrix root env runs the target script across all generated env instances in deterministic order.</li>
 </ol>
 <h2 id="motivation">Motivation<a class="headerlink" href="#motivation" title="Permanent link">&para;</a></h2>
@@ -9441,7 +9441,7 @@ oven env run &#39;compat[incan=0.4,profile=release]&#39; test
 <li><code>oven test</code></li>
 <li><code>oven lock</code></li>
 <li><code>oven env run</code></li>
-<li>any future Oven operation that reads a <code>Loaf.toml</code> project</li>
+<li>any future Oven operation that reads a <code>loaf.toml</code> project</li>
 </ul>
 <p>The following commands must resolve and report the effective constraint, but they must not require the active toolchain to satisfy it merely to inspect configuration:</p>
 <ul>
@@ -9462,7 +9462,7 @@ oven env run &#39;compat[incan=0.4,profile=release]&#39; test
 <p>For inspection commands, the CLI should surface the same effective constraint and should indicate whether the active toolchain satisfies it.</p>
 <p>Commands that do not resolve a project root must not attempt to infer or enforce <code>requires-incan</code>.</p>
 <h3 id="environment-schema-additions">Environment schema additions<a class="headerlink" href="#environment-schema-additions" title="Permanent link">&para;</a></h3>
-<p>This RFC adds the following optional fields to <code>[oven.envs.&lt;name&gt;]</code> in <code>Loaf.toml</code>:</p>
+<p>This RFC adds the following optional fields to <code>[oven.envs.&lt;name&gt;]</code> in <code>loaf.toml</code>:</p>
 <ul>
 <li><code>requires-incan: str</code></li>
 <li><code>matrix: List[Table]</code></li>

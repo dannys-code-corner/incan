@@ -9469,7 +9469,7 @@
 <li><strong>Status:</strong> Draft</li>
 <li><strong>Created:</strong> 2026-03-06</li>
 <li><strong>Author(s):</strong> Danny Meijer (@dannymeijer)</li>
-<li><strong>Related:</strong> RFC 027 (incan-vocab), RFC 031 (library system phase 1), RFC 117 (<code>Loaf.toml</code> and Oven's language-neutral project model), RFC 118 (Incan and Oven command-line surfaces)</li>
+<li><strong>Related:</strong> RFC 027 (incan-vocab), RFC 031 (library system phase 1), RFC 117 (<code>loaf.toml</code> and Oven's language-neutral project model), RFC 118 (Incan and Oven command-line surfaces)</li>
 <li><strong>Issue:</strong> <a href="https://github.com/encero-systems/incan/issues/168">#168</a></li>
 <li><strong>RFC PR:</strong> —</li>
 <li><strong>Written against:</strong> ~~v0.2~~ v0.5</li>
@@ -9514,7 +9514,7 @@ $<span class="w"> </span>oven<span class="w"> </span>publish
 <span class="w">  </span>Published<span class="w"> </span>mylib<span class="w"> </span><span class="m">0</span>.1.0
 </code></pre></div>
 <h3 id="consuming-a-published-package">Consuming a published package<a class="headerlink" href="#consuming-a-published-package" title="Permanent link">&para;</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span class="c1"># my-app/Loaf.toml</span>
+<div class="language-toml highlight"><pre><span></span><code><span class="c1"># my-app/loaf.toml</span>
 <span class="k">[project]</span>
 <span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;my-app&quot;</span>
 <span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.1.0&quot;</span>
@@ -9826,7 +9826,7 @@ mylib = { loaf = &quot;mylib&quot;, version = &quot;0.1.0&quot;, registry = &quo
 </code></pre></div>
 <p>Resolution:</p>
 <ol>
-<li>Read the typed dependency entry from <code>Loaf.toml</code></li>
+<li>Read the typed dependency entry from <code>loaf.toml</code></li>
 <li>For each registry dep: <code>GET https://incan.pub/index/&lt;prefix&gt;/&lt;name&gt;</code></li>
 <li>Parse JSON lines, filter by version requirement, select newest matching non-yanked version</li>
 <li>Check local cache <code>~/.incan/libs/&lt;name&gt;-&lt;version&gt;/</code> — if cached and checksum matches, skip download</li>
@@ -9850,15 +9850,15 @@ mylib = { loaf = &quot;mylib&quot;, version = &quot;0.1.0&quot;, registry = &quo
 <tbody>
 <tr>
 <td><code>oven add &lt;pkg&gt;</code></td>
-<td>Add a Loaf dependency to <code>Loaf.toml</code> (fetch latest version from <code>incan.pub</code>)</td>
+<td>Add a Loaf dependency to <code>loaf.toml</code> (fetch latest version from <code>incan.pub</code>)</td>
 </tr>
 <tr>
 <td><code>oven add --crate &lt;pkg&gt;</code></td>
-<td>Add a crate dependency to <code>Loaf.toml</code> (fetch from crates.io by default)</td>
+<td>Add a crate dependency to <code>loaf.toml</code> (fetch from crates.io by default)</td>
 </tr>
 <tr>
 <td><code>oven remove &lt;pkg&gt;</code></td>
-<td>Remove a typed dependency from <code>Loaf.toml</code></td>
+<td>Remove a typed dependency from <code>loaf.toml</code></td>
 </tr>
 <tr>
 <td><code>oven update</code></td>
@@ -9891,7 +9891,7 @@ mylib = { loaf = &quot;mylib&quot;, version = &quot;0.1.0&quot;, registry = &quo
 </tbody>
 </table>
 <h4 id="oven-add-in-detail"><code>oven add</code> in detail<a class="headerlink" href="#oven-add-in-detail" title="Permanent link">&para;</a></h4>
-<p>Like <code>cargo add</code>, this is the primary way users add dependencies. It edits <code>Loaf.toml</code> for you. The final aliases exposed through <code>incan</code> are owned by RFC 118; they must delegate to Oven rather than duplicate this resolution behavior.</p>
+<p>Like <code>cargo add</code>, this is the primary way users add dependencies. It edits <code>loaf.toml</code> for you. The final aliases exposed through <code>incan</code> are owned by RFC 118; they must delegate to Oven rather than duplicate this resolution behavior.</p>
 <div class="language-bash highlight"><pre><span></span><code><span class="c1"># Add latest version from incan.pub</span>
 $<span class="w"> </span>oven<span class="w"> </span>add<span class="w"> </span>widgets
 <span class="w">  </span>Added<span class="w"> </span><span class="nv">widgets</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">{</span><span class="w"> </span><span class="nv">loaf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;widgets&quot;</span>,<span class="w"> </span><span class="nv">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;^0.2.1&quot;</span><span class="w"> </span><span class="o">}</span><span class="w"> </span>to<span class="w"> </span><span class="o">[</span>dependencies<span class="o">]</span>
@@ -9914,14 +9914,14 @@ $<span class="w"> </span>oven<span class="w"> </span>add<span class="w"> </span>
 </code></pre></div>
 <p><strong>Behavior:</strong></p>
 <ol>
-<li>If no <code>Loaf.toml</code> exists, error with "run <code>oven init</code> first"</li>
+<li>If no <code>loaf.toml</code> exists, error with "run <code>oven init</code> first"</li>
 <li>Query the registry index for the latest non-yanked version (unless <code>@version</code> or <code>--path</code>/<code>--git</code> specified)</li>
 <li>Default to <code>^major.minor.patch</code> range (SemVer-compatible, like Cargo)</li>
 <li>Write the typed entry to <code>[dependencies]</code></li>
-<li>If the package is already in <code>Loaf.toml</code>, update the version (with a confirmation prompt unless <code>--force</code>)</li>
+<li>If the package is already in <code>loaf.toml</code>, update the version (with a confirmation prompt unless <code>--force</code>)</li>
 <li>Update <code>Oven.lock</code> with the resolved closure</li>
 </ol>
-<p><code>oven remove</code> does the inverse: removes the entry from <code>Loaf.toml</code> and re-locks.</p>
+<p><code>oven remove</code> does the inverse: removes the entry from <code>loaf.toml</code> and re-locks.</p>
 <h2 id="infrastructure-provider-selection">Infrastructure: provider selection<a class="headerlink" href="#infrastructure-provider-selection" title="Permanent link">&para;</a></h2>
 <h3 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h3>
 <table>
@@ -10150,7 +10150,7 @@ $<span class="w"> </span>oven<span class="w"> </span>add<span class="w"> </span>
 
 <h2 id="future-extensions-out-of-scope">Future extensions (out of scope)<a class="headerlink" href="#future-extensions-out-of-scope" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Private registries.</strong> Organizations may register an <code>incan.pub</code>-compatible registry in Oven-controlled organization or user configuration, then allow-list that registered identity from a Loaf or workspace. Credentials and trust policy never live in <code>Loaf.toml</code>; <code>Oven.lock</code> records the resolved canonical identity and observed trust facts.</li>
+<li><strong>Private registries.</strong> Organizations may register an <code>incan.pub</code>-compatible registry in Oven-controlled organization or user configuration, then allow-list that registered identity from a Loaf or workspace. Credentials and trust policy never live in <code>loaf.toml</code>; <code>Oven.lock</code> records the resolved canonical identity and observed trust facts.</li>
 <li><strong>Trusted Publishers (GitHub Actions OIDC).</strong> Like PyPI's Trusted Publishers — CI/CD can publish without long-lived tokens by using GitHub Actions' OIDC identity directly with Sigstore.</li>
 <li><strong>Package auditing tools.</strong> <code>oven audit</code> to check dependencies against a vulnerability database.</li>
 <li><strong>Mirror support.</strong> Read-only mirrors of <code>incan.pub</code> for network-restricted environments or regional performance.</li>
