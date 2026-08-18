@@ -346,10 +346,24 @@ cargo_home_dir="$(dirname "$(dirname "$cargo_bin")")"
 # Cargo: the guard's sandbox also redirects `HOME` to an isolated, per-root scratch directory with
 # no rustup state at all. Route around rustup's own toolchain selection entirely by resolving
 # directly to one real, installed toolchain's `cargo`.
+#
+# Prefer `$RUSTUP_HOME`/`$HOME/.rustup` first: that is rustup's own authoritative toolchains
+# location regardless of where its `cargo`/`rustup` shim binary physically lives, so it also covers
+# package-manager rustup installs (e.g. Homebrew's `rustup` formula, whose shims live under
+# `<prefix>/opt/rustup/bin/` rather than `~/.cargo/bin/`) where `.cargo`/`.rustup` are not siblings
+# of the resolved binary's directory. Fall back to the sibling-of-Cargo heuristic only when that
+# lookup is empty, which covers the guarded/sandboxed case above where `$HOME` itself is redirected
+# but the resolved Cargo binary's real location still has `.rustup` as a physical sibling.
 direct_toolchain_cargo="$(
-  find "$(dirname "$cargo_home_dir")/.rustup/toolchains" -mindepth 3 -maxdepth 3 \
+  find "${RUSTUP_HOME:-$HOME/.rustup}/toolchains" -mindepth 3 -maxdepth 3 \
     -type f -name cargo -path '*/bin/cargo' 2>/dev/null | head -1
 )"
+if [ -z "$direct_toolchain_cargo" ]; then
+  direct_toolchain_cargo="$(
+    find "$(dirname "$cargo_home_dir")/.rustup/toolchains" -mindepth 3 -maxdepth 3 \
+      -type f -name cargo -path '*/bin/cargo' 2>/dev/null | head -1
+  )"
+fi
 if [ -n "$direct_toolchain_cargo" ] && [ -x "$direct_toolchain_cargo" ]; then
   cargo_bin="$direct_toolchain_cargo"
 fi
