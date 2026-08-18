@@ -11,7 +11,7 @@
     - RFC 105 (`incan architect` rule engine)
     - RFC 106 (compiler-backed agent context graph)
     - RFC 116 (typed C ABI interop)
-    - RFC 117 (`Loaf.toml` and Oven's language-neutral project model)
+    - RFC 117 (`loaf.toml` and Oven's language-neutral project model)
     - RFC 119 (Oven-native Rust build facets and Cargo interoperation)
 - **Issue:** [#1010](https://github.com/encero-systems/incan/issues/1010)
 - **RFC PR:** —
@@ -21,7 +21,7 @@
 
 ## Summary
 
-This RFC defines two command surfaces delivered in one Incan installation. `incan` is the language and semantic-tooling command: it is deliberately Python-shaped for direct source use, modules, REPL work, formatting, language-server work, semantic inspection, codegraph, and architect analysis. `oven` is the project, package, environment, target, registry, and artifact-lifecycle command: it is deliberately Cargo-shaped for `Loaf.toml` workspaces, planning, baking, locking, testing, actions, and publication.
+This RFC defines two command surfaces delivered in one Incan installation. `incan` is the language and semantic-tooling command: it is deliberately Python-shaped for direct source use, modules, REPL work, formatting, language-server work, semantic inspection, codegraph, and architect analysis. `oven` is the project, package, environment, target, registry, and artifact-lifecycle command: it is deliberately Cargo-shaped for `loaf.toml` workspaces, planning, baking, locking, testing, actions, and publication.
 
 The surfaces are not peer orchestrators. Incan may delegate downward to the Oven API when a semantic command needs a project plan or build work. Oven must not invoke the Incan CLI, expose Incan semantic subcommands, or learn Cargo behavior through Incan. Oven consumes compiler service APIs and owns its own operational plan, policy, cache, receipt, and provider lifecycle.
 
@@ -29,7 +29,7 @@ The surfaces are not peer orchestrators. Incan may delegate downward to the Oven
 
 1. **One installation, two surfaces:** installing Incan provides the compiler/runtime, Oven core and providers, `incan`, and `oven`. Oven is not a separately installed product.
 2. **`incan` is semantic and source-oriented:** outside a Loaf it owns direct-file and module execution, checking, formatting, REPL/LSP operation, compiler diagnostics, semantic inspection, `codegraph`, and `architect`. Inside a Loaf, its approved project-scale conveniences remain shallow calls to Oven.
-3. **`oven` is project-oriented:** it owns `Loaf.toml` discovery, workspaces, dependency resolution, registry trust, environments, targets, carriers, plans, baking, locks, artifacts, receipts, publication, and explicit Cargo compatibility.
+3. **`oven` is project-oriented:** it owns `loaf.toml` discovery, workspaces, dependency resolution, registry trust, environments, targets, carriers, plans, baking, locks, artifacts, receipts, publication, and explicit Cargo compatibility.
 4. **Cargo familiarity is deliberate but bounded:** Oven may use recognizable Cargo-shaped verbs such as `add`, `update`, `lock`, `test`, and `publish`; it does not promise Cargo's implicit workspace, build-script, proc-macro, or manifest semantics for a Loaf.
 5. **Incan familiarity is deliberate but bounded:** Incan may use familiar direct-source affordances such as a file argument, `-m`, `-c`, and a REPL. It must not grow a second dependency resolver, environment manager, cache, or package lifecycle model.
 6. **Delegation is downward only:** an Incan command may request work from the Oven API. Oven may call compiler service APIs, but it must never shell out to or route its behavior through the Incan CLI.
@@ -55,7 +55,7 @@ This separation also protects the architecture. Incan's semantic products—diag
 
 ## Non-Goals
 
-- Defining `Loaf.toml`, `Oven.lock`, dependency resolution, target/carrier semantics, artifact format, or interop safety rules; RFC 117 and the corresponding interop RFCs own those contracts.
+- Defining `loaf.toml`, `Oven.lock`, dependency resolution, target/carrier semantics, artifact format, or interop safety rules; RFC 117 and the corresponding interop RFCs own those contracts.
 - Creating a second resolver, environment manager, cache, registry/trust model, or package lifecycle in the Incan CLI.
 - Requiring the Oven CLI itself to be implemented in Incan by v0.7, or allowing its implementation language to change the Oven API/receipt contract.
 - Inferring or emulating Cargo workspace, build-script, proc-macro, or manifest semantics in a Loaf command.
@@ -77,11 +77,11 @@ incan codegraph export --format json
 incan architect src/
 ```
 
-These commands are about source, language behavior, and semantic facts. A direct-file invocation does not require a `Loaf.toml` project. When a semantic command is given a Loaf project, it may ask Oven for the selected dependency/provider context, but the compiler remains the authority for semantic results.
+These commands are about source, language behavior, and semantic facts. A direct-file invocation does not require a `loaf.toml` project. When a semantic command is given a Loaf project, it may ask Oven for the selected dependency/provider context, but the compiler remains the authority for semantic results.
 
 ### Use shallow Incan conveniences inside a Loaf
 
-Within a discovered `Loaf.toml` project, project-scale execution is not a second build system:
+Within a discovered `loaf.toml` project, project-scale execution is not a second build system:
 
 ```text
 incan run                 # shallow alias to the selected Oven run/bake plan
@@ -112,7 +112,7 @@ oven update
 oven publish
 ```
 
-These commands operate on a selected Loaf or workspace closure. They discover `Loaf.toml`, resolve the typed dependency graph, apply inherited workspace authority, and report a plan before effects where policy requires it.
+These commands operate on a selected Loaf or workspace closure. They discover `loaf.toml`, resolve the typed dependency graph, apply inherited workspace authority, and report a plan before effects where policy requires it.
 
 ### `oven build` and `oven bake` are not the same operation
 
@@ -166,7 +166,7 @@ oven cargo test
 oven cargo build --release
 ```
 
-Cargo compatibility is a clearly selected mode for a directory with `Cargo.toml` and no `Loaf.toml`. Cargo remains authoritative, including its own side effects. If both files exist, normal Oven commands use `Loaf.toml`, warn that Cargo was ignored, and require explicit Cargo compatibility to run Cargo semantics.
+Cargo compatibility is a clearly selected mode for a directory with `Cargo.toml` and no `loaf.toml`. Cargo remains authoritative, including its own side effects. If both files exist, normal Oven commands use `loaf.toml`, warn that Cargo was ignored, and require explicit Cargo compatibility to run Cargo semantics.
 
 ## Reference-level explanation
 
@@ -234,14 +234,14 @@ RFC 090 owns `std.cli`, the framework for applications authored in Incan. It doe
 ### Release boundaries
 
 - **v0.5:** retains the current bounded RFC 116 interop release work and its existing `incan.toml` contract; this RFC does not backport a Loaf transition into that release.
-- **v0.6:** RFC 117 introduces `Loaf.toml`, `Oven.lock`, hierarchical sub-Loaves, and the language-neutral project model.
+- **v0.6:** RFC 117 introduces `loaf.toml`, `Oven.lock`, hierarchical sub-Loaves, and the language-neutral project model.
 - **v0.7:** this RFC introduces the canonical command-surface split over the v0.6 Oven API and project model.
 
 ## Compatibility and migration
 
 This RFC does not require a separate Oven installation or a second lockfile format. It is intentionally incompatible with a model in which every project operation remains an `incan` command and owns its own package behavior.
 
-Direct Incan source commands remain usable without a project manifest. Inside a discovered Loaf, project-scale `incan run` and `incan test` use Oven as specified above; `incan run --direct` is the explicit direct-source alternative. Oven project commands require `Loaf.toml`, except explicit Cargo compatibility. Existing 0.5 `incan.toml` behavior is governed by the RFC 117 cutover; it is not preserved as a CLI compatibility parser.
+Direct Incan source commands remain usable without a project manifest. Inside a discovered Loaf, project-scale `incan run` and `incan test` use Oven as specified above; `incan run --direct` is the explicit direct-source alternative. Oven project commands require `loaf.toml`, except explicit Cargo compatibility. Existing 0.5 `incan.toml` behavior is governed by the RFC 117 cutover; it is not preserved as a CLI compatibility parser.
 
 ## Alternatives considered
 
@@ -280,7 +280,7 @@ Rejected. It would allow Cargo workspace discovery and side effects to leak into
 
 ## Inspectability and tooling surface
 
-- **Artifacts and metadata:** `Loaf.toml`, `Oven.lock`, selected plan, target-bound `*.loaf` assets, execution receipt, compiler diagnostics, semantic inspection facts, codegraph records, and architect findings expose the chosen authority.
+- **Artifacts and metadata:** `loaf.toml`, `Oven.lock`, selected plan, target-bound `*.loaf` assets, execution receipt, compiler diagnostics, semantic inspection facts, codegraph records, and architect findings expose the chosen authority.
 - **Inspection commands:** `oven inspect` reports operational plan/store/receipt facts; `incan inspect`, `incan codegraph`, and `incan architect` report checked semantic facts.
 - **Diagnostics:** commands must name whether failure occurred in direct-source mode, Loaf/Oven mode, or explicit Cargo-compatibility mode, and identify the selected manifest or target where relevant.
 - **Not implicit:** neither command surface may infer Cargo behavior from an adjacent manifest, execute an action during resolution, or hide the delegation path that produced a receipt.

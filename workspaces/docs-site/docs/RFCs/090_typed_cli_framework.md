@@ -12,7 +12,7 @@
     - RFC 073 (environment matrices and toolchain constraints)
     - RFC 083 (symbol and method aliases)
     - RFC 089 (`std.environ` runtime environment access)
-    - RFC 117 (`Loaf.toml` and Oven's language-neutral project model)
+    - RFC 117 (`loaf.toml` and Oven's language-neutral project model)
     - RFC 118 (Incan and Oven command-line surfaces)
 - **Issue:** https://github.com/encero-systems/incan/issues/87
 - **RFC PR:** —

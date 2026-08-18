@@ -13,7 +13,7 @@
     - RFC 073 (environment matrices and toolchain constraints)
     - RFC 074 (template rendering and boilerplate provenance)
     - RFC 076 (project mutation policy and recovery)
-    - RFC 117 (`Loaf.toml` and Oven's language-neutral project model)
+    - RFC 117 (`loaf.toml` and Oven's language-neutral project model)
     - RFC 118 (Incan and Oven command-line surfaces)
 - **Issue:** https://github.com/encero-systems/incan/issues/403
 - **RFC PR:** —
@@ -28,7 +28,7 @@ This RFC extends the Loaf/Oven project model with starter profiles and mixes. A 
 
 Read this RFC as nine foundations plus five mechanisms:
 
-1. **Foundation:** RFC 117 owns the `Loaf.toml` project model and root authority; this RFC layers richer project shapes on top without redefining manifest discovery, workspace inheritance, dependency resolution, or named-environment semantics.
+1. **Foundation:** RFC 117 owns the `loaf.toml` project model and root authority; this RFC layers richer project shapes on top without redefining manifest discovery, workspace inheritance, dependency resolution, or named-environment semantics.
 2. **Foundation:** Starters and mixes are tooling descriptors, not new language constructs. Applying one must result in explicit project files and manifest entries.
 3. **Foundation:** Generated projects remain ordinary Incan projects. There is no hidden starter mode, no runtime dependency injection container, and no implicit activation that cannot be inspected after creation.
 4. **Foundation:** Mixes are composition units. A starter profile may include zero or more mixes, and an existing project may add a mix later through `oven mix add`.
@@ -37,7 +37,7 @@ Read this RFC as nine foundations plus five mechanisms:
 7. **Foundation:** Incan packages may advertise mixes. Adding a package and applying a mix are separate operations: `oven add <pkg>` changes dependencies; `oven mix add <mix>` applies project setup and may add dependencies as part of an explicit mutation plan.
 8. **Foundation:** Applicability and back-off decisions are explicit. A descriptor may explain why it applies, why it is already satisfied, why it skipped a mutation, or why it is blocked, but it must not infer success from undocumented file conventions.
 9. **Foundation:** The same descriptor model must be consumable by CLI and editor tooling. IDE support should not infer project intent from ad-hoc filenames when the starter or mix can declare that intent directly.
-10. **Mechanism A:** `oven new <name> --starter <id>` creates a project by resolving one starter profile, applying its mixes, rendering its files, and writing a normal `Loaf.toml`.
+10. **Mechanism A:** `oven new <name> --starter <id>` creates a project by resolving one starter profile, applying its mixes, rendering its files, and writing a normal `loaf.toml`.
 11. **Mechanism B:** `oven init --starter <id>` applies starter initialization to an existing directory with adoption-oriented conflict rules. Existing-project initialization must preserve user-authored files more aggressively than greenfield creation.
 12. **Mechanism C:** `oven mix add <mix-id>` resolves one mix, which may be advertised by a package, then applies the resulting mutation plan to an existing project.
 13. **Mechanism D:** `oven starter list`, `oven starter show`, and dry-run output expose what a starter or mix would change before files are written.
@@ -61,7 +61,7 @@ The missing layer is an explicit project mutation contract. Users need a command
 - Define explainable applicability and back-off behavior for existing projects.
 - Distinguish greenfield project creation from existing-project adoption so migration does not overwrite user-authored files under creation-oriented assumptions.
 - Allow starters and mixes to add manifest entries, dependencies, dev-dependencies, scripts, env definitions, file templates, tooling metadata, agent guidance metadata, and user-facing follow-up notes.
-- Keep generated projects ordinary: all persistent behavior must be represented in source files, `Loaf.toml`, `Oven.lock`, or documented generated artifacts.
+- Keep generated projects ordinary: all persistent behavior must be represented in source files, `loaf.toml`, `Oven.lock`, or documented generated artifacts.
 - Provide inspection commands so users can list available starters, preview one starter, and see which mixes are recorded in a project.
 - Define a review-first mix update path so a project can move an applied mix from one recorded descriptor version to another without treating the change as an automatic package upgrade or silent template rewrite.
 - Provide machine-readable inspection surfaces so LSP and IDE tooling can list starters, preview mix changes, show enabled mixes, and surface project-specific actions without reimplementing descriptor resolution.
@@ -116,7 +116,7 @@ A starter may be selected during project creation:
 oven new weather_tool --starter cli
 ```
 
-The generated project is still an ordinary Incan project. The starter writes `Loaf.toml`, source files, docs, test files, and any other explicit artifacts described by the starter descriptor. There is no persistent hidden link to the starter that changes compilation semantics later.
+The generated project is still an ordinary Incan project. The starter writes `loaf.toml`, source files, docs, test files, and any other explicit artifacts described by the starter descriptor. There is no persistent hidden link to the starter that changes compilation semantics later.
 
 If the starter includes mixes, the CLI applies them as part of creation and records them in the project manifest for inspection:
 
@@ -187,7 +187,7 @@ Descriptor integrity: verified
 Would update dependencies:
   app-cli 1.3.0 -> 1.6.0
 
-Would update Loaf.toml:
+Would update loaf.toml:
   add [oven.actions.run-cli]
   rename script "run" -> "cli.run"
 
@@ -235,7 +235,7 @@ Suppose a user has an existing project:
 
 ```text
 weather_core/
-  Loaf.toml
+  loaf.toml
   src/lib.incn
 ```
 
@@ -281,7 +281,7 @@ Would create:
   src/main.incn
   tests/test_cli.incn
 
-Would update Loaf.toml:
+Would update loaf.toml:
   [project.scripts]
   main = "src/main.incn"
 
@@ -310,7 +310,7 @@ The result is an ordinary project:
 
 ```text
 weather_core/
-  Loaf.toml
+  loaf.toml
   src/lib.incn
   src/main.incn
   tests/test_cli.incn
@@ -410,7 +410,7 @@ For the walkthrough above, the provider-side descriptor could be packaged as ord
 
 ```text
 app-cli/
-  Loaf.toml
+  loaf.toml
   mixes/
     cli.toml
   templates/
@@ -478,7 +478,7 @@ A **starter profile** is a named descriptor that can create a new project or ini
 
 A **mix** is a named descriptor that applies one reusable project concern to an existing project. A starter profile may include mixes.
 
-A **project mutation** is a planned change to project files, `Loaf.toml`, dependency declarations, env definitions, scripts, generated docs, or other explicit artifacts owned by the project.
+A **project mutation** is a planned change to project files, `loaf.toml`, dependency declarations, env definitions, scripts, generated docs, or other explicit artifacts owned by the project.
 
 A **starter catalog** is a source of starter and mix descriptors. V1 implementations must support built-in descriptors. They may also support explicit local descriptor paths. Future source kinds may include git references, package-provided descriptors, public catalog sources, and private catalog sources.
 
@@ -511,7 +511,7 @@ This RFC adds the following lifecycle commands and flags:
 
 `oven starter show` and `oven mix show` must report the descriptor source, required Incan constraint, descriptor dependencies, included mixes, planned manifest effects, declared files, and known conflicts if evaluated in a project context.
 
-`oven mix add` requires a project root. If no `Loaf.toml` is found, it must fail with a diagnostic suggesting `oven init` or `oven new`.
+`oven mix add` requires a project root. If no `loaf.toml` is found, it must fail with a diagnostic suggesting `oven init` or `oven new`.
 
 `oven add <pkg>` remains the RFC 034 package dependency command. If the added package advertises mixes, the CLI should report those mixes and show the corresponding `oven mix add <mix-id>` command, but it must not apply project setup as part of plain dependency addition.
 
@@ -637,7 +637,7 @@ The enabled list is provenance and tooling state. It does not replace explicit d
 
 Mix provenance must preserve the descriptor source kind, source identity, selected descriptor version or content hash when available, provider package when applicable, applied mix id, expanded transitive mix graph, and the Incan version used to apply the descriptor. When available, it should also preserve publisher identity, integrity/signature state, yanking or revocation state, catalog trust tier, and the top-level user request that caused transitive mixes to be applied.
 
-The compact `enabled = [...]` form is sufficient for human-readable manifest summaries, but tools that support refresh, status, or security review need access to the richer provenance record. That richer record may live in `Loaf.toml`, a sidecar state file, or a future lock/state artifact, but it must be explicit project tooling state rather than inferred from generated files.
+The compact `enabled = [...]` form is sufficient for human-readable manifest summaries, but tools that support refresh, status, or security review need access to the richer provenance record. That richer record may live in `loaf.toml`, a sidecar state file, or a future lock/state artifact, but it must be explicit project tooling state rather than inferred from generated files.
 
 If a mix is already recorded as enabled, `oven mix add <mix-id>` should be idempotent. It may revalidate that the expected project shape is still present, but it must not duplicate manifest entries or files.
 
@@ -693,7 +693,7 @@ Implementations must provide a machine-readable dry-run format for the full muta
 
 ### Lockfile interaction
 
-Starter and mix application may update `Loaf.toml`, but it must not silently rewrite `Oven.lock` unless the command documents and exposes that behavior. The default behavior should leave lockfile updates to the next `oven lock`, `oven bake`, or `oven test` flow governed by RFC 020.
+Starter and mix application may update `loaf.toml`, but it must not silently rewrite `Oven.lock` unless the command documents and exposes that behavior. The default behavior should leave lockfile updates to the next `oven lock`, `oven bake`, or `oven test` flow governed by RFC 020.
 
 If a descriptor includes dependency changes and the project is in a locked or frozen mode, the CLI must report that lockfile refresh is required rather than pretending the project remains fully locked.
 
@@ -741,7 +741,7 @@ Diagnostics should prefer actionable conflict explanations over generic "templat
 
 ### Relationship to RFCs 015 and 117
 
-RFC 015 remains the historical source of the baseline lifecycle ideas. RFC 117 prospectively supersedes its manifest filename, discovery, lock, and environment-configuration placement. This RFC adds richer starter selection and mix application on top of the `Loaf.toml` project model without reviving the old manifest contract.
+RFC 015 remains the historical source of the baseline lifecycle ideas. RFC 117 prospectively supersedes its manifest filename, discovery, lock, and environment-configuration placement. This RFC adds richer starter selection and mix application on top of the `loaf.toml` project model without reviving the old manifest contract.
 
 The RFC 015 default scaffold remains valid and should stay small. Starter profiles are the place for opinionated project shapes.
 
@@ -834,9 +834,9 @@ Rejected because imports should not mutate projects or create hidden configurati
 
 Rejected because it overloads dependency addition with project mutation. RFC 034 defines `oven add <pkg>` as the package workflow, analogous to `cargo add`. It should be safe to add a dependency without creating source files or scripts. Packages may advertise mixes and the CLI may suggest them after adding the dependency, but applying mix setup belongs to `oven mix add`.
 
-### Store all starter behavior in `Loaf.toml`
+### Store all starter behavior in `loaf.toml`
 
-Rejected because starters often need file templates, docs, and sample tests. `Loaf.toml` should record project metadata and applied mix provenance, not become a large embedded template archive.
+Rejected because starters often need file templates, docs, and sample tests. `loaf.toml` should record project metadata and applied mix provenance, not become a large embedded template archive.
 
 ### Add mix removal in v1
 
@@ -860,7 +860,7 @@ The same mutation plan should power dry-run output, human diagnostics, and machi
 
 ## Layers affected
 
-- **Manifest schema / configuration validation:** `Loaf.toml` should allow mix provenance under `[oven.mixes]`; starter-applied env, script, dependency, and project metadata changes must validate under RFCs 020, 073, 076, and 117.
+- **Manifest schema / configuration validation:** `loaf.toml` should allow mix provenance under `[oven.mixes]`; starter-applied env, script, dependency, and project metadata changes must validate under RFCs 020, 073, 076, and 117.
 - **CLI / tooling:** `oven starter`, `oven mix`, `oven new --starter`, `oven init --starter`, `oven mix add`, `oven mix diff`, and `oven mix update` are new lifecycle tooling surfaces. They must support inspection, dry-run planning, conflict diagnostics, deterministic application, and review-first descriptor-version updates.
 - **LSP / IDE tooling:** editor-facing tools should consume machine-readable starter, mix, mutation-plan, file-role, and action metadata from the lifecycle layer. They may expose completions, code actions, project diagnostics, and run/debug affordances, but they must not fork descriptor semantics.
 - **Agentic tooling:** agent-facing tools may consume mix provenance, file roles, and agent guidance metadata to select relevant skills or workflows, but starter/mix descriptors remain descriptive and must not execute agents implicitly.

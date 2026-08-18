@@ -13,7 +13,7 @@
     - RFC 043 (Rust trait implementation from Incan)
     - RFC 079 (`incan.pub` artifact graph)
     - RFC 092 (interactive runtime stdlib contracts)
-    - RFC 117 (`Loaf.toml` and Oven's language-neutral project model)
+    - RFC 117 (`loaf.toml` and Oven's language-neutral project model)
     - RFC 119 (Oven-native Rust build facets and Cargo interoperation)
     - #656 (Rust-facing ABI and Incan package compatibility direction)
     - #975 (Oven: Cargo-free Incan/Rust toolchain)
@@ -78,7 +78,7 @@ The end-state should be simple: an application team writes domain logic, policy,
 - This RFC does not require Cargo to resolve or compile an Incan package before a Rust host can call it.
 - This RFC does not require every Incan public export to be Rust-callable by default.
 - This RFC does not define registry publication mechanics beyond compatibility with RFC 034 and RFC 079.
-- This RFC does not define `Loaf.toml`, `Oven.lock`, or the `*.loaf` asset format; it consumes the project, asset-identity, and receipt contract from RFC 117.
+- This RFC does not define `loaf.toml`, `Oven.lock`, or the `*.loaf` asset format; it consumes the project, asset-identity, and receipt contract from RFC 117.
 - This RFC does not define the full implementation of async runtime internals, host capability enforcement, or telemetry backends.
 - This RFC does not guarantee that every Rust type imported through `rust::` can automatically cross back into a host Rust application without an adapter.
 
