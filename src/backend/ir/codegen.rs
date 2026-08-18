@@ -2935,9 +2935,9 @@ def main() -> None:
             "membership must borrow the loop binding before its later branch use:\n{code}"
         );
         assert!(
-            code.contains("AsRef::<str>::as_ref(__incan_probe)")
-                || code.contains("<_ as AsRef<str>>::as_ref(__incan_probe)"),
-            "membership should consume the planned borrow rather than reborrow an owned probe:\n{code}"
+            code.contains("AsRef::<str>::as_ref(&__incan_probe)")
+                || code.contains("<_ as AsRef<str>>::as_ref(&__incan_probe)"),
+            "membership should borrow the probe binding at its point of use:\n{code}"
         );
         assert!(
             !code.contains("let __incan_probe = name;"),
@@ -2946,6 +2946,58 @@ def main() -> None:
         assert!(
             !code.contains("name.clone()"),
             "the ownership planner should borrow, not synthesize a clone:\n{code}"
+        );
+    }
+
+    #[test]
+    fn string_membership_probe_borrows_non_variable_owned_string_issue1066() {
+        let code = generate(
+            r#"
+def observation_id_text(value: int) -> str:
+  return f"obs-{value}"
+
+def is_known(observation_id: int, observation_ids: list[str]) -> bool:
+  if observation_id_text(observation_id) in observation_ids:
+    return True
+  return False
+
+def main() -> None:
+  assert is_known(1, ["obs-1", "obs-2"])
+"#,
+        );
+
+        assert!(
+            code.contains("AsRef::<str>::as_ref(&__incan_probe)")
+                || code.contains("<_ as AsRef<str>>::as_ref(&__incan_probe)"),
+            "a call-result probe must be borrowed at its point of use:\n{code}"
+        );
+        assert!(
+            !code.contains("AsRef::<str>::as_ref(__incan_probe)")
+                && !code.contains("<_ as AsRef<str>>::as_ref(__incan_probe)"),
+            "an owned call result must never reach AsRef::as_ref by value (E0308):\n{code}"
+        );
+    }
+
+    #[test]
+    fn string_membership_probe_keeps_literal_and_borrowed_probes_well_formed_issue1066() {
+        let code = generate(
+            r#"
+def has_orders(names: list[str]) -> bool:
+  return "orders" in names
+
+def main() -> None:
+  assert has_orders(["orders"])
+"#,
+        );
+
+        assert!(
+            !code.contains("let __incan_probe = &&"),
+            "broadening the probe guard must not double-borrow an already-referenced value:\n{code}"
+        );
+        assert!(
+            code.contains("AsRef::<str>::as_ref(&__incan_probe)")
+                || code.contains("<_ as AsRef<str>>::as_ref(&__incan_probe)"),
+            "literal membership should still route through the AsRef template:\n{code}"
         );
     }
 

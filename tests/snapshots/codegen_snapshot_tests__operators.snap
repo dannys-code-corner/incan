@@ -30,7 +30,7 @@ fn test_operators() {
     let words: Vec<String> = vec!["alpha".to_string(), "beta".to_string()];
     let _has_alpha: bool = {
         let __incan_probe = "alpha";
-        let __incan_probe = <_ as AsRef<str>>::as_ref(__incan_probe);
+        let __incan_probe = <_ as AsRef<str>>::as_ref(&__incan_probe);
         words
             .iter()
             .any(|__incan_item| <_ as AsRef<str>>::as_ref(__incan_item) == __incan_probe)
@@ -40,12 +40,12 @@ fn test_operators() {
         .collect::<std::collections::HashSet<_>>();
     let _has_a: bool = {
         let __incan_probe = "a";
-        let __incan_probe = <_ as AsRef<str>>::as_ref(__incan_probe);
+        let __incan_probe = <_ as AsRef<str>>::as_ref(&__incan_probe);
         vowels.contains(__incan_probe)
     };
     let _lacks_z: bool = !{
         let __incan_probe = "z";
-        let __incan_probe = <_ as AsRef<str>>::as_ref(__incan_probe);
+        let __incan_probe = <_ as AsRef<str>>::as_ref(&__incan_probe);
         vowels.contains(__incan_probe)
     };
 }

@@ -82,8 +82,10 @@ pub enum ValueUseSite<'a> {
     MethodArg,
     /// Probe passed to a known collection membership operation.
     ///
-    /// Membership compares against collection-owned values without taking ownership of the probe. In particular, an
-    /// owned `String` loop binding must be borrowed so a later expression in the same branch can still use it.
+    /// Membership compares against collection-owned values without taking ownership of the probe. The emitted
+    /// comparison borrows the probe binding itself, so this site only decides whether binding the probe would move an
+    /// owned string out of storage the surrounding code still owns. Place expressions such as a loop binding or a
+    /// field read are therefore borrowed, while temporaries like call results and literals are bound by value.
     MembershipProbe,
 }
 
@@ -216,8 +218,15 @@ pub fn plan_value_use(expr: &IrExpr, site: ValueUseSite<'_>) -> OwnershipPlan {
         }
         ValueUseSite::MethodArg => determine_conversion(expr, None, ConversionContext::MethodArg),
         ValueUseSite::MembershipProbe => {
+            // The membership template borrows the probe binding at its point of use, so reference-ness is not this
+            // plan's concern (#1066). What remains is that binding the probe must not move an owned string out of
+            // storage the surrounding code still owns, so borrow exactly the place expressions and leave temporaries
+            // such as call results and literals to be bound by value.
             if is_owned_string_type(&expr.ty)
-                && matches!(&expr.kind, IrExprKind::Var { .. })
+                && matches!(
+                    &expr.kind,
+                    IrExprKind::Var { .. } | IrExprKind::Field { .. } | IrExprKind::Index { .. }
+                )
                 && !expr_has_rust_reference_shape(expr)
             {
                 OwnershipPlan::Borrow
