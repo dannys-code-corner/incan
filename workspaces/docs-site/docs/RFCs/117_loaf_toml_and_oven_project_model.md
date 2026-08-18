@@ -128,10 +128,10 @@ Loaf.toml + declared sources + declared inputs
 - A **`loaves/` group** is the repository convention for non-root workspace members. It may be nested, for example `loaves/stdlib/web/`; its path is not a dependency, publication, or Rust-crate identity.
 - A **Doughball** is Oven's internal representation of the selected sources, declared dependencies, features, interop inputs, and policy before target shaping.
 - A **Loaf** is the resolved logical build unit Oven obtains by shaping a Doughball for a selected package facet and target-compatible plan.
-- A **`*.loaf` asset** is the immutable, verified, target-bound build and distribution asset emitted by a bake. It carries the selected Loaf identity, target/carrier/profile, resolved-graph identity, payload digest, and receipt identity. Its archive or wire format is outside this RFC.
-- To **bake** is the operation that executes a resolved plan for a selected target/carrier/profile and produces a `*.loaf` asset plus a receipt. "Bake" is a verb, not a required artifact type.
+- A **`*.loaf` asset** is the immutable, verified, target-bound build and distribution asset emitted by a bake of a loaf-shaped carrier. It carries the selected Loaf identity, target/carrier/profile, resolved-graph identity, payload digest, and receipt identity. Its archive or wire format is outside this RFC.
+- To **bake** is the operation that executes a resolved plan for a selected target/carrier/profile and produces a build artifact plus a receipt. "Bake" is a verb, not a required artifact type. The produced artifact's packaging depends on the selected carrier's shape (see below): a loaf-shaped carrier yields a `*.loaf` asset, a terminal carrier yields a plain build artifact. Both shapes still go through the same plan, policy decision, and receipt; only downstream-reuse packaging differs.
 - **Cold**, **warm**, and **hot** Loaves may be shown by Oven's internal inspection and cache-status UX. Their precise state semantics are intentionally not specified here.
-- A **carrier** is the target deliverable form: for example, a static library, framework, JNI shared library, Python wheel, Rust-host caller projection, executable, or another declared artifact family.
+- A **carrier** is the target deliverable form: for example, a static library, framework, JNI shared library, Python wheel, Rust-host caller projection, executable, or another declared artifact family. Every carrier has a **shape**: **loaf-shaped** carriers (static library, framework, JNI shared library, Python wheel, Rust-host caller projection) produce a `*.loaf` asset meant for another Oven consumer to depend on or reuse; the **terminal** carrier `executable` produces a plain build artifact meant to be run or deployed directly, never depended on as a package. A carrier's shape is fixed by whichever RFC defines that carrier kind, not chosen per invocation.
 
 ## Guide-level explanation
 
@@ -297,7 +297,7 @@ This example is intentionally schematic. `[interop]` is Loaf-owned requirement d
 
 ### Baking and inspecting
 
-Before Oven performs external work, it can show a plan containing selected members, dependencies, providers, target, carrier, profile, capabilities, declared inputs/outputs, and expected effect classes. Baking executes only that plan and emits a target-bound `*.loaf` asset plus a receipt.
+Before Oven performs external work, it can show a plan containing selected members, dependencies, providers, target, carrier, profile, capabilities, declared inputs/outputs, and expected effect classes. Baking executes only that plan and emits a target-bound build artifact plus a receipt — a `*.loaf` asset for a loaf-shaped carrier, or a plain build artifact for a terminal carrier such as `executable`.
 
 The exact CLI spelling is intentionally outside this RFC. The semantic operation is:
 
@@ -407,6 +407,21 @@ The resolved plan must distinguish:
 
 An explicit invocation has the highest selection precedence but cannot override package support or workspace policy. A workspace delivery policy may narrow a project choice but cannot make a package claim an unsupported target. An unqualified local bake may choose a deterministic host-development target and profile, and the receipt must record that choice. Publication or deployment must require an explicit target/carrier or named delivery policy; it must not silently publish a host-default artifact.
 
+### Carrier shape and bake output
+
+A carrier's **shape** determines what packaging, if any, a bake of it produces:
+
+| Carrier                     | Shape       | Bake output                                                 |
+| ---------------------------- | ----------- | -------------------------------------------------------------- |
+| static library                | loaf-shaped | `*.loaf` asset, verified and reusable by another Oven bake     |
+| framework                     | loaf-shaped | `*.loaf` asset, verified and reusable by another Oven bake     |
+| JNI shared library             | loaf-shaped | `*.loaf` asset, verified and reusable by another Oven bake     |
+| Python wheel                  | loaf-shaped | `*.loaf` asset, verified and reusable by another Oven bake     |
+| Rust-host caller projection    | loaf-shaped | `*.loaf` asset, verified and reusable by another Oven bake     |
+| executable                    | terminal    | plain build artifact, no `.loaf` packaging                     |
+
+A loaf-shaped carrier's output is meant for another Oven consumer to depend on or reuse: it is the shape a package published for downstream consumption needs. A terminal carrier's output is meant to be run or deployed directly and is never depended on as a package, so packaging it as a reusable `*.loaf` would carry no meaning — nothing will ever declare a dependency on it. Both shapes go through the same plan, policy decision, and receipt; shape changes packaging for downstream reuse, not plan rigor, policy gating, or audit requirements. A future carrier RFC declares its own carrier's shape alongside its other properties; shape is fixed per carrier kind, not selectable per invocation.
+
 ### Plans, effects, extensions, and receipts
 
 Oven uses the following boundary:
@@ -483,7 +498,7 @@ The interop envelope must be binding-kind neutral. It represents declared header
 
 The lock must include every semantic or physical input whose change can alter checking, linking, target compatibility, generated output, or the baked artifact closure. It must not contain credentials, mutable cache paths, arbitrary environment values, or unreviewed host discovery output.
 
-`*.loaf` is the immutable, target-bound distribution/build asset derived from the lock and the selected bake plan. It must identify its project/facet, target, carrier, profile, resolved graph identity, payload digest, and receipt identity; it is not an editable project manifest or a replacement lockfile. The artifact store, provider payload store, staged deployment files, generated Rust, target intermediates, and receipts are separate from the lock. They are inspectable and may be content-addressed, but they are not user-authored package configuration or semantic authority.
+`*.loaf` is the immutable, target-bound distribution/build asset derived from the lock and the selected bake plan for a loaf-shaped carrier. It must identify its project/facet, target, carrier, profile, resolved graph identity, payload digest, and receipt identity; it is not an editable project manifest or a replacement lockfile. A bake of a terminal carrier such as `executable` instead produces a plain build artifact identified by the same lock and receipt, without `.loaf` packaging (see "Carrier shape and bake output"). The artifact store, provider payload store, staged deployment files, generated Rust, target intermediates, and receipts are separate from the lock. They are inspectable and may be content-addressed, but they are not user-authored package configuration or semantic authority.
 
 ### Future registry-supplied warm reuse
 
@@ -681,3 +696,4 @@ RFC 117 is ready to move beyond Draft when its normative rules and updated relat
 - **Registry trust distribution/administration is out of scope:** this RFC defines the registration contract — registries are declared in Oven-controlled user or organization configuration outside the project, and a Loaf or workspace may only allow-list from what is already registered, never define, rebind, or weaken trust (see "Registry registration and trust"). That non-overwrite guarantee already holds without any additional distribution mechanism, because a project has no registration authority at all. How an organization gets the same trusted-registry configuration onto every developer machine and CI runner — through existing device-management tooling, a self-hosted convention, or another means the operator chooses — is an operational concern for whoever runs the registry, not a capability this RFC or Oven itself needs to provide. `incan.pub` remains the trusted, secure default origin for the open ecosystem; that trust is RFC 034's responsibility.
 - **Generators are ordinary typed Incan functions, not a bespoke plugin format:** a generator is not a new sandboxed runtime, wire protocol, or component model. It is a typed Incan (or `rust::`-interop) function with a declared input/output signature that Oven resolves and calls as part of planning or baking, reusing the same execution substrate Incan's own interactive and notebook ambitions already require rather than inventing a second one. Its capability needs — network access, filesystem beyond its declared outputs, a live database, or any other ambient authority — are ordinary RFC 104 capability grants like any other code path; there is no generator-specific security model, because RFC 104 already owns "what can this code touch" regardless of who is asking. A generator's output may legitimately vary between two otherwise-identical builds when it consults an external, changing source; that variability is a capability its declaring package consciously requests and its consumer consciously grants, not a defect this RFC needs to guard against. A generator's declared outputs remain generated, ownership-tracked files that an ordinary bake must not overwrite authored source with.
 - **Providers remain closed and toolchain-owned, not a third-party extension point:** unlike generators, providers (compiling Rust, verifying C headers, materializing an SDK component) are deep native toolchain integrations that Oven implements itself, not expressible as a typed function signature. A new provider kind lands only through an official RFC, the same governance already settled for carrier kinds.
+- **Carriers have a shape, and a terminal carrier's bake output is not a `*.loaf`:** found while working RFC 118's command-surface decisions and folded back here, since carrier semantics are this RFC's job, not RFC 118's. A `*.loaf`'s entire value proposition, as this RFC's own "Future registry-supplied warm reuse" section describes it, is reuse by another Oven consumer. A terminal artifact such as an executable — for example a data pipeline's final ETL binary — is never depended on as a package by anything, so packaging it as a reusable `*.loaf` carries no meaning. Every carrier therefore has a fixed **shape**: loaf-shaped carriers (static library, framework, JNI shared library, Python wheel, Rust-host caller projection) bake to a `*.loaf` asset; the terminal carrier (`executable`) bakes to a plain build artifact with no `.loaf` packaging. Both shapes still go through the same plan, policy decision, and receipt; shape changes only downstream-reuse packaging, not plan rigor or audit requirements. See "Carrier shape and bake output."
