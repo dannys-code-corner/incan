@@ -1,3 +1,7 @@
+def sample_word() -> str:
+    return "alpha"
+
+
 def test_operators() -> None:
     # Basic arithmetic
     add: int = 1 + 2
@@ -34,6 +38,9 @@ def test_operators() -> None:
     vowels = {"a", "e", "i"}
     has_a: bool = "a" in vowels
     lacks_z: bool = "z" not in vowels
+
+    # Regression for #1066: a Call-result probe must also borrow at its point of use, not move.
+    has_alpha_from_call: bool = sample_word() in words
 
 
 def main() -> None:

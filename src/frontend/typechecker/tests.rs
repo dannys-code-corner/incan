@@ -2043,6 +2043,46 @@ def unpack(vault: Vault) -> str:
 }
 
 #[test]
+fn test_class_private_field_settable_via_external_named_construction() {
+    // Unlike `pub model`, a class's private fields remain settable through ordinary named-argument construction
+    // from outside the class, even across modules (see issue886/`tests/integration_tests.rs`,
+    // `test_imported_private_class_constructor_compile_and_run_issue886`, and the stdlib's `tempfile.incn`
+    // module-level factory functions, which both rely on this). Only member access after construction is private.
+    let source = r#"
+class Vault:
+  secret: str = "sealed"
+  pub label: str
+
+def construct() -> Vault:
+  return Vault(secret="leaked", label="outside")
+"#;
+    assert_check_ok(source);
+}
+
+#[test]
+fn test_class_private_field_pattern_match_extraction_is_rejected() {
+    let source = r#"
+class Vault:
+  secret: str = "sealed"
+  pub label: str
+
+def unpack(vault: Vault) -> str:
+  match vault:
+    Vault(secret=value) =>
+      return value
+"#;
+    let errors = check_str_err(
+        source,
+        "extracting a private class field through a constructor pattern should fail like a direct field read",
+    );
+    assert!(
+        has_private_field_error(&errors, "Vault", "secret"),
+        "expected private pattern field error, got: {:?}",
+        errors.iter().map(|error| &error.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_class_private_parent_field_access_rejected_in_child_method() {
     let source = r#"
 class Parent:

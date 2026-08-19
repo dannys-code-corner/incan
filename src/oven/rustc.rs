@@ -5117,7 +5117,7 @@ pub(crate) fn clear_inherited_cargo_environment(command: &mut Command) {
     {
         command.env_remove(name);
     }
-    for name in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
+    for name in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTFLAGS"] {
         command.env_remove(name);
     }
 }

@@ -2733,6 +2733,13 @@ impl TypeChecker {
     ///
     /// Local aliases remain relevant to runtime lowering, but duplicate validation must compare the source owner so
     /// importing the same registry under two names cannot create two checked descriptions for one registry key.
+    ///
+    /// `explicit_entries` only ever records module-local `registry_name` bindings (`.entry()` requires a local
+    /// `Registry.define(...)`), and `RegistryArtifacts::definitions` is a single binding-name-keyed map with no
+    /// module qualification. Comparing an `Imported` registry's remote-module binding name against that flat local
+    /// namespace by bare string equality would risk a false "duplicate key" match against an unrelated,
+    /// coincidentally same-named local registry in a different module, so this cross-check is intentionally
+    /// restricted to `Local` until registry identity carries a canonical module path.
     fn registry_description_has_key(
         &self,
         registry: &RegistryDescriptionRegistry,

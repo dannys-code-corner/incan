@@ -872,7 +872,7 @@ pub fn determine_conversion(expr: &IrExpr, target_ty: Option<&IrType>, context: 
                 (IrExprKind::StaticRead { .. }, _) if matches!(expr.ty, IrType::StaticStr) => Conversion::Into,
                 (IrExprKind::Var { .. }, _) if matches!(expr.ty, IrType::StaticStr) => Conversion::Into,
                 (IrExprKind::Var { access, .. }, Some(target_ty))
-                    if is_owned_string_target(target_ty) && matches!(expr.ty, IrType::String) =>
+                    if is_owned_string_target(target_ty) && is_owned_string_type(&expr.ty) =>
                 {
                     match access {
                         VarAccess::Move => Conversion::None,
@@ -880,23 +880,21 @@ pub fn determine_conversion(expr: &IrExpr, target_ty: Option<&IrType>, context: 
                     }
                 }
                 (IrExprKind::Field { .. }, Some(target_ty))
-                    if is_owned_string_target(target_ty) && matches!(expr.ty, IrType::String) =>
+                    if is_owned_string_target(target_ty) && is_owned_string_type(&expr.ty) =>
                 {
                     Conversion::Clone
                 }
-                (_, Some(IrType::StrRef))
-                    if matches!(expr.ty, IrType::String) && !expr_has_rust_reference_shape(expr) =>
-                {
+                (_, Some(IrType::StrRef)) if is_owned_string_type(&expr.ty) && !expr_has_rust_reference_shape(expr) => {
                     Conversion::Borrow
                 }
-                (IrExprKind::Var { .. }, _) if matches!(expr.ty, IrType::String) => {
+                (IrExprKind::Var { .. }, _) if is_owned_string_type(&expr.ty) => {
                     if expr_has_rust_reference_shape(expr) {
                         Conversion::None
                     } else {
                         Conversion::Borrow
                     }
                 }
-                (IrExprKind::Field { .. }, None) if matches!(expr.ty, IrType::String) => {
+                (IrExprKind::Field { .. }, None) if is_owned_string_type(&expr.ty) => {
                     if expr_has_rust_reference_shape(expr) {
                         Conversion::None
                     } else {
@@ -911,7 +909,7 @@ pub fn determine_conversion(expr: &IrExpr, target_ty: Option<&IrType>, context: 
                 // through unmodified, matching how they were emitted before this call reached the general
                 // ownership plan at all.
                 (_, None)
-                    if matches!(expr.ty, IrType::String)
+                    if is_owned_string_type(&expr.ty)
                         && !expr_has_rust_reference_shape(expr)
                         && !matches!(expr.kind, IrExprKind::Call { .. } | IrExprKind::MethodCall { .. }) =>
                 {

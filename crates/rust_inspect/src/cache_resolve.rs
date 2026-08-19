@@ -65,6 +65,60 @@ pub(crate) fn dependency_manifest_dir_from_manifest(root: &Path, crate_name: &st
         })
 }
 
+/// Return every local path-dependency directory declared directly in the workspace root manifest.
+///
+/// `Cargo.lock` records a locked version for a `path = "..."` dependency but no content checksum, so it cannot
+/// detect an edit to the dependency's own source. Callers use this to fold path-dependency contents into a cache
+/// fingerprint that would otherwise treat an edited local crate as unchanged.
+///
+/// Mirrors [`dependency_manifest_dir_from_manifest`]'s table coverage (ordinary, target-specific, and
+/// `{ workspace = true }`-inherited dependency tables) so a path dependency declared through any of those shapes
+/// still invalidates the fingerprint.
+pub(crate) fn path_dependency_dirs_from_manifest(root: &Path) -> Vec<PathBuf> {
+    let Some(manifest_text) = fs::read_to_string(root.join("Cargo.toml")).ok() else {
+        return Vec::new();
+    };
+    let Ok(manifest) = toml::from_str::<toml::Value>(&manifest_text) else {
+        return Vec::new();
+    };
+
+    let workspace_dependencies = manifest
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(toml::Value::as_table);
+
+    let mut tables = Vec::new();
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(table) = manifest.get(section).and_then(toml::Value::as_table) {
+            tables.push(table);
+        }
+    }
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values() {
+            for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+                if let Some(table) = target.get(section).and_then(toml::Value::as_table) {
+                    tables.push(table);
+                }
+            }
+        }
+    }
+
+    tables
+        .into_iter()
+        .flat_map(|table| table.iter())
+        .filter_map(|(key, declaration)| {
+            let declaration = declaration.as_table()?;
+            let resolved = if declaration.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
+                workspace_dependencies?.get(key)?.as_table()?
+            } else {
+                declaration
+            };
+            let path = resolved.get("path")?.as_str()?;
+            root.join(path).canonicalize().ok()
+        })
+        .collect()
+}
+
 /// Resolve one path dependency from a Cargo dependency table without invoking Cargo.
 fn dependency_path_in_table(table: Option<&toml::Value>, normalized_crate_name: &str, root: &Path) -> Option<PathBuf> {
     let dependencies = table?.as_table()?;
