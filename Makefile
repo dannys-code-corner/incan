@@ -569,8 +569,12 @@ smoke-test-benchmarks-incan:
 	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
 		bash workspaces/benchmarks/check_incan.sh
 
+# `smoke-test-examples` bakes `examples/pro/vocab_*` and `examples/advanced/library_package`
+# producer/consumer pairs with the release binary. Baking their compiler-owned vocabulary helper
+# needs a release-cohort Loaf, which only `test-prewarm-oven-release-loafs` bakes; without it, the
+# producer bake fails with "no compatible release-cohort Loaf" before the consumer ever runs.
 .PHONY: smoke-test-core
-smoke-test-core: test-prewarm-oven-loafs
+smoke-test-core: test-prewarm-oven-loafs test-prewarm-oven-release-loafs
 	@$(MAKE) smoke-test-release
 	@$(MAKE) smoke-test-canary
 	@$(MAKE) smoke-test-web-example

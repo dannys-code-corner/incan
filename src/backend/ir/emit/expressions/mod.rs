@@ -744,6 +744,7 @@ impl<'a> IrEmitter<'a> {
                     *arg_policy,
                     site,
                 )?;
+                let emitted = plan_value_use(expr, site).apply(emitted);
                 if let Some(target_ty) = resolved_target_ty.as_ref() {
                     let (source_ty, source_qualifier) = self.list_element_widening_source_for_expr(expr);
                     if let Some(converted) = self.emit_list_element_widening_value(
@@ -788,6 +789,7 @@ impl<'a> IrEmitter<'a> {
                     canonical_path.as_deref(),
                     target_site,
                 )?;
+                let emitted = plan_value_use(expr, site).apply(emitted);
                 if let Some(target_ty) = resolved_target_ty.as_ref() {
                     let (source_ty, source_qualifier) = self.list_element_widening_source_for_expr(expr);
                     if let Some(converted) = self.emit_list_element_widening_value(
@@ -4060,5 +4062,174 @@ mod tests {
             },
             IrType::Unknown,
         )
+    }
+
+    /// Build `child.as_ref()` where `child: Box[Node]`, so `borrowed_expr_needs_owned_materialization` requires a
+    /// `.clone()` when the result flows into an owned `Node` sink. Regression coverage for the `Call`/`MethodCall`
+    /// ownership-plan bypass fixed for issue #1066: before the fix, `emit_expr_for_use_with_union_qualifier` never
+    /// consulted `plan_value_use` for `MethodCall`/`Call` expressions at any value-use site, so this borrowed result
+    /// reached owned sinks unconverted.
+    fn boxed_node_as_ref_method_call() -> TypedExpr {
+        let inner_ty = IrType::Struct("Node".to_string());
+        let receiver = TypedExpr::new(
+            IrExprKind::Var {
+                name: "child".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            IrType::NamedGeneric("Box".to_string(), vec![inner_ty.clone()]),
+        );
+        TypedExpr::new(
+            IrExprKind::MethodCall {
+                receiver: Box::new(receiver),
+                method: "as_ref".to_string(),
+                dispatch: None,
+                type_args: Vec::new(),
+                args: Vec::new(),
+                callable_signature: None,
+                arg_policy: MethodCallArgPolicy::Default,
+            },
+            inner_ty,
+        )
+    }
+
+    #[test]
+    fn method_call_return_value_materializes_borrowed_as_ref_result() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let expr = boxed_node_as_ref_method_call();
+        let target_ty = expr.ty.clone();
+
+        let emitted = emitter
+            .emit_expr_for_use(
+                &expr,
+                ValueUseSite::ReturnValue {
+                    target_ty: Some(&target_ty),
+                },
+            )
+            .map_err(|err| format!("expected successful expression emission, got {err:?}"))?;
+        let rendered = emitted.to_string();
+        assert!(
+            rendered.ends_with(". clone ()"),
+            "a borrowed as_ref() result returned to an owned target must be cloned exactly once, got `{rendered}`"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn method_call_struct_field_materializes_borrowed_as_ref_result() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let expr = boxed_node_as_ref_method_call();
+        let target_ty = expr.ty.clone();
+
+        let emitted = emitter
+            .emit_expr_for_use(
+                &expr,
+                ValueUseSite::StructField {
+                    target_ty: Some(&target_ty),
+                },
+            )
+            .map_err(|err| format!("expected successful expression emission, got {err:?}"))?;
+        let rendered = emitted.to_string();
+        assert!(
+            rendered.ends_with(". clone ()"),
+            "a borrowed as_ref() result stored into an owned struct field must be cloned exactly once, got `{rendered}`"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn method_call_collection_element_materializes_borrowed_as_ref_result() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let expr = boxed_node_as_ref_method_call();
+        let target_ty = expr.ty.clone();
+
+        let emitted = emitter
+            .emit_expr_for_use(
+                &expr,
+                ValueUseSite::CollectionElement {
+                    target_ty: Some(&target_ty),
+                },
+            )
+            .map_err(|err| format!("expected successful expression emission, got {err:?}"))?;
+        let rendered = emitted.to_string();
+        assert!(
+            rendered.ends_with(". clone ()"),
+            "a borrowed as_ref() result stored into an owned collection element must be cloned exactly once, got `{rendered}`"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn method_call_match_scrutinee_reaches_the_ownership_plan_without_over_cloning() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let expr = boxed_node_as_ref_method_call();
+        let target_ty = expr.ty.clone();
+
+        let emitted = emitter
+            .emit_expr_for_use(
+                &expr,
+                ValueUseSite::MatchScrutinee {
+                    target_ty: Some(&target_ty),
+                },
+            )
+            .map_err(|err| format!("expected successful expression emission, got {err:?}"))?;
+        let rendered = emitted.to_string();
+        // `ConversionContext::MatchScrutinee` deliberately does not clone borrowed method-chain results (see its doc
+        // comment in `conversions.rs`): Rust interop values consumed by a generated `match` can be non-`Clone`, and
+        // `match` can bind a borrowed scrutinee directly without owning it. This asserts the ownership-plan fix now
+        // reaches `MethodCall` at this site (so a future change to that conversion table would apply here too)
+        // without introducing an unwanted clone the way the `Assignment`/`ReturnValue`/etc. contexts would.
+        assert_eq!(
+            rendered, "child . as_ref ()",
+            "a match scrutinee must not clone a borrowed as_ref() result it can bind directly, got `{rendered}`"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn call_return_value_materializes_ref_typed_result() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let inner_ty = IrType::Struct("Node".to_string());
+        let func = TypedExpr::new(
+            IrExprKind::Var {
+                name: "borrow_node".to_string(),
+                access: VarAccess::Copy,
+                ref_kind: VarRefKind::ExternalRustName,
+            },
+            IrType::Function {
+                params: Vec::new(),
+                ret: Box::new(IrType::Ref(Box::new(inner_ty.clone()))),
+            },
+        );
+        let expr = TypedExpr::new(
+            IrExprKind::Call {
+                func: Box::new(func),
+                type_args: Vec::new(),
+                args: Vec::new(),
+                callable_signature: None,
+                canonical_path: None,
+            },
+            IrType::Ref(Box::new(inner_ty.clone())),
+        );
+
+        let emitted = emitter
+            .emit_expr_for_use(
+                &expr,
+                ValueUseSite::ReturnValue {
+                    target_ty: Some(&inner_ty),
+                },
+            )
+            .map_err(|err| format!("expected successful expression emission, got {err:?}"))?;
+        let rendered = emitted.to_string();
+        assert!(
+            rendered.ends_with(". clone ()"),
+            "a `&T`-typed call result returned to an owned target must be cloned exactly once, got `{rendered}`"
+        );
+        Ok(())
     }
 }

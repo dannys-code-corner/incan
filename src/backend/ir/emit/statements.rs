@@ -1054,13 +1054,22 @@ impl<'a> IrEmitter<'a> {
                 let n = Self::rust_ident(&emitted_name);
                 let value_target_ty = type_annotation.as_ref().unwrap_or(ty);
                 let v = self.emit_assignment_value(value, Some(value_target_ty))?;
-                let converted_v = plan_value_use(
-                    value,
-                    ValueUseSite::Assignment {
-                        target_ty: Some(value_target_ty),
-                    },
-                )
-                .apply(v);
+                // `emit_assignment_value` already routes bare `Call`/`MethodCall` values through
+                // `emit_expr_for_use`, which now applies the ownership plan itself; re-applying it here would
+                // double-convert (e.g. `.clone().clone()`). Every other expression shape still needs this
+                // statement-level application, since `emit_assignment_value`'s other exit paths (its plain
+                // `emit_expr` fallback, and wrapped shapes like `Cast`/`InteropCoerce`) do not plan at this site.
+                let converted_v = if matches!(value.kind, IrExprKind::Call { .. } | IrExprKind::MethodCall { .. }) {
+                    v
+                } else {
+                    plan_value_use(
+                        value,
+                        ValueUseSite::Assignment {
+                            target_ty: Some(value_target_ty),
+                        },
+                    )
+                    .apply(v)
+                };
                 let annotation = type_annotation
                     .as_ref()
                     .and_then(|annotated_ty| self.emit_local_let_annotation(annotated_ty));
@@ -1127,13 +1136,20 @@ impl<'a> IrEmitter<'a> {
                         },
                     )?;
                     let v = self.emit_assignment_value(value, value_target_ty)?;
-                    let v = plan_value_use(
-                        value,
-                        ValueUseSite::CollectionElement {
-                            target_ty: value_target_ty,
-                        },
-                    )
-                    .apply(v);
+                    // See the matching comment in `IrStmtKind::Let`: bare `Call`/`MethodCall` values are already
+                    // planned inside `emit_assignment_value`'s `emit_expr_for_use` routing, so re-applying here
+                    // would double-convert. Other shapes still need this explicit `CollectionElement` application.
+                    let v = if matches!(value.kind, IrExprKind::Call { .. } | IrExprKind::MethodCall { .. }) {
+                        v
+                    } else {
+                        plan_value_use(
+                            value,
+                            ValueUseSite::CollectionElement {
+                                target_ty: value_target_ty,
+                            },
+                        )
+                        .apply(v)
+                    };
                     return Ok(quote! { #o.insert(#k, #v); });
                 }
                 if let AssignTarget::Index { object, .. } = target
@@ -1528,7 +1544,9 @@ mod tests {
     use super::*;
     use crate::backend::ir::FunctionRegistry;
     use crate::backend::ir::TypedExpr;
-    use crate::backend::ir::expr::{CollectionMethodKind, IrCallArg, IrCallArgKind, MethodKind, VarAccess, VarRefKind};
+    use crate::backend::ir::expr::{
+        CollectionMethodKind, IrCallArg, IrCallArgKind, MethodCallArgPolicy, MethodKind, VarAccess, VarRefKind,
+    };
     use crate::backend::ir::types::Mutability;
 
     #[test]
@@ -1618,6 +1636,94 @@ mod tests {
         assert!(
             rendered.contains("let mut current ="),
             "later assignment to a local must emit Rust `mut`, got `{rendered}`"
+        );
+        Ok(())
+    }
+
+    /// Build `child.as_ref()` where `child: Box[Node]`, so `borrowed_expr_needs_owned_materialization` requires a
+    /// `.clone()` when the result flows into an owned `Node` sink (issue #1066 follow-up).
+    fn boxed_node_as_ref_call() -> TypedExpr {
+        let inner_ty = IrType::Struct("Node".to_string());
+        let receiver = TypedExpr::new(
+            IrExprKind::Var {
+                name: "child".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            IrType::NamedGeneric("Box".to_string(), vec![inner_ty.clone()]),
+        );
+        TypedExpr::new(
+            IrExprKind::MethodCall {
+                receiver: Box::new(receiver),
+                method: "as_ref".to_string(),
+                dispatch: None,
+                type_args: Vec::new(),
+                args: Vec::new(),
+                callable_signature: None,
+                arg_policy: MethodCallArgPolicy::Default,
+            },
+            inner_ty,
+        )
+    }
+
+    #[test]
+    fn let_binding_from_method_call_result_clones_borrowed_value_exactly_once() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let value = boxed_node_as_ref_call();
+        let ty = value.ty.clone();
+        let stmt = IrStmt::new(IrStmtKind::Let {
+            name: "node".to_string(),
+            ty,
+            type_annotation: None,
+            mutability: Mutability::Immutable,
+            value,
+        });
+
+        let emitted = emitter
+            .emit_stmt(&stmt)
+            .map_err(|err| format!("expected successful statement emission, got {err:?}"))?;
+        let rendered = emitted.to_string();
+        let clone_count = rendered.matches(". clone ()").count();
+        assert_eq!(
+            clone_count, 1,
+            "a let binding materializing a borrowed as_ref() result must clone exactly once \
+             (the mod.rs ownership-plan fix and the statement-level plan must not both apply it), got `{rendered}`"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dict_index_assignment_from_method_call_result_clones_borrowed_value_exactly_once() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let value = boxed_node_as_ref_call();
+        let dict_ty = IrType::Dict(Box::new(IrType::String), Box::new(value.ty.clone()));
+        let object = TypedExpr::new(
+            IrExprKind::Var {
+                name: "nodes".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            dict_ty,
+        );
+        let index = TypedExpr::new(IrExprKind::String("a".to_string()), IrType::String);
+        let stmt = IrStmt::new(IrStmtKind::Assign {
+            target: AssignTarget::Index {
+                object: Box::new(object),
+                index: Box::new(index),
+            },
+            value,
+        });
+
+        let emitted = emitter
+            .emit_stmt(&stmt)
+            .map_err(|err| format!("expected successful statement emission, got {err:?}"))?;
+        let rendered = emitted.to_string();
+        let clone_count = rendered.matches(". clone ()").count();
+        assert_eq!(
+            clone_count, 1,
+            "a dict-index assignment materializing a borrowed as_ref() result must clone exactly once, got `{rendered}`"
         );
         Ok(())
     }

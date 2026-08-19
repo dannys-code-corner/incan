@@ -10721,7 +10721,17 @@ fn digest_baked_project_build_tree(project_root: &Path, manifest: &ProjectManife
     }
 
     /// Traverse a regular source directory deterministically and record its input files.
-    fn collect_directory(root: &Path, directory: &Path, records: &mut BTreeMap<String, String>) -> CliResult<()> {
+    ///
+    /// `already_recorded` names files this traversal must not re-record: the manifest and lock file
+    /// are always recorded separately above under their own dedicated (and, for the lock, semantically
+    /// filtered) digest, but a flat-layout project whose source root is the project root itself would
+    /// otherwise walk straight over them here too, producing a spurious duplicate-path failure.
+    fn collect_directory(
+        root: &Path,
+        directory: &Path,
+        records: &mut BTreeMap<String, String>,
+        already_recorded: &HashSet<PathBuf>,
+    ) -> CliResult<()> {
         let mut entries = fs::read_dir(directory)
             .map_err(|error| {
                 CliError::failure(format!(
@@ -10752,8 +10762,18 @@ fn digest_baked_project_build_tree(project_root: &Path, manifest: &ProjectManife
                 )));
             }
             if metadata.is_dir() {
-                collect_directory(root, &path, records)?;
-            } else {
+                // Tool-owned output directories are never part of the build authority. A project whose
+                // source root is the project root itself (no dedicated `src/`) would otherwise scan its
+                // own `.incan`/`target` output back into the digest, making an explicit bake refuse to
+                // publish because the authority it just computed changed while writing that same output.
+                if matches!(
+                    path.file_name().and_then(|name| name.to_str()),
+                    Some(".git" | ".incan" | ".ralph-cache" | "target")
+                ) {
+                    continue;
+                }
+                collect_directory(root, &path, records, already_recorded)?;
+            } else if !already_recorded.contains(&path) {
                 append_file(root, &path, records)?;
             }
         }
@@ -10761,13 +10781,17 @@ fn digest_baked_project_build_tree(project_root: &Path, manifest: &ProjectManife
     }
 
     let mut records = BTreeMap::new();
-    append_file(project_root, &project_root.join(MANIFEST_FILENAME), &mut records)?;
+    let mut already_recorded = HashSet::new();
+    let manifest_path = project_root.join(MANIFEST_FILENAME);
+    append_file(project_root, &manifest_path, &mut records)?;
+    already_recorded.insert(manifest_path);
     let lockfile = canonical_baked_project_lock_path(project_root)?;
     if lockfile.is_file() {
         records.insert(
             "incan.lock".to_string(),
             digest_baked_project_lock_authority(&lockfile)?,
         );
+        already_recorded.insert(lockfile);
     }
     let source_root = resolve_source_root(project_root, Some(manifest));
     let source_metadata = fs::symlink_metadata(&source_root).map_err(|error| {
@@ -10795,7 +10819,7 @@ fn digest_baked_project_build_tree(project_root: &Path, manifest: &ProjectManife
         ))
     })?;
     if canonical_source_root.starts_with(&canonical_project_root) {
-        collect_directory(project_root, &source_root, &mut records)?;
+        collect_directory(project_root, &source_root, &mut records, &already_recorded)?;
     } else {
         records.insert(
             "configured-source-root".to_string(),

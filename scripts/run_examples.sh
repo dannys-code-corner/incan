@@ -155,10 +155,28 @@ prebuild_example_libraries() {
     [[ -z "$manifest" ]] && continue
     local project_dir
     project_dir="$(dirname "$manifest")"
-    if [[ ! -f "$project_dir/src/lib.incn" && ! -f "$project_dir/src/lib.incan" ]]; then
+    if ! selection_requires_project "$project_dir"; then
       continue
     fi
-    if ! selection_requires_project "$project_dir"; then
+
+    # A project declaring real `[rust-dependencies]` (external registry crates, not just `rust::std::*`)
+    # needs full Cargo-backed inspection authority before `run`/`--check` can use it; that authority is
+    # only registered by an explicit `oven bake --project`, not implicitly by a plain `incan run`.
+    if grep -q '^\[rust-dependencies\]' "$manifest"; then
+      echo "==> oven-bake: $project_dir"
+      local reg_bake_log_file
+      reg_bake_log_file="$(log_file_for "oven-bake" "$project_dir")"
+      if (cd "$project_dir" && INCAN_NO_BANNER=1 "$INCAN_BIN" oven bake --project . >"$reg_bake_log_file" 2>&1); then
+        :
+      else
+        echo "FAILED: oven bake --project $project_dir"
+        print_log "$reg_bake_log_file"
+        failed_items+=("oven bake --project $project_dir")
+        failed=$((failed + 1))
+      fi
+    fi
+
+    if [[ ! -f "$project_dir/src/lib.incn" && ! -f "$project_dir/src/lib.incan" ]]; then
       continue
     fi
 
@@ -172,6 +190,23 @@ prebuild_example_libraries() {
       print_log "$log_file"
       failed_items+=("build --lib $project_dir")
       failed=$((failed + 1))
+    fi
+
+    # A `producer` directory paired with a sibling `consumer` publishes a `pub::` package another
+    # project imports. `build --lib` alone only materializes its library artifact; the consumer also
+    # needs an explicit package Loaf, which only `oven bake --project` registers.
+    if [[ "$(basename "$project_dir")" == "producer" && -d "$(dirname "$project_dir")/consumer" ]]; then
+      echo "==> oven-bake: $project_dir"
+      local bake_log_file
+      bake_log_file="$(log_file_for "oven-bake" "$project_dir")"
+      if (cd "$project_dir" && INCAN_NO_BANNER=1 "$INCAN_BIN" oven bake --project . >"$bake_log_file" 2>&1); then
+        :
+      else
+        echo "FAILED: oven bake --project $project_dir"
+        print_log "$bake_log_file"
+        failed_items+=("oven bake --project $project_dir")
+        failed=$((failed + 1))
+      fi
     fi
   done < <(
     find examples \
