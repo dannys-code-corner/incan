@@ -21,7 +21,7 @@
     
     
       
-        <title>RFC 097: Rust-hosted Incan caller - Incan Documentation</title>
+        <title>RFC 121: Unified Incan/Rust type substrate - Incan Documentation</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#rfc-097-rust-hosted-incan-caller" class="md-skip">
+        <a href="#rfc-121-unified-incanrust-type-substrate" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              RFC 097: Rust-hosted Incan caller
+              RFC 121: Unified Incan/Rust type substrate
             
           </span>
         </div>
@@ -8891,332 +8891,134 @@
   
 
 
-<h1 id="rfc-097-rust-hosted-incan-caller">RFC 097: Rust-hosted Incan caller<a class="headerlink" href="#rfc-097-rust-hosted-incan-caller" title="Permanent link">&para;</a></h1>
+<h1 id="rfc-121-unified-incanrust-type-substrate">RFC 121: Unified Incan/Rust type substrate<a class="headerlink" href="#rfc-121-unified-incanrust-type-substrate" title="Permanent link">&para;</a></h1>
 <ul>
-<li><strong>Status:</strong> Planned</li>
-<li><strong>Created:</strong> 2026-05-12</li>
+<li><strong>Status:</strong> Draft</li>
+<li><strong>Created:</strong> 2026-08-19</li>
 <li><strong>Author(s):</strong> Danny Meijer (@dannymeijer)</li>
 <li><strong>Related:</strong><ul>
 <li>RFC 005 (Rust interop)</li>
-<li>RFC 013 (Rust crate dependencies)</li>
-<li>RFC 031 (Incan library system phase 1)</li>
-<li>RFC 034 (<code>incan.pub</code> package registry)</li>
+<li>RFC 024 (extensible derive protocol)</li>
 <li>RFC 041 (first-class Rust interop authoring)</li>
 <li>RFC 043 (Rust trait implementation from Incan)</li>
-<li>RFC 079 (<code>incan.pub</code> artifact graph)</li>
-<li>RFC 104 (ambient runtime capabilities and receipts)</li>
-<li>RFC 106 (compiler-backed agent context graph)</li>
-<li>RFC 117 (<code>loaf.toml</code> and Oven's language-neutral project model)</li>
-<li>RFC 119 (Oven-native Rust build facets and Cargo interoperation)</li>
-<li>RFC 121 (unified Incan/Rust type substrate)</li>
-<li>
-<h1 id="652-v06-replacement-backend-cutover">652 (v0.6 replacement-backend cutover)<a class="headerlink" href="#652-v06-replacement-backend-cutover" title="Permanent link">&para;</a></h1>
-</li>
-<li>
-<h1 id="656-rust-facing-abi-and-incan-package-compatibility-direction">656 (Rust-facing ABI and Incan package compatibility direction)<a class="headerlink" href="#656-rust-facing-abi-and-incan-package-compatibility-direction" title="Permanent link">&para;</a></h1>
-</li>
+<li>RFC 097 (Rust-hosted Incan caller)</li>
 <li>
 <h1 id="975-oven-cargo-free-incanrust-toolchain">975 (Oven: Cargo-free Incan/Rust toolchain)<a class="headerlink" href="#975-oven-cargo-free-incanrust-toolchain" title="Permanent link">&para;</a></h1>
 </li>
+<li>
+<h1 id="1077-unified-incanrust-type-substrate">1077 (unified Incan/Rust type substrate)<a class="headerlink" href="#1077-unified-incanrust-type-substrate" title="Permanent link">&para;</a></h1>
+</li>
 </ul>
 </li>
-<li><strong>Issue:</strong> https://github.com/encero-systems/incan/issues/569</li>
+<li><strong>Issue:</strong> https://github.com/encero-systems/incan/issues/1077</li>
 <li><strong>RFC PR:</strong> —</li>
-<li><strong>Written against:</strong> ~~v0.3~~ v0.5</li>
+<li><strong>Written against:</strong> v0.5</li>
 <li><strong>Shipped in:</strong> —</li>
 </ul>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
-<p>This RFC defines a Rust-hosted Incan caller model for <strong>self-hosted, Oven-orchestrated interop</strong>: within one Oven-managed project, Rust-authored code should be able to call a curated, typed Rust-facing API backed by Incan-authored behavior, without reverse-engineering compiler output, manually wiring Incan runtime helpers, or treating every public Incan export as a stable Rust API. The motivating case is Incan's own toolchain: Oven's operational core is a deliberate, narrow Rust exception (RFC 118), while providers, generators, and policy logic are meant to be ordinary typed Incan functions (RFC 104, RFC 117) — this RFC defines how that Rust core calls into that Incan-authored code reliably, in the same repo, same bake, same toolchain.</p>
-<p>This Draft is framed around a Rust-facing caller facet and caller ABI metadata. A caller artifact is built by Oven's Rust facet compiling the Rust-host caller projection carrier (RFC 119) through direct <code>rustc</code> invocation, within the same Oven-managed build graph as the calling Rust-authored unit — there is no path to a Rust-hosted caller artifact that does not go through Oven. Rust source produced this way is a deliberate, normative build mechanism for the selected facet, not incidental compiler output; it is separate from the ordinary default-path Rust emission that #652's backend cutover demotes to an optional migration/debugging/inspection projection with no compatibility promise. The caller boundary is exposed as plain typed Rust free functions, with compatibility guaranteed by construction since Oven compiles the Rust-authored caller and the Incan-authored callee together in one bake. The caller boundary is the stable host API shape; it is backed by checked Incan metadata, ABI metadata, generated adapters where needed, and a small support crate that owns conversions, async/runtime policy, diagnostics, and panic/error containment.</p>
-<p>Cargo-compatible external consumption — a Rust project outside Oven's own build graph depending on a published Incan-authored package — is out of scope for this RFC. Divorcing Incan's own toolchain from Cargo entirely is the stated 1.0 goal (#975); this RFC does not reopen that boundary to accommodate external Cargo consumers. If a Cargo-facing consumption story is ever wanted, that is a separate proposal with its own tradeoffs to make explicitly, not a loosening of the design this RFC defines.</p>
-<h2 id="core-model">Core model<a class="headerlink" href="#core-model" title="Permanent link">&para;</a></h2>
-<ol>
-<li><strong>Rust-hosted consumption is a first-class direction:</strong> Incan already lets Incan code call Rust; this RFC defines the reverse direction where Rust code deliberately calls Incan-authored behavior.</li>
-<li><strong>The caller artifact is built by Oven, not by ambient compiler output:</strong> a caller artifact only exists because Oven's Rust facet (RFC 119) selected and built the Rust-host caller projection carrier through direct <code>rustc</code> invocation, within the same Oven-managed build graph as its caller. The public compatibility promise is the caller facet and ABI metadata that gate that build, not whatever Rust text the ordinary default compiler path happens to produce for debugging.</li>
-<li><strong>Default-path implementation artifacts remain inspectable but carry no promise:</strong> generated Rust from the ordinary (non-caller) build path, object code, IR snapshots, or other backend artifacts should be inspectable and debuggable where emitted, but they are not the host-facing semantic contract. They are a separate build output from the caller carrier's own Rust build, produced by a separate build request (an ordinary build versus a selected Rust-hosted caller build) with its own, unguaranteed stability — even though both draw on the same upstream parsing, typechecking, and Body IR/semantic-facts stages, and only diverge at backend/carrier selection.</li>
-<li><strong>The caller boundary is plain typed Rust functions:</strong> the Rust-authored caller calls free functions directly, backed by caller helpers and support traits that make those calls feel natural from Rust while preserving Incan semantics.</li>
-<li><strong><code>pub</code> alone is sufficient; the caller facet is derived from usage, not authored as a separate declaration:</strong> an ordinary <code>pub</code> Incan export is already eligible to be called from a Rust-authored unit in the same Oven-managed build graph. Oven determines the actual caller facet by observing which <code>pub</code> exports are referenced across every Rust-authored unit in the project during the bake, unioned into one stable facet per Incan library — an Incan author does not maintain a second, hand-curated list of Rust-visible exports alongside the ordinary <code>pub</code> surface.</li>
-<li><strong>Types cross through reusable helpers:</strong> primitive values, models, newtypes, enums, <code>Result</code>, <code>Option</code>, collections, and Rust-backed types should cross through explicit, versioned conversion helpers that can also simplify emitter responsibilities.</li>
-<li><strong>Runtime policy is explicit:</strong> async execution, logger/telemetry hooks, host capabilities, and panic handling must be part of the caller contract rather than incidental generated code behavior, even without a constructed object to attach them to — ambient wiring or explicit parameters, not implicit assumptions.</li>
-<li><strong>Cargo independence is the design, not a temporary restriction:</strong> the caller contract targets Oven-orchestrated interop within one build graph, same toolchain end to end, and does not shape itself around a foreign build system's constraints. A Cargo-consumable bridge is not a later phase of this RFC; it would be a distinct proposal with its own tradeoffs, layered outside this contract rather than replacing it.</li>
-</ol>
+<p>Incan and Rust are one type substrate, expressed through two surface syntaxes — not two independently-typed systems bridged by a conversion layer at every boundary. Incan's built-in and stdlib types are defined to use the same underlying Rust representation, so crossing between Incan-authored and Rust-authored code, in either direction, is representation-identical rather than converted. This is the same relationship Kotlin has to Java: Kotlin's <code>String</code> is <code>java.lang.String</code>, not a wrapper around one, because both languages target the same underlying object model.</p>
 <h2 id="motivation">Motivation<a class="headerlink" href="#motivation" title="Permanent link">&para;</a></h2>
-<p>Incan's current interop story is strong in one direction: Incan source imports Rust crates, wraps Rust types, and can implement Rust traits for Incan-owned types. That is necessary, but it does not answer the reverse question Incan's own toolchain already needs answered: how does Rust-authored code in the same project call into Incan-authored behavior?</p>
-<p>That question is not hypothetical. RFC 118 already commits Oven's operational core to staying Rust — "a justified Rust exception," narrow but real. RFC 117 and RFC 104 already expect providers, generators, and policy logic to be "ordinary typed Incan functions." Put together, those two decisions already require a Rust-authored core to call Incan-authored code, in the same repository, compiled in the same bake. This RFC exists because that call has no defined contract yet: no stable namespace, no typed conversions, no error boundary, no compatibility guarantee. Without it, Oven's Rust core would have to either avoid calling Incan-authored logic at all (undermining the entire "generators are ordinary typed Incan functions" premise) or reach into whatever internal implementation shape the compiler happens to produce that week.</p>
-<p>RFC 031 created the first library artifact foundation: an Incan library can build a semantic manifest and implementation artifacts. The missing product-level answer is the shape above those artifacts: which public exports are intended for Rust callers, which helper types make calls feel Incan-like from Rust, which support code owns repeated boundary mechanics, and which metadata defines compatibility without exposing default-path implementation internals as API.</p>
-<p>Oven completes the delivery boundary without replacing this caller model. A selected Rust-hosted export facet is a target-neutral contract within Oven's own project; Oven turns it into target-specific build units by selecting the Rust-host caller projection carrier and compiling it through its Rust facet's direct-<code>rustc</code> build graph (RFC 119), in the same bake as the Rust-authored caller. RFC 117 owns the authored-manifest, resolved-graph, asset-identity, and receipt model that this RFC consumes.</p>
-<p>The missing piece is not only a command. It is a boundary. Rust-authored code embedding Incan behavior needs to know which calls are stable, how values convert, how errors surface, whether async calls need a runtime, whether panics are contained, and which compiler/runtime version produced the artifact. Without that boundary, callers either treat compiler output as hand-authored Rust or avoid Rust-hosted Incan entirely.</p>
-<p>The end-state is Incan's own toolchain proving the model on itself: Oven's Rust core calls into Incan-authored providers, generators, and policy logic as typed dependencies within one build graph, with no Cargo anywhere in that loop — the first real, self-hosted, bidirectional Rust↔Incan interop.</p>
+<p>Before Oven, this was not a real option. Rust was built by a separate toolchain (Cargo), so Incan's own type system had to be treated as independent — something that got translated to Rust as a backend implementation detail, at every boundary crossing, because there was no single build authority that could guarantee both sides stayed representation-compatible. Once Oven owns the full build graph for both Incan-authored and Rust-authored code in one project (RFC 119), that structural constraint disappears. There is no longer a reason to keep them as two systems needing a bridge.</p>
+<p>This surfaced directly out of RFC 097 (Rust-hosted Incan caller). Its "Type projection" section describes checked, sometimes-costly conversions for crossing into Rust — "checked <code>i64</code> boundary," borrowed-versus-owned string decisions, generated adapter code per type. Once RFC 097's caller boundary stopped being framed as bridging two independently-built binaries (the same realization that removed its constructed handle-object pattern), the conversion framing for <em>types</em> stopped making sense for the same reason: there is nothing to check or convert if the two sides were never different representations to begin with.</p>
+<p>RFC 097 intentionally does not take this on fully — it states the caller-boundary consequences of this idea without owning the underlying substrate claim, because the claim affects more than one RFC. RFC 005, RFC 041, and RFC 043 govern the reverse direction (Incan importing and using Rust) and would need the same treatment for the model to be symmetric. This RFC exists to state that shared claim once, in one place, rather than have each interop RFC independently reinvent a piece of it.</p>
 <h2 id="goals">Goals<a class="headerlink" href="#goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Define a Rust-hosted caller model for Rust-authored code, within an Oven-managed project, calling Incan-authored behavior.</li>
-<li>Define a stable Rust-facing caller surface backed by ABI metadata.</li>
-<li>Keep default-path implementation artifacts inspectable without making them the public compatibility path.</li>
-<li>Define how the caller facet is derived from actual Rust-side usage of <code>pub</code> exports, without requiring a second, separately authored declaration.</li>
-<li>Define conversion requirements for primitives, collections, models, enums, newtypes, results, options, and Rust-backed values.</li>
-<li>Define reusable caller helpers that can reduce bespoke emitter output for common boundary shapes.</li>
-<li>Define version, diagnostics, panic, async, logging, telemetry, and host capability responsibilities at the caller boundary, without relying on a constructed handle object to hold them.</li>
-<li>Define how a selected caller facet becomes a target-compatible Oven caller artifact with inspectable build and source-map receipts, consumed entirely within Oven's own build graph.</li>
-<li>Keep Rust integration Rust-shaped enough to feel natural to a Rust caller without making Incan source adopt Rust's full API design model.</li>
+<li>State the substrate-identity principle formally: Incan and Rust share one type substrate.</li>
+<li>Define which categories of Incan types are covered — primitives, stdlib/compound types, user-authored models/enums/newtypes — and how each relates to its Rust representation.</li>
+<li>Define how canonical shared identity works for stdlib/compound types, so two different Incan libraries using the same stdlib type don't produce incompatible generated copies.</li>
+<li>Establish that this principle holds symmetrically for both interop directions: Rust calling Incan-authored code, and Incan importing and using Rust.</li>
+<li>Leave room for named, explicit exceptions where full representation identity turns out not to be achievable.</li>
 </ul>
 <h2 id="non-goals">Non-Goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li>This RFC does not define Cargo-compatible package publication, crates.io distribution, or consumption by a Rust project outside Oven's own build graph. That is out of scope for this design, not a gap it leaves open; see Alternatives considered.</li>
-<li>This RFC does not make default-path generated Rust source the public package compatibility path.</li>
-<li>This RFC does not require the ordinary (non-caller) build path to emit Rust source.</li>
-<li>This RFC does not make every default-path generated Rust module a stable public API where such output is still emitted.</li>
-<li>This RFC does not replace <code>rust::</code> imports or Rust interop from Incan source.</li>
-<li>This RFC does not define a C ABI, dynamic plugin ABI, <code>extern "C"</code> boundary, or cross-language FFI story.</li>
-<li>This RFC does not require a Rust application to run the Incan compiler at runtime.</li>
-<li>This RFC does not eagerly build a caller wrapper for every <code>pub</code> export regardless of whether anything calls it from Rust; only exports actually referenced by a Rust-authored unit in the same build graph enter the caller build (see "Public export profiles").</li>
-<li>This RFC does not define registry publication mechanics beyond compatibility with RFC 034 and RFC 079.</li>
-<li>This RFC does not define <code>loaf.toml</code>, <code>Oven.lock</code>, or the <code>*.loaf</code> asset format; it consumes the project, asset-identity, and receipt contract from RFC 117.</li>
-<li>This RFC does not define the full implementation of async runtime internals, host capability enforcement, or telemetry backends.</li>
-<li>This RFC does not guarantee that every Rust type imported through <code>rust::</code> can automatically cross back into a caller-visible Rust type without an adapter.</li>
+<li>This RFC does not require implementation in v0.6. It is the intended 1.0 north star, not scoped work for the current milestone; RFC 097 already states its caller-boundary consequences without needing this RFC to land first.</li>
+<li>This RFC does not itself rewrite RFC 097's "Type projection" section or RFC 005/041/043's conversion rules — those are follow-up revisions once this RFC's model is accepted.</li>
+<li>This RFC does not claim every Incan type can be made representation-identical to a Rust type. It states the principle and the target; specific exceptions, if any prove necessary, are named explicitly rather than silently assumed away.</li>
+<li>This RFC does not define a new intermediate ABI, FFI boundary, or serialization format. It is the opposite: for representation-identical types, there is no boundary left to define.</li>
+<li>This RFC does not change Incan's own authoring syntax. <code>model</code>, <code>enum</code>, and <code>newtype</code> keep meaning what they mean to an Incan author; this RFC is about what those declarations compile to, not how they're written.</li>
+<li>This RFC does not extend this claim to Incan's trait/dispatch system (RFC 025's multi-instantiation dispatch, RFC 043's Rust trait implementation) — see Unresolved questions.</li>
 </ul>
 <h2 id="guide-level-explanation">Guide-level explanation<a class="headerlink" href="#guide-level-explanation" title="Permanent link">&para;</a></h2>
-<p>Take the motivating case directly: Oven's Rust-authored core needs to evaluate a capability grant, and per RFC 104/117 that policy logic is meant to be an ordinary typed Incan function, not hand-written Rust. Both live in the same workspace, as sibling Loaves under RFC 117's workspace model:</p>
-<div class="language-text highlight"><pre><span></span><code>oven/
-├── loaf.toml              # [workspace] members = [&quot;core&quot;, &quot;policy&quot;]
-├── core/
-│   ├── loaf.toml          # [project] name = &quot;oven_core&quot;
-│   └── sources/rust/plan.rs
-└── policy/
-    ├── loaf.toml          # [project] name = &quot;policy&quot;
-    └── sources/incan/lib.incn
-</code></pre></div>
-<p><code>core</code> is Oven's own Rust-authored operational core (RFC 118's justified Rust exception); <code>plan.rs</code> is where the Rust-authored caller in this example lives. <code>policy</code> is an ordinary Incan-authored library Loaf, with its logic in <code>lib.incn</code>. An Incan author writes the policy logic there as an ordinary library export:</p>
+<p>Take the same running example RFC 097 already uses: an Incan-authored <code>policy</code> library, defining a request/decision pair and a policy function, called from Oven's Rust-authored core.</p>
 <div class="language-incan highlight"><pre><span></span><code><span class="k">pub</span> <span class="k">model</span> <span class="nc">ProviderRequest</span><span class="p">:</span>
     <span class="k">pub</span> <span class="n">target</span><span class="p">:</span> <span class="nb">str</span>
     <span class="k">pub</span> <span class="n">requested_capabilities</span><span class="p">:</span> <span class="kt">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 
-<span class="k">pub</span> <span class="k">model</span> <span class="nc">ProviderDecision</span><span class="p">:</span>
-    <span class="k">pub</span> <span class="n">granted</span><span class="p">:</span> <span class="kt">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
-    <span class="k">pub</span> <span class="n">denied</span><span class="p">:</span> <span class="kt">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
-
 <span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">evaluate_policy</span><span class="p">(</span><span class="n">request</span><span class="p">:</span> <span class="nc">ProviderRequest</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">ProviderDecision</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">requested_capabilities</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="nb">Err</span><span class="p">(</span><span class="s2">&quot;no capabilities requested&quot;</span><span class="p">)</span>
-    <span class="n">granted</span> <span class="o">=</span> <span class="p">[</span><span class="n">cap</span> <span class="k">for</span> <span class="n">cap</span> <span class="ow">in</span> <span class="n">request</span><span class="o">.</span><span class="n">requested_capabilities</span> <span class="k">if</span> <span class="n">cap</span> <span class="o">!=</span> <span class="s2">&quot;process.exec&quot;</span><span class="p">]</span>
-    <span class="n">denied</span> <span class="o">=</span> <span class="p">[</span><span class="n">cap</span> <span class="k">for</span> <span class="n">cap</span> <span class="ow">in</span> <span class="n">request</span><span class="o">.</span><span class="n">requested_capabilities</span> <span class="k">if</span> <span class="n">cap</span> <span class="o">==</span> <span class="s2">&quot;process.exec&quot;</span><span class="p">]</span>
-    <span class="k">return</span> <span class="nb">Ok</span><span class="p">(</span><span class="nc">ProviderDecision</span><span class="p">(</span><span class="n">granted</span><span class="o">=</span><span class="n">granted</span><span class="p">,</span> <span class="n">denied</span><span class="o">=</span><span class="n">denied</span><span class="p">))</span>
-
-<span class="k">pub</span> <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">evaluate_policy_remote</span><span class="p">(</span><span class="n">request</span><span class="p">:</span> <span class="nc">ProviderRequest</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">ProviderDecision</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-    <span class="c1"># unlike evaluate_policy above, this checks a remote-backed policy service</span>
-    <span class="k">return</span> <span class="k">await</span> <span class="n">fetch_remote_decision</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+    <span class="o">...</span>
 </code></pre></div>
-<p>Nothing further is required on the Incan side to make <code>evaluate_policy</code> callable from Rust. <code>pub</code> is already sufficient — there is no separate declaration to write. From <code>plan.rs</code>, Oven's Rust-authored core simply calls it, as a plain function:</p>
-<div class="language-rust highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">policy</span><span class="p">::</span><span class="n">caller</span><span class="p">::</span><span class="n">incan</span><span class="p">::{</span><span class="n">evaluate_policy</span><span class="p">,</span><span class="w"> </span><span class="n">ProviderRequest</span><span class="p">};</span>
-
-<span class="k">fn</span><span class="w"> </span><span class="nf">plan_provider_grant</span><span class="p">(</span><span class="n">request</span><span class="p">:</span><span class="w"> </span><span class="nc">ProviderRequest</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">decision</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate_policy</span><span class="p">(</span><span class="n">request</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
-<span class="w">    </span><span class="c1">// Oven&#39;s Rust core uses `decision` to finish planning the provider grant.</span>
-<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
-<span class="p">}</span>
+<p><strong>Before this RFC (conversion framing):</strong> <code>request.requested_capabilities</code>, a <code>List[str]</code>, crosses into Rust through a projection step — RFC 097's original "Type projection" table describes this as producing a <code>Vec&lt;String&gt;</code> via a conversion, with <code>int</code> similarly requiring a "checked <code>i64</code> boundary." The mental model is two type systems, bridged.</p>
+<p><strong>Under this RFC (identity framing):</strong> <code>List[str]</code> <em>is</em> <code>Vec&lt;String&gt;</code>. There is no conversion step, because Incan's <code>List[str]</code> was never a different representation from <code>Vec&lt;String&gt;</code> — it is defined, in the compiler's own type system, to be that Rust type. The same is true of <code>int</code> and <code>i64</code>: nothing is checked at a boundary, because there is no boundary between two different representations to check.</p>
+<p>This is already true today for one category of type: RFC 097 already states that a <code>model</code> projects to "a Rust caller struct," used directly. This RFC generalizes that same relationship — already correct for user-authored models — to primitives and to Incan's stdlib types as well.</p>
+<p>The stdlib case needs one more piece: canonical sharing. Suppose two different Incan libraries, <code>policy</code> and <code>billing</code>, both use Incan's stdlib <code>Duration</code> type in a caller-visible signature:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># policy/sources/incan/lib.incn</span>
+<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">evaluate_policy</span><span class="p">(</span><span class="n">request</span><span class="p">:</span> <span class="nc">ProviderRequest</span><span class="p">,</span> <span class="n">window</span><span class="p">:</span> <span class="nc">Duration</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">ProviderDecision</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="o">...</span>
 </code></pre></div>
-<p>The crate path starts with <code>policy</code>, not an invented prefix — it is the <code>policy</code> Loaf's own project name, following the same rule RFC 119 already states for the Rust facet generally ("the derived crate name follows the project name only when that mapping is unambiguous"). The caller artifact this RFC defines is projected under that same crate name, at the <code>caller</code> module this RFC's caller boundary owns.</p>
-<p>Compatibility holds by construction: Oven compiles this Rust-authored core unit and the Incan-authored <code>policy</code> library together, in the same bake, keyed by source digest (RFC 119), so a call can never reach a caller artifact built against a stale or incompatible callee. <code>evaluate_policy</code> and <code>ProviderRequest</code> both live under the reserved <code>incan</code> submodule of the caller namespace, since both are caller-projected Incan items — a function projects the same way a model does, and reserving that submodule keeps every projected name away from whatever compiler-generated infrastructure (such as the caller error type) still needs its own space at the namespace's top level (see "Caller facet and artifact shape").</p>
-<p><code>oven bake</code> (exact command spelling not normative) resolves the whole build graph — both the Rust-authored core unit and the Incan-authored policy library — in one pass. During that resolution, Oven observes that the core unit references <code>evaluate_policy</code>, and that observation is what makes it part of the caller facet: no separate declaration authored it there. Oven then checks that the reference has a representable Rust signature and, if so, selects the Rust-host caller projection carrier and materializes a target-compatible caller artifact through its Rust facet's direct-<code>rustc</code> build graph (RFC 119) — this is the only way the artifact comes into existence; there is no <code>incan build</code> path that produces it without Oven. There is no manifest dependency line to write for this either — the exact in-workspace linkage mechanism is Oven planning state, not authored configuration, matching how RFC 119 already links host/target Rust units within one graph. The artifact carries caller metadata, ABI metadata, target compatibility, source-map references, and its verified Oven build receipt, inspectable for diagnostics and provenance even though nothing checks it at call time.</p>
-<p>If a later change removes the only Rust-side reference to <code>evaluate_policy</code>, the next bake simply stops building a caller wrapper for it — the caller facet tracks live usage, not a list someone has to remember to prune. And when the default projection genuinely isn't enough — an alias, a non-default type projection, a forced blocking wrapper around an async export — attaching that policy to the declaration itself remains an open question (see Unresolved questions); it is override metadata for the uncommon case, not a gate the common case has to pass through.</p>
-<p><code>evaluate_policy_remote</code> is declared <code>async def</code> in Incan, unlike <code>evaluate_policy</code> above — and that is what determines its projection, not a separate calling-convention choice on the Rust side. An async Incan export projects to an async Rust free function, called with <code>.await</code> from an async Rust caller:</p>
-<div class="language-rust highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">policy</span><span class="p">::</span><span class="n">caller</span><span class="p">::</span><span class="n">incan</span><span class="p">::{</span><span class="n">evaluate_policy_remote</span><span class="p">,</span><span class="w"> </span><span class="n">ProviderRequest</span><span class="p">};</span>
-
-<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">plan_provider_grant_remote</span><span class="p">(</span><span class="n">request</span><span class="p">:</span><span class="w"> </span><span class="nc">ProviderRequest</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">decision</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate_policy_remote</span><span class="p">(</span><span class="n">request</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
-<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
-<span class="p">}</span>
+<div class="language-incan highlight"><pre><span></span><code><span class="c1"># billing/sources/incan/lib.incn</span>
+<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">charge_for</span><span class="p">(</span><span class="n">amount</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">window</span><span class="p">:</span> <span class="nc">Duration</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">Result</span><span class="p">[</span><span class="nc">Receipt</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+    <span class="o">...</span>
 </code></pre></div>
-<p>An Incan export that is never referenced by a Rust-authored unit simply never enters the caller facet — the Rust-authored caller must not rely on whatever implementation symbols happen to exist for anything it hasn't actually called. The distinction is about semantic authority: caller metadata and the caller namespace are stable; default-path implementation artifacts are not.</p>
-<p>The author-facing model is:</p>
-<div class="language-text highlight"><pre><span></span><code>Incan library source
-  -&gt; checked public Incan API (ordinary `pub`)
-  -&gt; Oven observes which `pub` exports a Rust-authored unit in the same build graph actually references
-  -&gt; Rust-facing caller facet + ABI metadata, derived from that usage
-  -&gt; Oven selects the Rust-host caller projection carrier (RFC 119)
-  -&gt; Oven&#39;s Rust facet builds it via direct `rustc`, linked into the same build graph as the calling Rust-authored unit
-  -&gt; Rust-authored code within that Oven-managed project
-</code></pre></div>
+<p>Without canonical sharing, each library's caller artifact could regenerate its own <code>Duration</code> struct — two Rust types with the same name, structurally identical, but nominally incompatible, so a Rust caller couldn't pass one library's <code>Duration</code> value to the other's function. With canonical sharing, both <code>policy::caller::incan::Duration</code> and <code>billing::caller::incan::Duration</code> resolve to the <em>same</em> Rust type, defined once in a shared location, re-exported rather than regenerated. This is the same principle RFC 097 already requires for <code>rusttype</code> values crossing the caller boundary — "the generated caller type and host type refer to the same Rust path and compatible version" — extended from "Rust types Incan wraps" to "Incan's own stdlib types."</p>
+<p>User-authored types (<code>ProviderRequest</code>, <code>ProviderDecision</code>) don't need this canonical-sharing treatment the same way — each library legitimately owns its own domain types, and there is no ambiguity about which library's <code>ProviderRequest</code> a given signature means.</p>
 <h2 id="reference-level-explanation">Reference-level explanation<a class="headerlink" href="#reference-level-explanation" title="Permanent link">&para;</a></h2>
-<p>An Incan implementation that supports Rust-hosted caller artifacts must emit a Rust-facing caller boundary for <code>pub</code> exports referenced by a Rust-authored unit in the same Oven build graph.</p>
-<p>The caller boundary must include:</p>
+<p>An Incan implementation adopting this substrate model must satisfy the following, for every type crossing between Incan-authored and Rust-authored code, in either direction:</p>
 <ul>
-<li>a stable Rust module or crate-level namespace for caller APIs, structurally reserving its own top level for compiler-generated infrastructure and placing every caller-projected Incan type under a reserved <code>incan</code> submodule (see "Caller facet and artifact shape")</li>
-<li>typed Rust representations for caller-visible Incan input and output types</li>
-<li>conversion implementations or generated adapters for every caller-visible boundary type</li>
-<li>version and compatibility metadata, inspectable for diagnostics and provenance</li>
-<li>diagnostic metadata sufficient to map caller failures back to Incan export names and source spans where available</li>
-<li>error types that distinguish Incan <code>Err</code> values, Incan runtime errors, caller conversion errors, host capability errors, version mismatches, and contained panics</li>
+<li>A caller-visible or interop-visible Incan primitive type (<code>int</code>, <code>bool</code>, <code>float</code>) must compile to its named native Rust type directly — <code>int</code> to <code>i64</code>, <code>bool</code> to <code>bool</code>, <code>float</code> to <code>f64</code> — with no generated wrapper type and no runtime check at the crossing point. <code>str</code> remains a policy choice between <code>String</code> and borrowed forms (RFC 097 already establishes this), not a representation check; whichever form is chosen, it is a real <code>String</code>/<code>&amp;str</code>, not a wrapped copy.</li>
+<li>Every Incan stdlib/compound type (<code>List[T]</code>, <code>Dict[K, V]</code>, <code>Option[T]</code>, <code>Result[T, E]</code>, and any other stdlib-owned type) must have exactly one canonical Rust definition, shared by reference across every consumer, never regenerated per library or per caller artifact. Two Incan libraries using the same stdlib type in a caller-visible or interop-visible signature must produce mutually compatible Rust values.</li>
+<li>A user-authored <code>model</code>, <code>enum</code>, or <code>newtype</code> declaration must compile to a genuine Rust struct or enum that the declaration is sugar over, not a separate internal representation later projected into one. Incan's own checks (validation, invariants) attach to that same real type; they do not require a shadow representation to enforce.</li>
+<li>This must hold symmetrically: the same identity relationship applies whether Rust-authored code is calling into Incan-authored code (RFC 097) or Incan-authored code is importing and using a Rust type (RFC 005, RFC 041, RFC 043). Neither direction may define its own, different relationship between an Incan type and its Rust representation.</li>
+<li>Where full representation identity is not achievable for some type or case, that gap must be explicit and diagnosable — a named, documented exception — not a silent fallback to conversion behavior that the rest of this contract assumes doesn't exist.</li>
 </ul>
-<p>The caller boundary must not require Rust consumers to import arbitrary default-path implementation modules as the host API. Such modules may exist and should remain readable where the default path still emits them, but only the caller namespace is stable for Rust-hosted consumption.</p>
-<p>The caller boundary must be materialized by Oven, via its Rust facet building the Rust-host caller projection carrier (RFC 119), as a target-compatible caller artifact linked into the same build graph as its Rust-authored caller. The Rust-authored caller must not need to know the compiler's internal implementation layout.</p>
-<p>Caller-visible Incan functions must have a representable Rust signature. The compiler must reject a Rust-hosted public export when any parameter, return value, type parameter, effect, or captured dependency cannot be represented by the caller boundary.</p>
-<p>Caller-visible synchronous functions must expose a synchronous Rust free function. Caller-visible async functions must expose an async Rust free function or an explicit, separately named blocking-wrapper free function, depending on the declared caller mode. Neither must silently create or own a runtime in a way that surprises the caller.</p>
-<p>Compiler/runtime compatibility is a build-time guarantee: Oven compiles the caller artifact and its Rust-authored caller together in the same bake, keyed by source digest, so no call can ever reach a caller artifact built against an incompatible compiler, runtime, target, or profile. The generated artifact must still expose metadata identifying the Incan compiler version, manifest format, caller facet, caller ABI version, generated support crate version, target/profile compatibility, and the selected Oven build receipt or <code>*.loaf</code> asset identity, inspectable for diagnostics, provenance, and cache-correctness auditing.</p>
-<p>Incan <code>Result[T, E]</code> crossing into Rust must map to Rust <code>Result&lt;T, E&gt;</code> when both <code>T</code> and <code>E</code> are representable. Boundary failures that occur outside the Incan function's declared return value must use the caller error type, not the Incan function's domain error type.</p>
-<p>Incan <code>Option[T]</code> must map to Rust <code>Option&lt;T&gt;</code> when <code>T</code> is representable.</p>
-<p>Incan <code>None</code>, <code>bool</code>, <code>int</code>, <code>float</code>, <code>str</code>, list, dict, tuple-like fixed records, models, enums, value enums, newtypes, and constrained newtypes must have deterministic caller conversion rules. Integer width, constrained storage carriers, and validation failures must not rely on unchecked Rust casts.</p>
-<p>Incan models exposed to Rust callers should generate Rust structs with stable field names and derive surfaces appropriate for Rust host use when those derives are requested or safe by default. Wire aliases remain data-contract metadata and must not silently rename Rust struct fields unless the caller export explicitly chooses that projection.</p>
-<p>Incan newtypes exposed to Rust callers must preserve validation semantics. Constructing a Rust-side caller newtype from an unchecked primitive must either be impossible or go through a checked constructor.</p>
-<p>Rust-backed <code>rusttype</code> values may cross the caller boundary only when the backing Rust type is visible to the host crate and the artifact can prove that the generated caller type and host type refer to the same Rust path and compatible version. Otherwise, the export must require an explicit adapter.</p>
-<p>Panics from compiled Incan code or Rust code called by Incan must not be indistinguishable from ordinary Incan <code>Result</code> values. Implementations should contain unwinding where practical and report a caller panic error with diagnostic context. If panic containment is unavailable for a target, the caller metadata must state that policy clearly.</p>
-<p>Host capabilities used by caller-visible Incan code must be visible through metadata. If an Incan caller export requires filesystem, network, process, environment, telemetry, clock, async runtime, or other host services, those services must be provided or validated ambiently by Oven's build-time capability wiring, or through an explicit parameter on the specific caller-visible functions that need them, before use where the target supports such validation.</p>
-<p>Caller diagnostics and capability outcomes must reference stable public source-map and receipt identities. They must not expose private HIR, Body IR, compiler session state, or backend implementation representations.</p>
 <h2 id="design-details">Design details<a class="headerlink" href="#design-details" title="Permanent link">&para;</a></h2>
-<h3 id="authority-and-compatibility-identity">Authority and compatibility identity<a class="headerlink" href="#authority-and-compatibility-identity" title="Permanent link">&para;</a></h3>
-<p>The compatibility surface for a Rust-hosted caller boundary is limited to a specific set of inputs. Everything else is implementation detail that may change between compiler versions without breaking the caller contract — a real concern even within one repository, since the Rust-authored caller and the Incan-authored callee are typically maintained across separate changes.</p>
-<p>Compatibility inputs are: Incan source and its checked public API, semantic manifests (RFC 031's library artifact model), caller-facet metadata (which exports, projections, and policy make up the selected facet), ABI metadata (caller ABI version, compiler/runtime compatibility range, target/profile compatibility), and versioned native artifacts — the caller build unit and its <code>*.loaf</code> asset.</p>
-<p>Never part of the contract: generated Rust source (useful for inspection, debugging, migration evidence, or as an implementation backend, but never a compatibility promise), and private HIR, Body IR, compiler session state, or any other backend implementation representation.</p>
-<p>A caller artifact must be usable by its Rust-authored caller without reading or depending on any of the non-public inputs above. A rule elsewhere in this RFC that would require the Rust-authored caller to depend on generated Rust internals, private HIR, or Body IR to use a caller-visible export correctly is incompatible with this section.</p>
-<h3 id="caller-facet-and-artifact-shape">Caller facet and artifact shape<a class="headerlink" href="#caller-facet-and-artifact-shape" title="Permanent link">&para;</a></h3>
-<p>The Rust-hosted caller facet is the target-neutral selection of Incan exports, type projections, capability requirements, caller ABI version, and source-map schema. Oven materializes that facet into target-compatible caller artifacts by selecting the Rust-host caller projection carrier and building it through its Rust facet's direct-<code>rustc</code> graph (RFC 119), linked into the same build graph as the Rust-authored caller. The normative contract is the caller facet and metadata, not the emitted source layout.</p>
-<p>Conceptually, the caller artifact set contains:</p>
-<div class="language-text highlight"><pre><span></span><code>stable caller namespace
-caller facet metadata
-ABI metadata
-semantic manifest
-source-map and Oven-receipt references
-implementation artifact(s)
-target-compatible caller `*.loaf` asset(s)
-</code></pre></div>
-<p>The exact directory layout and static-versus-dynamic linkage are not normative. The Rust-authored caller must not need to know which files came from Incan source lowering, backend emission, support glue, ABI materialization, or Oven storage.</p>
-<p>Caller-visible Incan functions project to plain Rust free functions.</p>
-<p>The caller namespace must reserve its own top level for compiler-generated infrastructure — at minimum, the caller error type(s) (see "Errors") — and must never place a caller-projected Incan item (a projected function, model, enum, or newtype) directly at that top level. Every caller-projected Incan item must instead live one level deeper, under a reserved <code>incan</code> submodule of the caller namespace (for example <code>policy::caller::incan::evaluate_policy</code> and <code>policy::caller::incan::ProviderRequest</code>, side by side). This is a structural rule, not a name-collision check: an Incan export whose own name happens to match a reserved infrastructure name (including an export literally named <code>incan</code>) can never collide with it, because projected items are never eligible to land at the top level in the first place — the collision class is eliminated by construction rather than detected and diagnosed after the fact.</p>
-<h3 id="caller-identity-metadata">Caller identity metadata<a class="headerlink" href="#caller-identity-metadata" title="Permanent link">&para;</a></h3>
-<p>Every caller artifact Oven materializes must carry an identity record readable by its Rust-authored caller and by inspection tooling before the artifact is trusted. The record must include: <code>package_name</code> and <code>package_version</code> (the Incan package identity); <code>caller_facet_id</code> (identifies the library-scoped, usage-derived facet this artifact was built from — one per Incan library per bake, shared by every Rust-authored caller in the project, never scoped to a single calling unit); <code>caller_abi_version</code> (versioned independently of <code>package_version</code>, bumped when the caller-facing shape changes in a way that could break an existing caller); <code>compiler_version_range</code> (the range of Incan compiler versions this artifact is compatible with); <code>manifest_schema_version</code> (the version of this identity record's own format); <code>target</code> and <code>profile</code>; and a reference to the exact Oven build receipt the artifact was materialized from.</p>
-<p>Compatibility holds by construction: Oven compiles the caller artifact and its Rust-authored caller together in the same bake, keyed by source digest (RFC 119), so a compiler/runtime/target/ABI mismatch cannot reach a call site at all — Oven's build-unit staleness check invalidates and rebuilds the caller artifact whenever the callee's caller-facing shape changes. The identity record's role is inspectability: what a diagnostic, a receipt audit, or a caching-bug investigation reads to confirm which exact build produced a given caller artifact.</p>
-<p>An unsupported or non-representable caller-visible export must be rejected when Oven selects and bakes the caller build unit, not discovered later by its Rust-authored caller at call time. Oven must not materialize a caller artifact or <code>*.loaf</code> asset that contains an unresolved unsupported-export failure.</p>
-<h3 id="oven-planning">Oven planning<a class="headerlink" href="#oven-planning" title="Permanent link">&para;</a></h3>
-<p>Oven must include the selected caller facet, public feature projection, compiler and support compatibility, target/profile, native-linkage requirements, and relevant source/ABI metadata in the caller build-unit identity. The resulting <code>*.loaf</code> asset must identify the caller facet and the exact build receipt through which it was built. The Rust-authored caller consumes that selected caller artifact directly, within the same Oven build graph — there is no Cargo subprocess and no external package resolution step (see Non-Goals and Alternatives considered for why Cargo-consumable projection is out of scope for this design).</p>
-<h3 id="support-crate">Support crate<a class="headerlink" href="#support-crate" title="Permanent link">&para;</a></h3>
-<p>The Incan toolchain should provide a small Rust support crate for caller boundaries. That crate should own shared traits, error types, conversion helpers, and host context traits that would otherwise be duplicated into every generated caller artifact or embedded directly into emitter output. Oven's Rust facet builds and links it into the same build graph as any other Rust-authored unit in the project; nothing about its existence depends on Cargo.</p>
-<p>The support crate should not become a large runtime framework. It should be boundary infrastructure: conversions, diagnostics, panic policy, host context plumbing, and reusable call-shape helpers. Those helpers should make Rust-hosted calls feel closer to Incan's domain model while giving the emitter fewer bespoke cases to print inline.</p>
-<h3 id="public-export-profiles">Public export profiles<a class="headerlink" href="#public-export-profiles" title="Permanent link">&para;</a></h3>
-<p>The caller facet is derived, not authored. Plain Incan <code>pub</code> exports remain the Incan package API, and every <code>pub</code> export is eligible to be caller-visible without a second declaration. The caller facet is <strong>library-scoped, not caller-unit-scoped</strong>: for a given Incan library, it is the union of every <code>pub</code> export referenced by <em>any</em> Rust-authored unit anywhere in the same Oven build graph, checked for a representable Rust signature. One caller module (<code>incan_&lt;library&gt;::caller::incan</code>) exists per Incan library, shared by every Rust-authored caller in the project — two Rust modules calling the same library see the same free functions and types, and a new caller referencing a new export only ever grows that union, never produces a differently-shaped module for a different file. Scoping the facet per calling unit instead was considered and rejected: it would make the caller module's available functions depend on which file was asking, defeat ordinary incremental caching (a bespoke module per Rust unit rather than one stable module per library), and give a brand-new caller nothing to discover from, since a per-unit facet only contains what that unit already references.</p>
-<p>Library-scoping still leaves a real gap for the <em>first</em> caller of a library, or any caller wanting to browse what's available before writing a reference: nothing has been used yet, so the compiled caller module may not contain it. This RFC resolves that by separating two different concerns rather than picking one artifact to serve both. What actually gets <strong>compiled</strong> stays usage-scoped and lean, for exactly the reasons "Alternatives considered" rejects eager generation: no wasted representability-checking or generated code for exports nobody calls. What a developer can <strong>discover</strong> does not depend on the compiled artifact at all — Oven already determines, for every <code>pub</code> export, whether it is representable independent of whether anything currently references it (see "Reference-level explanation"), and that eligibility fact is exactly what LSP completion and an inspection command (<code>incan inspect caller &lt;library&gt;</code>, exact spelling not normative) should surface: the full eligible surface, not just the realized one. A developer writing new Rust-authored code gets full IDE-backed discovery of what it <em>could</em> call; the compiled artifact only ever contains what it actually does.</p>
-<p>This must be answered by the same session-owned, incrementally-maintained semantic-facts service RFC 106 defines for LSP reference queries — the same machinery that already needs to answer "find references" at interactive latency for editor tooling answers both "which <code>pub</code> exports does any Rust-authored unit in this project reference" for the compiled union and "which <code>pub</code> exports are representable" for discovery. The usage query must be gated by the same source-digest staleness check that governs Oven build-unit reuse (RFC 119): it must run only for units whose source, or transitive dependency closure, changed since the last successful bake receipt, not as a full-project re-scan on every bake. Usage detection that does not meet this bar is not an acceptable implementation of this section.</p>
-<p>A separate, explicitly-authored declaration remains relevant only for non-default policy — an alias, a non-default type projection, a forced blocking wrapper around an async export — layered onto the <code>pub def</code> (or equivalent) itself. Its exact shape is unresolved (see Unresolved questions); it is override metadata for the exception case, not a required gate for the default case.</p>
-<h3 id="type-projection">Type projection<a class="headerlink" href="#type-projection" title="Permanent link">&para;</a></h3>
-<p>The table below describes projection in conversion terms, which is what this RFC needs to be usable now. RFC 121 proposes the durable target this should converge toward: for primitives and stdlib types, no conversion at all, because the Incan type and its Rust representation are the same thing. That convergence is compiler-owned type-system work with its own timeline, not a prerequisite for this RFC.</p>
-<p>Caller type projection should prefer ordinary Rust types where doing so preserves semantics:</p>
-<table>
-<thead>
-<tr>
-<th>Incan surface</th>
-<th>Rust caller projection</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>bool</code></td>
-<td><code>bool</code></td>
-</tr>
-<tr>
-<td><code>int</code></td>
-<td>checked <code>i64</code> boundary unless a narrower constrained carrier is explicitly exposed</td>
-</tr>
-<tr>
-<td><code>float</code></td>
-<td><code>f64</code></td>
-</tr>
-<tr>
-<td><code>str</code></td>
-<td><code>String</code> or borrowed input forms where explicitly generated</td>
-</tr>
-<tr>
-<td><code>Option[T]</code></td>
-<td><code>Option&lt;T&gt;</code></td>
-</tr>
-<tr>
-<td><code>Result[T, E]</code></td>
-<td><code>Result&lt;T, E&gt;</code> for domain result values</td>
-</tr>
-<tr>
-<td><code>List[T]</code></td>
-<td><code>Vec&lt;T&gt;</code></td>
-</tr>
-<tr>
-<td><code>Dict[K, V]</code></td>
-<td>map type with documented ordering/hash requirements</td>
-</tr>
-<tr>
-<td><code>model</code></td>
-<td>Rust caller struct</td>
-</tr>
-<tr>
-<td><code>enum</code></td>
-<td>Rust caller enum</td>
-</tr>
-<tr>
-<td><code>newtype</code></td>
-<td>Rust caller newtype with checked construction</td>
-</tr>
-</tbody>
-</table>
-<p>Borrowed Rust signatures may be generated as an optimization, but the semantic contract must first be expressible with owned values. Borrowed projections must not expose Incan lifetime or ownership details as user-authored Incan concepts.</p>
-<p>Caller artifact metadata must also declare, per export, the ownership/conversion policy (owned vs. borrowed projection) and any runtime or native-linkage requirements needed to call it, such as an async runtime, a specific allocator, or host-provided native linkage. Where 0.6 does not establish behavior — no-std compatibility, C-ABI stability, dynamic-plugin loading, or a specific allocator/panic policy — the metadata must state that status explicitly as unsupported or unknown rather than implying an unstated guarantee.</p>
-<h3 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h3>
-<p>The generated caller API should use two layers of errors:</p>
-<ul>
-<li>domain errors produced by Incan functions that return <code>Result[T, E]</code></li>
-<li>caller errors produced by the boundary itself</li>
-</ul>
-<p>For a function whose Incan signature returns <code>Result[T, DomainError]</code> for some domain error type <code>DomainError</code>, the Rust caller may expose a nested result or a generated convenience type, but it must preserve the distinction between <code>DomainError</code> and boundary failures such as conversion failure, missing host capability, incompatible artifact version, or contained panic.</p>
-<h3 id="async-and-runtime-policy">Async and runtime policy<a class="headerlink" href="#async-and-runtime-policy" title="Permanent link">&para;</a></h3>
-<p>Async caller exports must not assume that the caller artifact owns the process runtime. The Rust-authored caller should either provide an async context by calling async functions or explicitly opt into a blocking wrapper that documents runtime behavior.</p>
-<p>Caller metadata should state whether an export is synchronous, async, blocking, or requires host-provided runtime services. This should compose with RFC 104 target and host capability metadata when those contracts mature.</p>
-<h3 id="diagnostics-and-observability">Diagnostics and observability<a class="headerlink" href="#diagnostics-and-observability" title="Permanent link">&para;</a></h3>
-<p>Caller failures should identify the caller export name, the Incan function name, and source-span metadata when available. Logging and telemetry should route through host-provided hooks where configured, rather than unconditionally initializing global logging from the caller package.</p>
-<p>Public caller diagnostics must bind to the compiler-owned backend-selection and execution receipts (#986) and to the selected Oven build/<code>*.loaf</code> receipt (RFC 117), so a host or CI system can trace a caller failure back to a specific verified build without exposing private compiler representations. Diagnostics must distinguish at minimum: Incan domain errors (the function's own <code>Result</code> error type), caller boundary/conversion errors, host-capability errors, artifact version-compatibility errors, and contained panics.</p>
-<h3 id="evolution-and-publication-posture">Evolution and publication posture<a class="headerlink" href="#evolution-and-publication-posture" title="Permanent link">&para;</a></h3>
-<p>Caller ABI version and manifest schema version follow independent, explicit compatibility rules. Within Oven's own build graph, an incompatible compiler, runtime, target, or profile combination must produce an explicit, diagnosable bake failure — Oven refuses to materialize the caller artifact rather than silently linking a mismatched pair — never a silent partial success discovered later at runtime.</p>
-<p>Internal, prewarmed SDK providers may consume private implementation metadata ahead of this RFC's full caller contract while it is still maturing. Publication to <code>incan.pub</code> (RFC 034, RFC 079) — Incan's own registry, not Cargo or crates.io — must wait for this identity, type/linkage, and diagnostics contract to be in place; it must not publish against an unversioned or provisional shape.</p>
-<h3 id="compatibility-and-migration">Compatibility and migration<a class="headerlink" href="#compatibility-and-migration" title="Permanent link">&para;</a></h3>
-<p>This RFC is additive but reframes older default-path generated-crate consumption as transitional. Existing direct default-path generated-crate consumers may continue while that path remains available, but it must be documented as a lower-level implementation-artifact path rather than the recommended Rust-hosted integration path.</p>
-<p>Once caller artifacts exist, docs should steer Rust application authors toward caller APIs and reserve default-path backend artifacts for debugging, compiler tests, inspection, or advanced toolchain integration. Migration reporting must classify direct default-path generated-crate use as supported through the caller facet, temporarily retained for migration/debugging, or unsupported with an explicit diagnostic.</p>
+<h3 id="primitive-identity">Primitive identity<a class="headerlink" href="#primitive-identity" title="Permanent link">&para;</a></h3>
+<p>Incan's primitive types are declared, at the language's own type-system level, to use exactly the Rust representation already named for them — not merely mapped to that representation at emission time. This is a frontend/type-system commitment, not a backend/codegen optimization: the guarantee needs to hold before lowering, so that both RFC 097's caller boundary and RFC 005/041/043's Rust-interop boundary can rely on it without re-deriving it independently.</p>
+<h3 id="canonical-stdlibcompound-type-identity">Canonical stdlib/compound type identity<a class="headerlink" href="#canonical-stdlibcompound-type-identity" title="Permanent link">&para;</a></h3>
+<p>Incan's stdlib-owned compound types need one canonical Rust definition, in one shared location every consumer references rather than regenerates. The exact crate/module this lives in (a dedicated shared crate, a module of the RFC 097 support crate, or elsewhere) is an open question (see Unresolved questions) — the requirement this RFC states is the property, not the specific location: canonical, not per-consumer.</p>
+<h3 id="user-authored-domain-types">User-authored domain types<a class="headerlink" href="#user-authored-domain-types" title="Permanent link">&para;</a></h3>
+<p>A <code>model</code>, <code>enum</code>, or <code>newtype</code> is sugar over an ordinary Rust struct/enum declaration, with Incan's own validation and derive machinery (RFC 024) attaching directly to that real type. Because the derive protocol already targets real Rust traits (Debug, Eq, Clone, and user-authored derives per RFC 024), a model's derives were already, in effect, real Rust derives on a real Rust struct — this RFC states that relationship as the general rule rather than a caller-boundary-specific behavior.</p>
+<h3 id="relationship-to-rfc-097">Relationship to RFC 097<a class="headerlink" href="#relationship-to-rfc-097" title="Permanent link">&para;</a></h3>
+<p>RFC 097 states the caller-boundary consequences of this model (free functions instead of a handle object, no runtime version check, models already projecting directly to structs) without asserting the general substrate claim this RFC makes. Once this RFC is accepted, RFC 097's "Type projection" section should be revised to describe identity rather than conversion for the categories this RFC covers — a follow-up pass, not a change required to unblock RFC 097 itself.</p>
+<h3 id="relationship-to-rfc-005-rfc-041-rfc-043">Relationship to RFC 005 / RFC 041 / RFC 043<a class="headerlink" href="#relationship-to-rfc-005-rfc-041-rfc-043" title="Permanent link">&para;</a></h3>
+<p>These RFCs own the reverse interop direction — Incan importing and using Rust — and currently describe that direction in their own terms. For the model in this RFC to be symmetric rather than a one-directional caller-boundary optimization, each needs an equivalent follow-up revision once this RFC's principle is accepted. This RFC does not perform those revisions itself.</p>
+<h3 id="migrationconvergence-path">Migration/convergence path<a class="headerlink" href="#migrationconvergence-path" title="Permanent link">&para;</a></h3>
+<p>Closing any gap between Incan's current internal type representations and this RFC's target is compiler-owned type-system work, not something this RFC schedules or gates on a deadline. Where a gap is real (see Unresolved questions), it should be tracked as an explicit, named exception until closed — not treated as failure to adopt this RFC.</p>
 <h2 id="alternatives-considered">Alternatives considered<a class="headerlink" href="#alternatives-considered" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Design the caller contract around external Cargo/crates.io consumption</strong> — Rejected. The goal is self-hosted, Oven-orchestrated interop within Oven's own build graph, starting with Incan's own compiler repo, with the explicit 1.0 direction of divorcing the toolchain from Cargo entirely (#975). Shaping the caller contract around a foreign build system's resolver and publication model would compromise that goal for a consumer this design does not target. A Cargo-consumable bridge is not a future phase of this RFC; it would be a separate proposal, built as a distinct projection on top rather than a change to this contract.</li>
-<li><strong>Tell Rust callers to depend on the default-path generated crate directly</strong> — Rejected because it makes default-path implementation internals the compatibility path. A caller needs a stable caller ABI contract, distinct from whatever the ordinary (non-caller) build path happens to emit.</li>
-<li><strong>Use a dynamic plugin or C ABI boundary</strong> — Rejected for this RFC because the Rust-host caller projection carrier already compiles to genuine Rust through direct <code>rustc</code> (RFC 119), within the same Oven build graph as its caller, and should get normal Rust type checking rather than a new FFI boundary.</li>
-<li><strong>Use only a <code>build.rs</code> helper in the Rust-authored caller</strong> — A development helper may hydrate or validate a selected caller artifact, but it is insufficient as the whole model because it re-introduces a build-time discovery step Oven's own build graph already owns.</li>
-<li><strong>Require a separate, hand-curated declaration for every caller-visible export</strong> — Rejected. It duplicates the <code>pub def</code> that already exists, adds ceremony to the common case, and creates a list someone has to remember to keep in sync as usage changes. Superseded by usage-driven derivation (see "Public export profiles").</li>
-<li><strong>Eagerly build a caller wrapper for every <code>pub</code> export regardless of Rust-side usage</strong> — Rejected as distinct from the chosen design. It would flatten every public Incan symbol into the same Rust-hosted contract whether or not anything calls it from Rust, growing the checked/versioned caller surface with dead weight and doing needless representability-checking work on every bake.</li>
-<li><strong>Scope the derived caller facet per Rust-authored calling unit rather than per Incan library</strong> — Rejected. It would make the caller module's available functions depend on which file was asking, defeat incremental caching by generating a bespoke module per Rust unit instead of one stable module per library, and leave a brand-new caller nothing to discover from. Superseded by library-scoped union derivation plus tooling-based discovery of the full eligible surface (see "Public export profiles").</li>
-<li><strong>Expose the caller boundary as a constructed handle object (<code>Caller::new()</code> with instance methods) rather than plain free functions</strong> — Rejected. That pattern defends against runtime drift between two independently-built, decoupled binaries — a risk that doesn't exist when Oven compiles the Rust-authored caller and the Incan-authored callee together in one bake, keyed by source digest. Free functions get the same guarantee at build time instead, without the construction ceremony, the invented fixed entry-point name, or the multi-library aliasing question a shared type name would raise.</li>
-<li><strong>Generate only untyped stringly dynamic calls</strong> — Rejected because it gives up the main benefit of compiling Incan into the Rust ecosystem: typed, auditable integration.</li>
+<li><strong>Keep Incan and Rust as two independently-typed systems, bridged by conversion at every boundary (status quo).</strong> This is what RFC 097 and the Rust-interop RFCs currently describe piecemeal. It works, but implies ongoing translation and checking cost, and per-boundary duplicated logic, that a single-toolchain, Oven-owned build graph no longer requires.</li>
+<li><strong>Apply this only to RFC 097's caller boundary, leaving the reverse direction conversion-based.</strong> Rejected as the long-term target — it would leave the model asymmetric: the same substrate calling one direction, two systems calling the other.</li>
+<li><strong>Write a fully formal, ABI-level unification spec now, in this RFC.</strong> Rejected as premature. This RFC establishes the target principle and what it requires of each category of type; the detailed mechanics (canonical module location, frontend representation changes) belong to implementation-phase follow-up work once actually undertaken, not to this RFC.</li>
 </ul>
 <h2 id="drawbacks">Drawbacks<a class="headerlink" href="#drawbacks" title="Permanent link">&para;</a></h2>
 <ul>
-<li>The proposal introduces another artifact boundary and support crate.</li>
-<li>Caller projection rules can become complex around generics, constrained newtypes, borrowed data, async values, and Rust-backed types.</li>
-<li>A library's realized caller surface is implicit — discoverable through tooling (LSP, <code>incan inspect</code>) or by reading Rust-side call sites, rather than a single authored list a maintainer can review directly in Incan source.</li>
-<li>Rust host ergonomics may pressure Incan APIs toward Rust-shaped design unless the boundary keeps projections separate from source semantics.</li>
-<li>Version and compatibility metadata add maintenance burden to the build pipeline.</li>
+<li>Requires the compiler's own type system (HIR/Body IR, frontend) to converge toward representation identity for primitives and stdlib types — real engineering work, not free, and not scoped or scheduled by this RFC.</li>
+<li>Symmetric treatment means RFC 005, RFC 041, and RFC 043 each need a follow-up revision pass; this RFC creates that obligation without discharging it.</li>
+<li>A canonical shared stdlib-type module is new shared infrastructure to design, own, and version.</li>
+<li>Removes the "checked boundary" safety net for primitives in favor of relying on the frontend's own correctness to guarantee Incan's type semantics genuinely match Rust's — raising the bar on that guarantee rather than backstopping it with a runtime check.</li>
 </ul>
-<h2 id="implementation-architecture">Implementation architecture<a class="headerlink" href="#implementation-architecture" title="Permanent link">&para;</a></h2>
-<p>The recommended architecture is to extend library builds with a caller adapter generation pass that consumes checked public API metadata, semantic facts, ABI metadata, and the derived caller-usage facts (see "Public export profiles"). Oven plans that adapter, its implementation dependencies, target/profile requirements, and native linkage as one caller build-unit graph, alongside the Rust-authored caller's own build unit, then builds it by selecting the Rust-host caller projection carrier through its Rust facet's direct-<code>rustc</code> invocation (RFC 119) — this build-unit graph is the only mechanism that produces a caller artifact. The adapter calls backend-owned implementation artifacts through compiler-owned internal paths or ABI entrypoints while exposing only the caller namespace to the Rust-authored caller.</p>
-<p>The support crate should remain narrow and versioned. Caller artifacts should declare the caller ABI version they were emitted against, inspectable for diagnostics and provenance (see "Caller identity metadata"). Metadata, source maps, and Oven receipts should be inspectable by docs, LSP, and tooling so the caller boundary can be documented and discovered without building the artifact.</p>
-<p>If a Cargo-consumable bridge is ever proposed, it would be a separate compatibility projection layered over this same caller artifact — not a redefinition of the caller boundary itself. This RFC does not design that bridge (see Non-Goals, Alternatives considered).</p>
-<p>Borrowed non-<code>Copy</code> callable parameters illustrate why implementation artifacts are not enough as the contract. The caller adapter must generate a compatible caller projection or reject the unsupported export before producing a caller artifact. It must not publish a boundary whose generated Rust shape is incompatible with its declared caller signature.</p>
 <h2 id="layers-affected">Layers affected<a class="headerlink" href="#layers-affected" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Library artifact model</strong>: library builds must be able to include caller metadata, ABI metadata, caller adapters, and semantic manifests alongside backend implementation artifacts.</li>
-<li><strong>Typechecker / API metadata</strong>: caller export validation must prove that selected entrypoints and boundary types are representable for Rust-hosted calls.</li>
-<li><strong>IR Lowering / Emission</strong>: backend output must preserve a stable caller namespace or ABI entrypoint and avoid making internal generated modules part of the Rust-hosted contract.</li>
-<li><strong>Stdlib / Runtime (<code>incan_stdlib</code>)</strong>: caller-facing runtime hooks, errors, logging, telemetry, async, and capability surfaces may need caller-compatible contracts.</li>
-<li><strong>Oven / Tooling</strong>: Oven must plan, materialize, inspect, and verify caller build units and <code>*.loaf</code> assets under RFC 117's project/asset contract, including the caller identity record and its Rust facet's link into the calling Rust-authored unit's own build unit (RFC 119); it must reject rather than publish a caller artifact with an unsupported export, and tooling must report diagnostics traceable to #986 execution receipts and the selected Oven build receipt.</li>
-<li><strong>LSP / Docs tooling</strong>: tooling should surface caller-visible exports, Rust-facing signatures, compatibility metadata, and unsupported-boundary diagnostics.</li>
-<li><strong>Registry / Package metadata</strong>: <code>incan.pub</code> (RFC 034, RFC 079) should advertise whether a published Incan package provides a Rust-hosted caller surface, which caller ABI version it requires, and its compiler/runtime/target compatibility range — not a Cargo/crates.io concern.</li>
+<li><strong>Typechecker / language type system</strong>: primitive and stdlib type definitions must commit to Rust-representation identity at the type-system level, not only at emission time.</li>
+<li><strong>IR Lowering / Emission</strong>: no conversion/adapter emission for representation-identical types; lowering passes a real value through rather than constructing a projected copy.</li>
+<li><strong>Stdlib (<code>incan_stdlib</code>)</strong>: owns the canonical shared definitions for stdlib/compound types.</li>
+<li><strong>RFC 097's caller boundary</strong>: "Type projection" section requires a follow-up revision from conversion framing to identity framing.</li>
+<li><strong>RFC 005 / RFC 041 / RFC 043's Rust-interop boundary</strong>: require an equivalent follow-up revision for the reverse direction.</li>
 </ul>
-<h2 id="design-decisions">Design decisions<a class="headerlink" href="#design-decisions" title="Permanent link">&para;</a></h2>
+<h2 id="inspectability-and-tooling-surface">Inspectability and tooling surface<a class="headerlink" href="#inspectability-and-tooling-surface" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Non-default caller policy reuses standard namespace aliasing, not new syntax:</strong> renaming a caller-visible export is ordinary Incan import aliasing (<code>from policy import evaluate_policy as check_grant</code>, RFC 083), which already preserves semantic identity through the rename. There is no separate caller-specific declaration for this. The other originally-considered override cases dissolve into other decisions below: non-default type projection isn't supported as a per-export override — the default projection rules in "Type projection" are the only behavior — and forced blocking wrappers are usage-derived, not manually opted into (see the sync-wrapper decision below).</li>
-<li><strong>The support crate's first stable shape is boundary infrastructure only, with no host-context or initialization API:</strong> a shared <code>CallerError</code> enum (variants for conversion failure, host-capability error, version-compatibility mismatch, and contained panic, matching "Errors" and the Reference-level explanation's error-type requirements), shared conversion helper functions/traits implementing the "Type projection" rules, and a panic-containment helper wrapping <code>catch_unwind</code> semantics. It does not own initialization or compatibility-check responsibilities, since neither applies without a constructed handle object.</li>
-<li><strong>Blocking wrappers around async exports are usage-derived, not default, opt-in, or disallowed as a manual choice:</strong> Oven generates a blocking wrapper for an async caller-visible export only when a synchronous Rust-authored unit in the same build graph actually references it — the same usage-driven principle that derives the rest of the caller facet (see "Public export profiles"). If only async callers ever reference an async export, no blocking wrapper is generated at all.</li>
-<li><strong>Domain and boundary errors flatten into one per-export error enum, not nested <code>Result</code>s:</strong> a caller-visible export whose Incan signature returns <code>Result[T, DomainError]</code> projects to <code>Result&lt;T, PerExportCallError&gt;</code> in Rust, where the generated <code>PerExportCallError</code> enum carries a domain variant wrapping <code>DomainError</code> and a boundary variant wrapping the shared <code>CallerError</code>. One <code>?</code> unwinds either; a <code>match</code> distinguishes domain from boundary when needed, avoiding the double-unwrap ceremony a nested <code>Result&lt;Result&lt;T, DomainError&gt;, CallerError&gt;</code> shape would impose.</li>
-<li><strong>Caller-projected models and enums receive exactly the derives already declared on the Incan side, mapped 1:1:</strong> RFC 024's derive protocol already targets real Rust traits (Debug, Eq, Clone, and user-authored derives), so a caller-projected struct or enum's derives mirror whatever <code>@derive(...)</code> the Incan declaration already carries. There is no separate caller-specific derive policy; a declaration with no derives projects with none beyond what's structurally required to compile.</li>
-<li><strong>Generic Incan functions and generic model types project to genuine Rust generics, not per-usage monomorphization:</strong> because every concrete type a generic parameter could be is already a real Rust type (per "Type projection" and RFC 121's identity principle), a caller-visible generic Incan function projects directly to a generic Rust free function, with Incan's <code>with</code> bounds mapped 1:1 to Rust trait bounds — both systems are intersection-only (RFC 025), so the mapping is direct. Oven does not track or generate a separate monomorphized function per concrete type actually used.</li>
-<li><strong>Host capability wiring is RFC 104's model, consumed directly, not a separate bridging mechanism:</strong> RFC 097 does not define its own host-capability connection; caller-visible calls that need host capabilities get them through whatever ambient wiring or explicit-parameter mechanism RFC 104 defines (see "Host capabilities" in Reference-level explanation). Which RFC's implementation lands first is a sequencing concern for implementation planning, not a design question this RFC answers differently.</li>
+<li><strong>Artifact or metadata:</strong> the canonical Rust path for every Incan stdlib/compound type should be a checked, versioned fact — the same kind of identity record RFC 097 already defines for caller artifacts — so tooling can confirm two consumers agree on the same underlying type rather than silently diverging.</li>
+<li><strong>Inspection command:</strong> <code>incan inspect types</code> (exact spelling not normative) should report, for a given Incan type, its concrete Rust representation and, for stdlib types, the canonical path every consumer resolves to.</li>
+<li><strong>Diagnostics:</strong> a named, explicit exception (see Unresolved questions) must produce a diagnostic when relied upon incorrectly — for example, code assuming representation identity for a type that has a documented exception should fail clearly, not silently misbehave.</li>
+<li><strong>Provenance:</strong> the frontend's commitment to a given type's Rust representation should be traceable to one canonical declaration (in the compiler's own type-system source, or the stdlib's canonical module for stdlib types), not scattered per-boundary.</li>
+<li><strong>Not implicit:</strong> which types are covered by this identity guarantee, and which (if any) are named exceptions, must be an explicit, documented list — not left for a reader to infer from behavior.</li>
+</ul>
+<h2 id="unresolved-questions">Unresolved questions<a class="headerlink" href="#unresolved-questions" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Are there any Incan type-system semantics that cannot be made representation-identical to a natural Rust type — different overflow/panic semantics, different string-encoding guarantees, or similar — and if so, how should those exceptions be named and diagnosed?</li>
+<li>What is the actual canonical location for the shared stdlib-type module — part of <code>incan_stdlib</code>, a new dedicated crate, or something else?</li>
+<li>Does <code>str</code>'s owned-versus-borrowed (<code>String</code> vs <code>&amp;str</code>) choice remain a genuine per-call-site policy decision under this model, or does it need its own resolution to fit cleanly under "representation identity"?</li>
+<li>What is the actual sequencing for revisiting RFC 005/041/043 and RFC 097's "Type projection" section once this RFC is accepted — one combined follow-up, or a separate pass per RFC?</li>
+<li>Does this RFC's principle extend to Incan's trait/dispatch system (RFC 025's multi-instantiation dispatch, RFC 043's Rust trait implementation), or is it scoped to data/type-shape identity only?</li>
 </ul>
 <!-- Rename this section to "Design Decisions" once all questions have been resolved.
      An RFC cannot move from Draft to Planned until no unresolved questions remain. -->
