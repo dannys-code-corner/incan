@@ -21,8 +21,8 @@
     {
       "path": "crates/rust_inspect/src/cache.rs",
       "category": "rust-inspect cache migration and generated Rust syntax metadata compatibility",
-      "expected_count": 26,
-      "expected_fingerprint": "0x80c41a2e4dc23da1"
+      "expected_count": 27,
+      "expected_fingerprint": "0x8fe006273640352e"
     },
     {
       "path": "crates/rust_inspect/src/cache_tests.rs",

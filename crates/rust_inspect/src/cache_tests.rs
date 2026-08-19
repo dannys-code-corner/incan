@@ -393,6 +393,34 @@ fn disk_cache_invalidates_when_workspace_fingerprint_changes() -> Result<(), Box
     Ok(())
 }
 
+/// `Cargo.lock` does not content-checksum a `path = "..."` dependency, so editing that dependency's own source must
+/// still change the workspace fingerprint or the disk cache would keep serving pre-edit extracted metadata.
+#[test]
+fn workspace_fingerprint_changes_when_path_dependency_source_changes() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let dep_dir = tmp.path().join("local_dep");
+    fs::create_dir_all(dep_dir.join("src"))?;
+    fs::write(
+        dep_dir.join("Cargo.toml"),
+        "[package]\nname = \"local_dep\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(dep_dir.join("src/lib.rs"), "pub fn hello() -> i32 { 1 }\n")?;
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nlocal_dep = { path = \"local_dep\" }\n",
+    )?;
+
+    let before = workspace_fingerprint(tmp.path())?;
+    fs::write(dep_dir.join("src/lib.rs"), "pub fn hello() -> i32 { 2 }\n")?;
+    let after = workspace_fingerprint(tmp.path())?;
+
+    assert_ne!(
+        before, after,
+        "editing a local path dependency's source must change the workspace fingerprint"
+    );
+    Ok(())
+}
+
 /// Malformed on-disk cache payloads are ignored instead of poisoning later lookups.
 #[test]
 fn malformed_disk_cache_is_treated_as_miss() -> Result<(), Box<dyn std::error::Error>> {

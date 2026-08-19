@@ -146,6 +146,7 @@ jobs:
           path: |
             dist/toolchain/manifest.json
             dist/toolchain/toolchain-manifest.schema.v1.json
+            dist/toolchain/toolchain-version.txt
             dist/toolchain/install.sh
             dist/toolchain/incan.rb
             dist/toolchain/incan-toolchain-*.tgz

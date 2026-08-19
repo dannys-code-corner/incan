@@ -205,12 +205,50 @@ fn legacy_versioned_workspace_fingerprint(root: &Path, inspector_version: &str) 
 }
 
 /// Hash the workspace files that affect rust-inspect extraction results for this generated Cargo workspace.
+///
+/// `Cargo.lock` does not content-checksum `path = "..."` dependencies, so an edit to a local path-dependency crate
+/// leaves `Cargo.toml`/`Cargo.lock` byte-identical. Path-dependency directories are hashed alongside them so an edit
+/// to a hand-written interop crate invalidates this cache instead of serving stale extracted metadata.
 fn hash_workspace_fingerprint_inputs(hasher: &mut Sha256, root: &Path) -> Result<(), RustMetadataError> {
     hasher.update(fs::read(root.join("Cargo.toml"))?);
     match fs::read(root.join("Cargo.lock")) {
         Ok(lock) => hasher.update(lock),
         Err(err) if err.kind() == ErrorKind::NotFound => {}
         Err(err) => return Err(err.into()),
+    }
+    for dependency_dir in crate::cache_resolve::path_dependency_dirs_from_manifest(root) {
+        hash_dir_contents(hasher, &dependency_dir, &dependency_dir)?;
+    }
+    Ok(())
+}
+
+/// Hash file paths (relative to `root`) and contents under `dir` in a stable order, skipping build output, VCS
+/// metadata, and symlinks.
+///
+/// Paths are hashed relative to `root` rather than as absolute paths so that identical dependency contents
+/// fingerprint identically across checkout locations. Symlinks are skipped rather than followed, matching
+/// [`crate::cache_resolve`]'s canonicalized-directory contract and avoiding a symlink-cycle traversal hazard;
+/// `read_dir` and per-entry metadata errors propagate instead of being silently dropped.
+fn hash_dir_contents(hasher: &mut Sha256, root: &Path, dir: &Path) -> Result<(), RustMetadataError> {
+    let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let file_name = entry.file_name();
+        if file_name == "target" || file_name == ".git" {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            hash_dir_contents(hasher, root, &path)?;
+        } else if metadata.is_file() {
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            hasher.update(relative.to_string_lossy().as_bytes());
+            hasher.update(fs::read(&path)?);
+        }
     }
     Ok(())
 }
@@ -369,8 +407,20 @@ fn ensure_disk_cache_loaded(inner: &mut CacheInner, root: &Path) -> Result<DiskC
 }
 
 /// Build the current workspace-local disk cache snapshot.
+///
+/// Reuses the fingerprint `ensure_disk_cache_loaded` already computed and cached in `inner.disk_cache_state` when
+/// available. Path-dependency directories are hashed as part of that fingerprint, so recomputing it on every
+/// persisted item (this function runs after each newly extracted item during a cold cache) would otherwise repeat a
+/// full recursive directory walk per item instead of once per workspace load.
 fn disk_cache_envelope(inner: &CacheInner, root: &Path) -> Result<DiskCacheEnvelope, RustMetadataError> {
-    let fingerprint = workspace_fingerprint(root)?;
+    let fingerprint = match inner
+        .disk_cache_state
+        .get(root)
+        .and_then(|state| state.workspace_fingerprint.clone())
+    {
+        Some(fingerprint) => fingerprint,
+        None => workspace_fingerprint(root)?,
+    };
     let mut items = HashMap::new();
     let mut misses = HashMap::new();
     for ((item_root, canonical_path), cached) in &inner.items {

@@ -7,6 +7,9 @@ expression: rust_code
 // __INCAN_INSERT_MODS__
 
 incan_stdlib::__incan_stdlib_version_check!("<INCAN_STDLIB_VERSION>");
+fn sample_word() -> String {
+    return "alpha".to_string();
+}
 fn test_operators() {
     let _add: i64 = 1 + 2;
     let _sub: i64 = 5 - 3;
@@ -47,6 +50,13 @@ fn test_operators() {
         let __incan_probe = "z";
         let __incan_probe = <_ as AsRef<str>>::as_ref(&__incan_probe);
         vowels.contains(__incan_probe)
+    };
+    let _has_alpha_from_call: bool = {
+        let __incan_probe = sample_word();
+        let __incan_probe = <_ as AsRef<str>>::as_ref(&__incan_probe);
+        words
+            .iter()
+            .any(|__incan_item| <_ as AsRef<str>>::as_ref(__incan_item) == __incan_probe)
     };
 }
 fn main() {

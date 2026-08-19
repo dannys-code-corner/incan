@@ -346,17 +346,15 @@ impl TypeChecker {
                     ResolvedType::Named(type_name) if ctor_name == type_name => self
                         .lookup_type_info(type_name)
                         .and_then(|type_info| match type_info {
-                            TypeInfo::Model(model_info) => Some((model_info.fields.clone(), true)),
-                            TypeInfo::Class(class_info) => Some((class_info.fields.clone(), false)),
+                            TypeInfo::Model(model_info) => Some(model_info.fields.clone()),
+                            TypeInfo::Class(class_info) => Some(class_info.fields.clone()),
                             _ => None,
                         })
-                        .map(|(fields, model_private_fields_are_hidden)| {
-                            (type_name, fields, model_private_fields_are_hidden)
-                        }),
+                        .map(|fields| (type_name, fields)),
                     _ => None,
                 };
 
-                if let Some((type_name, fields, model_private_fields_are_hidden)) = model_or_class_fields {
+                if let Some((type_name, fields)) = model_or_class_fields {
                     let mut provided = HashSet::new();
                     for arg in sub_patterns {
                         match arg {
@@ -372,9 +370,7 @@ impl TypeChecker {
                                     continue;
                                 };
 
-                                if model_private_fields_are_hidden
-                                    && self.private_field_is_inaccessible(type_name, info)
-                                {
+                                if self.private_field_is_inaccessible(type_name, info) {
                                     self.errors.push(errors::private_field(type_name, field_name, pat.span));
                                     continue;
                                 }
