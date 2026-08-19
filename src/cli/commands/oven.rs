@@ -100,9 +100,12 @@ pub const OVEN_COMPILER_TEST_JOBS_ENV: &str = "INCAN_OVEN_COMPILER_TEST_JOBS";
 /// the complete worker pool indefinitely on one host-specific child process.
 ///
 /// Constrained hosted MSRV runners can require more than fifteen minutes for the two largest integration roots even
-/// though prepared reference-machine replay remains inside the five-minute suite budget. Keep a deterministic
-/// per-root ceiling, but calibrate it with enough headroom that slow hardware is not misreported as a test failure.
-const OVEN_COMPILER_TEST_ROOT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// though prepared reference-machine replay remains inside the five-minute suite budget. The unsharded release
+/// evidence workflow (`oven_evidence.yml`) runs every root in one job rather than the four-way split the ordinary
+/// CI workflow uses, so its two largest roots (`cli_integration`, `integration_tests`) have repeatedly needed more
+/// than thirty minutes under real hosted-runner contention. Keep a deterministic per-root ceiling, but calibrate it
+/// with enough headroom that slow hardware is not misreported as a test failure.
+const OVEN_COMPILER_TEST_ROOT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// Inputs for `incan oven import`.
 #[derive(Debug, Clone)]
