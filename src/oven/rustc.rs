@@ -453,13 +453,19 @@ impl OvenRegistryLeafAuthority {
         })
     }
 
-    #[cfg(test)]
     #[must_use]
-    /// Join catalogs from fragments already proven to form one receipt-bound composed direct-Rustc closure.
+    /// Join registry-leaf catalogs from independently sealed sources into one lookup surface.
     ///
-    /// Callers must not use this as a general registry resolver.  Each authority retains the root and verified
-    /// metadata search paths that published its leaves; composition is safe only after the outer artifact manifest
-    /// has required every fragment and rejected duplicate/substituted artifacts.
+    /// This does not itself decide compatibility: [`select_sealed_registry_leaf`]'s existing candidate resolution
+    /// already tolerates a joined catalog naming the same package at different versions (it picks the
+    /// requirement-matching highest one), and separately fails closed if a *specific requested* package/version
+    /// resolves to more than one distinct compiled artifact. That per-lookup check is what actually protects against
+    /// admitting two incompatible compiled instances of a shared package (most dangerously an async runtime such as
+    /// `tokio`, where a runtime object built through one compiled instance becomes invisible to code compiled
+    /// against another) -- it is precise about only the package actually being resolved, unlike a blanket
+    /// pre-validation of every entry a joined catalog happens to carry, most of which are never looked up together.
+    /// Joining catalogs here is therefore safe for any sources whose own artifacts are independently receipt-bound;
+    /// it does not require the caller to have already reconciled a shared compiled closure.
     pub(crate) fn aggregate(authorities: impl IntoIterator<Item = Self>) -> Self {
         Self {
             entries: authorities
@@ -2224,6 +2230,31 @@ fn same_registry_leaf_semantics(left: &OvenRustcRegistryLeaf, right: &OvenRustcR
         && left.features == right.features
 }
 
+/// Return whether a project registry leaf may be replaced by its matching release-base counterpart.
+///
+/// Matching package, version, source checksum, and declared features proves two registry leaves compiled from
+/// identical source. That is sufficient for an ordinary crate: identical source under the same toolchain, target,
+/// and profile compiles to byte-identical output, so substituting the release's already-published copy is a safe
+/// deduplication. It is not sufficient for a crate with a build script: `build.rs` can probe the ambient build
+/// environment (target-detection `cfg`s, feature unification pulled in from an unrelated part of each closure's own
+/// dependency graph) and legitimately compile differently despite identical declared inputs, in which case the two
+/// artifacts are not link-compatible even though every recorded coordinate matches. A build-script artifact is
+/// staged under `build/<package>/<identity>/out/`, unlike an ordinary crate's `deps/` output, so restrict
+/// substitution to leaves on both sides that are not build-script-shaped.
+fn registry_leaf_substitution_is_safe(
+    project_leaf: &OvenRustcRegistryLeaf,
+    release_leaf: &OvenRustcRegistryLeaf,
+) -> bool {
+    let is_build_script_shaped = |relative_path: &str| {
+        Path::new(relative_path)
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "out")
+    };
+    !is_build_script_shaped(&project_leaf.artifact.relative_path)
+        && !is_build_script_shaped(&release_leaf.artifact.relative_path)
+}
+
 /// Replace project source-catalog facts with the exact selected release record for each shared coordinate.
 fn canonicalize_release_registry_sources(
     project: &mut OvenRustcArtifactManifest,
@@ -2791,6 +2822,7 @@ impl OvenRustcArtifactManifest {
             }
             let Some(release_leaf) = candidates.into_iter().find(|candidate| {
                 same_registry_leaf_semantics(candidate, project_leaf)
+                    && registry_leaf_substitution_is_safe(project_leaf, candidate)
                     && composed.registry_sources.iter().any(|project_source| {
                         base.registry_sources.iter().any(|release_source| {
                             project_source == release_source
@@ -5894,7 +5926,11 @@ fn parse_rustc_diagnostics(stdout: &[u8], stderr: &[u8]) -> OvenRustcDiagnosticR
 impl OvenRustcDiagnosticReport {
     /// Attach bounded process evidence to a report after Rustc has exited unsuccessfully.
     fn with_invocation(mut self, command: &Command) -> Self {
-        const MAX_INVOCATION_CHARS: usize = 12_000;
+        // A legacy-Cargo-published dependency closure with many build-script crates can produce a single-line
+        // invocation with hundreds of `-L dependency=...` entries before the first `--extern`. The previous 12,000
+        // char bound routinely truncated evidence before any `--extern` flag appeared at all, making failure
+        // reports misleading for exactly the invocations most worth diagnosing.
+        const MAX_INVOCATION_CHARS: usize = 100_000;
 
         // Do not render `Command` itself: its debug format may include explicit compile-time environment values.
         // Rustc program and argument evidence is enough to replay the artifact closure without exposing that state.
@@ -6661,6 +6697,164 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_admits_a_provider_package_the_consumer_never_declared() -> Result<(), Box<dyn std::error::Error>> {
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let provider_artifact = provider_root.path().join("libdatafusion.rlib");
+        let provider_bytes = b"sealed datafusion 53.1.0";
+        fs::write(&provider_artifact, provider_bytes)?;
+        let consumer_authority = OvenRegistryLeafAuthority::new(consumer_root.path().to_path_buf(), Vec::new());
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![OvenRustcRegistryLeaf {
+                package: "datafusion".to_string(),
+                version: "53.1.0".to_string(),
+                crate_name: "datafusion".to_string(),
+                features: Vec::new(),
+                source: fixture_registry_source(),
+                artifact: OvenRustcArtifactExtern {
+                    crate_name: "datafusion".to_string(),
+                    relative_path: "libdatafusion.rlib".to_string(),
+                    digest: digest_bytes(provider_bytes),
+                },
+            }],
+        );
+        let joined = OvenRegistryLeafAuthority::aggregate([consumer_authority, provider_authority]);
+        let dependency = DependencySpec {
+            crate_name: "datafusion".to_string(),
+            version: Some("53".to_string()),
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Registry,
+            optional: false,
+            package: None,
+        };
+        assert_eq!(
+            resolve_sealed_registry_leaf(&dependency, Some(&joined), "debug")?,
+            fs::canonicalize(provider_artifact)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_does_not_block_an_unrelated_lookup_when_a_never_requested_package_conflicts(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Regression coverage for a real false positive: a provider and consumer can each carry their own build of
+        // some common transitive crate (for example `memchr`, pulled in independently by unrelated dependencies on
+        // each side) that nobody ever actually resolves through this authority. Joining the two catalogs must not
+        // block resolution of a package that IS actually requested and IS only on one side.
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let consumer_bytes = b"sealed memchr 2.8.0 consumer build";
+        let provider_memchr_bytes = b"sealed memchr 2.8.0 provider build";
+        let provider_datafusion_bytes = b"sealed datafusion 53.1.0";
+        fs::write(consumer_root.path().join("libmemchr.rlib"), consumer_bytes)?;
+        fs::write(provider_root.path().join("libmemchr.rlib"), provider_memchr_bytes)?;
+        let provider_datafusion = provider_root.path().join("libdatafusion.rlib");
+        fs::write(&provider_datafusion, provider_datafusion_bytes)?;
+        let memchr_leaf = |bytes: &[u8]| OvenRustcRegistryLeaf {
+            package: "memchr".to_string(),
+            version: "2.8.0".to_string(),
+            crate_name: "memchr".to_string(),
+            features: Vec::new(),
+            source: fixture_registry_source(),
+            artifact: OvenRustcArtifactExtern {
+                crate_name: "memchr".to_string(),
+                relative_path: "libmemchr.rlib".to_string(),
+                digest: digest_bytes(bytes),
+            },
+        };
+        let consumer_authority =
+            OvenRegistryLeafAuthority::new(consumer_root.path().to_path_buf(), vec![memchr_leaf(consumer_bytes)]);
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![
+                memchr_leaf(provider_memchr_bytes),
+                OvenRustcRegistryLeaf {
+                    package: "datafusion".to_string(),
+                    version: "53.1.0".to_string(),
+                    crate_name: "datafusion".to_string(),
+                    features: Vec::new(),
+                    source: fixture_registry_source(),
+                    artifact: OvenRustcArtifactExtern {
+                        crate_name: "datafusion".to_string(),
+                        relative_path: "libdatafusion.rlib".to_string(),
+                        digest: digest_bytes(provider_datafusion_bytes),
+                    },
+                },
+            ],
+        );
+        let joined = OvenRegistryLeafAuthority::aggregate([consumer_authority, provider_authority]);
+        let datafusion_dependency = DependencySpec {
+            crate_name: "datafusion".to_string(),
+            version: Some("53".to_string()),
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Registry,
+            optional: false,
+            package: None,
+        };
+        assert_eq!(
+            resolve_sealed_registry_leaf(&datafusion_dependency, Some(&joined), "debug")?,
+            fs::canonicalize(&provider_datafusion)?,
+            "an unrelated conflicting memchr entry must not block resolving datafusion"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_fails_closed_when_the_actually_requested_package_conflicts() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let consumer_bytes = b"sealed tokio 1.52.3 rt-multi-thread,macros,time,sync,net";
+        let provider_bytes = b"sealed tokio 1.52.3 full";
+        // Real rustc output embeds a metadata hash in the filename that differs whenever the compiled configuration
+        // differs, which is what `same_compilation` actually keys off; give the two conflicting artifacts distinct
+        // names here so this fixture matches that shape instead of coincidentally looking like the same compilation.
+        fs::write(consumer_root.path().join("libtokio-consumer1234.rlib"), consumer_bytes)?;
+        fs::write(provider_root.path().join("libtokio-provider5678.rlib"), provider_bytes)?;
+        let leaf = |features: &[&str], bytes: &[u8], relative_path: &str| OvenRustcRegistryLeaf {
+            package: "tokio".to_string(),
+            version: "1.52.3".to_string(),
+            crate_name: "tokio".to_string(),
+            features: features.iter().map(|feature| feature.to_string()).collect(),
+            source: fixture_registry_source(),
+            artifact: OvenRustcArtifactExtern {
+                crate_name: "tokio".to_string(),
+                relative_path: relative_path.to_string(),
+                digest: digest_bytes(bytes),
+            },
+        };
+        let consumer_authority = OvenRegistryLeafAuthority::new(
+            consumer_root.path().to_path_buf(),
+            vec![leaf(
+                &["rt-multi-thread", "macros", "time", "sync", "net"],
+                consumer_bytes,
+                "libtokio-consumer1234.rlib",
+            )],
+        );
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![leaf(&["full"], provider_bytes, "libtokio-provider5678.rlib")],
+        );
+        let joined = OvenRegistryLeafAuthority::aggregate([consumer_authority, provider_authority]);
+        let dependency = DependencySpec {
+            crate_name: "tokio".to_string(),
+            version: Some("1".to_string()),
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Registry,
+            optional: false,
+            package: None,
+        };
+        let error = resolve_sealed_registry_leaf(&dependency, Some(&joined), "debug")
+            .expect_err("resolving a package that genuinely disagrees between two joined authorities must fail closed");
+        assert!(matches!(error, OvenRustcError::InvalidInput { .. }));
+        Ok(())
+    }
+
+    #[test]
     fn selects_one_profile_matched_copy_of_an_equivalent_sealed_registry_leaf() -> Result<(), Box<dyn std::error::Error>>
     {
         let first = tempfile::tempdir()?;
@@ -7208,6 +7402,103 @@ mod tests {
         project.registry_sources[0].source.checksum = "mismatched-checksum".to_string();
         let mismatch = project.with_release_cohort_from_base(&base);
         assert!(matches!(mismatch, Err(OvenRustcError::InvalidInput { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn project_extension_keeps_its_own_build_script_leaf_despite_matching_release_semantics()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Regression: two independent builds of a build-script crate (like `libc`) can compile to link-incompatible
+        // artifacts even when package, version, source checksum, and declared features all match, because a build
+        // script can read ambient build-environment state that isn't captured by any of those coordinates. Matching
+        // "leaf semantics" alone must not be trusted as proof of link compatibility for such a crate.
+        let root = tempfile::tempdir()?;
+        let receipt = intent(root.path())?;
+        let source = OvenRustcRegistrySource {
+            registry: "registry+https://github.com/rust-lang/crates.io-index".to_string(),
+            checksum: "libc-checksum".to_string(),
+            relative_root: "registry-sources/libc".to_string(),
+            digest: "sha256:libc-source".to_string(),
+        };
+        let registry_source = OvenRustcRegistrySourcePackage {
+            package: "libc".to_string(),
+            version: "0.2.155".to_string(),
+            features: vec!["default".to_string()],
+            source: source.clone(),
+        };
+        // Build-script output is staged under `build/<package>/<identity>/out/`, unlike an ordinary crate's flat
+        // `deps/` output; this is the structural signal that distinguishes it from a crate like `serde`.
+        let release_libc = OvenRustcArtifactExtern {
+            crate_name: "libc".to_string(),
+            relative_path: "build/libc/release-identity/out/liblibc-release-identity.rlib".to_string(),
+            digest: "sha256:release-libc".to_string(),
+        };
+        let project_libc = OvenRustcArtifactExtern {
+            relative_path: "build/libc/project-identity/out/liblibc-project-identity.rlib".to_string(),
+            digest: "sha256:project-libc".to_string(),
+            ..release_libc.clone()
+        };
+        let leaf = |artifact| OvenRustcRegistryLeaf {
+            package: "libc".to_string(),
+            version: "0.2.155".to_string(),
+            crate_name: "libc".to_string(),
+            features: vec!["default".to_string()],
+            source: source.clone(),
+            artifact,
+        };
+        let project = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent.clone(),
+            dependency_search_paths: vec!["build/libc/project-identity/out".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![
+                OvenRustcArtifactExtern {
+                    crate_name: "incan_stdlib".to_string(),
+                    relative_path: "deps/libincan_stdlib-project.rlib".to_string(),
+                    digest: "sha256:project-stdlib".to_string(),
+                },
+                project_libc.clone(),
+            ],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: vec![leaf(project_libc.clone())],
+            registry_sources: vec![registry_source.clone()],
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![OvenRustcSupportingArtifact {
+                relative_path: "registry-sources/libc/Cargo.toml".to_string(),
+                digest: "sha256:libc-manifest".to_string(),
+            }],
+        };
+        let base = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent,
+            dependency_search_paths: vec!["build/libc/release-identity/out".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![
+                OvenRustcArtifactExtern {
+                    crate_name: "incan_stdlib".to_string(),
+                    relative_path: "deps/libincan_stdlib-release.rlib".to_string(),
+                    digest: "sha256:release-stdlib".to_string(),
+                },
+                release_libc.clone(),
+            ],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: vec![leaf(release_libc)],
+            registry_sources: vec![registry_source],
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![OvenRustcSupportingArtifact {
+                relative_path: "registry-sources/libc/Cargo.toml".to_string(),
+                digest: "sha256:libc-manifest".to_string(),
+            }],
+        };
+
+        let composed = project.with_release_cohort_from_base(&base)?;
+        assert_eq!(
+            composed.registry_leaves[0].artifact, project_libc,
+            "a build-script leaf must keep the project's own compiled artifact, not the base's independently built one"
+        );
+        assert_eq!(composed.externs[1], project_libc);
         Ok(())
     }
 

@@ -35,14 +35,15 @@ pub fn expr_has_rust_reference_shape(expr: &IrExpr) -> bool {
     ) || matches!(
         &expr.kind,
         IrExprKind::MethodCall { method, args, .. }
-            if args.is_empty() && matches!(method.as_str(), "as_slice" | "as_str")
+            if args.is_empty() && matches!(method.as_str(), "as_slice" | "as_str" | "as_ref")
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::type_has_rust_reference_shape;
+    use super::{expr_has_rust_reference_shape, type_has_rust_reference_shape};
     use crate::backend::ir::IrType;
+    use crate::backend::ir::expr::{IrExpr, IrExprKind, MethodCallArgPolicy, VarAccess, VarRefKind};
 
     #[test]
     fn borrowed_callback_display_preserves_reference_shape() {
@@ -55,5 +56,51 @@ mod tests {
         assert!(!type_has_rust_reference_shape(&IrType::RustDisplay(
             "egui::Ui".to_string()
         )));
+    }
+
+    /// Build a zero-arg `receiver.method()` call expression for the reference-shape predicate tests below.
+    fn zero_arg_method_call(method: &str, receiver_ty: IrType, result_ty: IrType) -> IrExpr {
+        IrExpr::new(
+            IrExprKind::MethodCall {
+                receiver: Box::new(IrExpr::new(
+                    IrExprKind::Var {
+                        name: "value".to_string(),
+                        access: VarAccess::Read,
+                        ref_kind: VarRefKind::Value,
+                    },
+                    receiver_ty,
+                )),
+                method: method.to_string(),
+                dispatch: None,
+                type_args: Vec::new(),
+                args: Vec::new(),
+                callable_signature: None,
+                arg_policy: MethodCallArgPolicy::Default,
+            },
+            result_ty,
+        )
+    }
+
+    #[test]
+    fn as_ref_call_is_treated_as_already_reference_shaped() {
+        // `Arc<T>`/`Box<T>`/`Rc<T>` `.as_ref()` always yields `&T`, matching the already-recognized `.as_slice()` and
+        // `.as_str()` shapes; without this, argument planning wraps the result in a second `&`.
+        let expr = zero_arg_method_call(
+            "as_ref",
+            IrType::NamedGeneric("Arc".to_string(), vec![IrType::Struct("dyn Array".to_string())]),
+            IrType::Struct("dyn Array".to_string()),
+        );
+        assert!(expr_has_rust_reference_shape(&expr));
+    }
+
+    #[test]
+    fn clone_call_is_not_treated_as_reference_shaped() {
+        // `.clone()` produces an owned value, so a target expecting `&T` still needs an explicit borrow.
+        let expr = zero_arg_method_call(
+            "clone",
+            IrType::Struct("Node".to_string()),
+            IrType::Struct("Node".to_string()),
+        );
+        assert!(!expr_has_rust_reference_shape(&expr));
     }
 }

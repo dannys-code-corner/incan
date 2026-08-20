@@ -33,7 +33,7 @@ use crate::frontend::contract_metadata::{ContractMetadataPackage, read_project_m
 use crate::frontend::library_exports::{CheckedExportKind, CheckedNamedExport, collect_checked_public_exports};
 use crate::frontend::library_manifest_index::{
     LibraryArtifactKind, LibraryArtifactMetadata, LibraryManifestIndex, LibraryManifestIndexEntry,
-    load_provider_dependency_artifact,
+    dependency_project_root, load_provider_dependency_artifact,
 };
 use crate::frontend::module::{
     SourceModuleImportResolution, canonicalize_source_module_segments, resolve_program_source_imports,
@@ -4467,6 +4467,159 @@ fn rematerialize_caller_owned_provider_graph(
     result
 }
 
+/// Collect the receipt-bound registry-leaf authority owned by every caller-owned path-dependency provider.
+///
+/// A `pub::` provider consumed by path (for example a query-engine library) was compiled against its own sealed
+/// third-party registry closure. [`rematerialize_caller_owned_provider_graph`] re-materializes that provider's
+/// compiled libraries into the consumer's own direct-Rustc plan, but resolving the provider's *own* declared
+/// registry dependencies (its `[rust-dependencies]`) needs the provider's own registry-leaf authority, not just the
+/// consumer's -- the consumer's own closure knows nothing about a package the provider alone depends on. Omitting
+/// this fails closed with a confusing "no compatible receipt-bound Loaf registry leaf" error for a package the
+/// consumer never declared. This walks the exact same caller-owned provider graph
+/// [`rematerialize_caller_owned_provider_graph`] re-materializes and joins each visited provider's own registry
+/// authority into `authority` via [`OvenRegistryLeafAuthority::aggregate`]. Joining does not itself decide whether a
+/// package shared between the consumer and a provider (most dangerously an async runtime such as `tokio`) is safe to
+/// treat as one closure -- [`select_sealed_registry_leaf`]'s existing per-lookup check already fails closed if the
+/// *specific package actually being resolved* disagrees between sources, without also rejecting an unrelated package
+/// that happens to differ between the two but is never looked up through this authority at all.
+fn collect_caller_owned_provider_registry_leaf_authority(
+    store: &OvenStore,
+    provider_plan: &ProviderPlan,
+    profile: &str,
+    mut authority: Option<OvenRegistryLeafAuthority>,
+) -> CliResult<Option<OvenRegistryLeafAuthority>> {
+    let mut visiting = BTreeSet::new();
+    for provider in provider_plan.active_records().filter(|provider| {
+        matches!(
+            provider.authority,
+            crate::provider::NamespaceAuthority::ProjectDependency { .. }
+        )
+    }) {
+        let artifact = provider.artifact.as_ref().ok_or_else(|| {
+            CliError::failure(format!(
+                "Oven Alpha cannot resolve pub::{} because its generated library artifact is unavailable",
+                provider.identity.name
+            ))
+        })?;
+        let manifest = provider.manifest.as_ref().ok_or_else(|| {
+            CliError::failure(format!(
+                "Oven Alpha cannot resolve pub::{} because its checked provider manifest is unavailable",
+                artifact.dependency_key
+            ))
+        })?;
+        authority = collect_caller_owned_provider_registry_leaf_authority_graph(
+            store,
+            artifact,
+            manifest,
+            profile,
+            authority,
+            &mut visiting,
+        )?;
+    }
+    Ok(authority)
+}
+
+/// Recursive worker for [`collect_caller_owned_provider_registry_leaf_authority`].
+///
+/// Follows the same public-package provider edges [`rematerialize_caller_owned_provider_graph`] follows, so both
+/// walks agree on which providers exist and which are another provider's own nested public-package dependency.
+fn collect_caller_owned_provider_registry_leaf_authority_graph(
+    store: &OvenStore,
+    artifact: &LibraryArtifactMetadata,
+    manifest: &LibraryManifest,
+    profile: &str,
+    mut authority: Option<OvenRegistryLeafAuthority>,
+    visiting: &mut BTreeSet<PathBuf>,
+) -> CliResult<Option<OvenRegistryLeafAuthority>> {
+    let canonical_root = fs::canonicalize(&artifact.crate_root).map_err(|error| {
+        CliError::failure(format!(
+            "Oven Alpha cannot canonicalize generated artifact root for pub::{} at {}: {error}",
+            artifact.dependency_key,
+            artifact.crate_root.display()
+        ))
+    })?;
+    if !visiting.insert(canonical_root.clone()) {
+        return Err(CliError::failure(format!(
+            "Oven Alpha refuses a cyclic public provider graph while resolving pub::{} at {}",
+            artifact.dependency_key,
+            canonical_root.display()
+        )));
+    }
+    let result = (|| {
+        for dependency in manifest
+            .contract_metadata
+            .provider
+            .provider_dependencies
+            .iter()
+            .filter(|dependency| dependency.kind == ProviderDependencyKind::PublicPackage)
+        {
+            let (nested_manifest, nested_artifact) = load_receipted_public_provider_dependency(artifact, dependency)?;
+            authority = collect_caller_owned_provider_registry_leaf_authority_graph(
+                store,
+                &nested_artifact,
+                &nested_manifest,
+                profile,
+                authority,
+                visiting,
+            )?;
+        }
+        if let Some(provider_authority) = caller_owned_provider_registry_leaf_authority(store, artifact, profile)? {
+            authority = Some(match authority {
+                Some(consumer_authority) => {
+                    OvenRegistryLeafAuthority::aggregate([consumer_authority, provider_authority])
+                }
+                None => provider_authority,
+            });
+        }
+        Ok(authority)
+    })();
+    visiting.remove(&canonical_root);
+    result
+}
+
+/// Return one caller-owned provider's own receipt-bound registry-leaf authority, if it declared any.
+///
+/// This never bakes or invokes Cargo -- it only selects an already-published receipt, the same select-only step
+/// normal build/run try before falling back to the explicit baker. A provider without a verified receipt for this
+/// profile, or without any registry dependencies of its own, contributes nothing here; the ordinary
+/// [`materialize_declared_rust_libraries_with_selected_path_authority`] failure surfaces an actionable error once
+/// something actually needs a registry leaf this authority does not have.
+fn caller_owned_provider_registry_leaf_authority(
+    store: &OvenStore,
+    artifact: &LibraryArtifactMetadata,
+    profile: &str,
+) -> CliResult<Option<OvenRegistryLeafAuthority>> {
+    let Some(project_root) = dependency_project_root(&artifact.crate_root) else {
+        return Ok(None);
+    };
+    let Some(receipt) = read_verified_caller_owned_provider_receipt(&project_root, profile) else {
+        return Ok(None);
+    };
+    let Some(selection) = select_published_project_plan(store, &receipt, OvenToolchainMaterialization::Reused)?
+    else {
+        return Ok(None);
+    };
+    registry_leaf_authority_for_plan_selection(&selection.plan_selection)
+}
+
+/// Read and identity-verify one caller-owned provider's own Oven receipt for `profile`, if one exists.
+///
+/// Mirrors the exact receipt paths the explicit library bake writes for each profile (see the `receipt_path`
+/// selection in the library-mode bake loop), so a provider baked through the ordinary `incan build --lib` /
+/// `incan oven bake --project` path is always found here.
+fn read_verified_caller_owned_provider_receipt(project_root: &Path, profile: &str) -> Option<crate::oven::OvenReceipt> {
+    let path = if profile == "release" {
+        crate::oven::default_receipt_path(project_root)
+    } else {
+        crate::oven::default_receipt_path(project_root).with_file_name(format!("library-{profile}-receipt.json"))
+    };
+    let receipt = fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<crate::oven::OvenReceipt>(&bytes).ok())?;
+    receipt.verify_identity().ok()?;
+    Some(receipt)
+}
+
 /// Rebuild selected caller-owned Rust libraries in the consumer's direct-Rustc cohort.
 #[allow(clippy::too_many_arguments)]
 fn rematerialize_caller_owned_libraries_with_authority_context(
@@ -8233,10 +8386,16 @@ fn bake_oven_project(
 ) -> CliResult<crate::oven::rustc::OvenDirectRustcBake> {
     let mut caller_owned_libraries = prepared.caller_owned_libraries.clone();
     let mut re_materialized_package_library_names = BTreeSet::new();
-    let registry_authority = registry_leaf_authority_for_plan_selection(&prepared.plan_selection)?;
+    let mut registry_authority = registry_leaf_authority_for_plan_selection(&prepared.plan_selection)?;
     if has_caller_owned_project_libraries(&prepared.provider_plan)
         && !prepared.plan_selection.uses_packaged_provider_closure()
     {
+        registry_authority = collect_caller_owned_provider_registry_leaf_authority(
+            &open_default_oven_store()?,
+            &prepared.provider_plan,
+            profile,
+            registry_authority,
+        )?;
         let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
             &prepared.provider_plan,
             profile,
@@ -8311,10 +8470,16 @@ fn bake_oven_library(
     })?;
     let mut caller_owned_libraries = selected.caller_owned_libraries.clone();
     let mut re_materialized_package_library_names = BTreeSet::new();
-    let registry_authority = registry_leaf_authority_for_plan_selection(&selected.plan_selection)?;
+    let mut registry_authority = registry_leaf_authority_for_plan_selection(&selected.plan_selection)?;
     if has_caller_owned_project_libraries(&selected.provider_plan)
         && !selected.plan_selection.uses_packaged_provider_closure()
     {
+        registry_authority = collect_caller_owned_provider_registry_leaf_authority(
+            &open_default_oven_store()?,
+            &selected.provider_plan,
+            profile,
+            registry_authority,
+        )?;
         let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
             &selected.provider_plan,
             profile,

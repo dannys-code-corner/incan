@@ -1673,6 +1673,40 @@ mod tests {
     }
 
     #[test]
+    fn test_external_function_as_ref_arg_does_not_double_borrow() {
+        // Regression for a real downstream build failure: `array.as_ref()` on an `Arc<dyn Array>`-shaped receiver
+        // already yields `&dyn Array`, so passing it to an external function expecting `&dyn Array` must not wrap it
+        // in a second `&`, which would produce the uninstantiable `&&dyn Array`.
+        let expr = IrExpr::new(
+            IrExprKind::MethodCall {
+                receiver: Box::new(IrExpr::new(
+                    IrExprKind::Var {
+                        name: "array".to_string(),
+                        access: VarAccess::Read,
+                        ref_kind: VarRefKind::Value,
+                    },
+                    IrType::NamedGeneric("Arc".to_string(), vec![IrType::Struct("dyn Array".to_string())]),
+                )),
+                method: "as_ref".to_string(),
+                dispatch: None,
+                type_args: Vec::new(),
+                args: Vec::new(),
+                callable_signature: None,
+                arg_policy: MethodCallArgPolicy::Default,
+            },
+            IrType::Struct("dyn Array".to_string()),
+        );
+
+        let target = IrType::Ref(Box::new(IrType::Struct("dyn Array".to_string())));
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::ExternalFunctionArg);
+        assert_eq!(
+            conv,
+            Conversion::None,
+            "an explicit as_ref() argument must not become &&dyn Array for ref targets"
+        );
+    }
+
+    #[test]
     fn test_external_function_string_var_with_by_value_target_does_not_borrow() {
         let expr = IrExpr::new(
             IrExprKind::Var {
