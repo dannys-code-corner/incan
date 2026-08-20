@@ -522,6 +522,31 @@ impl OvenRegistryLeafAuthority {
         }
         Ok(None)
     }
+
+    /// Return the first package both authorities carry at the same version but as byte-distinct compiled artifacts.
+    ///
+    /// [`Self::first_conflicting_package_with`] only sees packages a plan links as a *named* `--extern`, but a
+    /// shared package can just as easily enter both sides transitively -- the real `tokio` duplication that
+    /// motivated these checks was never a named extern of either compile; both copies loaded purely through
+    /// `-L dependency=...` metadata search from their respective dependents. Whenever the consumer's dependents and
+    /// a provider's dependents both end up in one link (which is always true for a caller-owned provider: the SDK
+    /// runtime and the provider library are both linked), a same-version/different-bytes package in the two catalogs
+    /// means two compiled instances of one crate in one binary. Two *different versions* of a package are deliberate,
+    /// ordinary Cargo semver coexistence and are not flagged; only a same-version byte divergence -- two independent
+    /// compiles of identical source -- is the anomaly this reports.
+    pub(crate) fn first_diverging_shared_package(&self, other: &Self) -> Option<String> {
+        for entry in &self.entries {
+            for candidate in &other.entries {
+                if entry.leaf.package == candidate.leaf.package
+                    && entry.leaf.version == candidate.leaf.version
+                    && entry.leaf.artifact.digest != candidate.leaf.artifact.digest
+                {
+                    return Some(entry.leaf.package.clone());
+                }
+            }
+        }
+        None
+    }
 }
 
 /// One digest-verified registry leaf plus the plan directories Rustc may use solely for its transitive metadata.
@@ -7041,6 +7066,61 @@ mod tests {
         );
         assert_eq!(provider_authority.first_conflicting_package_with(&plan)?, None);
         Ok(())
+    }
+
+    #[test]
+    fn first_diverging_shared_package_reports_a_same_version_byte_distinct_overlap() {
+        let leaf = |package: &str, version: &str, digest: &str| OvenRustcRegistryLeaf {
+            package: package.to_string(),
+            version: version.to_string(),
+            crate_name: package.replace('-', "_"),
+            features: Vec::new(),
+            source: fixture_registry_source(),
+            artifact: OvenRustcArtifactExtern {
+                crate_name: package.replace('-', "_"),
+                relative_path: format!("lib{package}.rlib"),
+                digest: digest.to_string(),
+            },
+        };
+        let consumer = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/consumer"),
+            vec![leaf("tokio", "1.52.3", "sha256:consumer-tokio")],
+        );
+        let provider = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/provider"),
+            vec![leaf("tokio", "1.52.3", "sha256:provider-tokio")],
+        );
+        assert_eq!(
+            consumer.first_diverging_shared_package(&provider),
+            Some("tokio".to_string()),
+            "one package at one version with two byte-distinct compiled artifacts is the exact dangerous shape"
+        );
+
+        let identical = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/provider"),
+            vec![leaf("tokio", "1.52.3", "sha256:consumer-tokio")],
+        );
+        assert_eq!(
+            consumer.first_diverging_shared_package(&identical),
+            None,
+            "the same compiled bytes on both sides is the harmless shared case"
+        );
+
+        let different_version = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/provider"),
+            vec![leaf("tokio", "1.51.0", "sha256:provider-tokio")],
+        );
+        assert_eq!(
+            consumer.first_diverging_shared_package(&different_version),
+            None,
+            "distinct versions are ordinary Cargo semver coexistence, not a divergence"
+        );
+
+        let unrelated = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/provider"),
+            vec![leaf("datafusion", "53.1.0", "sha256:provider-datafusion")],
+        );
+        assert_eq!(consumer.first_diverging_shared_package(&unrelated), None);
     }
 
     #[test]

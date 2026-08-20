@@ -4485,39 +4485,55 @@ fn rematerialize_caller_owned_provider_graph(
     result
 }
 
-/// Registry-leaf authority and dependency-search closure collected from every caller-owned path-dependency provider.
+/// Registry-leaf authorities and dependency-search closure collected from every caller-owned path-dependency
+/// provider.
 ///
 /// A `pub::` provider consumed by path (for example a query-engine library) was compiled against its own sealed
 /// third-party registry closure. [`rematerialize_caller_owned_provider_graph`] re-materializes that provider's
 /// compiled libraries into the consumer's own direct-Rustc plan, but resolving the provider's *own* declared
 /// registry dependencies (its `[rust-dependencies]`) needs the provider's own registry-leaf authority and full
 /// dependency search closure, not just the consumer's -- the consumer's own closure knows nothing about a package
-/// the provider alone depends on, directly or transitively. `authority` is used for the provider's own directly
-/// declared registry externs; `dependency_search_paths` additionally exposes every directory the provider's own
-/// standalone bake needed to load those externs' further dependencies (including proc-macro/build-script outputs
-/// that never become a named registry leaf at all) purely through Rustc's ordinary `-L dependency=...` search.
+/// the provider alone depends on, directly or transitively. Each provider's authority is kept separate here rather
+/// than pre-merged so [`caller_owned_provider_registry_conflict`] can compare it against the consumer's own
+/// authority before anything is joined; `dependency_search_paths` additionally exposes every directory the
+/// providers' own standalone bakes needed to load their externs' further dependencies (including
+/// proc-macro/build-script outputs that never become a named registry leaf at all) purely through Rustc's ordinary
+/// `-L dependency=...` search.
 #[derive(Default)]
 struct CallerOwnedProviderRegistryClosure {
-    authority: Option<OvenRegistryLeafAuthority>,
+    provider_authorities: Vec<OvenRegistryLeafAuthority>,
     dependency_search_paths: Vec<PathBuf>,
 }
 
-/// Collect the registry-leaf authority and dependency search closure owned by every caller-owned path-dependency
+impl CallerOwnedProviderRegistryClosure {
+    /// Join the consumer's own authority with every collected provider authority into one lookup surface.
+    ///
+    /// Joining decides only what is *discoverable*; safety against a genuinely diverging shared package is decided
+    /// beforehand by [`caller_owned_provider_registry_conflict`] and per-lookup by `select_sealed_registry_leaf`'s
+    /// existing same-compilation check.
+    fn merged_authority(&self, consumer: Option<OvenRegistryLeafAuthority>) -> Option<OvenRegistryLeafAuthority> {
+        if self.provider_authorities.is_empty() {
+            return consumer;
+        }
+        Some(OvenRegistryLeafAuthority::aggregate(
+            consumer.into_iter().chain(self.provider_authorities.iter().cloned()),
+        ))
+    }
+}
+
+/// Collect the registry-leaf authorities and dependency search closure owned by every caller-owned path-dependency
 /// provider.
 ///
-/// Walks the exact same caller-owned provider graph [`rematerialize_caller_owned_provider_graph`] re-materializes
-/// and joins each visited provider's own registry authority via [`OvenRegistryLeafAuthority::aggregate`]. Joining
-/// does not itself decide whether a package shared between the consumer and a provider (most dangerously an async
-/// runtime such as `tokio`) is safe to treat as one closure -- [`select_sealed_registry_leaf`]'s existing per-lookup
-/// check already fails closed if the *specific package actually being resolved* disagrees between sources, without
-/// also rejecting an unrelated package that happens to differ between the two but is never looked up through this
-/// authority at all.
+/// Walks the exact same caller-owned provider graph [`rematerialize_caller_owned_provider_graph`] re-materializes.
+/// The collected authorities feed both the pre-bake conflict decision
+/// ([`caller_owned_provider_registry_conflict`]) and, via
+/// [`CallerOwnedProviderRegistryClosure::merged_authority`], the re-materialization lookup surface.
 fn collect_caller_owned_provider_registry_leaf_authority(
     store: &OvenStore,
     provider_plan: &ProviderPlan,
     profile: &str,
-    mut closure: CallerOwnedProviderRegistryClosure,
 ) -> CliResult<CallerOwnedProviderRegistryClosure> {
+    let mut closure = CallerOwnedProviderRegistryClosure::default();
     let mut visiting = BTreeSet::new();
     for provider in provider_plan.active_records().filter(|provider| {
         matches!(
@@ -4537,12 +4553,12 @@ fn collect_caller_owned_provider_registry_leaf_authority(
                 artifact.dependency_key
             ))
         })?;
-        closure = collect_caller_owned_provider_registry_leaf_authority_graph(
+        collect_caller_owned_provider_registry_leaf_authority_graph(
             store,
             artifact,
             manifest,
             profile,
-            closure,
+            &mut closure,
             &mut visiting,
         )?;
     }
@@ -4560,9 +4576,9 @@ fn collect_caller_owned_provider_registry_leaf_authority_graph(
     artifact: &LibraryArtifactMetadata,
     manifest: &LibraryManifest,
     profile: &str,
-    mut closure: CallerOwnedProviderRegistryClosure,
+    closure: &mut CallerOwnedProviderRegistryClosure,
     visiting: &mut BTreeSet<PathBuf>,
-) -> CliResult<CallerOwnedProviderRegistryClosure> {
+) -> CliResult<()> {
     let canonical_root = fs::canonicalize(&artifact.crate_root).map_err(|error| {
         CliError::failure(format!(
             "Oven Alpha cannot canonicalize generated artifact root for pub::{} at {}: {error}",
@@ -4586,7 +4602,7 @@ fn collect_caller_owned_provider_registry_leaf_authority_graph(
             .filter(|dependency| dependency.kind == ProviderDependencyKind::PublicPackage)
         {
             let (nested_manifest, nested_artifact) = load_receipted_public_provider_dependency(artifact, dependency)?;
-            closure = collect_caller_owned_provider_registry_leaf_authority_graph(
+            collect_caller_owned_provider_registry_leaf_authority_graph(
                 store,
                 &nested_artifact,
                 &nested_manifest,
@@ -4598,15 +4614,10 @@ fn collect_caller_owned_provider_registry_leaf_authority_graph(
         if let Some((provider_authority, provider_search_paths)) =
             caller_owned_provider_registry_leaf_authority(store, artifact, profile)?
         {
-            closure.authority = Some(match closure.authority {
-                Some(consumer_authority) => {
-                    OvenRegistryLeafAuthority::aggregate([consumer_authority, provider_authority])
-                }
-                None => provider_authority,
-            });
+            closure.provider_authorities.push(provider_authority);
             closure.dependency_search_paths.extend(provider_search_paths);
         }
-        Ok(closure)
+        Ok(())
     })();
     visiting.remove(&canonical_root);
     result
@@ -6092,15 +6103,27 @@ fn registry_leaf_authority_for_plan_selection(
 /// ([`cargo_fallback_bake_oven_project`]); a library bake, which has no Cargo fallback yet, fails closed via
 /// [`reject_caller_owned_provider_registry_conflict`].
 fn caller_owned_provider_registry_conflict(
-    registry_authority: Option<&OvenRegistryLeafAuthority>,
+    consumer_authority: Option<&OvenRegistryLeafAuthority>,
+    closure: &CallerOwnedProviderRegistryClosure,
     plan: &OvenRustcArtifactPlan,
 ) -> CliResult<Option<String>> {
-    let Some(registry_authority) = registry_authority else {
-        return Ok(None);
-    };
-    registry_authority
-        .first_conflicting_package_with(plan)
-        .map_err(oven_rustc_error)
+    for provider_authority in &closure.provider_authorities {
+        // A shared package can enter both closures transitively without ever being a named extern of either
+        // compile (the reproduced `tokio` duplication was exactly this shape), so the catalogs themselves are
+        // compared first; the extern comparison then covers packages the selected plan links directly.
+        if let Some(consumer_authority) = consumer_authority
+            && let Some(package) = consumer_authority.first_diverging_shared_package(provider_authority)
+        {
+            return Ok(Some(package));
+        }
+        if let Some(package) = provider_authority
+            .first_conflicting_package_with(plan)
+            .map_err(oven_rustc_error)?
+        {
+            return Ok(Some(package));
+        }
+    }
+    Ok(None)
 }
 
 /// Fail closed on a provider registry conflict for bake paths that have no unified-Cargo fallback.
@@ -6109,10 +6132,11 @@ fn caller_owned_provider_registry_conflict(
 /// the exact conflicting package named, is safer than shipping an artifact whose async runtime state silently
 /// splits across two incompatible copies.
 fn reject_caller_owned_provider_registry_conflict(
-    registry_authority: Option<&OvenRegistryLeafAuthority>,
+    consumer_authority: Option<&OvenRegistryLeafAuthority>,
+    closure: &CallerOwnedProviderRegistryClosure,
     plan: &OvenRustcArtifactPlan,
 ) -> CliResult<()> {
-    if let Some(package) = caller_owned_provider_registry_conflict(registry_authority, plan)? {
+    if let Some(package) = caller_owned_provider_registry_conflict(consumer_authority, closure, plan)? {
         return Err(CliError::failure(format!(
             "Oven Alpha refuses to build: a caller-owned provider's own registry closure resolves `{package}` to a \
              different compiled artifact than this project's own closure already links. Linking both would silently \
@@ -8549,45 +8573,45 @@ fn bake_oven_project(
     let mut re_materialized_package_library_names = BTreeSet::new();
     let mut registry_authority = registry_leaf_authority_for_plan_selection(&prepared.plan_selection)?;
     let mut extra_dependency_search_paths = Vec::new();
-    if has_caller_owned_project_libraries(&prepared.provider_plan)
-        && !prepared.plan_selection.uses_packaged_provider_closure()
-    {
+    if has_caller_owned_project_libraries(&prepared.provider_plan) {
         let closure = collect_caller_owned_provider_registry_leaf_authority(
             &open_default_oven_store()?,
             &prepared.provider_plan,
             profile,
-            CallerOwnedProviderRegistryClosure {
-                authority: registry_authority,
-                dependency_search_paths: Vec::new(),
-            },
         )?;
-        registry_authority = closure.authority;
-        extra_dependency_search_paths = closure.dependency_search_paths;
+        // The conflict decision must cover every selection path -- including an imported packaged-provider closure,
+        // whose composed link carries the SDK base's and the provider's own copies of any shared package exactly
+        // like a re-materialized one does.
         if let Some(package) = caller_owned_provider_registry_conflict(
             registry_authority.as_ref(),
+            &closure,
             prepared.plan_selection.artifact_plan(),
         )? {
             return cargo_fallback_bake_oven_project(prepared, profile, &package);
         }
-        let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
-            &prepared.provider_plan,
-            profile,
-            prepared.plan_selection.artifacts(),
-            prepared.plan_selection.output_guard_root(),
-            prepared.plan_selection.artifact_plan(),
-            &prepared.rustc,
-            prepared.generator.output_dir(),
-            registry_authority.as_ref(),
-            &extra_dependency_search_paths,
-            authority_context,
-        )?;
-        re_materialized_package_library_names.extend(
-            re_materialized
-                .iter()
-                .filter(|library| library.expose_extern)
-                .map(|library| library.crate_name.clone()),
-        );
-        replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
+        if !prepared.plan_selection.uses_packaged_provider_closure() {
+            extra_dependency_search_paths = closure.dependency_search_paths.clone();
+            registry_authority = closure.merged_authority(registry_authority);
+            let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
+                &prepared.provider_plan,
+                profile,
+                prepared.plan_selection.artifacts(),
+                prepared.plan_selection.output_guard_root(),
+                prepared.plan_selection.artifact_plan(),
+                &prepared.rustc,
+                prepared.generator.output_dir(),
+                registry_authority.as_ref(),
+                &extra_dependency_search_paths,
+                authority_context,
+            )?;
+            re_materialized_package_library_names.extend(
+                re_materialized
+                    .iter()
+                    .filter(|library| library.expose_extern)
+                    .map(|library| library.crate_name.clone()),
+            );
+            replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
+        }
     }
     let mut artifact_plan = prepared
         .plan_selection
@@ -8655,43 +8679,42 @@ fn bake_oven_library(
     let mut re_materialized_package_library_names = BTreeSet::new();
     let mut registry_authority = registry_leaf_authority_for_plan_selection(&selected.plan_selection)?;
     let mut extra_dependency_search_paths = Vec::new();
-    if has_caller_owned_project_libraries(&selected.provider_plan)
-        && !selected.plan_selection.uses_packaged_provider_closure()
-    {
+    if has_caller_owned_project_libraries(&selected.provider_plan) {
         let closure = collect_caller_owned_provider_registry_leaf_authority(
             &open_default_oven_store()?,
             &selected.provider_plan,
             profile,
-            CallerOwnedProviderRegistryClosure {
-                authority: registry_authority,
-                dependency_search_paths: Vec::new(),
-            },
         )?;
-        registry_authority = closure.authority;
-        extra_dependency_search_paths = closure.dependency_search_paths;
+        // Library outputs have no unified-Cargo fallback, so a conflicted provider closure fails closed on every
+        // selection path, packaged-provider composition included.
         reject_caller_owned_provider_registry_conflict(
             registry_authority.as_ref(),
+            &closure,
             selected.plan_selection.artifact_plan(),
         )?;
-        let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
-            &selected.provider_plan,
-            profile,
-            selected.plan_selection.artifacts(),
-            selected.plan_selection.output_guard_root(),
-            selected.plan_selection.artifact_plan(),
-            &oven.rustc,
-            &prepared.out_dir,
-            registry_authority.as_ref(),
-            &extra_dependency_search_paths,
-            authority_context,
-        )?;
-        re_materialized_package_library_names.extend(
-            re_materialized
-                .iter()
-                .filter(|library| library.expose_extern)
-                .map(|library| library.crate_name.clone()),
-        );
-        replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
+        if !selected.plan_selection.uses_packaged_provider_closure() {
+            extra_dependency_search_paths = closure.dependency_search_paths.clone();
+            registry_authority = closure.merged_authority(registry_authority);
+            let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
+                &selected.provider_plan,
+                profile,
+                selected.plan_selection.artifacts(),
+                selected.plan_selection.output_guard_root(),
+                selected.plan_selection.artifact_plan(),
+                &oven.rustc,
+                &prepared.out_dir,
+                registry_authority.as_ref(),
+                &extra_dependency_search_paths,
+                authority_context,
+            )?;
+            re_materialized_package_library_names.extend(
+                re_materialized
+                    .iter()
+                    .filter(|library| library.expose_extern)
+                    .map(|library| library.crate_name.clone()),
+            );
+            replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
+        }
     }
     let mut artifact_plan = selected
         .plan_selection
