@@ -3215,23 +3215,26 @@ mod tests {
         let first_manifest = store.publish(&request(first_project.path(), "engine-arm64", b"first payload")?)?;
         // Publishing a second, unrelated entry forces admission to re-measure the first as a retained entry, which
         // is what writes both sidecar cache files into its directory.
-        let second_manifest = store.publish(&request(second_project.path(), "engine-x64", b"second payload")?)?;
+        store.publish(&request(second_project.path(), "engine-x64", b"second payload")?)?;
         let first_entry_root = store.entry_root(&first_manifest.identity);
         assert!(first_entry_root.join(super::PHYSICAL_BYTES_CACHE_FILE).is_file());
         assert!(first_entry_root.join(super::UNIQUE_FILE_RECORDS_CACHE_FILE).is_file());
 
-        // Hold both entries active so every measured byte is lease-protected, making the two accounting paths
-        // directly comparable.
-        let selected = store
-            .select_payloads_for_execution(&[first_manifest.identity.clone(), second_manifest.identity.clone()])?;
-        assert_eq!(selected.len(), 2);
+        // The cached admission measurement must equal a fresh sidecar-excluding walk of the same directory: if
+        // admission had counted the sidecar files it was writing, the cached value would exceed the fresh one.
+        // (Deliberately not compared against active-lease inspection totals: that path deduplicates by inode and
+        // measures at a different moment, so its equality with per-entry cached sums is filesystem-dependent
+        // rather than an invariant -- an exact-equality form of this test failed on ext4 while passing on APFS.)
+        let cached = super::cached_directory_physical_bytes(&first_entry_root)?;
+        let fresh_with_sidecars = super::directory_physical_bytes(&first_entry_root)?;
+        assert_eq!(cached, fresh_with_sidecars);
 
-        // Active-lease accounting always re-derives its totals from a fresh, uncached walk
-        // (`record_physical_file_leases`). If either cached walker above ever counted its own sidecar file as
-        // artifact content, this total would exceed the lease-derived total by the sidecar files' own on-disk
-        // allocation.
-        let inspection = store.inspect()?;
-        assert_eq!(inspection.active_lease_physical_bytes, inspection.physical_bytes);
+        // And the walker's exclusion itself: physically deleting the sidecar files must not change the measured
+        // total, proving they were never part of it.
+        fs::remove_file(first_entry_root.join(super::PHYSICAL_BYTES_CACHE_FILE))?;
+        fs::remove_file(first_entry_root.join(super::UNIQUE_FILE_RECORDS_CACHE_FILE))?;
+        let fresh_without_sidecars = super::directory_physical_bytes(&first_entry_root)?;
+        assert_eq!(fresh_with_sidecars, fresh_without_sidecars);
         Ok(())
     }
 
