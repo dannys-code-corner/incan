@@ -474,6 +474,54 @@ impl OvenRegistryLeafAuthority {
                 .collect(),
         }
     }
+
+    /// Return the first package name this authority's own registry leaves would silently link as a second,
+    /// incompatible compiled instance of a crate `plan` already links explicitly.
+    ///
+    /// A caller-owned provider's own registry closure (for example a query-engine library's own third-party
+    /// dependency graph) is baked through an independent Cargo resolve from the consumer/SDK's own closure. Both can
+    /// legitimately depend on "the same" package at the same version -- most dangerously an async runtime such as
+    /// `tokio` -- yet resolve to two byte-distinct compiled artifacts, because a compiled crate's identity depends on
+    /// its full compilation context, not only its declared version. Neither [`select_sealed_registry_leaf`] (which
+    /// only sees one closure's own catalog) nor [`Self::aggregate`] (which only decides what is *discoverable*, not
+    /// what is safe to *use*) can catch this: the danger appears only once a provider's own extern for the shared
+    /// package and the consumer's own extern for it are compared directly. This does that comparison, checked
+    /// against real evidence: linking a provider's own DataFusion/Tokio closure into the same binary as the SDK's
+    /// own Tokio-based `block_on` support (RFC 048/114) is exactly what produced a real "no reactor running" panic
+    /// at runtime, discovered as two distinct `tokio` symbol-mangled crate instances in the same linked executable.
+    /// A build-time refusal here is far cheaper than that panic. This is deliberately conservative: it compares by
+    /// digest, so a package the provider and consumer resolved to the exact same compiled bytes (a legitimate,
+    /// harmless case) is never rejected -- only a genuine, byte-distinct duplicate is.
+    pub(crate) fn first_conflicting_package_with(
+        &self,
+        plan: &OvenRustcArtifactPlan,
+    ) -> Result<Option<String>, OvenRustcError> {
+        for entry in &self.entries {
+            let Some((_, existing_path)) = plan
+                .externs
+                .iter()
+                .find(|(crate_name, _)| *crate_name == entry.leaf.crate_name)
+            else {
+                continue;
+            };
+            let candidate_path = safe_artifact_path(
+                &entry.artifact_root,
+                &entry.leaf.artifact.relative_path,
+                "registry leaf",
+            )?;
+            if fs::canonicalize(&candidate_path).ok().as_deref() == fs::canonicalize(existing_path).ok().as_deref() {
+                continue;
+            }
+            let existing_bytes = fs::read(existing_path).map_err(|source| OvenRustcError::Io {
+                path: existing_path.clone(),
+                source,
+            })?;
+            if digest_bytes(&existing_bytes) != entry.leaf.artifact.digest {
+                return Ok(Some(entry.leaf.package.clone()));
+            }
+        }
+        Ok(None)
+    }
 }
 
 /// One digest-verified registry leaf plus the plan directories Rustc may use solely for its transitive metadata.
@@ -1942,6 +1990,25 @@ pub struct OvenDirectRustcBake {
     pub reused: bool,
     /// Held for stored consumers until their caller finishes executing the native test binary.
     lease: Option<OvenStoreLease>,
+}
+
+impl OvenDirectRustcBake {
+    /// Wrap a binary produced by the unified-Cargo fallback compile as a completed bake result.
+    ///
+    /// Downstream run/report consumers only need the output path and its digest; there is no store lease because a
+    /// Cargo-produced binary is published project-locally rather than admitted to the bounded Oven store.
+    /// `cargo_process_started` is `true` here by definition -- this constructor exists precisely because a Cargo
+    /// process performed the compile.
+    pub(crate) fn from_external_cargo_build(source_digest: String, output: PathBuf, output_digest: String) -> Self {
+        Self {
+            source_digest,
+            output,
+            output_digest,
+            cargo_process_started: true,
+            reused: false,
+            lease: None,
+        }
+    }
 }
 
 /// The concrete caller-owned output Rustc must produce for one Oven materialization step.
@@ -6737,8 +6804,8 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_does_not_block_an_unrelated_lookup_when_a_never_requested_package_conflicts(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn aggregate_does_not_block_an_unrelated_lookup_when_a_never_requested_package_conflicts()
+    -> Result<(), Box<dyn std::error::Error>> {
         // Regression coverage for a real false positive: a provider and consumer can each carry their own build of
         // some common transitive crate (for example `memchr`, pulled in independently by unrelated dependencies on
         // each side) that nobody ever actually resolves through this authority. Joining the two catalogs must not
@@ -6851,6 +6918,128 @@ mod tests {
         let error = resolve_sealed_registry_leaf(&dependency, Some(&joined), "debug")
             .expect_err("resolving a package that genuinely disagrees between two joined authorities must fail closed");
         assert!(matches!(error, OvenRustcError::InvalidInput { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn first_conflicting_package_with_reports_a_provider_leaf_that_disagrees_with_an_existing_extern()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Reproduces the exact real-world defect this check exists for: a caller-owned provider's own registry
+        // closure (a query-engine library's own DataFusion/Tokio dependency graph) resolves a package the consumer
+        // already links explicitly (the SDK's own `block_on` support) to a different compiled artifact. Left
+        // unchecked, both get linked into one binary as two distinct compiled `tokio` instances -- confirmed by
+        // inspecting a real built executable's symbol table -- and the async runtime state silently splits across
+        // them, producing a "no reactor running" panic at runtime instead of a build failure.
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let consumer_bytes = b"sealed tokio compiled for the SDK's own block_on closure";
+        let provider_bytes = b"sealed tokio compiled for the provider's own DataFusion closure";
+        let consumer_artifact = consumer_root.path().join("libtokio-sdk1234.rlib");
+        let provider_artifact = provider_root.path().join("libtokio-provider5678.rlib");
+        fs::write(&consumer_artifact, consumer_bytes)?;
+        fs::write(&provider_artifact, provider_bytes)?;
+        let plan = OvenRustcArtifactPlan {
+            dependency_search_paths: Vec::new(),
+            native_search_paths: Vec::new(),
+            externs: vec![("tokio".to_string(), consumer_artifact)],
+            compile_environment: BTreeMap::new(),
+            caller_owned_library_digests: BTreeMap::new(),
+        };
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![OvenRustcRegistryLeaf {
+                package: "tokio".to_string(),
+                version: "1.52.3".to_string(),
+                crate_name: "tokio".to_string(),
+                features: Vec::new(),
+                source: fixture_registry_source(),
+                artifact: OvenRustcArtifactExtern {
+                    crate_name: "tokio".to_string(),
+                    relative_path: "libtokio-provider5678.rlib".to_string(),
+                    digest: digest_bytes(provider_bytes),
+                },
+            }],
+        );
+        assert_eq!(
+            provider_authority.first_conflicting_package_with(&plan)?,
+            Some("tokio".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn first_conflicting_package_with_allows_a_byte_identical_provider_leaf() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let shared_bytes = b"sealed tokio, compiled identically for both closures";
+        let consumer_artifact = consumer_root.path().join("libtokio-shared.rlib");
+        let provider_artifact = provider_root.path().join("libtokio-shared.rlib");
+        fs::write(&consumer_artifact, shared_bytes)?;
+        fs::write(&provider_artifact, shared_bytes)?;
+        let plan = OvenRustcArtifactPlan {
+            dependency_search_paths: Vec::new(),
+            native_search_paths: Vec::new(),
+            externs: vec![("tokio".to_string(), consumer_artifact)],
+            compile_environment: BTreeMap::new(),
+            caller_owned_library_digests: BTreeMap::new(),
+        };
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![OvenRustcRegistryLeaf {
+                package: "tokio".to_string(),
+                version: "1.52.3".to_string(),
+                crate_name: "tokio".to_string(),
+                features: Vec::new(),
+                source: fixture_registry_source(),
+                artifact: OvenRustcArtifactExtern {
+                    crate_name: "tokio".to_string(),
+                    relative_path: "libtokio-shared.rlib".to_string(),
+                    digest: digest_bytes(shared_bytes),
+                },
+            }],
+        );
+        assert_eq!(
+            provider_authority.first_conflicting_package_with(&plan)?,
+            None,
+            "a provider leaf compiled to the exact same bytes as the existing extern must not be rejected"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn first_conflicting_package_with_ignores_an_unrelated_package() -> Result<(), Box<dyn std::error::Error>> {
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let consumer_bytes = b"sealed tokio for the consumer";
+        let provider_bytes = b"sealed datafusion for the provider";
+        let consumer_artifact = consumer_root.path().join("libtokio.rlib");
+        let provider_artifact = provider_root.path().join("libdatafusion.rlib");
+        fs::write(&consumer_artifact, consumer_bytes)?;
+        fs::write(&provider_artifact, provider_bytes)?;
+        let plan = OvenRustcArtifactPlan {
+            dependency_search_paths: Vec::new(),
+            native_search_paths: Vec::new(),
+            externs: vec![("tokio".to_string(), consumer_artifact)],
+            compile_environment: BTreeMap::new(),
+            caller_owned_library_digests: BTreeMap::new(),
+        };
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![OvenRustcRegistryLeaf {
+                package: "datafusion".to_string(),
+                version: "53.1.0".to_string(),
+                crate_name: "datafusion".to_string(),
+                features: Vec::new(),
+                source: fixture_registry_source(),
+                artifact: OvenRustcArtifactExtern {
+                    crate_name: "datafusion".to_string(),
+                    relative_path: "libdatafusion.rlib".to_string(),
+                    digest: digest_bytes(provider_bytes),
+                },
+            }],
+        );
+        assert_eq!(provider_authority.first_conflicting_package_with(&plan)?, None);
         Ok(())
     }
 

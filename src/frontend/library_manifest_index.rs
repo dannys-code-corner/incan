@@ -974,7 +974,10 @@ mylib = { path = "deps/mylib" }
     #[test]
     fn dependency_project_root_rejects_a_path_without_the_expected_suffix() {
         assert_eq!(dependency_project_root(Path::new("/workspace/providers/mylib")), None);
-        assert_eq!(dependency_project_root(Path::new("/workspace/providers/mylib/lib")), None);
+        assert_eq!(
+            dependency_project_root(Path::new("/workspace/providers/mylib/lib")),
+            None
+        );
         assert_eq!(dependency_project_root(Path::new("target/lib")), Some(PathBuf::new()));
     }
 

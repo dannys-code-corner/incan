@@ -85,7 +85,6 @@ impl Drop for GeneratedCacheLease {
 
 impl GeneratedCacheLease {
     /// Finish one compiler-owned Cargo operation before user code may continue outside the cache lease.
-    #[cfg(test)]
     pub(crate) fn finish(mut self) -> io::Result<()> {
         self.release_activity_lock();
         let result = self
