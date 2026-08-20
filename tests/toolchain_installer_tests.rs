@@ -1383,7 +1383,12 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result
         .and_then(|name| name.to_str())
         .ok_or("toolchain archive name was not valid UTF-8")?;
     let checksum = fs::read_to_string(sha256_sidecar_path(&archive))?.trim().to_string();
-    assert!(formula.contains(&format!(r#"version "{version}""#)));
+    // Brew audit rejects an explicit `version` line (it is inferred from the URL) and the `on_macos`/`on_linux`
+    // block shape; the generator emits the audit-clean class-level platform chain instead.
+    assert!(!formula.contains(&format!(r#"version "{version}""#)));
+    assert!(!formula.contains("on_macos"));
+    assert!(formula.contains("if OS.mac? && Hardware::CPU.arm?"));
+    assert!(formula.contains("elsif OS.linux? && Hardware::CPU.intel?"));
     assert!(formula.contains("npm and Homebrew install prebuilt Incan commands"));
     assert!(formula.contains(&format!(
         r#"url "https://github.com/encero-systems/incan/releases/download/{release}/{archive_name}""#
