@@ -1407,9 +1407,15 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result
     assert!(formula.contains(
         r#"odie "could not find incan binary in archive; staged files: #{staged_file_sample}" if incan_bin.nil?"#
     ));
-    assert!(formula.contains(
-        r#"odie "could not find SDK provider inventory in archive; staged files: #{staged_file_sample}" unless sdk_inventory.exist?"#
-    ));
+    // The SDK-inventory guard is emitted in the wrapped `unless ... end` form: its one-line trailing-`unless`
+    // spelling exceeded brew audit's line-length limit (the same v0.4 tap-only hand-fix this generator now owns).
+    assert!(formula.contains("unless sdk_inventory.exist?"));
+    assert!(
+        formula.contains(
+            r#"odie "could not find SDK provider inventory in archive; staged files: #{staged_file_sample}""#
+        )
+    );
+    assert!(!formula.contains(r#"" unless sdk_inventory.exist?"#));
     assert!(formula.contains("could not find SDK provider inventory in archive"));
     assert!(formula.contains("libexec.install Dir[\"*\"]"));
     assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan\""));
