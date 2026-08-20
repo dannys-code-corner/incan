@@ -36,6 +36,12 @@ jobs:
         run: cargo build --locked --release --bin incan
       - name: Build toolchain commands
         run: cargo build --locked --release --features lsp --target "${{ matrix.target }}" --bin incan --bin incan-lsp
+      # package_archive.sh derives the release support workspace lock with `cargo metadata --offline`,
+      # which requires every crate named by the support workspace and release_stdlib fixture to already
+      # be in the registry cache. Ordinary workspace builds do not guarantee that, and runner caches
+      # evict between releases, so warm the cache explicitly while network access is still expected.
+      - name: Prewarm release support workspace registry cache
+        run: workspaces/release/toolchain/fetch_release_support_workspace_sources.sh
       - name: Package archive
         shell: bash
         env:
