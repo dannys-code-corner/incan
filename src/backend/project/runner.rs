@@ -1,13 +1,15 @@
-//! Cargo-lock projection support for the explicit publisher boundary.
+//! Cargo-lock projection and unified Cargo compilation for generated projects.
 //!
-//! Normal Incan execution is receipt-bound Oven direct-`rustc`. Historical generated-project Cargo execution remains
-//! compiled only for isolated unit fixtures; it is not an available product backend.
+//! Normal Incan execution is receipt-bound Oven direct-`rustc`. [`ProjectGenerator::cargo_build`] remains available
+//! as the unified-resolution fallback for the one project shape direct-rustc composition cannot yet build safely: a
+//! caller-owned `pub::` provider whose own registry closure resolves a shared package to a different compiled
+//! artifact than the consumer's closure. Cargo resolves consumer and provider as one feature-unified graph, so that
+//! divergence cannot occur through this path. Isolated fixture execution (`run`) remains test-only.
 
 use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-#[cfg(test)]
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -166,13 +168,15 @@ impl ProjectGenerator {
         project_changed || !self.run_binary_path().is_file() || !self.run_publication_fingerprint_matches()
     }
 
+    /// Return the extra Cargo CLI args selecting a build profile.
+    fn profile_build_args(release: bool) -> &'static [&'static str] {
+        if release { &["--release"] } else { &[] }
+    }
+
     /// Return extra Cargo CLI args required by an isolated runner fixture.
     #[cfg(test)]
     fn run_profile_build_args(&self) -> &'static [&'static str] {
-        match self.run_profile {
-            RunProfile::Debug => &[],
-            RunProfile::Release => &["--release"],
-        }
+        Self::profile_build_args(self.run_profile == RunProfile::Release)
     }
 
     /// Return the Cargo target subdirectory used by an isolated runner fixture.
@@ -208,19 +212,30 @@ impl ProjectGenerator {
         Self::resolve_target_dir(target_dir)
     }
 
-    /// Build an isolated generated-project fixture using Cargo.
+    /// Build an isolated generated-project fixture using Cargo at the release profile.
     #[cfg(test)]
     pub fn build(&self) -> io::Result<BuildResult> {
+        self.cargo_build(true)
+    }
+
+    /// Compile this generated project through one unified Cargo invocation.
+    ///
+    /// This is the fallback compile for the one project shape Oven direct-rustc composition cannot yet build safely:
+    /// a caller-owned `pub::` provider whose own registry closure resolves a shared package (most dangerously an
+    /// async runtime) to a different compiled artifact than the consumer's own closure. Cargo resolves the consumer
+    /// and every provider as one feature-unified dependency graph, so exactly one compiled instance of each package
+    /// exists by construction. The projected `Cargo.lock` (from `incan.lock`) and the caller's Cargo policy flags
+    /// still govern resolution; the successful binary is published to [`Self::cargo_build_binary_path`].
+    pub(crate) fn cargo_build(&self, release: bool) -> io::Result<BuildResult> {
         self.materialize_cargo_lock_projection()?;
         let _root_artifact_guard = self.acquire_root_artifact_lock()?;
         let cargo_target_dir = self.cargo_target_dir();
         let mut command = cargo_command();
         sanitize_cargo_environment(&mut command);
         configure_cargo_target(&mut command, &cargo_target_dir);
-        command
-            .arg("build")
-            .arg("--release")
-            .arg("--message-format=json-render-diagnostics");
+        command.arg("build");
+        command.args(Self::profile_build_args(release));
+        command.arg("--message-format=json-render-diagnostics");
         for flag in &self.cargo_policy_flags {
             command.arg(flag);
         }
@@ -249,7 +264,7 @@ impl ProjectGenerator {
                     self.cargo_target_name()
                 ))
             })?;
-            self.publish_cargo_binary(&executable, &self.binary_path())?;
+            self.publish_cargo_binary(&executable, &self.cargo_build_binary_path(release))?;
         }
         self.finish_generated_cache_lease()?;
         Ok(result)
@@ -371,8 +386,7 @@ impl ProjectGenerator {
         })
     }
 
-    /// Atomically copy one fixture Cargo root artifact into project-local generated output.
-    #[cfg(test)]
+    /// Atomically copy one Cargo-built root binary into its stable project-local publication path.
     fn publish_cargo_binary(&self, source: &Path, destination: &Path) -> io::Result<()> {
         if source == destination {
             return Ok(());
@@ -393,8 +407,7 @@ impl ProjectGenerator {
         Ok(())
     }
 
-    /// Serialize fixture Cargo root-artifact production and publication for one deterministic target name.
-    #[cfg(test)]
+    /// Serialize Cargo root-artifact production and publication for one deterministic target name.
     fn acquire_root_artifact_lock(&self) -> io::Result<File> {
         let lock_dir = self.cargo_target_dir().join(".incan-root-locks");
         fs::create_dir_all(&lock_dir)?;
@@ -485,10 +498,18 @@ impl ProjectGenerator {
         Ok(())
     }
 
+    /// Get the project-local publication path of a [`Self::cargo_build`] binary for the given profile.
+    pub(crate) fn cargo_build_binary_path(&self, release: bool) -> PathBuf {
+        self.output_dir
+            .join("target")
+            .join(if release { "release" } else { "debug" })
+            .join(&self.name)
+    }
+
     /// Get the project-local path to an isolated fixture build artifact.
     #[cfg(test)]
     pub fn binary_path(&self) -> PathBuf {
-        self.output_dir.join("target").join("release").join(&self.name)
+        self.cargo_build_binary_path(true)
     }
 
     /// Get the path to the binary produced by an isolated runner fixture.
@@ -501,16 +522,14 @@ impl ProjectGenerator {
     }
 }
 
-/// Executable and rendered diagnostics selected from a fixture Cargo JSON message stream.
-#[cfg(test)]
+/// Executable and rendered diagnostics selected from a Cargo JSON message stream.
 #[derive(Default)]
 struct CargoJsonBuildOutput {
     executable: Option<PathBuf>,
     rendered: String,
 }
 
-/// Parse fixture Cargo artifact locations instead of reconstructing profile/target-triple paths.
-#[cfg(test)]
+/// Parse Cargo-reported artifact locations instead of reconstructing profile/target-triple paths.
 fn parse_cargo_json_build_output(stdout: &[u8], expected_target_name: &str) -> CargoJsonBuildOutput {
     let mut parsed = CargoJsonBuildOutput::default();
     for line in stdout.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
@@ -640,8 +659,7 @@ fn record_reconciliation_target(
     )))
 }
 
-/// Result of an isolated Cargo-runner fixture build.
-#[cfg(test)]
+/// Result of one generated-project Cargo build.
 #[derive(Debug)]
 pub struct BuildResult {
     pub success: bool,

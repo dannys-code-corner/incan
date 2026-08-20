@@ -25,6 +25,19 @@ const LOAF_MANIFEST_FILE: &str = "loaf.json";
 const PAYLOAD_FILE: &str = "payload";
 const MATERIALIZED_DIRECTORY: &str = "artifacts";
 const ACCESS_FILE: &str = "last-used";
+/// Sidecar cache for one immutable entry's recursively measured physical allocation.
+///
+/// Entries under [`ENTRIES_DIRECTORY`] never change after publication, so a physical-byte measurement taken once
+/// stays valid for the entry's lifetime. Missing or unreadable cache files fall back to a fresh recursive walk, so
+/// this is purely an optimization: it never becomes a second source of truth for admission decisions.
+const PHYSICAL_BYTES_CACHE_FILE: &str = ".physical-bytes-cache";
+/// Sidecar cache for one immutable entry's `(device, inode, size)` regular-file identities.
+///
+/// Cross-entry hard-link deduplication (see [`assign_unique_entry_physical_bytes`]) needs each file's inode
+/// identity, not just an aggregate byte count, so it cannot reuse [`PHYSICAL_BYTES_CACHE_FILE`] directly. Entries
+/// are immutable once published, so this listing is as safe to cache as the plain byte total; a missing or
+/// unparsable cache file falls back to a fresh recursive walk exactly like its sibling.
+const UNIQUE_FILE_RECORDS_CACHE_FILE: &str = ".physical-bytes-unique-cache";
 const ACTIVE_LOCK_FILE: &str = ".active.lock";
 const MANAGER_LOCK_FILE: &str = ".manager.lock";
 const LEGACY_CARGO_STAGING_DIRECTORY: &str = "legacy-cargo-staging";
@@ -2152,7 +2165,9 @@ fn verify_entry(root: &Path) -> Result<OvenStoreEntry, OvenStoreError> {
             .payload
             .logical_bytes
             .saturating_add(materialized_logical_bytes),
-        physical_bytes: directory_physical_bytes(root)?,
+        // Every `verify_entry` caller resolves `root` through `entry_root`/`entry_root_for_kind`: always a real,
+        // immutable entry, never staging, so the same physical-bytes cache used by the admission path applies here.
+        physical_bytes: cached_directory_physical_bytes(root)?,
         last_used_unix_seconds,
         manifest,
         path: root.to_path_buf(),
@@ -2378,9 +2393,16 @@ fn measure_entry_for_admission_with_directory_identity(
             .iter()
             .fold(0_u64, |total, file| total.saturating_add(file.logical_bytes)),
     );
+    // Staging directories are private, not-yet-finalized publisher work: their content can still change before an
+    // atomic rename admits them as an immutable entry, so their physical bytes must never be cached.
+    let physical_bytes = if require_identity_directory_name {
+        cached_directory_physical_bytes(root)?
+    } else {
+        directory_physical_bytes(root)?
+    };
     Ok(OvenStoreEntry {
         logical_bytes,
-        physical_bytes: directory_physical_bytes(root)?,
+        physical_bytes,
         last_used_unix_seconds,
         manifest,
         path: root.to_path_buf(),
@@ -2524,6 +2546,34 @@ fn domain_totals(entries: &[OvenStoreEntry], domain: &str) -> (u64, u64) {
         })
 }
 
+/// Return one immutable store entry's physical byte allocation, backed by [`PHYSICAL_BYTES_CACHE_FILE`] when present.
+///
+/// Admission recomputed every retained entry's allocation via a fresh recursive [`directory_physical_bytes`] walk on
+/// every publish, so admitting one new artifact cost time proportional to the store's entire accumulated content
+/// rather than to that one artifact. Entries under [`ENTRIES_DIRECTORY`] are immutable once published, so caching
+/// the one-time measurement is always safe: a missing or corrupt cache file simply falls back to the recursive
+/// walk, so a cold or damaged cache degrades to the previous behavior rather than serving a stale value. Callers
+/// must not use this for staging directories, whose content can still change before they are finalized.
+fn cached_directory_physical_bytes(root: &Path) -> Result<u64, OvenStoreError> {
+    let cache_path = root.join(PHYSICAL_BYTES_CACHE_FILE);
+    if let Ok(cached) = fs::read_to_string(&cache_path)
+        && let Ok(bytes) = cached.trim().parse::<u64>()
+    {
+        return Ok(bytes);
+    }
+    let bytes = directory_physical_bytes(root)?;
+    // Best-effort: a read-only store or a lost race with a concurrent measurement must not fail the measurement
+    // itself, since the recomputed value above is already correct without the cache.
+    let _ = fs::write(&cache_path, bytes.to_string());
+    Ok(bytes)
+}
+
+/// Return true when `name` is an OvenStore-internal sidecar bookkeeping file that must never count toward an
+/// entry's measured content, since none of the raw recursive walkers below know how to exclude it structurally.
+fn is_store_sidecar_file(name: &std::ffi::OsStr) -> bool {
+    name == PHYSICAL_BYTES_CACHE_FILE || name == UNIQUE_FILE_RECORDS_CACHE_FILE
+}
+
 /// Recursively measure allocated file blocks, excluding directories from the physical file-byte definition.
 fn directory_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
     fs::read_dir(path)
@@ -2536,6 +2586,9 @@ fn directory_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
                 path: path.to_path_buf(),
                 source,
             })?;
+            if is_store_sidecar_file(&child.file_name()) {
+                return Ok(total);
+            }
             let child_path = child.path();
             let metadata = fs::symlink_metadata(&child_path).map_err(|source| OvenStoreError::Io {
                 path: child_path.clone(),
@@ -2660,11 +2713,23 @@ fn publisher_staging_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> 
 /// this stable attribution pass and report physical bytes once while retaining each entry's independent logical
 /// bytes. Re-running it after a simulated or real prune is essential: deleting one link cannot reclaim a block that
 /// another selected entry still references.
+///
+/// `entries` are always already-published, immutable store entries (never staging), so each entry's file identities
+/// are read through [`cached_directory_file_records`] instead of a fresh walk. This runs on every admission scan
+/// (see `collect_entries_with`), so an uncached walk here previously re-read every retained entry's entire directory
+/// tree on every single publish, independent of whether anything was actually pruned.
 #[cfg(unix)]
 fn assign_unique_entry_physical_bytes(entries: &mut [OvenStoreEntry]) -> Result<(), OvenStoreError> {
     let mut seen_files = BTreeSet::new();
     for entry in entries {
-        entry.physical_bytes = directory_unique_physical_bytes(&entry.path, &mut seen_files)?;
+        let records = cached_directory_file_records(&entry.path)?;
+        entry.physical_bytes = records.into_iter().fold(0_u64, |total, (device, inode, bytes)| {
+            if seen_files.insert((device, inode)) {
+                total.saturating_add(bytes)
+            } else {
+                total
+            }
+        });
     }
     Ok(())
 }
@@ -2743,6 +2808,101 @@ fn directory_unique_physical_bytes(path: &Path, seen_files: &mut BTreeSet<(u64, 
         })
 }
 
+/// Return one immutable store entry's regular-file `(device, inode, physical_bytes)` identities, backed by
+/// [`UNIQUE_FILE_RECORDS_CACHE_FILE`] when present.
+///
+/// See [`cached_directory_physical_bytes`] for the immutability argument that makes caching safe here: entries under
+/// [`ENTRIES_DIRECTORY`] never change after publication, so a listing taken once stays valid for the entry's
+/// lifetime, and a missing or unparsable cache file simply falls back to a fresh walk. Callers must not use this for
+/// staging directories, whose content can still change before they are finalized.
+#[cfg(unix)]
+fn cached_directory_file_records(root: &Path) -> Result<Vec<(u64, u64, u64)>, OvenStoreError> {
+    let cache_path = root.join(UNIQUE_FILE_RECORDS_CACHE_FILE);
+    if let Ok(cached) = fs::read_to_string(&cache_path)
+        && let Some(records) = parse_directory_file_records(&cached)
+    {
+        return Ok(records);
+    }
+    let records = directory_file_records(root)?;
+    // Best-effort: a read-only store or a lost race with a concurrent measurement must not fail the measurement
+    // itself, since the recomputed value above is already correct without the cache.
+    let _ = fs::write(&cache_path, serialize_directory_file_records(&records));
+    Ok(records)
+}
+
+/// Parse a [`UNIQUE_FILE_RECORDS_CACHE_FILE`] payload, returning `None` on any malformed line so the caller falls
+/// back to a fresh walk instead of trusting a partially corrupt cache.
+#[cfg(unix)]
+fn parse_directory_file_records(cached: &str) -> Option<Vec<(u64, u64, u64)>> {
+    cached
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut fields = line.split(':');
+            let device = fields.next()?.parse::<u64>().ok()?;
+            let inode = fields.next()?.parse::<u64>().ok()?;
+            let bytes = fields.next()?.parse::<u64>().ok()?;
+            if fields.next().is_some() {
+                return None;
+            }
+            Some((device, inode, bytes))
+        })
+        .collect()
+}
+
+/// Encode `(device, inode, physical_bytes)` records for [`UNIQUE_FILE_RECORDS_CACHE_FILE`].
+#[cfg(unix)]
+fn serialize_directory_file_records(records: &[(u64, u64, u64)]) -> String {
+    records
+        .iter()
+        .map(|(device, inode, bytes)| format!("{device}:{inode}:{bytes}\n"))
+        .collect()
+}
+
+/// Recursively list regular files below one root as `(device, inode, physical_bytes)`, enforcing the same
+/// symlink/type integrity rules as [`directory_unique_physical_bytes`] without performing cross-entry deduplication.
+#[cfg(unix)]
+fn directory_file_records(path: &Path) -> Result<Vec<(u64, u64, u64)>, OvenStoreError> {
+    use std::os::unix::fs::MetadataExt;
+
+    fs::read_dir(path)
+        .map_err(|source| OvenStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .try_fold(Vec::new(), |mut records, child| {
+            let child = child.map_err(|source| OvenStoreError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            if is_store_sidecar_file(&child.file_name()) {
+                return Ok(records);
+            }
+            let child_path = child.path();
+            let metadata = fs::symlink_metadata(&child_path).map_err(|source| OvenStoreError::Io {
+                path: child_path.clone(),
+                source,
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(OvenStoreError::Integrity {
+                    identity: child_path.display().to_string(),
+                    message: "store entries may not contain symlinks".to_string(),
+                });
+            }
+            if metadata.is_dir() {
+                records.extend(directory_file_records(&child_path)?);
+            } else if metadata.is_file() {
+                records.push((metadata.dev(), metadata.ino(), physical_file_bytes(&metadata)));
+            } else {
+                return Err(OvenStoreError::Integrity {
+                    identity: child_path.display().to_string(),
+                    message: "store entries may contain only regular files and directories".to_string(),
+                });
+            }
+            Ok(records)
+        })
+}
+
 /// Split measured physical allocation into bytes that an inactive-only prune could reclaim and bytes retained by at
 /// least one active lease. A shared immutable inode is lease-protected if any entry that links it is active.
 #[cfg(unix)]
@@ -2798,6 +2958,9 @@ fn record_physical_file_leases(
             path: path.to_path_buf(),
             source,
         })?;
+        if is_store_sidecar_file(&child.file_name()) {
+            continue;
+        }
         let child_path = child.path();
         let metadata = fs::symlink_metadata(&child_path).map_err(|source| OvenStoreError::Io {
             path: child_path.clone(),
@@ -2995,6 +3158,83 @@ mod tests {
         assert_eq!(inspection.entries[0].manifest.identity, manifest.identity);
         assert_eq!(inspection.logical_bytes, 14);
         assert!(inspection.physical_bytes >= inspection.logical_bytes);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admission_reuses_the_cached_physical_byte_measurement_for_retained_entries()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir()?;
+        let first_project = tempfile::tempdir()?;
+        let second_project = tempfile::tempdir()?;
+        let third_project = tempfile::tempdir()?;
+        write_project(first_project.path())?;
+        write_project(second_project.path())?;
+        write_project(third_project.path())?;
+        // Generous limits keep every publish well under capacity, so admission only ever measures retained entries
+        // to confirm there is room; it never has to prune one.
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(10_000_000, 10_000_000, 10_000_000));
+
+        // Publishing the first entry does not yet measure it: admission only re-measures *retained* entries while
+        // making room for a new one. Publishing a second, unrelated entry re-measures the first as part of that
+        // aggregate capacity scan, which is what leaves both sidecar cache files behind (the plain physical-byte
+        // total and the per-file identity listing that cross-entry hard-link deduplication consumes).
+        let first_manifest = store.publish(&request(first_project.path(), "engine-arm64", b"engine payload")?)?;
+        let first_entry_root = store.entry_root(&first_manifest.identity);
+        store.publish(&request(second_project.path(), "engine-x64", b"second engine payload")?)?;
+        assert!(first_entry_root.join(super::PHYSICAL_BYTES_CACHE_FILE).is_file());
+        assert!(first_entry_root.join(super::UNIQUE_FILE_RECORDS_CACHE_FILE).is_file());
+
+        // A fresh recursive walk of the first entry would now fail outright: `directory_physical_bytes` rejects any
+        // symlink it encounters. Admitting a third, unrelated entry re-measures every retained entry (including
+        // this one) as part of aggregate capacity accounting via the same `collect_entries_for_admission` path
+        // exercised by every ordinary build; if that publish still succeeds, it can only have done so by trusting
+        // the cache files instead of re-walking the first entry.
+        symlink(
+            first_entry_root.join(super::PAYLOAD_FILE),
+            first_entry_root.join("untracked-symlink"),
+        )?;
+        store.publish(&request(third_project.path(), "engine-riscv", b"third engine payload")?)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_cache_files_are_never_counted_toward_measured_physical_bytes() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp = tempfile::tempdir()?;
+        let first_project = tempfile::tempdir()?;
+        let second_project = tempfile::tempdir()?;
+        write_project(first_project.path())?;
+        write_project(second_project.path())?;
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(10_000_000, 10_000_000, 10_000_000));
+
+        let first_manifest = store.publish(&request(first_project.path(), "engine-arm64", b"first payload")?)?;
+        // Publishing a second, unrelated entry forces admission to re-measure the first as a retained entry, which
+        // is what writes both sidecar cache files into its directory.
+        store.publish(&request(second_project.path(), "engine-x64", b"second payload")?)?;
+        let first_entry_root = store.entry_root(&first_manifest.identity);
+        assert!(first_entry_root.join(super::PHYSICAL_BYTES_CACHE_FILE).is_file());
+        assert!(first_entry_root.join(super::UNIQUE_FILE_RECORDS_CACHE_FILE).is_file());
+
+        // The cached admission measurement must equal a fresh sidecar-excluding walk of the same directory: if
+        // admission had counted the sidecar files it was writing, the cached value would exceed the fresh one.
+        // (Deliberately not compared against active-lease inspection totals: that path deduplicates by inode and
+        // measures at a different moment, so its equality with per-entry cached sums is filesystem-dependent
+        // rather than an invariant -- an exact-equality form of this test failed on ext4 while passing on APFS.)
+        let cached = super::cached_directory_physical_bytes(&first_entry_root)?;
+        let fresh_with_sidecars = super::directory_physical_bytes(&first_entry_root)?;
+        assert_eq!(cached, fresh_with_sidecars);
+
+        // And the walker's exclusion itself: physically deleting the sidecar files must not change the measured
+        // total, proving they were never part of it.
+        fs::remove_file(first_entry_root.join(super::PHYSICAL_BYTES_CACHE_FILE))?;
+        fs::remove_file(first_entry_root.join(super::UNIQUE_FILE_RECORDS_CACHE_FILE))?;
+        let fresh_without_sidecars = super::directory_physical_bytes(&first_entry_root)?;
+        assert_eq!(fresh_with_sidecars, fresh_without_sidecars);
         Ok(())
     }
 

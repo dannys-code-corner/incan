@@ -33,7 +33,7 @@ use crate::frontend::contract_metadata::{ContractMetadataPackage, read_project_m
 use crate::frontend::library_exports::{CheckedExportKind, CheckedNamedExport, collect_checked_public_exports};
 use crate::frontend::library_manifest_index::{
     LibraryArtifactKind, LibraryArtifactMetadata, LibraryManifestIndex, LibraryManifestIndexEntry,
-    load_provider_dependency_artifact,
+    dependency_project_root, load_provider_dependency_artifact,
 };
 use crate::frontend::module::{
     SourceModuleImportResolution, canonicalize_source_module_segments, resolve_program_source_imports,
@@ -4331,6 +4331,7 @@ fn rematerialize_caller_owned_provider_graph(
     rustc: &Path,
     consumer_output_root: &Path,
     registry_authority: Option<&OvenRegistryLeafAuthority>,
+    extra_dependency_search_paths: &[PathBuf],
     selected_path_authority: Option<&OvenSelectedPathRustcAuthority>,
     visiting: &mut BTreeSet<PathBuf>,
     authority_context: &mut Option<&mut OvenProjectBakeAuthorityContext>,
@@ -4376,6 +4377,7 @@ fn rematerialize_caller_owned_provider_graph(
                 rustc,
                 consumer_output_root,
                 registry_authority,
+                extra_dependency_search_paths,
                 selected_path_authority,
                 visiting,
                 authority_context,
@@ -4431,6 +4433,22 @@ fn rematerialize_caller_owned_provider_graph(
             });
         let mut provider_plan = artifact_plan.clone();
         attach_caller_owned_rustc_libraries(&mut provider_plan, &nested_libraries).map_err(oven_rustc_error)?;
+        if provider_dependencies
+            .iter()
+            .any(|dependency| matches!(dependency.source, DependencySource::Registry))
+        {
+            // The provider's own registry dependencies were each attached above as a direct `--extern`, but loading
+            // any one of them can require Rustc to locate its *own* further dependencies purely through
+            // `-L dependency=...` search -- including proc-macro/build-script outputs that never become a named
+            // registry leaf at all. `extra_dependency_search_paths` is this provider's own already-materialized
+            // closure (see `caller_owned_provider_registry_leaf_authority`), the same directories that made this
+            // provider's own standalone bake link successfully.
+            for directory in extra_dependency_search_paths {
+                if !provider_plan.dependency_search_paths.contains(directory) {
+                    provider_plan.dependency_search_paths.push(directory.clone());
+                }
+            }
+        }
         let bake_request = OvenTrustedDirectRustcTargetRequest {
             receipt: &receipt,
             artifacts,
@@ -4467,6 +4485,194 @@ fn rematerialize_caller_owned_provider_graph(
     result
 }
 
+/// Registry-leaf authorities and dependency-search closure collected from every caller-owned path-dependency
+/// provider.
+///
+/// A `pub::` provider consumed by path (for example a query-engine library) was compiled against its own sealed
+/// third-party registry closure. [`rematerialize_caller_owned_provider_graph`] re-materializes that provider's
+/// compiled libraries into the consumer's own direct-Rustc plan, but resolving the provider's *own* declared
+/// registry dependencies (its `[rust-dependencies]`) needs the provider's own registry-leaf authority and full
+/// dependency search closure, not just the consumer's -- the consumer's own closure knows nothing about a package
+/// the provider alone depends on, directly or transitively. Each provider's authority is kept separate here rather
+/// than pre-merged so [`caller_owned_provider_registry_conflict`] can compare it against the consumer's own
+/// authority before anything is joined; `dependency_search_paths` additionally exposes every directory the
+/// providers' own standalone bakes needed to load their externs' further dependencies (including
+/// proc-macro/build-script outputs that never become a named registry leaf at all) purely through Rustc's ordinary
+/// `-L dependency=...` search.
+#[derive(Default)]
+struct CallerOwnedProviderRegistryClosure {
+    provider_authorities: Vec<OvenRegistryLeafAuthority>,
+    dependency_search_paths: Vec<PathBuf>,
+}
+
+impl CallerOwnedProviderRegistryClosure {
+    /// Join the consumer's own authority with every collected provider authority into one lookup surface.
+    ///
+    /// Joining decides only what is *discoverable*; safety against a genuinely diverging shared package is decided
+    /// beforehand by [`caller_owned_provider_registry_conflict`] and per-lookup by `select_sealed_registry_leaf`'s
+    /// existing same-compilation check.
+    fn merged_authority(&self, consumer: Option<OvenRegistryLeafAuthority>) -> Option<OvenRegistryLeafAuthority> {
+        if self.provider_authorities.is_empty() {
+            return consumer;
+        }
+        Some(OvenRegistryLeafAuthority::aggregate(
+            consumer.into_iter().chain(self.provider_authorities.iter().cloned()),
+        ))
+    }
+}
+
+/// Collect the registry-leaf authorities and dependency search closure owned by every caller-owned path-dependency
+/// provider.
+///
+/// Walks the exact same caller-owned provider graph [`rematerialize_caller_owned_provider_graph`] re-materializes.
+/// The collected authorities feed both the pre-bake conflict decision
+/// ([`caller_owned_provider_registry_conflict`]) and, via
+/// [`CallerOwnedProviderRegistryClosure::merged_authority`], the re-materialization lookup surface.
+fn collect_caller_owned_provider_registry_leaf_authority(
+    store: &OvenStore,
+    provider_plan: &ProviderPlan,
+    profile: &str,
+) -> CliResult<CallerOwnedProviderRegistryClosure> {
+    let mut closure = CallerOwnedProviderRegistryClosure::default();
+    let mut visiting = BTreeSet::new();
+    for provider in provider_plan.active_records().filter(|provider| {
+        matches!(
+            provider.authority,
+            crate::provider::NamespaceAuthority::ProjectDependency { .. }
+        )
+    }) {
+        let artifact = provider.artifact.as_ref().ok_or_else(|| {
+            CliError::failure(format!(
+                "Oven Alpha cannot resolve pub::{} because its generated library artifact is unavailable",
+                provider.identity.name
+            ))
+        })?;
+        let manifest = provider.manifest.as_ref().ok_or_else(|| {
+            CliError::failure(format!(
+                "Oven Alpha cannot resolve pub::{} because its checked provider manifest is unavailable",
+                artifact.dependency_key
+            ))
+        })?;
+        collect_caller_owned_provider_registry_leaf_authority_graph(
+            store,
+            artifact,
+            manifest,
+            profile,
+            &mut closure,
+            &mut visiting,
+        )?;
+    }
+    closure.dependency_search_paths.sort();
+    closure.dependency_search_paths.dedup();
+    Ok(closure)
+}
+
+/// Recursive worker for [`collect_caller_owned_provider_registry_leaf_authority`].
+///
+/// Follows the same public-package provider edges [`rematerialize_caller_owned_provider_graph`] follows, so both
+/// walks agree on which providers exist and which are another provider's own nested public-package dependency.
+fn collect_caller_owned_provider_registry_leaf_authority_graph(
+    store: &OvenStore,
+    artifact: &LibraryArtifactMetadata,
+    manifest: &LibraryManifest,
+    profile: &str,
+    closure: &mut CallerOwnedProviderRegistryClosure,
+    visiting: &mut BTreeSet<PathBuf>,
+) -> CliResult<()> {
+    let canonical_root = fs::canonicalize(&artifact.crate_root).map_err(|error| {
+        CliError::failure(format!(
+            "Oven Alpha cannot canonicalize generated artifact root for pub::{} at {}: {error}",
+            artifact.dependency_key,
+            artifact.crate_root.display()
+        ))
+    })?;
+    if !visiting.insert(canonical_root.clone()) {
+        return Err(CliError::failure(format!(
+            "Oven Alpha refuses a cyclic public provider graph while resolving pub::{} at {}",
+            artifact.dependency_key,
+            canonical_root.display()
+        )));
+    }
+    let result = (|| {
+        for dependency in manifest
+            .contract_metadata
+            .provider
+            .provider_dependencies
+            .iter()
+            .filter(|dependency| dependency.kind == ProviderDependencyKind::PublicPackage)
+        {
+            let (nested_manifest, nested_artifact) = load_receipted_public_provider_dependency(artifact, dependency)?;
+            collect_caller_owned_provider_registry_leaf_authority_graph(
+                store,
+                &nested_artifact,
+                &nested_manifest,
+                profile,
+                closure,
+                visiting,
+            )?;
+        }
+        if let Some((provider_authority, provider_search_paths)) =
+            caller_owned_provider_registry_leaf_authority(store, artifact, profile)?
+        {
+            closure.provider_authorities.push(provider_authority);
+            closure.dependency_search_paths.extend(provider_search_paths);
+        }
+        Ok(())
+    })();
+    visiting.remove(&canonical_root);
+    result
+}
+
+/// Return one caller-owned provider's own receipt-bound registry-leaf authority and dependency search closure, if
+/// it declared any registry dependencies of its own.
+///
+/// This never bakes or invokes Cargo -- it only selects an already-published receipt, the same select-only step
+/// normal build/run try before falling back to the explicit baker. A provider without a verified receipt for this
+/// profile, or without any registry dependencies of its own, contributes nothing here; the ordinary
+/// [`materialize_declared_rust_libraries_with_selected_path_authority`] failure surfaces an actionable error once
+/// something actually needs a registry leaf this authority does not have. The returned search paths are the
+/// provider's own already-materialized `artifact_plan().dependency_search_paths` -- the same directories that made
+/// this provider's own standalone bake link successfully, including proc-macro/build-script outputs that have no
+/// registry-leaf entry of their own.
+fn caller_owned_provider_registry_leaf_authority(
+    store: &OvenStore,
+    artifact: &LibraryArtifactMetadata,
+    profile: &str,
+) -> CliResult<Option<(OvenRegistryLeafAuthority, Vec<PathBuf>)>> {
+    let Some(project_root) = dependency_project_root(&artifact.crate_root) else {
+        return Ok(None);
+    };
+    let Some(receipt) = read_verified_caller_owned_provider_receipt(&project_root, profile) else {
+        return Ok(None);
+    };
+    let Some(selection) = select_published_project_plan(store, &receipt, OvenToolchainMaterialization::Reused)? else {
+        return Ok(None);
+    };
+    let Some(authority) = registry_leaf_authority_for_plan_selection(&selection.plan_selection)? else {
+        return Ok(None);
+    };
+    let search_paths = selection.plan_selection.artifact_plan().dependency_search_paths.clone();
+    Ok(Some((authority, search_paths)))
+}
+
+/// Read and identity-verify one caller-owned provider's own Oven receipt for `profile`, if one exists.
+///
+/// Mirrors the exact receipt paths the explicit library bake writes for each profile (see the `receipt_path`
+/// selection in the library-mode bake loop), so a provider baked through the ordinary `incan build --lib` /
+/// `incan oven bake --project` path is always found here.
+fn read_verified_caller_owned_provider_receipt(project_root: &Path, profile: &str) -> Option<crate::oven::OvenReceipt> {
+    let path = if profile == "release" {
+        crate::oven::default_receipt_path(project_root)
+    } else {
+        crate::oven::default_receipt_path(project_root).with_file_name(format!("library-{profile}-receipt.json"))
+    };
+    let receipt = fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<crate::oven::OvenReceipt>(&bytes).ok())?;
+    receipt.verify_identity().ok()?;
+    Some(receipt)
+}
+
 /// Rebuild selected caller-owned Rust libraries in the consumer's direct-Rustc cohort.
 #[allow(clippy::too_many_arguments)]
 fn rematerialize_caller_owned_libraries_with_authority_context(
@@ -4478,6 +4684,7 @@ fn rematerialize_caller_owned_libraries_with_authority_context(
     rustc: &Path,
     consumer_output_root: &Path,
     registry_authority: Option<&OvenRegistryLeafAuthority>,
+    extra_dependency_search_paths: &[PathBuf],
     mut authority_context: Option<&mut OvenProjectBakeAuthorityContext>,
 ) -> CliResult<Vec<OvenCallerOwnedRustcLibrary>> {
     let mut libraries = Vec::new();
@@ -4517,6 +4724,7 @@ fn rematerialize_caller_owned_libraries_with_authority_context(
             rustc,
             consumer_output_root,
             registry_authority,
+            extra_dependency_search_paths,
             selected_path_authority.as_ref(),
             &mut visiting,
             &mut authority_context,
@@ -4543,6 +4751,12 @@ fn rematerialize_caller_owned_libraries_with_authority_context(
 }
 
 /// Rebuild selected caller-owned Rust libraries for ordinary consumers without an explicit-bake memo.
+///
+/// Unlike [`bake_oven_project`]/[`bake_oven_library`], this entry point does not (yet) collect each caller-owned
+/// provider's own registry-leaf authority and dependency search closure via
+/// [`collect_caller_owned_provider_registry_leaf_authority`] -- a caller-owned provider that declares registry
+/// dependencies of its own is not yet supported through this path. Ordinary providers without their own registry
+/// dependencies are unaffected.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rematerialize_caller_owned_libraries(
     provider_plan: &ProviderPlan,
@@ -4563,6 +4777,7 @@ pub(crate) fn rematerialize_caller_owned_libraries(
         rustc,
         consumer_output_root,
         registry_authority,
+        &[],
         None,
     )
 }
@@ -5873,6 +6088,129 @@ fn registry_leaf_authority_for_plan_selection(
     selection: &OvenDirectRustcPlanSelection,
 ) -> CliResult<Option<OvenRegistryLeafAuthority>> {
     Ok(selection.registry_leaf_authority())
+}
+
+/// Detect whether a caller-owned provider's own registry closure would silently link a second, incompatible
+/// compiled instance of a package `plan` already links explicitly, returning the first such package.
+///
+/// Linking a provider's own registry-resolved package (for example an async runtime a query-engine provider pulls
+/// in through its own dependency graph) alongside the SDK/consumer's own separately compiled copy of that same
+/// package is a real, reproduced defect, not a theoretical one: it produced a runtime panic ("no reactor running")
+/// from two distinct compiled `tokio` instances silently linked into one binary, discovered only by inspecting the
+/// linked executable's own symbol table after the build otherwise succeeded. Properly unifying a provider's
+/// independently Cargo-resolved registry closure with the consumer's own is out of scope for Oven Alpha's
+/// direct-rustc execution. An executable bake routes this shape through the unified-Cargo fallback
+/// ([`cargo_fallback_bake_oven_project`]); a library bake, which has no Cargo fallback yet, fails closed via
+/// [`reject_caller_owned_provider_registry_conflict`].
+fn caller_owned_provider_registry_conflict(
+    consumer_authority: Option<&OvenRegistryLeafAuthority>,
+    closure: &CallerOwnedProviderRegistryClosure,
+    plan: &OvenRustcArtifactPlan,
+) -> CliResult<Option<String>> {
+    for provider_authority in &closure.provider_authorities {
+        // A shared package can enter both closures transitively without ever being a named extern of either
+        // compile (the reproduced `tokio` duplication was exactly this shape), so the catalogs themselves are
+        // compared first; the extern comparison then covers packages the selected plan links directly.
+        if let Some(consumer_authority) = consumer_authority
+            && let Some(package) = consumer_authority.first_diverging_shared_package(provider_authority)
+        {
+            return Ok(Some(package));
+        }
+        if let Some(package) = provider_authority
+            .first_conflicting_package_with(plan)
+            .map_err(oven_rustc_error)?
+        {
+            return Ok(Some(package));
+        }
+    }
+    Ok(None)
+}
+
+/// Fail closed on a provider registry conflict for bake paths that have no unified-Cargo fallback.
+///
+/// See [`caller_owned_provider_registry_conflict`] for why the conflict is dangerous. Refusing to build here, with
+/// the exact conflicting package named, is safer than shipping an artifact whose async runtime state silently
+/// splits across two incompatible copies.
+fn reject_caller_owned_provider_registry_conflict(
+    consumer_authority: Option<&OvenRegistryLeafAuthority>,
+    closure: &CallerOwnedProviderRegistryClosure,
+    plan: &OvenRustcArtifactPlan,
+) -> CliResult<()> {
+    if let Some(package) = caller_owned_provider_registry_conflict(consumer_authority, closure, plan)? {
+        return Err(CliError::failure(format!(
+            "Oven Alpha refuses to build: a caller-owned provider's own registry closure resolves `{package}` to a \
+             different compiled artifact than this project's own closure already links. Linking both would silently \
+             admit two incompatible compiled instances of the same crate into one binary -- for a crate that carries \
+             process-wide runtime state (most dangerously an async runtime), this can produce a runtime panic instead \
+             of a build failure. Oven Alpha does not yet unify a caller-owned provider's independently resolved \
+             registry closure with the consumer's own for library outputs; build this consumer as an executable \
+             project, or prepare an explicit Oven-native closure that reconciles `{package}` to one shared compiled \
+             artifact."
+        )));
+    }
+    Ok(())
+}
+
+/// Compile a conflicted-provider project through one unified Cargo invocation instead of direct-rustc composition.
+///
+/// This is the routing target for the one project shape direct-rustc composition cannot yet build safely (see
+/// [`caller_owned_provider_registry_conflict`]). The generated project on disk already carries the complete Cargo
+/// wiring -- the consumer's manifest, each `pub::` provider as a Cargo path dependency, and the provider's own
+/// registry dependencies -- so one `cargo build` resolves everything as a single feature-unified graph in which
+/// exactly one compiled instance of each package exists by construction. This is the same build path v0.4 shipped
+/// with; only projects that actually hit the conflict pay its cost. The produced binary is published to the same
+/// [`oven_binary_path`] destination a direct-rustc bake uses, so run/report consumers are unaffected.
+fn cargo_fallback_bake_oven_project(
+    prepared: &OvenPreparedProject,
+    profile: &str,
+    conflicting_package: &str,
+) -> CliResult<crate::oven::rustc::OvenDirectRustcBake> {
+    eprintln!(
+        "Oven: building `{}` through unified Cargo resolution: provider registry package `{conflicting_package}` \
+         requires one shared compiled closure.",
+        prepared.crate_name
+    );
+    let release = profile == "release";
+    let result = prepared.generator.cargo_build(release).map_err(|error| {
+        CliError::failure(format!(
+            "unified Cargo fallback build failed to start for `{}`: {error}",
+            prepared.crate_name
+        ))
+    })?;
+    if !result.success {
+        return Err(CliError::failure(format!(
+            "unified Cargo fallback build failed for `{}`:\n{}",
+            prepared.crate_name, result.stderr
+        )));
+    }
+    let built = prepared.generator.cargo_build_binary_path(release);
+    let bytes = fs::read(&built).map_err(|error| {
+        CliError::failure(format!(
+            "unified Cargo fallback build reported success but its binary is unreadable at {}: {error}",
+            built.display()
+        ))
+    })?;
+    let output_digest = crate::oven::digest_bytes(&bytes);
+    let output = oven_binary_path(prepared, profile);
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CliError::failure(format!(
+                "could not create Oven binary destination {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::copy(&built, &output).map_err(|error| {
+        CliError::failure(format!(
+            "could not publish unified Cargo fallback binary to {}: {error}",
+            output.display()
+        ))
+    })?;
+    Ok(crate::oven::rustc::OvenDirectRustcBake::from_external_cargo_build(
+        prepared.receipt.identity.clone(),
+        output,
+        output_digest,
+    ))
 }
 
 /// Return the caller-owned Oven binary destination, intentionally outside generated-Cargo target layout.
@@ -8233,28 +8571,47 @@ fn bake_oven_project(
 ) -> CliResult<crate::oven::rustc::OvenDirectRustcBake> {
     let mut caller_owned_libraries = prepared.caller_owned_libraries.clone();
     let mut re_materialized_package_library_names = BTreeSet::new();
-    let registry_authority = registry_leaf_authority_for_plan_selection(&prepared.plan_selection)?;
-    if has_caller_owned_project_libraries(&prepared.provider_plan)
-        && !prepared.plan_selection.uses_packaged_provider_closure()
-    {
-        let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
+    let mut registry_authority = registry_leaf_authority_for_plan_selection(&prepared.plan_selection)?;
+    let mut extra_dependency_search_paths = Vec::new();
+    if has_caller_owned_project_libraries(&prepared.provider_plan) {
+        let closure = collect_caller_owned_provider_registry_leaf_authority(
+            &open_default_oven_store()?,
             &prepared.provider_plan,
             profile,
-            prepared.plan_selection.artifacts(),
-            prepared.plan_selection.output_guard_root(),
-            prepared.plan_selection.artifact_plan(),
-            &prepared.rustc,
-            prepared.generator.output_dir(),
-            registry_authority.as_ref(),
-            authority_context,
         )?;
-        re_materialized_package_library_names.extend(
-            re_materialized
-                .iter()
-                .filter(|library| library.expose_extern)
-                .map(|library| library.crate_name.clone()),
-        );
-        replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
+        // The conflict decision must cover every selection path -- including an imported packaged-provider closure,
+        // whose composed link carries the SDK base's and the provider's own copies of any shared package exactly
+        // like a re-materialized one does.
+        if let Some(package) = caller_owned_provider_registry_conflict(
+            registry_authority.as_ref(),
+            &closure,
+            prepared.plan_selection.artifact_plan(),
+        )? {
+            return cargo_fallback_bake_oven_project(prepared, profile, &package);
+        }
+        if !prepared.plan_selection.uses_packaged_provider_closure() {
+            extra_dependency_search_paths = closure.dependency_search_paths.clone();
+            registry_authority = closure.merged_authority(registry_authority);
+            let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
+                &prepared.provider_plan,
+                profile,
+                prepared.plan_selection.artifacts(),
+                prepared.plan_selection.output_guard_root(),
+                prepared.plan_selection.artifact_plan(),
+                &prepared.rustc,
+                prepared.generator.output_dir(),
+                registry_authority.as_ref(),
+                &extra_dependency_search_paths,
+                authority_context,
+            )?;
+            re_materialized_package_library_names.extend(
+                re_materialized
+                    .iter()
+                    .filter(|library| library.expose_extern)
+                    .map(|library| library.crate_name.clone()),
+            );
+            replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
+        }
     }
     let mut artifact_plan = prepared
         .plan_selection
@@ -8267,6 +8624,15 @@ fn bake_oven_project(
         direct_rustc_compile_environment(prepared.generator.output_dir(), &prepared.generator.crate_root_path())
             .map_err(|error| CliError::failure(error.to_string()))?;
     attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries).map_err(oven_rustc_error)?;
+    // Loading a re-materialized caller-owned library's own metadata (for example a query-engine provider linked
+    // above) can require Rustc to locate that library's own further dependencies purely through
+    // `-L dependency=...` search, the same way `rematerialize_caller_owned_provider_graph` already extends that
+    // library's own compile with this same closure. The final consumer binary link needs it too.
+    for directory in &extra_dependency_search_paths {
+        if !artifact_plan.dependency_search_paths.contains(directory) {
+            artifact_plan.dependency_search_paths.push(directory.clone());
+        }
+    }
     bake_trusted_direct_rustc_run(&OvenTrustedDirectRustcTargetRequest {
         receipt: &prepared.receipt,
         artifacts: prepared.plan_selection.artifacts(),
@@ -8311,28 +8677,44 @@ fn bake_oven_library(
     })?;
     let mut caller_owned_libraries = selected.caller_owned_libraries.clone();
     let mut re_materialized_package_library_names = BTreeSet::new();
-    let registry_authority = registry_leaf_authority_for_plan_selection(&selected.plan_selection)?;
-    if has_caller_owned_project_libraries(&selected.provider_plan)
-        && !selected.plan_selection.uses_packaged_provider_closure()
-    {
-        let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
+    let mut registry_authority = registry_leaf_authority_for_plan_selection(&selected.plan_selection)?;
+    let mut extra_dependency_search_paths = Vec::new();
+    if has_caller_owned_project_libraries(&selected.provider_plan) {
+        let closure = collect_caller_owned_provider_registry_leaf_authority(
+            &open_default_oven_store()?,
             &selected.provider_plan,
             profile,
-            selected.plan_selection.artifacts(),
-            selected.plan_selection.output_guard_root(),
-            selected.plan_selection.artifact_plan(),
-            &oven.rustc,
-            &prepared.out_dir,
-            registry_authority.as_ref(),
-            authority_context,
         )?;
-        re_materialized_package_library_names.extend(
-            re_materialized
-                .iter()
-                .filter(|library| library.expose_extern)
-                .map(|library| library.crate_name.clone()),
-        );
-        replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
+        // Library outputs have no unified-Cargo fallback, so a conflicted provider closure fails closed on every
+        // selection path, packaged-provider composition included.
+        reject_caller_owned_provider_registry_conflict(
+            registry_authority.as_ref(),
+            &closure,
+            selected.plan_selection.artifact_plan(),
+        )?;
+        if !selected.plan_selection.uses_packaged_provider_closure() {
+            extra_dependency_search_paths = closure.dependency_search_paths.clone();
+            registry_authority = closure.merged_authority(registry_authority);
+            let re_materialized = rematerialize_caller_owned_libraries_with_authority_context(
+                &selected.provider_plan,
+                profile,
+                selected.plan_selection.artifacts(),
+                selected.plan_selection.output_guard_root(),
+                selected.plan_selection.artifact_plan(),
+                &oven.rustc,
+                &prepared.out_dir,
+                registry_authority.as_ref(),
+                &extra_dependency_search_paths,
+                authority_context,
+            )?;
+            re_materialized_package_library_names.extend(
+                re_materialized
+                    .iter()
+                    .filter(|library| library.expose_extern)
+                    .map(|library| library.crate_name.clone()),
+            );
+            replace_caller_owned_package_libraries(&mut caller_owned_libraries, re_materialized)?;
+        }
     }
     let mut artifact_plan = selected
         .plan_selection
@@ -8345,6 +8727,13 @@ fn bake_oven_library(
         direct_rustc_compile_environment(prepared.generator.output_dir(), &prepared.generator.crate_root_path())
             .map_err(|error| CliError::failure(error.to_string()))?;
     attach_caller_owned_rustc_libraries(&mut artifact_plan, &caller_owned_libraries).map_err(oven_rustc_error)?;
+    // See the matching comment in `bake_oven_project`: a re-materialized caller-owned library's own metadata can
+    // require this same dependency search closure to load, not only the library's own re-materialization compile.
+    for directory in &extra_dependency_search_paths {
+        if !artifact_plan.dependency_search_paths.contains(directory) {
+            artifact_plan.dependency_search_paths.push(directory.clone());
+        }
+    }
     bake_trusted_direct_rustc_library(&OvenTrustedDirectRustcTargetRequest {
         receipt: &selected.receipt,
         artifacts: selected.plan_selection.artifacts(),

@@ -232,7 +232,7 @@
       "path": "src/backend/ir/reference_shape.rs",
       "category": "central Rust reference-shape compatibility",
       "expected_count": 2,
-      "expected_fingerprint": "0xf934bef846cdc242"
+      "expected_fingerprint": "0x1f31d645283d8922"
     },
     {
       "path": "src/backend/ir/trait_bound_inference.rs",

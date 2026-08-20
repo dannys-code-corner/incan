@@ -516,7 +516,7 @@ impl ProjectGenerator {
     }
 
     /// Release a managed target lease once compiler-owned Cargo work and local publication are complete.
-    #[cfg(all(feature = "cli", test))]
+    #[cfg(feature = "cli")]
     pub(super) fn finish_generated_cache_lease(&self) -> io::Result<()> {
         let lease = self
             .generated_cache_lease
@@ -530,7 +530,7 @@ impl ProjectGenerator {
     }
 
     /// Keep non-CLI library builds independent from cache-management implementation details.
-    #[cfg(all(not(feature = "cli"), test))]
+    #[cfg(not(feature = "cli"))]
     pub(super) fn finish_generated_cache_lease(&self) -> io::Result<()> {
         Ok(())
     }
