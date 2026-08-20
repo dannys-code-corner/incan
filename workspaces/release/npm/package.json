@@ -13,11 +13,6 @@
     "incan-lsp": "bin/incan-lsp.js",
     "install-incan": "bin/install-incan.js"
   },
-  "optionalDependencies": {
-    "@incan/toolchain-linux-x64": "0.5.0-rc5",
-    "@incan/toolchain-darwin-x64": "0.5.0-rc5",
-    "@incan/toolchain-darwin-arm64": "0.5.0-rc5"
-  },
   "files": [
     "README.md",
     "bin",

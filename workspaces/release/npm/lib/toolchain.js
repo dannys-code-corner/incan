@@ -4,24 +4,6 @@ const fs = require("fs");
 const path = require("path");
 const childProcess = require("child_process");
 
-const HOST_PACKAGES = {
-  "x86_64-unknown-linux-gnu": {
-    packageName: "@incan/toolchain-linux-x64",
-    os: "linux",
-    arch: "x64",
-  },
-  "x86_64-apple-darwin": {
-    packageName: "@incan/toolchain-darwin-x64",
-    os: "darwin",
-    arch: "x64",
-  },
-  "aarch64-apple-darwin": {
-    packageName: "@incan/toolchain-darwin-arm64",
-    os: "darwin",
-    arch: "arm64",
-  },
-};
-
 function packageRoot() {
   return path.resolve(__dirname, "..");
 }
@@ -32,39 +14,6 @@ function toolchainHome() {
 
 function binDir() {
   return process.env.INCAN_NPM_BIN_DIR || path.join(packageRoot(), ".incan", "bin");
-}
-
-function hostTarget() {
-  if (process.env.INCAN_NPM_HOST_TARGET) {
-    return process.env.INCAN_NPM_HOST_TARGET;
-  }
-  for (const [target, config] of Object.entries(HOST_PACKAGES)) {
-    if (process.platform === config.os && process.arch === config.arch) {
-      return target;
-    }
-  }
-  return `${process.arch}-${process.platform}`;
-}
-
-function supportedTargets() {
-  return Object.keys(HOST_PACKAGES).join(", ");
-}
-
-function platformPackageRoot(target) {
-  const config = HOST_PACKAGES[target];
-  if (!config) {
-    throw new Error(`unsupported npm toolchain target: ${target}; supported targets: ${supportedTargets()}`);
-  }
-  try {
-    return path.dirname(require.resolve(`${config.packageName}/package.json`, { paths: [packageRoot()] }));
-  } catch (error) {
-    if (error && error.code === "MODULE_NOT_FOUND") {
-      throw new Error(
-        `missing npm toolchain package ${config.packageName} for ${target}; reinstall @incan/toolchain or install ${config.packageName}`,
-      );
-    }
-    throw error;
-  }
 }
 
 function packageVersion() {
@@ -126,19 +75,39 @@ function commandPath(command) {
   if (process.env.INCAN_NPM_TOOLCHAIN_DIR) {
     return path.join(process.env.INCAN_NPM_TOOLCHAIN_DIR, "bin", command);
   }
-  return path.join(platformPackageRoot(hostTarget()), "toolchain", "bin", command);
+  return path.join(binDir(), command);
+}
+
+// The npm package is a reference shim: it carries no toolchain payload of its own. The first command invocation
+// provisions the verified release archive through the bundled installer into the package-local toolchain home,
+// exactly like the pip shim; later invocations reuse that installation. Install scripts never run.
+function ensureToolchain(command) {
+  const executable = commandPath(command);
+  if (fs.existsSync(executable)) {
+    return executable;
+  }
+  if (process.env.INCAN_NPM_TOOLCHAIN_DIR) {
+    throw new Error(`missing ${command} binary in INCAN_NPM_TOOLCHAIN_DIR: ${executable}`);
+  }
+  console.error(`incan: provisioning the Incan toolchain (first run) ...`);
+  const status = runInstaller(["--package-install"]);
+  if (status !== 0) {
+    throw new Error(`toolchain provisioning failed with exit status ${status}; rerun with \`install-incan\``);
+  }
+  if (!fs.existsSync(executable)) {
+    throw new Error(
+      `toolchain provisioning completed but ${command} is missing at ${executable}; rerun with \`install-incan\``,
+    );
+  }
+  return executable;
 }
 
 function runCommand(command, args) {
   let executable;
   try {
-    executable = commandPath(command);
+    executable = ensureToolchain(command);
   } catch (error) {
     console.error(error.message);
-    process.exit(1);
-  }
-  if (!fs.existsSync(executable)) {
-    console.error(`missing ${command} binary in npm toolchain package: ${executable}`);
     process.exit(1);
   }
   const child = childProcess.spawn(executable, args, {

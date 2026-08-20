@@ -441,10 +441,6 @@ const NPM_PLATFORM_TARGETS: [(&str, &str, &str, &str); 3] = [
     ),
 ];
 
-fn npm_platform_package_dir(dist: &Path, target: &str) -> PathBuf {
-    dist.join("_npm-platform-packages").join(target)
-}
-
 fn current_npm_host_target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
@@ -452,21 +448,6 @@ fn current_npm_host_target() -> Option<&'static str> {
         ("macos", "aarch64") => Some("aarch64-apple-darwin"),
         _ => None,
     }
-}
-
-fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&source_path, &destination_path)?;
-        } else {
-            fs::copy(&source_path, &destination_path)?;
-        }
-    }
-    Ok(())
 }
 
 /// Sum each regular file exactly once for release-profile accounting assertions.
@@ -1494,34 +1475,17 @@ fn package_prepare_scripts_stage_versions_and_shared_installer() -> Result<(), B
             .is_none(),
         "default npm package must not declare postinstall"
     );
-    let optional_dependencies = npm_package["optionalDependencies"]
-        .as_object()
-        .ok_or("npm optionalDependencies must be an object")?;
-    for (target, package_name, os, cpu) in NPM_PLATFORM_TARGETS {
-        assert_eq!(
-            optional_dependencies
-                .get(package_name)
-                .and_then(serde_json::Value::as_str),
-            Some(npm_version.as_str()),
-            "top-level npm package must depend on {package_name}"
-        );
-
-        let platform_dir = npm_platform_package_dir(&dist, target);
-        let platform_package: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(platform_dir.join("package.json"))?)?;
-        assert_eq!(platform_package["name"], package_name);
-        assert_eq!(platform_package["version"], npm_version);
-        assert_eq!(platform_package["os"], serde_json::json!([os]));
-        assert_eq!(platform_package["cpu"], serde_json::json!([cpu]));
-        assert!(platform_dir.join("toolchain/bin/incan").exists());
-        assert!(platform_dir.join("toolchain/bin/incan-lsp").exists());
-        assert!(
-            platform_dir
-                .join("toolchain/share/incan/sdk/sdk-inventory.json")
-                .exists()
-        );
-        assert!(platform_dir.join("toolchain/crates/Cargo.toml").exists());
-    }
+    // The npm package is a reference shim: no toolchain payload travels through npm (a ~200MB payload exceeds the
+    // registry's upload limits), so no optionalDependencies and no per-platform payload packages exist. The shim
+    // provisions the verified release archive through its bundled installer on first invocation, like pip.
+    assert!(
+        npm_package.get("optionalDependencies").is_none(),
+        "reference npm shim must not declare platform payload optionalDependencies"
+    );
+    assert!(
+        !dist.join("_npm-platform-packages").exists(),
+        "reference npm packaging must not stage platform payload packages"
+    );
     assert!(fs::read_to_string(dist.join("_npm-package/README.md"))?.contains("https://incan.io"));
     assert!(dist.join("_npm-package/vendor/install-incan.sh").exists());
 
@@ -1571,7 +1535,7 @@ fn package_prepare_scripts_stage_versions_and_shared_installer() -> Result<(), B
 }
 
 #[test]
-fn npm_command_wrappers_run_platform_package_without_installer() -> Result<(), Box<dyn std::error::Error>> {
+fn npm_command_wrappers_run_provisioned_toolchain_without_installer() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = ToolchainTestStaging::new()?;
     let dist = tmp.path().join("toolchain");
     let (incan, incan_lsp) = write_fixture_toolchain_commands(tmp.path())?;
@@ -1589,17 +1553,17 @@ fn npm_command_wrappers_run_platform_package_without_installer() -> Result<(), B
         String::from_utf8_lossy(&npm_output.stderr)
     );
 
+    // Once a toolchain is provisioned, command invocations must not need the bundled installer again.
     let package_root = dist.join("_npm-package");
-    let node_modules_scope = package_root.join("node_modules/@incan");
-    copy_dir_recursive(
-        &npm_platform_package_dir(&dist, "x86_64-unknown-linux-gnu"),
-        &node_modules_scope.join("toolchain-linux-x64"),
-    )?;
     fs::remove_file(package_root.join("vendor/install-incan.sh"))?;
+    let toolchain_dir = tmp.path().join("provisioned-toolchain");
+    fs::create_dir_all(toolchain_dir.join("bin"))?;
+    fs::copy(&incan, toolchain_dir.join("bin/incan"))?;
+    fs::copy(&incan_lsp, toolchain_dir.join("bin/incan-lsp"))?;
 
     let incan_output = Command::new("node")
         .arg(package_root.join("bin/incan.js"))
-        .env("INCAN_NPM_HOST_TARGET", "x86_64-unknown-linux-gnu")
+        .env("INCAN_NPM_TOOLCHAIN_DIR", &toolchain_dir)
         .output()?;
     assert!(
         incan_output.status.success(),
@@ -1612,7 +1576,7 @@ fn npm_command_wrappers_run_platform_package_without_installer() -> Result<(), B
     let incan_lsp_output = Command::new("node")
         .arg(package_root.join("bin/incan-lsp.js"))
         .arg("--help")
-        .env("INCAN_NPM_HOST_TARGET", "x86_64-unknown-linux-gnu")
+        .env("INCAN_NPM_TOOLCHAIN_DIR", &toolchain_dir)
         .output()?;
     assert!(
         incan_lsp_output.status.success(),
@@ -1625,7 +1589,7 @@ fn npm_command_wrappers_run_platform_package_without_installer() -> Result<(), B
 }
 
 #[test]
-fn npm_command_wrappers_report_unsupported_platforms() -> Result<(), Box<dyn std::error::Error>> {
+fn npm_command_wrappers_fail_closed_without_provisioned_toolchain() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = ToolchainTestStaging::new()?;
     let dist = tmp.path().join("toolchain");
     let (incan, incan_lsp) = write_fixture_toolchain_commands(tmp.path())?;
@@ -1643,24 +1607,33 @@ fn npm_command_wrappers_report_unsupported_platforms() -> Result<(), Box<dyn std
         String::from_utf8_lossy(&npm_output.stderr)
     );
 
+    // With first-run provisioning suppressed and no toolchain installed, the shim must fail with actionable
+    // guidance rather than silently succeeding or invoking the network.
     let package_root = dist.join("_npm-package");
-    fs::remove_file(package_root.join("vendor/install-incan.sh"))?;
-
     let output = Command::new("node")
         .arg(package_root.join("bin/incan.js"))
-        .env("INCAN_NPM_HOST_TARGET", "sparc64-sun-solaris")
+        .env("INCAN_SKIP_NPM_INSTALL", "1")
         .output()?;
     assert!(
         !output.status.success(),
-        "unsupported npm platform should fail\nstdout:\n{}\nstderr:\n{}",
+        "an unprovisioned npm shim with provisioning suppressed should fail\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unsupported npm toolchain target: sparc64-sun-solaris"));
-    assert!(stderr.contains("x86_64-unknown-linux-gnu"));
-    assert!(stderr.contains("x86_64-apple-darwin"));
-    assert!(stderr.contains("aarch64-apple-darwin"));
+    assert!(stderr.contains("incan is missing"));
+    assert!(stderr.contains("install-incan"));
+
+    // An explicit toolchain-directory override that lacks the binary must also fail with the override named.
+    let missing_dir = tmp.path().join("missing-toolchain");
+    let override_output = Command::new("node")
+        .arg(package_root.join("bin/incan.js"))
+        .env("INCAN_NPM_TOOLCHAIN_DIR", &missing_dir)
+        .output()?;
+    assert!(!override_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&override_output.stderr).contains("missing incan binary in INCAN_NPM_TOOLCHAIN_DIR")
+    );
     Ok(())
 }
 
@@ -1917,7 +1890,7 @@ fn homebrew_smoke_preserves_existing_platform_archives() -> Result<(), Box<dyn s
 }
 
 #[test]
-fn npm_smoke_installs_platform_package_without_lifecycle_scripts() -> Result<(), Box<dyn std::error::Error>> {
+fn npm_smoke_installs_reference_shim_without_lifecycle_scripts() -> Result<(), Box<dyn std::error::Error>> {
     let Some(host_target) = current_npm_host_target() else {
         return Ok(());
     };

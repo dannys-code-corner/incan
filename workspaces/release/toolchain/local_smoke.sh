@@ -69,17 +69,6 @@ archive_path() {
   printf '%s/incan-%s-%s.tar.gz\n' "$dist_dir" "$(toolchain_release)" "$host_target"
 }
 
-npm_platform_package_path() {
-  local platform
-  case "$host_target" in
-    x86_64-unknown-linux-gnu) platform="linux-x64" ;;
-    x86_64-apple-darwin) platform="darwin-x64" ;;
-    aarch64-apple-darwin) platform="darwin-arm64" ;;
-    *) fail "unsupported npm platform smoke target: ${host_target}" ;;
-  esac
-  printf '%s/incan-toolchain-%s-%s.tgz\n' "$dist_dir" "$platform" "$(toolchain_version)"
-}
-
 require_archive() {
   local archive
   archive="$(archive_path)"
@@ -210,14 +199,11 @@ ensure_platform_archive_fixtures() {
 smoke_npm() {
   require_command node
   require_command npm
-  ensure_platform_archive_fixtures
+  require_archive
   npm_config_cache="${dist_dir}/npm-cache" \
     npm_config_logs_dir="${dist_dir}/npm-logs" \
     node "${root}/workspaces/release/npm/prepare_package.js" "$dist_dir"
   local npm_home="${dist_dir}/npm-home"
-  local platform_package
-  platform_package="$(npm_platform_package_path)"
-  [ -f "$platform_package" ] || fail "missing npm platform package: ${platform_package}"
   rm -rf "$npm_home"
   mkdir -p "$npm_home"
   npm_config_cache="${dist_dir}/npm-cache" \
@@ -225,9 +211,17 @@ smoke_npm() {
     npm_config_ignore_scripts=true \
     npm_config_audit=false \
     npm_config_fund=false \
-    npm install -g --offline --omit=optional --ignore-scripts "$platform_package" "${dist_dir}/incan-toolchain-$(toolchain_version).tgz" --prefix "$npm_home"
-  "${npm_home}/bin/incan" --version
-  "${npm_home}/bin/incan-lsp" --help >/dev/null
+    npm install -g --offline --ignore-scripts "${dist_dir}/incan-toolchain-$(toolchain_version).tgz" --prefix "$npm_home"
+  # The reference shim provisions the toolchain from the release manifest on first invocation. An offline smoke
+  # cannot exercise that download, so it validates the installed shim against the locally packaged host archive
+  # through the shim's explicit toolchain-directory override; installer-driven provisioning is covered by the
+  # direct and pip smokes, which share the same install-incan.sh contract the shim bundles.
+  local npm_toolchain_dir="${dist_dir}/npm-toolchain"
+  rm -rf "$npm_toolchain_dir"
+  mkdir -p "$npm_toolchain_dir"
+  tar -xzf "$(archive_path)" -C "$npm_toolchain_dir"
+  INCAN_NPM_TOOLCHAIN_DIR="$npm_toolchain_dir" "${npm_home}/bin/incan" --version
+  INCAN_NPM_TOOLCHAIN_DIR="$npm_toolchain_dir" "${npm_home}/bin/incan-lsp" --help >/dev/null
 }
 
 python_build_runner() {
