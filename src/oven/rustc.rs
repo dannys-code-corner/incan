@@ -5278,40 +5278,43 @@ fn verify_rustc_identity(rustc: &Path, expected: &str) -> Result<(), OvenRustcEr
     })
 }
 
+/// Ask one Rustup executable which compiler is active, returning its trimmed report when it succeeds.
+fn rustup_reported_rustc(rustup: &Path) -> Option<String> {
+    let mut command = Command::new(rustup);
+    command.args(["which", "rustc"]);
+    clear_inherited_cargo_environment(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let reported = String::from_utf8(output.stdout).ok()?;
+    let reported = reported.trim().to_string();
+    (!reported.is_empty()).then_some(reported)
+}
+
 /// Resolve the active Rust compiler without involving Cargo or a Cargo target directory.
 ///
 /// An explicit `RUSTC` must be a regular executable file, not a shell fragment. When it is absent, the Rustup
 /// toolchain resolver supplies the compiler path; that remains separate from the explicit `legacy_cargo` publisher.
+///
+/// When `rustup` is not reachable the error names the most common cause: provisioning Rust from within an Incan
+/// command wires Rustup into shell profiles for future shells, so the shell that triggered it keeps its original
+/// `PATH` and needs to be refreshed before the compiler is visible.
 pub fn resolve_active_rustc() -> Result<PathBuf, OvenRustcError> {
     if let Some(path) = env::var_os("RUSTC").filter(|path| !path.is_empty()) {
         return verified_regular_file(Path::new(&path), "RUSTC");
     }
-    let mut command = Command::new("rustup");
-    command.args(["which", "rustc"]);
-    clear_inherited_cargo_environment(&mut command);
-    let output = command.output().map_err(|source| OvenRustcError::Io {
-        path: PathBuf::from("rustup"),
-        source,
-    })?;
-    if !output.status.success() {
+    let reported = rustup_reported_rustc(Path::new("rustup"));
+    let Some(reported) = reported else {
         return Err(OvenRustcError::InvalidInput {
             field: "rustc",
-            message: "rustup could not locate the active Rust compiler; set RUSTC to an explicit compiler path"
+            message: "could not locate the active Rust compiler. If Rust was just installed, open a new shell (or \
+                      run `. \"$HOME/.cargo/env\"`) so `rustup` is on PATH; otherwise install Rust through rustup, \
+                      or set RUSTC to an explicit compiler path"
                 .to_string(),
         });
-    }
-    let reported = String::from_utf8(output.stdout).map_err(|error| OvenRustcError::InvalidInput {
-        field: "rustc",
-        message: format!("rustup reported a non-UTF-8 compiler path: {error}"),
-    })?;
-    let reported = reported.trim();
-    if reported.is_empty() {
-        return Err(OvenRustcError::InvalidInput {
-            field: "rustc",
-            message: "rustup reported an empty compiler path".to_string(),
-        });
-    }
-    verified_regular_file(Path::new(reported), "rustc")
+    };
+    verified_regular_file(Path::new(&reported), "rustc")
 }
 
 /// Read one regular Rust compiler's stable `--version` identity without invoking Cargo.
