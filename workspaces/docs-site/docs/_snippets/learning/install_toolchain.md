@@ -28,7 +28,7 @@ The supported release channels install the same Incan toolchain payload. Choose 
     incan --version
     ```
 
-    npm installs a host-specific optional platform package without a lifecycle script. Manage Rust and the `wasm32-wasip1` target separately.
+    npm installs command shims without a lifecycle script; the first `incan` run provisions the checksum-verified toolchain for your host. Manage Rust and the `wasm32-wasip1` target separately.
 
 === "pipx"
 

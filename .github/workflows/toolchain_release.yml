@@ -186,9 +186,8 @@ jobs:
             npm_tag="rc"
           fi
           version="$(sed -n '1p' dist/toolchain/toolchain-version.txt | tr -d '\r\n')"
-          for platform in linux-x64 darwin-x64 darwin-arm64; do
-            npm publish "dist/toolchain/incan-toolchain-${platform}-${version}.tgz" --access public --provenance --tag "$npm_tag"
-          done
+          # The npm package is a reference shim that provisions the verified release archive on first invocation;
+          # no per-platform payload packages exist (a ~200MB toolchain payload exceeds npm's upload limits).
           npm publish "dist/toolchain/incan-toolchain-${version}.tgz" --access public --provenance --tag "$npm_tag"
 
   publish-pypi:
