@@ -1171,7 +1171,10 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.contains("oven-linux-replay")
             && workflow.contains("actions/cache/save@v5")
             && workflow.contains("fail-on-cache-miss: true")
-            && workflow.contains("partition: [0, 1, 2, 3]")
+            && workflow.contains("{ partition: 0, display: 1 }")
+            && workflow.contains("{ partition: 1, display: 2 }")
+            && workflow.contains("{ partition: 2, display: 3 }")
+            && workflow.contains("{ partition: 3, display: 4 }")
             && workflow.matches("timeout-minutes: 20").count() >= 4
             && workflow.matches("Install WASI target for vocab desugarers").count() == 6
             && !workflow.contains("make test-oven-focused"),
