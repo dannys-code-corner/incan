@@ -188,6 +188,10 @@ rustdoc-gate:
 rustdoc-gate-ci:
 	@python3 scripts/check_changed_rustdocs.py
 
+.PHONY: version-gate  ## quality - Require hand-written version literals to match the workspace version
+version-gate:
+	@python3 scripts/check_release_version_consistency.py
+
 .PHONY: cargo-deny  ## quality - Run cargo-deny policy checks
 cargo-deny:
 	@echo "\033[1mRunning cargo-deny...\033[0m"
@@ -222,6 +226,9 @@ pre-commit-fast:
 	$(MAKE) -s rustdoc-gate-ci; \
 	echo "\033[32mDONE\033[0m"; \
 	t2=$$(date +%s); \
+	printf "\033[1mChecking version consistency...\033[0m "; \
+	$(MAKE) -s version-gate; \
+	echo "\033[32mDONE\033[0m"; \
 	echo "\033[1mRunning cargo check (fast gate)...\033[0m"; \
 	$(MAKE) -s check-fast-ci; \
 	echo "\033[32mDONE\033[0m"; \
