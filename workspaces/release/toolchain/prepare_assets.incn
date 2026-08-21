@@ -218,74 +218,74 @@ def render_formula(version: str, rust_channel: str, assets: list[HostAsset]) -> 
     mac_intel = host_block(assets, "x86_64-apple-darwin", "    ")?
     linux_x86 = host_block(assets, "x86_64-unknown-linux-gnu", "    ")?
 
-    # Built as a line list rather than one concatenation expression. The formula is long enough that chaining it
-    # with `+` produces an expression deep enough to exhaust the compiler's stack while lowering it, and a list
-    # keeps the Ruby readable in source order besides.
-    mut lines: list[str] = []
-    lines.append("# typed: false")
-    lines.append("# frozen_string_literal: true")
-    lines.append("")
-    lines.append("class Incan < Formula")
-    lines.append("  desc \"Statically typed language that compiles to native Rust\"")
-    lines.append("  homepage \"https://github.com/encero-systems/incan\"")
-    lines.append("")
-    lines.append("  if OS.mac? && Hardware::CPU.arm?")
-    lines.append(mac_arm)
-    lines.append("  elsif OS.mac?")
-    lines.append(mac_intel)
-    lines.append("  elsif OS.linux? && Hardware::CPU.intel?")
-    lines.append(linux_x86)
-    lines.append("  end")
-    lines.append("")
-    lines.append("  def staged_files")
-    lines.append("    (Dir[\"#{buildpath}/**/*\"] + Dir[\"**/*\"]).uniq")
-    lines.append("  end")
-    lines.append("")
-    lines.append("  def staged_binary(name)")
-    lines.append("    path = staged_files.find do |candidate|")
-    lines.append("      File.basename(candidate) == name && File.basename(File.dirname(candidate)) == \"bin\"")
-    lines.append("    end")
-    lines.append("    path.nil? ? nil : Pathname.new(path)")
-    lines.append("  end")
-    lines.append("")
-    lines.append("  def staged_file_sample")
-    lines.append("    staged_files.first(25).join(\", \")")
-    lines.append("  end")
-    lines.append("")
-    lines.append("  def install")
-    lines.append("    incan_bin = staged_binary(\"incan\")")
-    lines.append("    incan_lsp_bin = staged_binary(\"incan-lsp\")")
-    lines.append("    sdk_inventory = Pathname.new(\"share/incan/sdk/sdk-inventory.json\")")
-    lines.append("    odie \"could not find incan binary in archive; staged files: #{staged_file_sample}\" if incan_bin.nil?")
-    lines.append("    odie \"could not find incan-lsp binary in archive; staged files: #{staged_file_sample}\" if incan_lsp_bin.nil?")
-    lines.append("    unless sdk_inventory.exist?")
-    lines.append("      odie \"could not find SDK provider inventory in archive; staged files: #{staged_file_sample}\"")
-    lines.append("    end")
-    lines.append("    libexec.install Dir[\"*\"]")
-    lines.append("    bin.write_exec_script libexec/\"bin/incan\"")
-    lines.append("    bin.write_exec_script libexec/\"bin/incan-lsp\"")
-    lines.append("  end")
-    lines.append("")
-    lines.append("  def caveats")
-    lines.append("    <<~EOS")
-    lines.append(f"      Incan ships prebuilt Rust libraries that load only under the exact Rust compiler that built them, which for this release is {rust_channel}.")
-    lines.append("")
-    lines.append("      The direct installer, npm, and pipx provision that compiler into an Incan-owned rustup home and leave your own default toolchain alone. Homebrew installs only the prebuilt Incan commands, so select the matching compiler yourself before building projects:")
-    lines.append(f"        rustup toolchain install {rust_channel}")
-    lines.append(f"        rustup default {rust_channel}")
-    lines.append("        rustup target add wasm32-wasip1")
-    lines.append("")
-    lines.append("      To keep your own default toolchain untouched, install through the direct installer instead:")
-    lines.append("        curl -fsSL https://github.com/encero-systems/incan/releases/latest/download/install.sh | bash")
-    lines.append("    EOS")
-    lines.append("  end")
-    lines.append("")
-    lines.append("  test do")
-    lines.append("    assert_match version.to_s, shell_output(\"#{bin}/incan --version\")")
-    lines.append("  end")
-    lines.append("end")
-    lines.append("")
-    return Ok("\n".join(lines))
+    # The formula is mostly fixed Ruby with a few substitution points, so it reads best as literal blocks joined
+    # at those seams. A plain triple-quoted string rather than an f-string is deliberate: the formula is full of
+    # Ruby `#{...}` interpolations, which an f-string would require escaping as `#{{...}}` at every occurrence.
+    header = """# typed: false
+# frozen_string_literal: true
+
+class Incan < Formula
+  desc "Statically typed language that compiles to native Rust"
+  homepage "https://github.com/encero-systems/incan"
+
+  if OS.mac? && Hardware::CPU.arm?
+"""
+    body = """  end
+
+  def staged_files
+    (Dir["#{buildpath}/**/*"] + Dir["**/*"]).uniq
+  end
+
+  def staged_binary(name)
+    path = staged_files.find do |candidate|
+      File.basename(candidate) == name && File.basename(File.dirname(candidate)) == "bin"
+    end
+    path.nil? ? nil : Pathname.new(path)
+  end
+
+  def staged_file_sample
+    staged_files.first(25).join(", ")
+  end
+
+  def install
+    incan_bin = staged_binary("incan")
+    incan_lsp_bin = staged_binary("incan-lsp")
+    sdk_inventory = Pathname.new("share/incan/sdk/sdk-inventory.json")
+    odie "could not find incan binary in archive; staged files: #{staged_file_sample}" if incan_bin.nil?
+    odie "could not find incan-lsp binary in archive; staged files: #{staged_file_sample}" if incan_lsp_bin.nil?
+    unless sdk_inventory.exist?
+      odie "could not find SDK provider inventory in archive; staged files: #{staged_file_sample}"
+    end
+    libexec.install Dir["*"]
+    bin.write_exec_script libexec/"bin/incan"
+    bin.write_exec_script libexec/"bin/incan-lsp"
+  end
+
+  def caveats
+    <<~EOS
+      Incan ships prebuilt Rust libraries that load only under the exact Rust compiler that built them, which for this release is """
+    caveats_tail = """.
+
+      The direct installer, npm, and pipx provision that compiler into an Incan-owned rustup home and leave your own default toolchain alone. Homebrew installs only the prebuilt Incan commands, so select the matching compiler yourself before building projects:
+        rustup toolchain install """
+    targets_tail = """
+        rustup target add wasm32-wasip1
+
+      To keep your own default toolchain untouched, install through the direct installer instead:
+        curl -fsSL https://github.com/encero-systems/incan/releases/latest/download/install.sh | bash
+    EOS
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/incan --version")
+  end
+end
+"""
+    return Ok(
+        header + mac_arm + "\n  elsif OS.mac?\n" + mac_intel + "\n  elsif OS.linux? && Hardware::CPU.intel?\n"
+        + linux_x86 + "\n" + body + rust_channel + caveats_tail + rust_channel + "\n        rustup default "
+        + rust_channel + targets_tail,
+    )
 
 
 def prepare_assets() -> Result[None, str]:
