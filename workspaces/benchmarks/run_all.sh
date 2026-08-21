@@ -72,10 +72,32 @@ run_benchmark() {
         return 1
     fi
     cd "$dir"
-    # Generated crates share `target/incan/.cargo-target/release/` (see `ProjectGenerator::cargo_target_dir`).
-    local incan_bin="$PROJECT_ROOT/target/incan/.cargo-target/release/$basename"
+    # An Oven build writes the executable beside its generated project (`<project>/oven/release/<name>`); the
+    # Cargo-routed path keeps the older shared layout (`target/incan/.cargo-target/release/<name>`). Both are
+    # legitimate outcomes depending on how the project's dependencies resolve, so locate the binary rather than
+    # assuming one layout -- assuming the Cargo layout is what silently broke this harness when Oven became the
+    # default build path.
+    local incan_bin=""
+    for candidate in \
+        "$dir/target/incan/$basename/oven/release/$basename" \
+        "$PROJECT_ROOT/target/incan/$basename/oven/release/$basename" \
+        "$PROJECT_ROOT/target/incan/.cargo-target/release/$basename"
+    do
+        if [ -x "$candidate" ]; then
+            incan_bin="$candidate"
+            break
+        fi
+    done
+    if [ -z "$incan_bin" ]; then
+        incan_bin="$(find "$dir/target" "$PROJECT_ROOT/target/incan" -type f -perm -111 -name "$basename" \
+            -not -path '*/deps/*' -not -path '*/build/*' 2>/dev/null | head -1)"
+    fi
+    if [ -z "$incan_bin" ]; then
+        echo "  Failed to locate the Incan binary for $basename"
+        return 1
+    fi
     cp "$incan_bin" "${basename}_incan" || {
-        echo "  Failed to copy Incan binary"
+        echo "  Failed to copy Incan binary from $incan_bin"
         return 1
     }
     

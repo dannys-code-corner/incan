@@ -627,7 +627,7 @@ fn write_manifest(root: &Path, archive: &Path, checksum: &str) -> Result<PathBuf
   "release": "v0.4.0-test",
   "channel": "dev",
   "rust_toolchain": {{
-    "channel": "stable",
+    "channel": "1.93.0",
     "min_rust": "1.93",
     "targets": ["wasm32-wasip1"],
     "policy": "fixture"
@@ -1347,8 +1347,17 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result
         manifest["rust_toolchain"]["policy"]
             .as_str()
             .unwrap_or_default()
-            .contains("provisions stable Rust through rustup"),
-        "manifest should document installer-managed Rust provisioning"
+            .contains("Incan-owned rustup home"),
+        "manifest should document that provisioning is isolated from the user's own toolchain"
+    );
+    // The published channel has to name one concrete Rust release. A floating channel would drift away from the
+    // compiler that sealed this archive's Loafs, which is the whole reason installs broke.
+    let channel = manifest["rust_toolchain"]["channel"].as_str().unwrap_or_default();
+    let mut parts = channel.split('.');
+    assert!(
+        parts.clone().count() == 3
+            && parts.all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())),
+        "manifest must pin a concrete Rust release, got {channel:?}"
     );
     assert!(
         manifest["hosts"]["x86_64-unknown-linux-gnu"]["archive_url"]
@@ -1373,7 +1382,13 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result
     assert!(!formula.contains("on_macos"));
     assert!(formula.contains("if OS.mac? && Hardware::CPU.arm?"));
     assert!(formula.contains("elsif OS.linux? && Hardware::CPU.intel?"));
-    assert!(formula.contains("npm and Homebrew install prebuilt Incan commands"));
+    // Homebrew installs prebuilt commands without running install-incan.sh, so it is the one channel that does
+    // not get an Incan-owned toolchain. Its caveats must therefore name the exact Rust release to select.
+    assert!(formula.contains("Homebrew installs only the prebuilt Incan commands"));
+    assert!(
+        formula.contains(&format!("rustup toolchain install {channel}")),
+        "formula caveats must name the exact Rust release this archive's Loafs were sealed against"
+    );
     assert!(formula.contains(&format!(
         r#"url "https://github.com/encero-systems/incan/releases/download/{release}/{archive_name}""#
     )));
@@ -1404,7 +1419,7 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result
     assert!(formula.contains("libexec.install Dir[\"*\"]"));
     assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan\""));
     assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan-lsp\""));
-    assert!(formula.contains("Incan builds supported projects with verified Oven direct-rustc plans"));
+    assert!(formula.contains("load only under the exact Rust compiler that built them"));
     assert!(!formula.contains("Incan builds projects through Cargo"));
     Ok(())
 }
@@ -1708,9 +1723,11 @@ fn toolchain_installer_provisions_rust_backend_targets() -> Result<(), Box<dyn s
     fs::create_dir_all(&fake_bin)?;
     let rustup_log = tmp.path().join("rustup.log");
 
+    // Record the Rustup home and toolchain selection each call ran under, so the test can assert that
+    // provisioning went into Incan's own home and did not inherit an ambient toolchain choice.
     write_executable(
         &fake_bin.join("rustup"),
-        "#!/usr/bin/env sh\nprintf '%s\\n' \"$*\" >> \"$RUSTUP_LOG\"\n",
+        "#!/usr/bin/env sh\nprintf '%s\\t%s\\t%s\\n' \"$*\" \"${RUSTUP_HOME:-<unset>}\" \"${RUSTUP_TOOLCHAIN:-<unset>}\" >> \"$RUSTUP_LOG\"\n",
     )?;
     write_executable(
         &fake_bin.join("cargo"),
@@ -1740,12 +1757,43 @@ fn toolchain_installer_provisions_rust_backend_targets() -> Result<(), Box<dyn s
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Rust backend:"));
+    assert!(stdout.contains("Rust backend"));
     assert!(stdout.contains("target: wasm32-wasip1"));
+
+    // Every Rustup call must run inside Incan's own home with no inherited toolchain selection, and must name
+    // the manifest's channel explicitly. That combination is what keeps the user's own default untouched and
+    // keeps ambient configuration from redirecting provisioning.
+    let incan_rustup_home = incan_home.join("rust");
     let rustup_log = fs::read_to_string(rustup_log)?;
     assert!(
-        rustup_log.lines().any(|line| line == "target add wasm32-wasip1"),
-        "expected installer to add manifest Rust target, got:\n{rustup_log}"
+        !rustup_log.trim().is_empty(),
+        "expected the installer to invoke rustup at all"
+    );
+    for line in rustup_log.lines() {
+        let mut fields = line.split('\t');
+        let arguments = fields.next().unwrap_or_default();
+        let home = fields.next().unwrap_or_default();
+        let toolchain = fields.next().unwrap_or_default();
+        assert_eq!(
+            home,
+            incan_rustup_home.to_str().ok_or("incan rustup home is not UTF-8")?,
+            "rustup call `{arguments}` did not run against Incan's own rustup home"
+        );
+        assert_eq!(
+            toolchain, "<unset>",
+            "rustup call `{arguments}` inherited an ambient RUSTUP_TOOLCHAIN selection"
+        );
+    }
+    assert!(
+        rustup_log
+            .lines()
+            .any(|line| line.starts_with("target add --toolchain 1.93.0 wasm32-wasip1\t")),
+        "expected installer to add the manifest Rust target to the pinned toolchain, got:\n{rustup_log}"
+    );
+    assert_eq!(
+        fs::read_to_string(incan_rustup_home.join("incan-channel.txt"))?.trim(),
+        "1.93.0",
+        "installer must record which channel it provisioned so the compiler can resolve it exactly"
     );
     assert_toolchain_install(&incan_home, &bin_dir);
     Ok(())
@@ -1770,7 +1818,7 @@ set -eu
 mkdir -p "$HOME/.cargo/bin"
 cat > "$HOME/.cargo/bin/rustup" <<'RUSTUP'
 #!/usr/bin/env sh
-printf '%s\n' "$*" >> "$RUSTUP_LOG"
+printf '%s\t%s\t%s\n' "$*" "${RUSTUP_HOME:-<unset>}" "${RUSTUP_TOOLCHAIN:-<unset>}" >> "$RUSTUP_LOG"
 RUSTUP
 cat > "$HOME/.cargo/bin/cargo" <<'CARGO'
 #!/usr/bin/env sh
@@ -1805,12 +1853,22 @@ chmod +x "$HOME/.cargo/bin/rustup" "$HOME/.cargo/bin/cargo" "$HOME/.cargo/bin/ru
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Installing Rust backend with rustup (stable)"));
-    assert!(stdout.contains("Rust backend:"));
+    // rustup is bootstrapped without a default toolchain so the channel is downloaded once, into Incan's home,
+    // rather than twice on a machine that had no Rust.
+    assert!(stdout.contains("Installing rustup"));
+    assert!(stdout.contains("rustup is installed with no default toolchain"));
+    assert!(stdout.contains("Rust backend"));
     let rustup_log = fs::read_to_string(rustup_log)?;
     assert!(
-        rustup_log.lines().any(|line| line == "target add wasm32-wasip1"),
-        "expected bootstrapped rustup to add manifest Rust target, got:\n{rustup_log}"
+        rustup_log
+            .lines()
+            .any(|line| line.starts_with("target add --toolchain 1.93.0 wasm32-wasip1\t")),
+        "expected bootstrapped rustup to add the manifest Rust target to the pinned toolchain, got:\n{rustup_log}"
+    );
+    assert_eq!(
+        fs::read_to_string(incan_home.join("rust").join("incan-channel.txt"))?.trim(),
+        "1.93.0",
+        "installer must record which channel it provisioned even when it bootstrapped rustup itself"
     );
     assert_toolchain_install(&incan_home, &bin_dir);
     Ok(())

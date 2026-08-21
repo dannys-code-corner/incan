@@ -441,7 +441,8 @@ fn scheduler_nested_build_and_run_fail_closed_when_the_immutable_native_plan_is_
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(
-            diagnostics.contains("no compatible compiler-suite native provider/dependency unit"),
+            diagnostics.contains("dependencies have not been compiled yet")
+                && diagnostics.contains("will not compile them for you"),
             "scheduler nested {command} did not fail closed:\n{diagnostics}"
         );
     }

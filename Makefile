@@ -75,6 +75,9 @@ help: build-quiet  ## Display this help message
 	@echo "\033[1mTesting:\033[0m"
 	@grep -E '^.PHONY: .*?## test - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## test - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
 	@echo ""
+	@echo "\033[1mRelease gates (local only):\033[0m"
+	@grep -E '^.PHONY: .*?## gate - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## gate - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
+	@echo ""
 	@echo "\033[1mDocs:\033[0m"
 	@grep -E '^.PHONY: .*?## docs - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## docs - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
 	@echo ""
@@ -728,6 +731,34 @@ toolchain-release-smoke-homebrew:
 .PHONY: toolchain-release-smoke  ## tool - Full local toolchain release smoke (direct + npm + pip + Homebrew syntax)
 toolchain-release-smoke: toolchain-release-build
 	@TOOLCHAIN_DIST="$${TOOLCHAIN_DIST:-/private/tmp/incan-local-test}" bash workspaces/release/toolchain/local_smoke.sh all
+
+# =============================================================================
+# Release gates (local only)
+#
+# These prove a release the compiler suite cannot: that the flagship external consumer still builds, and that a
+# first-time user on a real machine can install and build. Both are deliberately kept out of CI -- IncQL pulls
+# DataFusion, and the clean rooms provision Rust twice -- so they run in front of a release, not every PR.
+# =============================================================================
+
+.PHONY: gate-incql  ## gate - Build the real IncQL consumer end to end (INCQL_CHECKOUT=..., INCAN=...)
+gate-incql:
+	@bash scripts/gate_incql.sh --incan "$${INCAN:-$(CURDIR)/target/release/incan}"
+
+.PHONY: gate-cleanroom  ## gate - Install into containers with and without a mismatched Rust (DIST=...)
+gate-cleanroom:
+	@bash scripts/gate_cleanroom.sh $(if $(DIST),--dist "$(DIST)",) $(if $(MANIFEST),--manifest "$(MANIFEST)",)
+
+.PHONY: bench-build-times  ## gate - Record build times across toolchains (TOOLCHAINS="0.4.0=/path/incan 0.5.0=/path/incan")
+bench-build-times:
+	@test -n "$(TOOLCHAINS)" \
+		|| { echo 'usage: make bench-build-times TOOLCHAINS="0.4.0=/path/to/incan 0.5.0=/path/to/incan"' >&2; exit 2; }
+	@bash scripts/bench_build_times.sh $(foreach toolchain,$(TOOLCHAINS),--toolchain "$(toolchain)")
+
+.PHONY: gate-release  ## gate - Every local release gate: IncQL consumer + clean-room installs
+gate-release:
+	@$(MAKE) gate-incql
+	@$(MAKE) gate-cleanroom
+	@echo "\033[32m✓ Release gates passed\033[0m"
 
 .PHONY: watch  ## tool - Watch for changes and rebuild (requires cargo-watch)
 watch:

@@ -29,7 +29,7 @@ use crate::frontend::{lexer, parser};
 use crate::lockfile::CargoFeatureSelection;
 use crate::manifest::DependencySpec;
 use crate::oven::legacy_cargo::direct_rustc_compile_environment;
-use crate::oven::loaf::{OVEN_LOAF_MISS_GUIDANCE, runtime_build_unit_inputs};
+use crate::oven::loaf::{OVEN_LOAF_MISS_GUIDANCE, OVEN_NO_IMPLICIT_DEPENDENCY_BUILD, runtime_build_unit_inputs};
 use crate::oven::native_test::{OvenNativeTestRequest, run_native_test_batch};
 use crate::oven::rustc::{
     OvenTrustedDirectRustcTargetRequest, attach_caller_owned_rustc_libraries, bake_trusted_direct_rustc_test,
@@ -2606,10 +2606,11 @@ fn run_file_tests_batch_oven(
             Ok(Some(selection)) => Some(selection),
             Ok(None) => {
                 return failure(format!(
-                    "Oven Alpha has no compatible native test provider/dependency unit. Generated harness: {}; receipt: {}. `incan test` will not invoke Cargo; the active toolchain does not ship a compatible Oven Loaf. {}",
+                    "This project's test dependencies have not been compiled yet. `incan test` {}. {} (Test harness: {}; build record: {}.)",
+                    OVEN_NO_IMPLICIT_DEPENDENCY_BUILD,
+                    OVEN_LOAF_MISS_GUIDANCE,
                     generated_root.display(),
                     receipt_path.display(),
-                    OVEN_LOAF_MISS_GUIDANCE,
                 ));
             }
             Err(error) => return failure(error.message),

@@ -102,6 +102,16 @@ package_toolchain() {
   rm -rf "$dist_dir"
   mkdir -p "$dist_dir"
   printf 'Packaging toolchain for %s into %s\n' "$host_target" "$dist_dir"
+  # Packaging records the compiler that sealed this archive's Loafs, and manifest preparation refuses anything
+  # that is not a concrete Rust release. A developer whose default toolchain is nightly would otherwise package an
+  # archive that cannot be described by a publishable manifest, so prefer a stable toolchain here the way CI does.
+  if [ -z "${RUSTC:-}" ] && command -v rustup >/dev/null 2>&1; then
+    local stable_rustc
+    if stable_rustc="$(rustup which --toolchain stable rustc 2>/dev/null)" && [ -x "$stable_rustc" ]; then
+      export RUSTC="$stable_rustc"
+      printf 'Using stable rustc for packaging: %s\n' "$("$stable_rustc" --version)"
+    fi
+  fi
   "${root}/workspaces/release/toolchain/package_archive.sh" "$host_target" --out-dir "$dist_dir"
 }
 
@@ -127,12 +137,16 @@ smoke_direct() {
   require_archive
   [ -f "${dist_dir}/manifest.json" ] || fail "missing manifest: ${dist_dir}/manifest.json; run make toolchain-release-assets first"
   rm -rf "${dist_dir}/install-home" "${dist_dir}/install-bin"
+  # `--skip-rust` keeps the smoke about archive, link and shim mechanics. Provisioning a full Rust toolchain per
+  # smoke stage would add hundreds of megabytes of download to every local run and to the CI publish job; that
+  # behavior is proven instead by `make gate-cleanroom`, which installs into containers for real.
   bash "${dist_dir}/install.sh" \
     --manifest "${dist_dir}/manifest.json" \
     --target "$host_target" \
     --archive "$(archive_path)" \
     --incan-home "${dist_dir}/install-home" \
-    --bin-dir "${dist_dir}/install-bin"
+    --bin-dir "${dist_dir}/install-bin" \
+    --skip-rust
   "${dist_dir}/install-bin/incan" --version
   local installed_sdk_store
   installed_sdk_store="${dist_dir}/install-home/toolchains/$(toolchain_version)/share/incan/sdk"
@@ -261,7 +275,7 @@ smoke_pip() {
   INCAN_TOOLCHAIN_MANIFEST="${dist_dir}/manifest.json" \
     INCAN_PIP_TOOLCHAIN_HOME="${dist_dir}/pip-toolchain-home" \
     INCAN_PIP_BIN_DIR="${dist_dir}/pip-bin" \
-    "${venv}/bin/install-incan" --archive "$(archive_path)" --target "$host_target"
+    "${venv}/bin/install-incan" --archive "$(archive_path)" --target "$host_target" --skip-rust
   INCAN_TOOLCHAIN_MANIFEST="${dist_dir}/manifest.json" \
     INCAN_PIP_TOOLCHAIN_HOME="${dist_dir}/pip-toolchain-home" \
     INCAN_PIP_BIN_DIR="${dist_dir}/pip-bin" \

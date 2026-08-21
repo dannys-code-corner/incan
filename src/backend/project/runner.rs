@@ -78,6 +78,14 @@ pub(crate) fn cargo_executable() -> OsString {
 /// records its executable before launching it, so it needs the same lookup as
 /// an explicit path rather than treating a valid bare name as a missing file.
 pub(crate) fn resolved_cargo_executable() -> io::Result<PathBuf> {
+    // An explicit `CARGO` selection still wins. Otherwise prefer the Cargo belonging to Incan's own provisioned
+    // toolchain: the compatibility baker's Cargo and the direct-Rustc compiler must come from one toolchain, and
+    // `resolve_active_rustc` already prefers that same isolated installation.
+    if env::var_os("CARGO").filter(|value| !value.is_empty()).is_none()
+        && let Some(cargo) = crate::oven::rustc::incan_owned_cargo()
+    {
+        return Ok(cargo);
+    }
     resolve_cargo_executable_from_path(PathBuf::from(cargo_executable()), env::var_os("PATH"))
 }
 
@@ -117,7 +125,17 @@ fn resolve_cargo_executable_from_path(selected: PathBuf, search_path: Option<OsS
 }
 
 /// Create one compiler-owned Cargo command from the canonical executable selection.
+///
+/// An installed Incan resolves its compiler from its own provisioned toolchain, so Cargo has to come from that
+/// same toolchain: the installer adds required targets (such as `wasm32-wasip1`) there and not to the user's
+/// ambient Rustup, and a Cargo from a different toolchain would not see them. Development checkouts have no
+/// provisioned toolchain and keep using the ambient selection.
 pub(crate) fn cargo_command() -> Command {
+    if env::var_os("CARGO").filter(|value| !value.is_empty()).is_none()
+        && let Some(cargo) = crate::oven::rustc::incan_owned_cargo()
+    {
+        return Command::new(cargo);
+    }
     Command::new(cargo_executable())
 }
 
@@ -504,6 +522,35 @@ impl ProjectGenerator {
             .join("target")
             .join(if release { "release" } else { "debug" })
             .join(&self.name)
+    }
+
+    /// Path to the `rlib` a unified Cargo build produced for this generated library project.
+    ///
+    /// Cargo names a library artifact after the crate with Rust's `lib` prefix and hyphens normalized to
+    /// underscores, and writes it beside the profile root rather than under `deps`, which holds the
+    /// per-metadata-hash copies. An explicitly targeted build nests that profile root under the target triple,
+    /// so both layouts are searched and the one that exists wins; returning a path that is merely plausible
+    /// would turn a successful build into a confusing "library is unreadable" failure.
+    pub(crate) fn cargo_build_library_path(&self, release: bool) -> PathBuf {
+        let profile = if release { "release" } else { "debug" };
+        let file_name = format!("lib{}.rlib", self.name.replace('-', "_"));
+        // Builds run against the lifecycle-owned target root that `cargo_build` configures, not a `target`
+        // directory beside the sources, so the artifact has to be looked for where it was actually written.
+        let target_root = self.cargo_target_dir();
+        let plain = target_root.join(profile).join(&file_name);
+        if plain.is_file() {
+            return plain;
+        }
+        let triple_nested = fs::read_dir(&target_root).ok().and_then(|entries| {
+            let mut candidates = entries
+                .flatten()
+                .map(|entry| entry.path().join(profile).join(&file_name))
+                .filter(|candidate| candidate.is_file())
+                .collect::<Vec<_>>();
+            candidates.sort();
+            candidates.into_iter().next()
+        });
+        triple_nested.unwrap_or(plain)
     }
 
     /// Get the project-local path to an isolated fixture build artifact.

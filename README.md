@@ -39,7 +39,7 @@ incan test
 incan build --release
 ```
 
-The direct installer links `incan` and `incan-lsp` into `~/.local/bin` by default and provisions the Rust backend through `rustup` when needed, including the `wasm32-wasip1` target used by packages with vocab companions. The pipx package delegates to that same installer and verified toolchain archive contract. npm installs script-free command shims that provision the checksum-verified toolchain archive on first invocation, and Homebrew installs the prebuilt Incan commands through the generated formula; both npm and Homebrew expect Rust and `wasm32-wasip1` to be managed separately. Cargo installation compiles from source and is mainly for Rust users who prefer that workflow. See [Install and run Incan](workspaces/docs-site/docs/tooling/how-to/install_and_run.md) for supported hosts, dry-run installation, manifest pinning, Cargo installation, and source-build fallback instructions.
+The direct installer links `incan` and `incan-lsp` into `~/.local/bin` by default and provisions the exact Rust release this toolchain was built against into an Incan-owned `rustup` home, including the `wasm32-wasip1` target used by packages with vocab companions. Your own default toolchain is never reconfigured, and Incan does not depend on it: the prebuilt libraries a release ships load only under the compiler that produced them, so Incan carries its own rather than hoping yours matches. On a machine with no Rust at all, `rustup` is installed without a default toolchain and the installer prints how to select one if you want Rust for your own use. The pipx and npm packages delegate to that same installer and verified toolchain archive contract, so they inherit this behavior. Homebrew installs the prebuilt Incan commands through the generated formula without running the installer, so it is the one path where you select the matching Rust release yourself; the formula's caveats name the exact version. Cargo installation compiles from source and is mainly for Rust users who prefer that workflow. See [Install and run Incan](workspaces/docs-site/docs/tooling/how-to/install_and_run.md) for supported hosts, dry-run installation, manifest pinning, Cargo installation, and source-build fallback instructions.
 
 If you are contributing to the compiler itself, clone this repository and use `make install` instead of the toolchain installer.
 
@@ -158,28 +158,31 @@ make docs-serve
 
 ## Performance
 
-Incan compiles to Rust and then to a native binary. Runtime performance can be close to Rust for many workloads, depending on current codegen and library behavior.
+Incan compiles to Rust and then to a native binary, so Rust is the meaningful reference point: on these workloads Incan runs within roughly 20% of hand-written Rust, and matches or beats it on some. Python is included for scale, not as the target.
 
 - Benchmarks: `workspaces/benchmarks/`
 - Results: `workspaces/benchmarks/results/results.md`
 
-| Benchmark                 | Incan | Rust  | Python   | Incan vs Python   |
-|---------------------------|------:|------:|---------:|------------------:|
-| Fibonacci (1M iterations) | 15ms  | 17ms  | 490ms    | **32.6×** faster  |
-| Collatz (1M numbers)      | 152ms | 155ms | 9,043ms  | **59.4×** faster  |
-| GCD (10M pairs)           | 277ms | 298ms | 2,037ms  | **7.3×** faster   |
-| Mandelbrot (2K×2K)        | 250ms | 248ms | 12,268ms | **49.0×** faster  |
-| N-Body (500K steps)       | 39ms  | 39ms  | 4,934ms  | **126.5×** faster |
-| Prime Sieve (10M)         | 117ms | 120ms | 9,520ms  | **81.3×** faster  |
-| Quicksort (1M elements)   | 79ms  | 78ms  | 2,435ms  | **30.8×** faster  |
-| Mergesort (1M elements)   | 195ms | 196ms | 3,629ms  | **18.9×** faster  |
+| Benchmark                 | Incan | Rust  | Python  | Incan vs Rust |
+|---------------------------|------:|------:|--------:|--------------:|
+| Fibonacci (1M iterations) | 3ms   | 4ms   | 42ms    | ~1×           |
+| Collatz (1M numbers)      | 94ms  | 92ms  | 4,209ms | 1.02×         |
+| GCD (10M pairs)           | 92ms  | 84ms  | 819ms   | 1.10×         |
+| Mandelbrot (2K×2K)        | 113ms | 113ms | 4,655ms | 1.00×         |
+| N-Body (500K steps)       | 20ms  | 17ms  | 1,507ms | 1.18×         |
+| Prime Sieve (50M)         | 141ms | 124ms | 3,163ms | 1.14×         |
+| Quicksort (1M elements)   | 56ms  | 48ms  | 1,000ms | 1.17×         |
+| Mergesort (1M elements)   | 83ms  | 130ms | 1,300ms | **0.64×**     |
+
+A ratio below 1.00× means Incan is faster than the hand-written Rust implementation of the same algorithm; Mergesort is the clear case. Fibonacci runs in single-digit milliseconds, where a one-millisecond difference is measurement noise rather than a meaningful gap, so it is reported as approximately even.
 
 **Benchmark details:**
 
 - **Machine:** Apple Silicon (results may vary)
 - **Incan/Rust:** Release builds with optimizations
-- **Python:** CPython 3.12
+- **Python:** CPython 3.14
 - **Methodology:** [hyperfine](https://github.com/sharkdp/hyperfine) with warmup runs
+- **Reproduce:** `make benchmarks` (add `SKIP_PYTHON=true` for Incan vs Rust only)
 
 ## Contributing
 
