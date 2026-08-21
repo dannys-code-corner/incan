@@ -604,7 +604,19 @@ fn ensure_companion_supports_cdylib(cargo_manifest_path: &Path) -> CliResult<()>
     }
 }
 
+/// Require the Rust target the vocab desugarer builds for, asking the toolchain that will actually build it.
+///
+/// An installed Incan provisions its own toolchain and adds required targets there, leaving the user's Rustup
+/// alone, so consulting ambient Rustup would report a target as missing that Incan installed for itself.
 fn ensure_rust_target_installed(target: &str) -> CliResult<()> {
+    if let Some(installed) = crate::oven::rustc::incan_owned_target_installed(target) {
+        if installed {
+            return Ok(());
+        }
+        return Err(CliError::failure(format!(
+            "vocab desugarer build needs the Rust target `{target}`, which this Incan installation's own Rust toolchain does not have. Reinstall Incan to provision it."
+        )));
+    }
     let output = Command::new("rustup")
         .arg("target")
         .arg("list")

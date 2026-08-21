@@ -67,7 +67,8 @@ use crate::oven::legacy_cargo::{
     direct_rustc_reusable_project_plan_environment, prepare_direct_rustc_plan,
 };
 use crate::oven::loaf::{
-    OVEN_LOAF_ENV, OVEN_LOAF_MISS_GUIDANCE, OvenLoafSelection, OvenToolchainLoaf, resolve_toolchain_loaf,
+    OVEN_DEPENDENCY_MISS_SUMMARY, OVEN_LOAF_ENV, OVEN_LOAF_MISS_GUIDANCE, OVEN_NESTED_DEPENDENCY_MISS_SUMMARY,
+    OVEN_NO_IMPLICIT_DEPENDENCY_BUILD, OvenLoafSelection, OvenToolchainLoaf, resolve_toolchain_loaf,
     resolve_toolchain_loaf_by_identity, resolve_toolchain_loaf_for_registry_dependencies, runtime_build_unit_inputs,
 };
 #[cfg(test)]
@@ -5331,12 +5332,14 @@ fn prepare_oven_project(
     };
     let plan_preparation = plan_preparation.ok_or_else(|| {
         CliError::failure(format!(
-            "Oven Alpha has no compatible native provider/dependency unit for receipt {}. Required sealed registry dependencies: {}. Generated project: {}; receipt: {}. Normal build and run will not invoke Cargo; the active toolchain does not ship a compatible Oven Loaf. {}",
-            receipt.identity,
+            "{}. `incan build` and `incan run` {}. {} (Needs: {}. Build record {}; generated project: {}; receipt: {}.)",
+            OVEN_DEPENDENCY_MISS_SUMMARY,
+            OVEN_NO_IMPLICIT_DEPENDENCY_BUILD,
+            OVEN_LOAF_MISS_GUIDANCE,
             required_registry_dependencies,
+            receipt.identity,
             generator.output_dir().display(),
             crate::oven::default_receipt_path(&project_root).display(),
-            OVEN_LOAF_MISS_GUIDANCE,
         ))
     })?;
     let plan_selection = plan_preparation.plan_selection;
@@ -5569,7 +5572,9 @@ fn select_oven_direct_rustc_plan_with_materialization(
             }));
         }
         return Err(CliError::failure(format!(
-            "Oven Alpha has no compatible compiler-suite native provider/dependency unit. Required sealed registry dependencies: {}. Nested build and run will not materialize a caller-owned store entry or invoke Cargo",
+            "{}. Nested build and run {}. (Needs: {}.)",
+            OVEN_NESTED_DEPENDENCY_MISS_SUMMARY,
+            OVEN_NO_IMPLICIT_DEPENDENCY_BUILD,
             format_oven_registry_dependency_requirements(registry_dependencies),
         )));
     }
@@ -8734,7 +8739,7 @@ fn bake_oven_library(
             artifact_plan.dependency_search_paths.push(directory.clone());
         }
     }
-    bake_trusted_direct_rustc_library(&OvenTrustedDirectRustcTargetRequest {
+    let direct = bake_trusted_direct_rustc_library(&OvenTrustedDirectRustcTargetRequest {
         receipt: &selected.receipt,
         artifacts: selected.plan_selection.artifacts(),
         artifact_root: selected.plan_selection.output_guard_root(),
@@ -8747,8 +8752,107 @@ fn bake_oven_library(
         source_evidence_key: "generated-root",
         features: &selected.receipt.intent.features,
         prefer_dynamic: false,
-    })
-    .map_err(oven_rustc_error)
+    });
+
+    match direct {
+        Ok(bake) => Ok(bake),
+        // A crate-loading failure is a composition fault, not a fault in the generated Rust: the sources already
+        // typechecked, so rustc rejecting a dependency means the assembled closure is not mutually loadable. That
+        // is the same shape an executable resolves by rebuilding through one unified Cargo resolution, and it is
+        // what a library needs here too, rather than surfacing raw `E0463`s about crates the user never named.
+        Err(error) if direct_rustc_composition_failure(&error) => {
+            cargo_fallback_bake_oven_library(prepared, oven, profile)
+        }
+        Err(error) => Err(oven_rustc_error(error)),
+    }
+}
+
+/// Recognize a rustc failure caused by an unloadable dependency closure rather than by the compiled source.
+///
+/// Only crate-loading diagnostics qualify. `E0463` is a crate that could not be found at all, `E0460`/`E0461`/`E0464`
+/// are candidates that were found but rejected for identity, target or ambiguity reasons. A type error in generated
+/// Rust is never one of these, so this cannot swallow a genuine compilation failure and silently retry it.
+fn direct_rustc_composition_failure(error: &OvenRustcError) -> bool {
+    let OvenRustcError::CompilationFailed { report } = error else {
+        return false;
+    };
+    const CRATE_LOADING_CODES: [&str; 4] = ["E0460", "E0461", "E0463", "E0464"];
+    if report.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .code
+            .as_deref()
+            .is_some_and(|code| CRATE_LOADING_CODES.contains(&code))
+    }) {
+        return true;
+    }
+    // Newer rustc JSON records carry a `$message_type` tag the structured decoder does not recognize, so the
+    // whole transcript can arrive as unstructured text with `diagnostics` empty. The codes are still verbatim in
+    // it, and missing this case is what makes the failure surface as raw rustc noise instead of a rebuild.
+    CRATE_LOADING_CODES
+        .iter()
+        .any(|code| report.unstructured_output.contains(code))
+}
+
+/// Rebuild a generated library through one unified Cargo resolution when direct-rustc composition cannot load.
+///
+/// The generated project on disk already carries the complete Cargo manifest, so Cargo resolves every dependency
+/// once and produces an internally consistent closure. Only libraries that actually hit the fault pay this cost;
+/// the produced `rlib` is published to the same path the direct-rustc bake would have written.
+fn cargo_fallback_bake_oven_library(
+    prepared: &PreparedLibraryProject,
+    oven: &OvenPreparedLibrary,
+    profile: &str,
+) -> CliResult<crate::oven::rustc::OvenDirectRustcBake> {
+    eprintln!(
+        "Oven: building library `{}` through unified Cargo resolution: its dependency closure is not loadable as \
+         independently compiled parts.",
+        oven.crate_name
+    );
+    let release = profile == "release";
+    let result = prepared.generator.cargo_build(release).map_err(|error| {
+        CliError::failure(format!(
+            "unified Cargo fallback build failed to start for library `{}`: {error}",
+            oven.crate_name
+        ))
+    })?;
+    if !result.success {
+        return Err(CliError::failure(format!(
+            "unified Cargo fallback build failed for library `{}`:\n{}",
+            oven.crate_name, result.stderr
+        )));
+    }
+    let built = prepared.generator.cargo_build_library_path(release);
+    let bytes = fs::read(&built).map_err(|error| {
+        CliError::failure(format!(
+            "unified Cargo fallback build reported success but its library is unreadable at {}: {error}",
+            built.display()
+        ))
+    })?;
+    let output = oven_library_path(prepared, oven, profile);
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CliError::failure(format!(
+                "could not create the Oven library output directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::write(&output, &bytes).map_err(|error| {
+        CliError::failure(format!(
+            "could not publish the unified Cargo library to {}: {error}",
+            output.display()
+        ))
+    })?;
+    let selected = oven.profiles.get(profile).ok_or_else(|| {
+        CliError::failure(format!(
+            "unified Cargo library fallback has no prepared `{profile}` selection to record provenance against"
+        ))
+    })?;
+    Ok(crate::oven::rustc::OvenDirectRustcBake::from_external_cargo_build(
+        selected.receipt.identity.clone(),
+        output,
+        crate::oven::digest_bytes(&bytes),
+    ))
 }
 
 /// Preserve direct-rustc diagnostics rather than reducing a normal Oven compilation failure to a generic status.
@@ -9778,12 +9882,14 @@ fn prepare_library_project(
             }
             .ok_or_else(|| {
                 CliError::failure(format!(
-                    "Oven Alpha has no compatible native provider/dependency unit for `{profile}` library receipt {}. Required sealed registry dependencies: {}. Generated project: {}; receipt: {}. Normal build --lib will not invoke Cargo; the active toolchain does not ship a compatible Oven Loaf. {}",
-                    receipt.identity,
+                    "{}. `incan build --lib` {}. {} (Needs: {}. `{profile}` build record {}; generated project: {}; receipt: {}.)",
+                    OVEN_DEPENDENCY_MISS_SUMMARY,
+                    OVEN_NO_IMPLICIT_DEPENDENCY_BUILD,
+                    OVEN_LOAF_MISS_GUIDANCE,
                     required_registry_dependencies,
+                    receipt.identity,
                     generator.output_dir().display(),
                     receipt_path.display(),
-                    OVEN_LOAF_MISS_GUIDANCE,
                 ))
             })?;
             record_timing(
@@ -14947,11 +15053,11 @@ headers = ["interop/include/bridge.h"]
             let Err(error) = consume_only else {
                 return Err("a compiler-suite normal consumer must reject a caller-owned Loaf miss".into());
             };
+            let message = error.to_string();
             assert!(
-                error
-                    .to_string()
-                    .contains("Nested build and run will not materialize a caller-owned store entry"),
-                "compiler-suite normal consumers must remain Cargo-free even when the explicit baker is tested"
+                message.contains(OVEN_NESTED_DEPENDENCY_MISS_SUMMARY)
+                    && message.contains(OVEN_NO_IMPLICIT_DEPENDENCY_BUILD),
+                "compiler-suite normal consumers must remain Cargo-free even when the explicit baker is tested, got: {message}"
             );
         } else {
             let consume_only = consume_only?;

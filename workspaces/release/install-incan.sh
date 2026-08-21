@@ -277,22 +277,36 @@ sha256_file() {
   fi
 }
 
+# Install rustup itself, without giving it a default toolchain.
+#
+# Incan provisions the exact channel it needs into its own Rustup home immediately after this. Letting rustup-init
+# also install a default toolchain would download the very same compiler a second time, into a second location, so
+# a machine with no Rust would pay twice for one toolchain. `--default-toolchain none` installs only rustup, and
+# the caller reports how to set up a default afterwards for anyone who wants Rust for their own use.
 install_rustup() {
-  local channel="$1"
-  printf 'Installing Rust backend with rustup (%s)...\n' "$channel"
+  printf 'Installing rustup (Incan provisions its own Rust toolchain separately)...\n'
   case "$rustup_init_ref" in
     http://*|https://*)
       require_command curl
-      curl --proto '=https' --tlsv1.2 -sSf "$rustup_init_ref" | sh -s -- -y --profile minimal --default-toolchain "$channel"
+      curl --proto '=https' --tlsv1.2 -sSf "$rustup_init_ref" | sh -s -- -y --profile minimal --default-toolchain none
       ;;
     file://*)
-      sh "${rustup_init_ref#file://}" -y --profile minimal --default-toolchain "$channel"
+      sh "${rustup_init_ref#file://}" -y --profile minimal --default-toolchain none
       ;;
     *)
-      sh "$rustup_init_ref" -y --profile minimal --default-toolchain "$channel"
+      sh "$rustup_init_ref" -y --profile minimal --default-toolchain none
       ;;
   esac
   export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+  rustup_was_bootstrapped="true"
+}
+
+# Run rustup against Incan's own Rustup home, ignoring ambient toolchain selection.
+#
+# `RUSTUP_TOOLCHAIN` (and a directory `rust-toolchain` override) outrank a home's default, so leaving either in
+# place would make rustup look inside Incan's home for a toolchain the user selected globally, which is not there.
+incan_rustup() {
+  env -u RUSTUP_TOOLCHAIN RUSTUP_HOME="$incan_rustup_home" rustup "$@"
 }
 
 ensure_rust_backend() {
@@ -307,29 +321,55 @@ ensure_rust_backend() {
   fi
 
   if ! has_command rustup; then
-    install_rustup "$channel"
+    install_rustup
   fi
   has_command rustup || fail "rustup was not available after Rust backend installation"
 
-  if ! has_command cargo || ! has_command rustc; then
-    printf 'Installing Rust toolchain %s...\n' "$channel"
-    rustup toolchain install "$channel" --profile minimal
-    rustup default "$channel"
-    export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-  fi
-  has_command cargo || fail "cargo was not available after Rust backend installation"
-  has_command rustc || fail "rustc was not available after Rust backend installation"
+  # Incan's Loafs are sealed against the exact compiler that baked them, so building with whatever toolchain the
+  # user has made their global default fails closed with a Loaf-incompatibility error. Provision the release's own
+  # required channel into an Incan-owned Rustup home and make it the default *there only*.
+  #
+  # An existing Rustup installation is never reconfigured: its default toolchain, targets and settings are left
+  # exactly as the user set them. (Installing Rustup in the first place, above, necessarily creates one for a
+  # machine that had none.)
+  incan_rustup_home="${incan_home}/rust"
+  mkdir -p "$incan_rustup_home"
+  printf 'Provisioning Incan-owned Rust toolchain %s...\n' "$channel"
+  incan_rustup toolchain install "$channel" --profile minimal \
+    || fail "could not install the Incan-owned Rust toolchain ${channel}"
+  incan_rustup default "$channel" \
+    || fail "could not select the Incan-owned Rust toolchain ${channel}"
 
-  printf 'Rust backend:\n'
-  printf '  rustc: %s\n' "$(rustc --version)"
-  printf '  cargo: %s\n' "$(cargo --version)"
+  # Record which channel this home carries. The compiler reads the installed layout directly rather than asking
+  # rustup, because `RUSTUP_TOOLCHAIN` and directory overrides would otherwise let ambient configuration pick a
+  # toolchain that does not exist here. This pointer keeps that resolution exact when an upgrade leaves an older
+  # channel behind.
+  printf '%s\n' "$channel" > "${incan_rustup_home}/incan-channel.txt"
+
+  incan_rustc="$(incan_rustup which --toolchain "$channel" rustc)" \
+    || fail "the Incan-owned Rust toolchain did not provide rustc"
+  incan_cargo="$(incan_rustup which --toolchain "$channel" cargo)" \
+    || fail "the Incan-owned Rust toolchain did not provide cargo"
+
+  printf 'Rust backend (Incan-owned, independent of your default toolchain):\n'
+  printf '  rustc: %s\n' "$("$incan_rustc" --version)"
+  printf '  cargo: %s\n' "$("$incan_cargo" --version)"
   while IFS= read -r rust_target; do
     [ -n "$rust_target" ] || continue
     printf '  target: %s\n' "$rust_target"
-    rustup target add "$rust_target"
+    incan_rustup target add --toolchain "$channel" "$rust_target" \
+      || fail "could not add Rust target ${rust_target} to the Incan-owned toolchain"
   done <<RUST_TARGETS
 $(json_rust_targets "$manifest_file")
 RUST_TARGETS
+
+  # Incan deliberately leaves the machine without a default toolchain when it installed rustup itself, so nothing
+  # is downloaded twice and no default is chosen on the user's behalf. Say so, and how to pick one.
+  if truthy "${rustup_was_bootstrapped:-false}"; then
+    printf 'rustup is installed with no default toolchain; Incan uses its own copy.\n'
+    printf 'To use Rust directly as well, pick a default:\n'
+    printf '  rustup default stable\n'
+  fi
 }
 
 target="${target_override:-$(detect_target)}"

@@ -47,7 +47,19 @@ pub const OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION: u32 = 3;
 /// trusted standard-provider identity as the SDK publisher, but it never authorizes Cargo for a caller command.
 pub(crate) const OVEN_LOAF_ENV: &str = "INCAN_OVEN_LOAF";
 /// Actionable user guidance for a normal-command miss without turning it into a compatibility-baker fallback.
-pub const OVEN_LOAF_MISS_GUIDANCE: &str = "Action: run `incan oven bake --project <project-root>`. That explicit command records generated-project receipts for every conventional project target, reuses a compatible closure when present, or performs one bounded compatibility bake. Normal build, run, and test remain Cargo-free and will not invoke the baker automatically.";
+pub const OVEN_LOAF_MISS_GUIDANCE: &str = "Action: run `incan oven bake --project <project-root>` once. That command compiles this project's dependencies and caches the result, reusing anything already compatible. It is a deliberate, separate step: `incan build`, `incan run`, and `incan test` never compile dependencies on their own.";
+/// Opening clause every fail-closed dependency miss in a normal project command reports.
+///
+/// The baker's cold probe recognizes an intended miss by matching this clause together with
+/// [`OVEN_NO_IMPLICIT_DEPENDENCY_BUILD`]. Both sides share these constants rather than repeating the sentence, so
+/// rewording user-facing text cannot silently stop the probe from recognizing the miss it is looking for.
+pub const OVEN_DEPENDENCY_MISS_SUMMARY: &str = "This project's dependencies have not been compiled yet";
+/// Opening clause a nested compiler-suite build reports for the same fail-closed miss.
+pub const OVEN_NESTED_DEPENDENCY_MISS_SUMMARY: &str = "This nested build's dependencies have not been compiled yet";
+/// Clause stating the no-implicit-build contract, required before a miss counts as fail-closed.
+///
+/// A miss message without it describes some other failure, so the probe must not treat it as the expected one.
+pub const OVEN_NO_IMPLICIT_DEPENDENCY_BUILD: &str = "will not compile them for you";
 const TOOLCHAIN_LOAF_RELATIVE_ROOT: &str = "share/incan/oven/loafs";
 static LOAF_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const OVEN_LOAF_ENVELOPE_LOCK_FILE: &str = ".envelope.lock";

@@ -28,6 +28,33 @@ fail() {
   exit 1
 }
 
+# Resolve the exact rustc that seals this archive's Oven Loafs.
+resolve_release_rustc() {
+  local resolved
+  if [ -n "${RUSTC:-}" ]; then
+    resolved="$RUSTC"
+  elif command -v rustup >/dev/null 2>&1; then
+    resolved="$(rustup which rustc)"
+  else
+    resolved="$(command -v rustc)"
+  fi
+  [ -x "$resolved" ] || return 1
+  printf '%s\n' "$resolved"
+}
+
+# Report the plain version number ("1.98.0") of a Rust compiler.
+#
+# Loafs are sealed against the compiler's full `rustc --version` identity and `verify_rustc_identity` demands an
+# exact match, so a release must tell installers precisely which compiler to provision. A Rustup channel naming a
+# concrete version resolves to exactly one build, which is what makes the shipped Loafs usable on a user's machine;
+# a floating "stable" channel does not, and drifts out from under the release the moment upstream publishes.
+rustc_channel_version() {
+  local rustc_bin="$1"
+  local reported
+  reported="$("$rustc_bin" --version)" || return 1
+  printf '%s\n' "$reported" | awk '{ print $2 }'
+}
+
 # Clear ambient Cargo/rustc-wrapper state before an internal Cargo invocation, mirroring
 # `clear_inherited_cargo_environment` in src/oven/rustc.rs. This script's own `cargo metadata`
 # calls are the release support workspace's authority; they must not inherit CARGO_* state
@@ -465,14 +492,7 @@ if [ -n "${INCAN_OVEN_LOAF_DIR:-}" ]; then
   mkdir -p "$(dirname "$loaf_root")"
   cp -R "$INCAN_OVEN_LOAF_DIR" "$loaf_root"
 else
-  if [ -n "${RUSTC:-}" ]; then
-    rustc_bin="$RUSTC"
-  elif command -v rustup >/dev/null 2>&1; then
-    rustc_bin="$(rustup which rustc)"
-  else
-    rustc_bin="$(command -v rustc)"
-  fi
-  [ -x "$rustc_bin" ] || fail "could not resolve an executable rustc for the release-only Loaf publisher"
+  rustc_bin="$(resolve_release_rustc)" || fail "could not resolve rustc for the release-only Loaf publisher"
   "$package_dir/bin/incan" oven legacy-cargo bake-loafs \
     --compiler-root "$package_dir" \
     --output "$loaf_root" \
@@ -514,5 +534,15 @@ cat > "${archive}.profile.json" <<PROFILE_EVIDENCE
 PROFILE_EVIDENCE
 printf '%s\n' "$version" > "$out_dir/toolchain-version.txt"
 printf '%s\n' "$release" > "$out_dir/toolchain-release.txt"
+
+# Record the exact Rust compiler that sealed this host's Loafs, under a per-host name because the publish job
+# merges every host's artifacts into one directory. Manifest preparation requires all hosts to agree and refuses
+# to publish otherwise, so a Rust release landing mid-workflow fails loudly instead of shipping a manifest whose
+# advertised channel matches only some of the archives.
+release_rustc_bin="$(resolve_release_rustc)" || fail "could not resolve rustc to record the release Rust channel"
+release_rust_channel="$(rustc_channel_version "$release_rustc_bin")" \
+  || fail "could not read the release Rust channel from $release_rustc_bin"
+[ -n "$release_rust_channel" ] || fail "resolved an empty release Rust channel from $release_rustc_bin"
+printf '%s\n' "$release_rust_channel" > "$out_dir/rust-channel-${target}.txt"
 
 printf 'Packaged %s\n' "$archive"

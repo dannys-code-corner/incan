@@ -1160,14 +1160,17 @@ fn isolate_loaf_fixture_toolchain_data(command: &mut Command, toolchain_data_roo
 }
 
 /// Recognize only the two fail-closed native-plan misses a baker-owned fixture may legitimately produce.
+///
+/// Both clauses come from the shared constants the messages themselves are built from, so reworded user-facing
+/// text stays recognizable here instead of silently turning an intended miss into an unrecognized failure.
 fn loaf_fixture_probe_is_expected_miss(stderr: &str) -> bool {
     [
-        "Oven Alpha has no compatible native",
-        "Oven Alpha has no compatible compiler-suite native",
+        crate::oven::loaf::OVEN_DEPENDENCY_MISS_SUMMARY,
+        crate::oven::loaf::OVEN_NESTED_DEPENDENCY_MISS_SUMMARY,
     ]
     .iter()
-    .any(|prefix| stderr.contains(prefix))
-        && stderr.contains("invoke Cargo")
+    .any(|summary| stderr.contains(summary))
+        && stderr.contains(crate::oven::loaf::OVEN_NO_IMPLICIT_DEPENDENCY_BUILD)
 }
 
 /// Bake or exactly reuse one complete compiler-owned Alpha Loaf envelope.
@@ -5917,14 +5920,18 @@ mod tests {
 
     #[test]
     fn loaf_fixture_probe_accepts_only_fail_closed_native_misses() {
-        for stderr in [
-            "Oven Alpha has no compatible native provider/dependency unit; normal build will not invoke Cargo",
-            "Oven Alpha has no compatible compiler-suite native provider/dependency unit; nested build will not invoke Cargo",
-        ] {
-            assert!(super::loaf_fixture_probe_is_expected_miss(stderr));
+        use crate::oven::loaf::{
+            OVEN_DEPENDENCY_MISS_SUMMARY, OVEN_NESTED_DEPENDENCY_MISS_SUMMARY, OVEN_NO_IMPLICIT_DEPENDENCY_BUILD,
+        };
+
+        for summary in [OVEN_DEPENDENCY_MISS_SUMMARY, OVEN_NESTED_DEPENDENCY_MISS_SUMMARY] {
+            assert!(super::loaf_fixture_probe_is_expected_miss(&format!(
+                "{summary}, and `incan build` {OVEN_NO_IMPLICIT_DEPENDENCY_BUILD}."
+            )));
         }
+        // A miss summary without the no-implicit-build contract describes a different failure.
         assert!(!super::loaf_fixture_probe_is_expected_miss(
-            "Oven Alpha has no compatible compiler-suite native provider/dependency unit"
+            OVEN_NESTED_DEPENDENCY_MISS_SUMMARY
         ));
         assert!(!super::loaf_fixture_probe_is_expected_miss(
             "Cargo failed while preparing a native provider/dependency unit"

@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read};
@@ -2124,8 +2125,15 @@ pub enum OvenRustcError {
         expected: String,
         actual: String,
     },
-    /// The explicit compiler did not report the exact identity frozen in the receipt.
-    #[error("Oven direct-rustc compiler identity mismatch: receipt requires `{expected}`, --rustc reports `{actual}`")]
+    /// The selected compiler did not report the exact identity the prebuilt libraries were sealed against.
+    ///
+    /// Users reach this by building with a different Rust compiler than the one that produced the libraries their
+    /// installation ships, so the message names both compilers and the way out rather than the internal reason.
+    #[error(
+        "Rust compiler mismatch: these prebuilt libraries were built with `{expected}`, but the Rust compiler in \
+         use is `{actual}`. Compiled Rust libraries only load under the exact compiler that built them. Reinstall \
+         Incan so it provisions its own matching Rust toolchain, or set RUSTC to a `{expected}` compiler."
+    )]
     ToolchainMismatch { expected: String, actual: String },
     /// Reading or writing a direct-rustc input/output path failed.
     #[error("Oven direct-rustc I/O failed at {path}: {source}")]
@@ -5263,7 +5271,19 @@ fn apply_oven_profile(command: &mut Command, profile: &str) {
             "-C",
             "overflow-checks=on",
         ]);
+        return;
     }
+
+    // Optimization is part of what a profile *means*, and rustc optimizes nothing unless told to. Cargo used to
+    // supply this implicitly from `[profile.release]`; once Oven replaced Cargo on the normal build path, nothing
+    // did, so `incan build --release` emitted `opt-level=0` binaries and ran roughly six times slower than the
+    // same sources at `-C opt-level=3`. These flags mirror Cargo's own release and dev profiles so a release
+    // binary performs like the Rust it compiles to, and both profiles state their level explicitly rather than
+    // inheriting a compiler default that has already gone wrong once.
+    match profile {
+        "release" => command.args(["-C", "opt-level=3"]),
+        _ => command.args(["-C", "opt-level=0"]),
+    };
 }
 
 /// Derive the selected compiler's stable version identity and require an exact receipt match before compilation.
@@ -5278,40 +5298,194 @@ fn verify_rustc_identity(rustc: &Path, expected: &str) -> Result<(), OvenRustcEr
     })
 }
 
+/// Ask the user's own Rustup which tool its active toolchain resolves to.
+///
+/// This answers for the ambient configuration, honoring `RUSTUP_TOOLCHAIN` and any directory override exactly as a
+/// hand-typed `rustup which` would. It is the fallback for development checkouts and installations without an
+/// Incan-owned toolchain; installations that have one resolve through [`incan_owned_tool`] instead.
+fn rustup_reported_tool(tool: &str) -> Option<String> {
+    let mut command = Command::new("rustup");
+    command.args(["which", tool]);
+    clear_inherited_cargo_environment(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let reported = String::from_utf8(output.stdout).ok()?;
+    let reported = reported.trim().to_string();
+    (!reported.is_empty()).then_some(reported)
+}
+
+/// Return the Rustup home Incan provisions for itself, when an installed toolchain has one.
+///
+/// Incan's Loafs are sealed against the exact compiler that baked them, so building with whatever compiler the user
+/// happens to have made their global default fails closed with a Loaf-incompatibility error. The installer therefore
+/// provisions the release's own required channel into `$INCAN_HOME/rust` (defaulting below the user home) and makes
+/// it the default *within that home only*, leaving the user's own Rustup configuration untouched. This returns that
+/// home when it exists, so ordinary builds resolve the compiler Incan was built against.
+///
+/// Returns `None` for development checkouts and for installations that predate this layout, both of which keep the
+/// previous behavior of consulting the ambient Rustup default.
+fn incan_owned_rustup_home() -> Option<PathBuf> {
+    // The installer links commands into a bin directory, and `current_exe` is documented to be allowed to report
+    // the symlink rather than its target. Resolving it first is what lets the ancestor walk see the installation
+    // the command actually belongs to when that installation lives outside the user home.
+    let executable = env::current_exe()
+        .ok()
+        .map(|executable| fs::canonicalize(&executable).unwrap_or(executable));
+    incan_owned_rustup_home_in(
+        env::var_os("INCAN_HOME"),
+        executable,
+        env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")),
+    )
+}
+
+/// Resolve the Incan-owned Rustup home from explicit inputs, without reading process-global state.
+///
+/// Selection order: an explicitly named Incan home, then this executable's own installed layout, then the user
+/// home default. The executable-relative step matters because the npm and pip shims install below their own
+/// package directory rather than the user home and do not set `INCAN_HOME` when they spawn the compiler, so only
+/// the executable's location identifies the provisioning that belongs to *this* installation.
+///
+/// Every candidate must actually contain `rust/toolchains`; a root without one yields `None` so development
+/// checkouts and pre-isolation installations keep resolving through the ambient Rustup default.
+fn incan_owned_rustup_home_in(
+    incan_home: Option<OsString>,
+    executable: Option<PathBuf>,
+    user_home: Option<OsString>,
+) -> Option<PathBuf> {
+    /// Accept a candidate Incan home only when it actually carries a provisioned Rustup layout.
+    fn provisioned(root: &Path) -> Option<PathBuf> {
+        let rust_root = root.join("rust");
+        rust_root.join("toolchains").is_dir().then_some(rust_root)
+    }
+
+    if let Some(root) = incan_home.filter(|path| !path.is_empty()).map(PathBuf::from)
+        && let Some(rust_root) = provisioned(&root)
+    {
+        return Some(rust_root);
+    }
+    if let Some(executable) = executable {
+        for ancestor in executable.ancestors().skip(1) {
+            if let Some(rust_root) = provisioned(ancestor) {
+                return Some(rust_root);
+            }
+        }
+    }
+    user_home
+        .filter(|path| !path.is_empty())
+        .and_then(|path| provisioned(&PathBuf::from(path).join(".incan")))
+}
+
+/// Name of the pointer file the installer writes to record which channel it provisioned.
+const INCAN_OWNED_CHANNEL_POINTER: &str = "incan-channel.txt";
+
+/// Resolve one tool from Incan's own provisioned toolchain by reading the Rustup layout directly.
+///
+/// This deliberately does not shell out to `rustup`. Rustup resolves a toolchain name from ambient state --
+/// `RUSTUP_TOOLCHAIN` and any directory `rust-toolchain.toml` override both win over a home's default -- so asking
+/// it would let the user's environment select a toolchain that does not exist inside Incan's home, reintroducing
+/// the very coupling this isolation removes. The installed layout is deterministic, so reading it is both exact
+/// and cheaper than a subprocess.
+///
+/// The installer records the channel it provisioned in [`INCAN_OWNED_CHANNEL_POINTER`]; that pointer disambiguates
+/// the toolchain directory when an earlier channel is still present after an upgrade. Without a pointer the home
+/// must hold exactly one toolchain, otherwise the choice would be arbitrary and this returns `None` so resolution
+/// falls back to the ambient default rather than guessing.
+fn incan_owned_tool(rust_root: &Path, tool: &str) -> Option<PathBuf> {
+    let toolchains = rust_root.join("toolchains");
+    let executable = |directory: &Path| -> Option<PathBuf> {
+        let candidate = directory.join("bin").join(tool);
+        candidate.is_file().then_some(candidate)
+    };
+
+    // ---- Preferred: the channel the installer recorded for this home ----
+    if let Ok(channel) = fs::read_to_string(rust_root.join(INCAN_OWNED_CHANNEL_POINTER)) {
+        let channel = channel.trim();
+        if !channel.is_empty()
+            && let Ok(entries) = fs::read_dir(&toolchains)
+        {
+            let mut matches: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name == channel || name.starts_with(&format!("{channel}-")))
+                })
+                .collect();
+            matches.sort();
+            if let Some(directory) = matches.first()
+                && let Some(found) = executable(directory)
+            {
+                return Some(found);
+            }
+        }
+    }
+
+    // ---- Fallback: an unambiguous single-toolchain home ----
+    let mut directories: Vec<PathBuf> = fs::read_dir(&toolchains)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    directories.sort();
+    match directories.as_slice() {
+        [only] => executable(only),
+        _ => None,
+    }
+}
+
+/// Report whether Incan's own provisioned toolchain carries a Rust target, when such a toolchain exists.
+///
+/// `None` means there is no Incan-owned toolchain to ask, so callers must fall back to the ambient Rustup. This
+/// matters because the installer adds required targets to Incan's home and deliberately leaves the user's own
+/// Rustup untouched: asking ambient Rustup about a target Incan provisioned for itself reports a false absence.
+///
+/// Membership is read from the toolchain layout (`lib/rustlib/<target>`) for the same reason [`incan_owned_tool`]
+/// reads it: ambient toolchain selection cannot redirect a directory check.
+pub(crate) fn incan_owned_target_installed(target: &str) -> Option<bool> {
+    let rust_root = incan_owned_rustup_home()?;
+    let rustc = incan_owned_tool(&rust_root, "rustc")?;
+    let toolchain_root = rustc.parent()?.parent()?;
+    Some(toolchain_root.join("lib").join("rustlib").join(target).is_dir())
+}
+
+/// Return the Cargo belonging to Incan's own provisioned toolchain, when one exists.
+///
+/// The compatibility baker's Cargo must match the compiler [`resolve_active_rustc`] selects; resolving one from the
+/// isolated installation and the other from the user's ambient default would reintroduce the toolchain mismatch this
+/// isolation exists to prevent.
+pub(crate) fn incan_owned_cargo() -> Option<PathBuf> {
+    incan_owned_tool(&incan_owned_rustup_home()?, "cargo")
+}
+
 /// Resolve the active Rust compiler without involving Cargo or a Cargo target directory.
 ///
 /// An explicit `RUSTC` must be a regular executable file, not a shell fragment. When it is absent, the Rustup
 /// toolchain resolver supplies the compiler path; that remains separate from the explicit `legacy_cargo` publisher.
+///
+/// When `rustup` is not reachable the error names the most common cause: provisioning Rust from within an Incan
+/// command wires Rustup into shell profiles for future shells, so the shell that triggered it keeps its original
+/// `PATH` and needs to be refreshed before the compiler is visible.
 pub fn resolve_active_rustc() -> Result<PathBuf, OvenRustcError> {
     if let Some(path) = env::var_os("RUSTC").filter(|path| !path.is_empty()) {
         return verified_regular_file(Path::new(&path), "RUSTC");
     }
-    let mut command = Command::new("rustup");
-    command.args(["which", "rustc"]);
-    clear_inherited_cargo_environment(&mut command);
-    let output = command.output().map_err(|source| OvenRustcError::Io {
-        path: PathBuf::from("rustup"),
-        source,
-    })?;
-    if !output.status.success() {
+    if let Some(isolated) = incan_owned_rustup_home().and_then(|home| incan_owned_tool(&home, "rustc")) {
+        return verified_regular_file(&isolated, "rustc");
+    }
+    let Some(reported) = rustup_reported_tool("rustc") else {
         return Err(OvenRustcError::InvalidInput {
             field: "rustc",
-            message: "rustup could not locate the active Rust compiler; set RUSTC to an explicit compiler path"
+            message: "could not locate the active Rust compiler. If Rust was just installed, open a new shell (or \
+                      run `. \"$HOME/.cargo/env\"`) so `rustup` is on PATH; otherwise install Rust through rustup, \
+                      or set RUSTC to an explicit compiler path"
                 .to_string(),
         });
-    }
-    let reported = String::from_utf8(output.stdout).map_err(|error| OvenRustcError::InvalidInput {
-        field: "rustc",
-        message: format!("rustup reported a non-UTF-8 compiler path: {error}"),
-    })?;
-    let reported = reported.trim();
-    if reported.is_empty() {
-        return Err(OvenRustcError::InvalidInput {
-            field: "rustc",
-            message: "rustup reported an empty compiler path".to_string(),
-        });
-    }
-    verified_regular_file(Path::new(reported), "rustc")
+    };
+    verified_regular_file(Path::new(&reported), "rustc")
 }
 
 /// Read one regular Rust compiler's stable `--version` identity without invoking Cargo.
@@ -7069,6 +7243,197 @@ mod tests {
     }
 
     #[test]
+    fn incan_owned_rustup_home_is_absent_for_a_development_checkout() -> Result<(), Box<dyn std::error::Error>> {
+        // A checkout has no `<root>/rust/toolchains`, so the compiler must keep resolving through the ambient
+        // Rustup default. Regressing this would break every contributor's `make test`.
+        let checkout = tempfile::tempdir()?;
+        let executable = checkout.path().join("target").join("debug").join("incan");
+        fs::create_dir_all(executable.parent().ok_or("executable has no parent")?)?;
+        fs::write(&executable, b"")?;
+        let home = tempfile::tempdir()?;
+        assert_eq!(
+            super::incan_owned_rustup_home_in(
+                Some(checkout.path().as_os_str().to_os_string()),
+                Some(executable),
+                Some(home.path().as_os_str().to_os_string()),
+            ),
+            None
+        );
+        Ok(())
+    }
+
+    /// Build a Rustup-shaped home holding the named channels, each carrying a `rustc` and `cargo`.
+    fn provisioned_rust_root(root: &Path, channels: &[&str]) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let rust_root = root.join("rust");
+        for channel in channels {
+            let bin = rust_root.join("toolchains").join(channel).join("bin");
+            fs::create_dir_all(&bin)?;
+            fs::write(bin.join("rustc"), b"")?;
+            fs::write(bin.join("cargo"), b"")?;
+        }
+        Ok(rust_root)
+    }
+
+    #[test]
+    fn incan_owned_tool_resolves_the_only_toolchain_without_a_pointer() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(root.path(), &["1.98.0-aarch64-apple-darwin"])?;
+        assert_eq!(
+            super::incan_owned_tool(&rust_root, "rustc"),
+            Some(
+                rust_root
+                    .join("toolchains")
+                    .join("1.98.0-aarch64-apple-darwin")
+                    .join("bin")
+                    .join("rustc")
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_tool_uses_the_pointer_when_an_upgrade_left_an_older_channel()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // An upgrade can leave the previous channel installed. Choosing between them by sort order would silently
+        // pick the wrong compiler, so the installer's recorded channel decides.
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(
+            root.path(),
+            &["1.97.0-aarch64-apple-darwin", "1.98.0-aarch64-apple-darwin"],
+        )?;
+        fs::write(rust_root.join(super::INCAN_OWNED_CHANNEL_POINTER), "1.98.0\n")?;
+        assert_eq!(
+            super::incan_owned_tool(&rust_root, "rustc"),
+            Some(
+                rust_root
+                    .join("toolchains")
+                    .join("1.98.0-aarch64-apple-darwin")
+                    .join("bin")
+                    .join("rustc")
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_tool_declines_an_ambiguous_home_without_a_pointer() -> Result<(), Box<dyn std::error::Error>> {
+        // Guessing here would bind the build to an arbitrary compiler; falling back to the ambient default is the
+        // honest outcome.
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(
+            root.path(),
+            &["1.97.0-aarch64-apple-darwin", "1.98.0-aarch64-apple-darwin"],
+        )?;
+        assert_eq!(super::incan_owned_tool(&rust_root, "rustc"), None);
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_tool_resolves_cargo_from_the_same_toolchain_as_rustc() -> Result<(), Box<dyn std::error::Error>> {
+        // The baker's Cargo and the compiler's rustc must come from one toolchain, or the isolation is pointless.
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(root.path(), &["1.98.0-host"])?;
+        fs::write(rust_root.join(super::INCAN_OWNED_CHANNEL_POINTER), "1.98.0\n")?;
+        let rustc = super::incan_owned_tool(&rust_root, "rustc").ok_or("rustc did not resolve")?;
+        let cargo = super::incan_owned_tool(&rust_root, "cargo").ok_or("cargo did not resolve")?;
+        assert_eq!(rustc.parent(), cargo.parent());
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_tool_declines_a_home_whose_pointer_names_a_missing_channel() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(root.path(), &["1.97.0-host"])?;
+        fs::write(rust_root.join(super::INCAN_OWNED_CHANNEL_POINTER), "1.98.0\n")?;
+        // The single-toolchain fallback still answers, because that home is unambiguous.
+        assert_eq!(
+            super::incan_owned_tool(&rust_root, "rustc"),
+            Some(
+                rust_root
+                    .join("toolchains")
+                    .join("1.97.0-host")
+                    .join("bin")
+                    .join("rustc")
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_target_membership_reads_the_toolchain_layout() -> Result<(), Box<dyn std::error::Error>> {
+        // The installer adds targets to Incan's own toolchain and leaves the user's Rustup alone, so membership
+        // has to be read where the target actually lands.
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(root.path(), &["1.98.0-host"])?;
+        let toolchain = rust_root.join("toolchains").join("1.98.0-host");
+        fs::create_dir_all(toolchain.join("lib").join("rustlib").join("wasm32-wasip1"))?;
+        let rustc = super::incan_owned_tool(&rust_root, "rustc").ok_or("rustc did not resolve")?;
+        let toolchain_root = rustc.parent().and_then(Path::parent).ok_or("no toolchain root")?;
+        assert!(
+            toolchain_root
+                .join("lib")
+                .join("rustlib")
+                .join("wasm32-wasip1")
+                .is_dir()
+        );
+        assert!(
+            !toolchain_root
+                .join("lib")
+                .join("rustlib")
+                .join("aarch64-unknown-none")
+                .is_dir()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_rustup_home_prefers_an_explicitly_named_incan_home() -> Result<(), Box<dyn std::error::Error>> {
+        let named = tempfile::tempdir()?;
+        fs::create_dir_all(named.path().join("rust").join("toolchains").join("1.98.0-host"))?;
+        assert_eq!(
+            super::incan_owned_rustup_home_in(Some(named.path().as_os_str().to_os_string()), None, None),
+            Some(named.path().join("rust"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_rustup_home_follows_the_executable_for_shim_installations() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // The npm and pip shims install below their own package directory and do not set `INCAN_HOME` when they
+        // spawn the compiler, so the executable's own layout is the only thing that identifies its provisioning.
+        let package = tempfile::tempdir()?;
+        let incan_home = package.path().join(".incan").join("home");
+        fs::create_dir_all(incan_home.join("rust").join("toolchains").join("1.98.0-host"))?;
+        let executable = incan_home.join("toolchains").join("0.5.0").join("bin").join("incan");
+        fs::create_dir_all(executable.parent().ok_or("executable has no parent")?)?;
+        fs::write(&executable, b"")?;
+        assert_eq!(
+            super::incan_owned_rustup_home_in(None, Some(executable), None),
+            Some(incan_home.join("rust"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_rustup_home_falls_back_to_the_user_home_default() -> Result<(), Box<dyn std::error::Error>> {
+        let home = tempfile::tempdir()?;
+        fs::create_dir_all(
+            home.path()
+                .join(".incan")
+                .join("rust")
+                .join("toolchains")
+                .join("1.98.0-host"),
+        )?;
+        assert_eq!(
+            super::incan_owned_rustup_home_in(None, None, Some(home.path().as_os_str().to_os_string())),
+            Some(home.path().join(".incan").join("rust"))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn first_diverging_shared_package_reports_a_same_version_byte_distinct_overlap() {
         let leaf = |package: &str, version: &str, digest: &str| OvenRustcRegistryLeaf {
             package: package.to_string(),
@@ -7196,7 +7561,25 @@ mod tests {
 
         let mut developer_profile = Command::new("rustc");
         apply_oven_profile(&mut developer_profile, "debug");
-        assert!(developer_profile.get_args().next().is_none());
+        let developer_arguments = developer_profile
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(developer_arguments, vec!["-C", "opt-level=0"]);
+    }
+
+    #[test]
+    fn release_profile_optimizes_because_rustc_optimizes_nothing_by_default() {
+        // Cargo used to supply this from `[profile.release]`. When Oven replaced Cargo on the normal build path
+        // nothing did, and `incan build --release` shipped `opt-level=0` binaries that ran about six times slower
+        // than the identical sources at `-C opt-level=3`. Assert the flag rather than trusting a default.
+        let mut command = Command::new("rustc");
+        apply_oven_profile(&mut command, "release");
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(arguments, vec!["-C", "opt-level=3"]);
     }
 
     #[test]

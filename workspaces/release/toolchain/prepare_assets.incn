@@ -3,7 +3,7 @@ from rust::std::process import exit
 from std.fs import Path
 from std.json import JsonValue
 
-const RUST_POLICY: str = "The toolchain installer provisions stable Rust through rustup when needed and ensures the wasm32-wasip1 target for packages that ship vocab companions."
+const RUST_POLICY: str = "The toolchain installer provisions this exact Rust release into an Incan-owned rustup home, leaving your own default toolchain untouched, and ensures the wasm32-wasip1 target for packages that ship vocab companions."
 
 
 model HostAsset:
@@ -91,6 +91,53 @@ def collect_assets(dist_dir: str, release: str) -> Result[list[HostAsset], str]:
     return Ok(assets)
 
 
+def is_plain_release_version(value: str) -> bool:
+    """Accept only a concrete `X.Y.Z` Rust release, which resolves to exactly one compiler build."""
+    parts = value.split(".")
+    if len(parts) != 3:
+        return false
+    for part in parts:
+        if len(part) == 0:
+            return false
+        for character in part:
+            if character < "0" or character > "9":
+                return false
+    return true
+
+
+def resolve_rust_channel(dist_dir: str) -> Result[str, str]:
+    """Determine the one Rust release every packaged host sealed its Oven Loafs against.
+
+    Each packaging job records its own compiler under a per-host name. Loafs only load under the exact compiler
+    that sealed them, so the published manifest has to name a concrete release rather than a floating channel.
+    Hosts disagreeing means a Rust release landed mid-workflow and the archives are no longer mutually
+    describable by one manifest, so this refuses to publish instead of shipping a channel that fits only part of
+    the release.
+    """
+    paths = Path(dist_dir).glob("rust-channel-*.txt").map_err((err) => err.message())?
+    mut channel_paths: list[str] = []
+    for path in paths:
+        channel_paths.append(path.0)
+    channel_paths = sorted_strings(channel_paths)
+    if len(channel_paths) == 0:
+        return Err(f"no recorded Rust channel found in {dist_dir}; packaging must record the compiler it sealed Loafs with")
+
+    mut resolved = ""
+    mut resolved_path = ""
+    for channel_path in channel_paths:
+        channel = read_first_line(channel_path)?
+        if len(channel) == 0:
+            return Err(f"{channel_path} records an empty Rust channel")
+        if not is_plain_release_version(channel):
+            return Err(f"{channel_path} records {channel}, which is not a concrete Rust release; package releases with a stable toolchain")
+        if len(resolved) == 0:
+            resolved = channel
+            resolved_path = f"{channel_path}"
+        elif channel != resolved:
+            return Err(f"packaged hosts disagree on the Rust release: {resolved_path} recorded {resolved} but {channel_path} recorded {channel}")
+    return Ok(resolved)
+
+
 def command_paths_json() -> JsonValue:
     return JsonValue.object({"incan": JsonValue.str("bin/incan"), "incan-lsp": JsonValue.str("bin/incan-lsp")})
 
@@ -110,14 +157,20 @@ def hosts_json(assets: list[HostAsset]) -> JsonValue:
     return JsonValue.object(hosts)
 
 
-def manifest_json(version: str, release: str, generated_at: str, assets: list[HostAsset]) -> JsonValue:
+def manifest_json(
+    version: str,
+    release: str,
+    generated_at: str,
+    rust_channel: str,
+    assets: list[HostAsset],
+) -> JsonValue:
     return JsonValue.object(
         {"schema_version": JsonValue.int(1), "toolchain_version": JsonValue.str(version), "release": JsonValue.str(
             release,
         ), "channel": JsonValue.str("stable"), "generated_at": JsonValue.str(generated_at), "manifest_url": JsonValue.str(
             f"https://github.com/encero-systems/incan/releases/download/{release}/manifest.json",
         ), "rust_toolchain": JsonValue.object(
-            {"channel": JsonValue.str("stable"), "min_rust": JsonValue.str("1.92"), "targets": JsonValue.array(
+            {"channel": JsonValue.str(rust_channel), "min_rust": JsonValue.str("1.92"), "targets": JsonValue.array(
                 [JsonValue.str("wasm32-wasip1")],
             ), "policy": JsonValue.str(RUST_POLICY)},
         ), "commands": JsonValue.array([JsonValue.str("incan"), JsonValue.str("incan-lsp")]), "hosts": hosts_json(assets)},
@@ -150,7 +203,7 @@ def host_block(assets: list[HostAsset], target: str, indent: str) -> Result[str,
         None => return Err(target)
 
 
-def render_formula(version: str, assets: list[HostAsset]) -> Result[str, str]:
+def render_formula(version: str, rust_channel: str, assets: list[HostAsset]) -> Result[str, str]:
     mut missing: list[str] = []
     if not has_asset(assets, "aarch64-apple-darwin"):
         missing.append("aarch64-apple-darwin")
@@ -164,8 +217,74 @@ def render_formula(version: str, assets: list[HostAsset]) -> Result[str, str]:
     mac_arm = host_block(assets, "aarch64-apple-darwin", "    ")?
     mac_intel = host_block(assets, "x86_64-apple-darwin", "    ")?
     linux_x86 = host_block(assets, "x86_64-unknown-linux-gnu", "    ")?
+
+    # The formula is mostly fixed Ruby with a few substitution points, so it reads best as literal blocks joined
+    # at those seams. A plain triple-quoted string rather than an f-string is deliberate: the formula is full of
+    # Ruby `#{...}` interpolations, which an f-string would require escaping as `#{{...}}` at every occurrence.
+    header = """# typed: false
+# frozen_string_literal: true
+
+class Incan < Formula
+  desc "Statically typed language that compiles to native Rust"
+  homepage "https://github.com/encero-systems/incan"
+
+  if OS.mac? && Hardware::CPU.arm?
+"""
+    body = """  end
+
+  def staged_files
+    (Dir["#{buildpath}/**/*"] + Dir["**/*"]).uniq
+  end
+
+  def staged_binary(name)
+    path = staged_files.find do |candidate|
+      File.basename(candidate) == name && File.basename(File.dirname(candidate)) == "bin"
+    end
+    path.nil? ? nil : Pathname.new(path)
+  end
+
+  def staged_file_sample
+    staged_files.first(25).join(", ")
+  end
+
+  def install
+    incan_bin = staged_binary("incan")
+    incan_lsp_bin = staged_binary("incan-lsp")
+    sdk_inventory = Pathname.new("share/incan/sdk/sdk-inventory.json")
+    odie "could not find incan binary in archive; staged files: #{staged_file_sample}" if incan_bin.nil?
+    odie "could not find incan-lsp binary in archive; staged files: #{staged_file_sample}" if incan_lsp_bin.nil?
+    unless sdk_inventory.exist?
+      odie "could not find SDK provider inventory in archive; staged files: #{staged_file_sample}"
+    end
+    libexec.install Dir["*"]
+    bin.write_exec_script libexec/"bin/incan"
+    bin.write_exec_script libexec/"bin/incan-lsp"
+  end
+
+  def caveats
+    <<~EOS
+      Incan ships prebuilt Rust libraries that load only under the exact Rust compiler that built them, which for this release is """
+    caveats_tail = """.
+
+      The direct installer, npm, and pipx provision that compiler into an Incan-owned rustup home and leave your own default toolchain alone. Homebrew installs only the prebuilt Incan commands, so select the matching compiler yourself before building projects:
+        rustup toolchain install """
+    targets_tail = """
+        rustup target add wasm32-wasip1
+
+      To keep your own default toolchain untouched, install through the direct installer instead:
+        curl -fsSL https://github.com/encero-systems/incan/releases/latest/download/install.sh | bash
+    EOS
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/incan --version")
+  end
+end
+"""
     return Ok(
-        "# typed: false\n" + "# frozen_string_literal: true\n" + "\n" + "class Incan < Formula\n" + "  desc \"Statically typed language that compiles to native Rust\"\n" + "  homepage \"https://github.com/encero-systems/incan\"\n" + "\n" + "  if OS.mac? && Hardware::CPU.arm?\n" + mac_arm + "\n" + "  elsif OS.mac?\n" + mac_intel + "\n" + "  elsif OS.linux? && Hardware::CPU.intel?\n" + linux_x86 + "\n" + "  end\n" + "\n" + "  def staged_files\n" + "    (Dir[\"#{buildpath}/**/*\"] + Dir[\"**/*\"]).uniq\n" + "  end\n" + "\n" + "  def staged_binary(name)\n" + "    path = staged_files.find do |candidate|\n" + "      File.basename(candidate) == name && File.basename(File.dirname(candidate)) == \"bin\"\n" + "    end\n" + "    path.nil? ? nil : Pathname.new(path)\n" + "  end\n" + "\n" + "  def staged_file_sample\n" + "    staged_files.first(25).join(\", \")\n" + "  end\n" + "\n" + "  def install\n" + "    incan_bin = staged_binary(\"incan\")\n" + "    incan_lsp_bin = staged_binary(\"incan-lsp\")\n" + "    sdk_inventory = Pathname.new(\"share/incan/sdk/sdk-inventory.json\")\n" + "    odie \"could not find incan binary in archive; staged files: #{staged_file_sample}\" if incan_bin.nil?\n" + "    odie \"could not find incan-lsp binary in archive; staged files: #{staged_file_sample}\" if incan_lsp_bin.nil?\n" + "    unless sdk_inventory.exist?\n" + "      odie \"could not find SDK provider inventory in archive; staged files: #{staged_file_sample}\"\n" + "    end\n" + "    libexec.install Dir[\"*\"]\n" + "    bin.write_exec_script libexec/\"bin/incan\"\n" + "    bin.write_exec_script libexec/\"bin/incan-lsp\"\n" + "  end\n" + "\n" + "  def caveats\n" + "    <<~EOS\n" + "      Incan builds supported projects with verified Oven direct-rustc plans. The direct installer and pipx package can provision Rust automatically; npm and Homebrew install prebuilt Incan commands, so make sure rustup, rustc, and the wasm32-wasip1 target are available before running projects:\n" + "        rustup target add wasm32-wasip1\n" + "    EOS\n" + "  end\n" + "\n" + "  test do\n" + "    assert_match version.to_s, shell_output(\"#{bin}/incan --version\")\n" + "  end\n" + "end\n",
+        header + mac_arm + "\n  elsif OS.mac?\n" + mac_intel + "\n  elsif OS.linux? && Hardware::CPU.intel?\n"
+        + linux_x86 + "\n" + body + rust_channel + caveats_tail + rust_channel + "\n        rustup default "
+        + rust_channel + targets_tail,
     )
 
 
@@ -179,8 +298,9 @@ def prepare_assets() -> Result[None, str]:
     version = read_first_line(f"{dist_dir}/toolchain-version.txt")?
     release = read_first_line(f"{dist_dir}/toolchain-release.txt")?
     assets = collect_assets(dist_dir, release)?
+    rust_channel = resolve_rust_channel(dist_dir)?
 
-    manifest = manifest_json(version, release, generated_at, assets)
+    manifest = manifest_json(version, release, generated_at, rust_channel, assets)
     manifest_text = manifest.to_pretty_json().map_err((err) => err.message())?
     write_text(f"{dist_dir}/manifest.json", manifest_text + "\n")?
     copy_text(f"{repo_root}/workspaces/release/install-incan.sh", f"{dist_dir}/install.sh")?
@@ -190,7 +310,7 @@ def prepare_assets() -> Result[None, str]:
     )?
 
     if not skip_homebrew:
-        formula = render_formula(version, assets)?
+        formula = render_formula(version, rust_channel, assets)?
         write_text(f"{dist_dir}/incan.rb", formula)?
 
     return Ok(None)
