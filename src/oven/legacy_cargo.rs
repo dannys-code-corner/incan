@@ -11852,7 +11852,15 @@ version = "1.0.0"
             result,
             Err(super::OvenLegacyCargoError::TransientCapacityExceeded { path, .. }) if path == staging
         ));
-        assert!(started.elapsed() < Duration::from_secs(2));
+        // The fixture's Cargo sleeps 30s, so this asserts the monitor aborted on the capacity breach rather than
+        // waiting for the child. The bound is deliberately loose: it only has to separate "aborted" from "waited",
+        // and a tight one measures machine load instead. At 2s this failed under the parallel suite while taking
+        // 0.26s in isolation, which tested the host rather than the monitor.
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "monitor should abort on the capacity breach, not wait for the 30s child; took {elapsed:?}",
+        );
         fs::remove_dir_all(&staging)?;
         assert!(
             !staging.exists(),
