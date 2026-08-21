@@ -134,9 +134,39 @@ pub(crate) fn cargo_command() -> Command {
     if env::var_os("CARGO").filter(|value| !value.is_empty()).is_none()
         && let Some(cargo) = crate::oven::rustc::incan_owned_cargo()
     {
-        return Command::new(cargo);
+        let mut command = Command::new(cargo);
+        pin_incan_owned_rustc(&mut command);
+        return command;
     }
     Command::new(cargo_executable())
+}
+
+/// Pin the compiler belonging to the same provisioned toolchain as the Cargo about to run.
+///
+/// Selecting Incan's Cargo is not enough to select Incan's compiler. Cargo takes `rustc` from `RUSTC` or from
+/// `PATH`, and on any machine with Rustup installed `PATH` reaches the Rustup shim, which resolves to the user's
+/// default toolchain rather than the one Incan provisioned. The build then mixes two rustc versions in one
+/// dependency graph and fails late with "found crate `x` compiled by an incompatible version of rustc", naming a
+/// dependency rather than the toolchain split that caused it.
+///
+/// An explicit `RUSTC` still wins, matching how `CARGO` is honoured above.
+fn pin_incan_owned_rustc(command: &mut Command) {
+    if let Some(rustc) = rustc_pin_for_incan_owned_cargo(env::var_os("RUSTC"), crate::oven::rustc::incan_owned_rustc())
+    {
+        command.env("RUSTC", rustc);
+    }
+}
+
+/// Decide which compiler to pin, given any explicit `RUSTC` and the provisioned toolchain's own.
+///
+/// Split out from the environment so the policy is testable: an explicit selection wins, an empty value is treated
+/// as absent exactly as `CARGO` is, and a checkout with no provisioned toolchain pins nothing and keeps the ambient
+/// compiler.
+fn rustc_pin_for_incan_owned_cargo(explicit: Option<OsString>, owned: Option<PathBuf>) -> Option<PathBuf> {
+    if explicit.is_some_and(|value| !value.is_empty()) {
+        return None;
+    }
+    owned
 }
 
 /// Keep Cargo's target and unstable build-directory outputs inside the lifecycle-owned target root.
@@ -1183,5 +1213,37 @@ mod tests {
         assert!(projected.contains("name = \"issue921_relative_caller\""));
         assert!(!projected.contains("name = \"incan_workspace\""));
         Ok(())
+    }
+
+    /// Selecting Incan's Cargo must also select Incan's compiler.
+    ///
+    /// Cargo takes `rustc` from `RUSTC` or `PATH`, and on a machine with Rustup installed `PATH` reaches the shim,
+    /// which resolves to the user's default toolchain rather than the provisioned one. Leaving it unpinned mixes two
+    /// rustc versions in one dependency graph, which surfaces much later as "found crate `x` compiled by an
+    /// incompatible version of rustc" against a dependency name that says nothing about the toolchain split.
+    #[test]
+    fn incan_owned_cargo_pins_its_own_compiler_unless_one_is_chosen_explicitly() {
+        let owned = PathBuf::from("/incan/rust/toolchains/1.98.0/bin/rustc");
+
+        assert_eq!(
+            super::rustc_pin_for_incan_owned_cargo(None, Some(owned.clone())),
+            Some(owned.clone()),
+            "a provisioned toolchain must pin its own compiler",
+        );
+        assert_eq!(
+            super::rustc_pin_for_incan_owned_cargo(Some(OsString::from("")), Some(owned.clone())),
+            Some(owned.clone()),
+            "an empty RUSTC is absent, exactly as an empty CARGO is",
+        );
+        assert_eq!(
+            super::rustc_pin_for_incan_owned_cargo(Some(OsString::from("/usr/local/bin/rustc")), Some(owned)),
+            None,
+            "an explicit RUSTC wins",
+        );
+        assert_eq!(
+            super::rustc_pin_for_incan_owned_cargo(None, None),
+            None,
+            "a checkout with no provisioned toolchain keeps the ambient compiler",
+        );
     }
 }
