@@ -192,6 +192,7 @@ pub enum LocalOrigin {
 }
 
 impl LocalOrigin {
+    /// Compact snapshot spelling for this origin.
     const fn as_str(self) -> &'static str {
         match self {
             Self::Parameter => "param",
@@ -409,6 +410,7 @@ pub enum UnOp {
 }
 
 impl UnOp {
+    /// Compact snapshot spelling for this unary operator.
     const fn as_str(self) -> &'static str {
         match self {
             Self::Neg => "-",
@@ -438,6 +440,7 @@ pub enum BinOp {
 }
 
 impl BinOp {
+    /// Compact snapshot spelling for this binary operator.
     const fn as_str(self) -> &'static str {
         match self {
             Self::Add => "+",
@@ -472,6 +475,7 @@ pub enum AggregateKind {
 }
 
 impl AggregateKind {
+    /// Compact snapshot spelling for this aggregate kind.
     fn as_str(&self) -> String {
         match self {
             Self::Tuple => "tuple".to_string(),
@@ -502,6 +506,7 @@ pub enum Callee {
 }
 
 impl Callee {
+    /// Render a deterministic maintainer-facing spelling for this callee.
     fn render_snapshot(&self) -> String {
         match self {
             Self::Function(name) => format!("fn:{name}"),
@@ -711,6 +716,7 @@ pub struct PanicFact {
 }
 
 impl PanicFact {
+    /// Render a deterministic maintainer-facing snapshot line for this panic fact.
     fn render_snapshot(&self) -> String {
         format!("{} span={}..{}", self.reason.as_str(), self.span.start, self.span.end)
     }
@@ -725,6 +731,7 @@ pub enum PanicReason {
 }
 
 impl PanicReason {
+    /// Compact snapshot spelling for this panic reason.
     fn as_str(&self) -> String {
         match self {
             Self::AssertFailure => "assert_failure".to_string(),

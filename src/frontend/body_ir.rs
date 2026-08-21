@@ -149,6 +149,7 @@ struct BodyBuilder<'a> {
 }
 
 impl<'a> BodyBuilder<'a> {
+    /// Start a fresh builder for one function body, with no locals, scopes, or accumulated facts yet.
     fn new(type_info: &'a TypeCheckInfo) -> Self {
         Self {
             type_info,
@@ -167,6 +168,7 @@ impl<'a> BodyBuilder<'a> {
 
     // ---- Scopes and locals ----
 
+    /// Allocate a fresh lexical scope with the given `parent`, recording it in `scopes` for later span lookup.
     fn new_scope(&mut self, parent: Option<bir::ScopeId>, span: HirSourceSpan) -> bir::ScopeId {
         let id = bir::ScopeId(self.next_scope);
         self.next_scope += 1;
@@ -174,6 +176,8 @@ impl<'a> BodyBuilder<'a> {
         id
     }
 
+    /// Look up the source span recorded for `scope`, or a zero-width span if the id is unknown (defensive default;
+    /// every scope this builder hands out is always recorded in `scopes` first).
     fn scope_span(&self, scope: bir::ScopeId) -> HirSourceSpan {
         self.scopes
             .iter()
@@ -313,6 +317,8 @@ impl<'a> BodyBuilder<'a> {
         bir::Operand::place(bir::Place::from_local(local), fact, true)
     }
 
+    /// Record a runtime/helper requirement for this body, deduplicated and kept in first-seen order (see
+    /// [`bir::Body::runtime_requirements`] for why lowering relies on traversal order rather than sorting).
     fn record_runtime_requirement(&mut self, requirement: AbiV0RuntimeRequirement) {
         if !self.runtime_requirements.contains(&requirement) {
             self.runtime_requirements.push(requirement);
@@ -350,6 +356,8 @@ impl<'a> BodyBuilder<'a> {
         }
     }
 
+    /// Push a [`bir::StatementKind::Unsupported`] statement carrying a short diagnostic `description`, so an
+    /// unmodeled source construct still leaves a total, structurally valid statement rather than being dropped.
     fn push_unsupported_stmt(&self, description: String, span: HirSourceSpan, out: &mut Vec<bir::Statement>) {
         out.push(bir::Statement {
             kind: bir::StatementKind::Unsupported { description },
@@ -373,6 +381,9 @@ impl<'a> BodyBuilder<'a> {
 
     // ---- Rvalue / call helpers ----
 
+    /// Allocate a fresh temporary, push an `Assign` statement giving it `rvalue`'s value, and return an operand for
+    /// that temporary's single, immediate use (see [`Self::temp_operand`]). The common tail shared by every
+    /// expression-lowering path that needs to flatten a computed value into a place before it can be read again.
     fn push_assign_temp(
         &mut self,
         rvalue: bir::Rvalue,
@@ -392,6 +403,8 @@ impl<'a> BodyBuilder<'a> {
         self.temp_operand(temp, &ty)
     }
 
+    /// Allocate a fresh temporary, push a `Call` statement storing its result there, and return an operand for that
+    /// temporary's single, immediate use — the call-lowering counterpart to [`Self::push_assign_temp`].
     #[allow(clippy::too_many_arguments)]
     fn push_call_temp(
         &mut self,
@@ -416,6 +429,8 @@ impl<'a> BodyBuilder<'a> {
         self.temp_operand(temp, &ty)
     }
 
+    /// Build the boolean negation of `operand` as a fresh temporary (`not operand`), used to turn a loop's
+    /// continuation condition into its complementary exit condition for the leading conditional `Break`.
     fn negate_operand(
         &mut self,
         operand: bir::Operand,
@@ -434,6 +449,9 @@ impl<'a> BodyBuilder<'a> {
 
     // ---- Statements ----
 
+    /// Lower every statement in `stmts` into `out`, within `scope`. Statements are lowered in source order and each
+    /// one is given the statement suffix that follows it (`&stmts[index + 1..]`), so last-use countdowns seeded by
+    /// [`Self::declare_new_local`] only count reads that can still occur after the declaration.
     fn lower_block_into(
         &mut self,
         stmts: &[ast::Spanned<ast::Statement>],
@@ -445,6 +463,10 @@ impl<'a> BodyBuilder<'a> {
         }
     }
 
+    /// Lower one statement into `out`, dispatching on its AST kind. `remaining` is the statement suffix following
+    /// `stmt` in its enclosing block, threaded through to [`Self::lower_assignment`] for last-use seeding. Statement
+    /// kinds outside v0's covered subset fall through to an explicit [`Self::push_unsupported_stmt`] rather than
+    /// panicking (see this module's module-level docs for the exact covered/uncovered split).
     fn lower_stmt_into(
         &mut self,
         stmt: &ast::Spanned<ast::Statement>,
@@ -489,6 +511,10 @@ impl<'a> BodyBuilder<'a> {
         }
     }
 
+    /// Lower an inferred/`let`/`mutable`/reassignment statement. A `Reassign` binding reuses the existing local for
+    /// `assignment.name` when one is already bound (falling back to declaring a new one if reassignment targets an
+    /// unbound name), while every other binding kind always declares a fresh local — matching source-level shadowing
+    /// semantics, where a repeated `let x = ...` introduces a new binding rather than mutating the old one.
     fn lower_assignment(
         &mut self,
         assignment: &ast::AssignmentStmt,
@@ -518,6 +544,10 @@ impl<'a> BodyBuilder<'a> {
         });
     }
 
+    /// Lower `if`/`elif`/`else` into a [`bir::StatementKind::If`] chain. `elif` branches are folded into nested
+    /// `else { if ... }` wrappers from the last branch inward (see the inline comment above the fold loop), and an
+    /// `if let` pattern condition — not yet modeled by v0 — lowers to an explicit unsupported placeholder instead of
+    /// the real branch.
     fn lower_if(
         &mut self,
         if_stmt: &ast::IfStmt,
@@ -586,6 +616,9 @@ impl<'a> BodyBuilder<'a> {
         });
     }
 
+    /// Lower `while cond: body` into Body IR's single normalized loop shape: a [`bir::StatementKind::Loop`] whose
+    /// body opens with `if not cond: break`, followed by the lowered loop body. A `while let` pattern condition —
+    /// not yet modeled by v0 — lowers to an explicit unsupported placeholder instead of the real loop.
     fn lower_while(
         &mut self,
         while_stmt: &ast::WhileStmt,
@@ -738,6 +771,9 @@ impl<'a> BodyBuilder<'a> {
         });
     }
 
+    /// Lower `assert cond[, message]`, recording an [`bir::PanicReason::AssertFailure`] panic fact and a
+    /// [`AbiV0RuntimeRequirement::PanicStrategy`] runtime requirement since every assert can panic. The `raises`
+    /// form of `assert` — not yet modeled by v0 — lowers to an explicit unsupported placeholder instead.
     fn lower_assert(
         &mut self,
         assert_stmt: &ast::AssertStmt,
@@ -771,6 +807,10 @@ impl<'a> BodyBuilder<'a> {
 
     // ---- Expressions ----
 
+    /// Lower one expression into an [`bir::Operand`], dispatching on its AST kind and, where evaluation has side
+    /// effects or must be flattened (calls, binary/unary ops, aggregates), pushing supporting statements into `out`
+    /// first. Expression kinds outside v0's covered subset fall through to [`Self::unsupported_operand`] rather than
+    /// panicking (see this module's module-level docs for the exact covered/uncovered split).
     fn lower_expr_to_operand(
         &mut self,
         expr: &ast::Spanned<ast::Expr>,
@@ -881,6 +921,14 @@ impl<'a> BodyBuilder<'a> {
         }
     }
 
+    /// Lower a binary-operator expression. When both operands are string-like and the operator has a compiler-owned
+    /// string helper (see [`string_helper_for_binop`]), the operation is emitted as an explicit
+    /// [`bir::Callee::Helper`] call with the matching runtime requirements recorded, rather than as a
+    /// [`bir::Rvalue::BinaryOp`] — this is Body IR's compiler-owned-runtime-operation requirement (#653 criterion
+    /// 3) applied to string operators specifically. Otherwise the operator lowers to a plain `BinaryOp` rvalue, with
+    /// a division/modulo panic fact recorded when [`bir::BinOp::may_panic`] holds. An operator with neither a string
+    /// helper nor a direct Body IR equivalent (see [`lower_binary_op`]) lowers to an explicit unsupported
+    /// placeholder.
     fn lower_binary(
         &mut self,
         lhs: &ast::Spanned<ast::Expr>,
@@ -935,6 +983,9 @@ impl<'a> BodyBuilder<'a> {
         )
     }
 
+    /// Lower every argument in `args` to an operand, or return `None` if any argument is named or an unpack
+    /// (`*args`/`**kwargs`) — v0's [`bir::Callee`] call shape only models positional arguments, so callers use the
+    /// `None` case to fall back to an explicit unsupported placeholder instead of dropping the extra arguments.
     fn lower_positional_args(
         &mut self,
         args: &[ast::CallArg],
@@ -953,6 +1004,10 @@ impl<'a> BodyBuilder<'a> {
         Some(operands)
     }
 
+    /// Lower a direct call `name(args)` to a [`bir::Callee::Function`] call. An indirect callee (anything other than
+    /// a bare identifier), explicit type arguments, or non-positional arguments each lower to an explicit
+    /// unsupported placeholder instead — v0 defers full call-target resolution (see [`bir::Callee::Function`]'s own
+    /// docs) and does not model generic call-site type arguments.
     fn lower_call(
         &mut self,
         callee: &ast::Spanned<ast::Expr>,
@@ -995,6 +1050,10 @@ impl<'a> BodyBuilder<'a> {
         )
     }
 
+    /// Lower a method call `recv.name(args)` to a [`bir::Callee::Method`] call, with the receiver prepended to
+    /// `args[0]` as a [`bir::OwnershipFact::Borrow`] operand (see the inline comment on the receiver-borrow decision
+    /// below). Explicit type arguments or non-positional arguments each lower to an explicit unsupported placeholder
+    /// instead, matching [`Self::lower_call`]'s treatment of the same cases.
     #[allow(clippy::too_many_arguments)]
     fn lower_method_call(
         &mut self,
@@ -1042,6 +1101,9 @@ impl<'a> BodyBuilder<'a> {
         )
     }
 
+    /// Lower a tuple or (non-spread) list literal to a [`bir::Rvalue::Aggregate`], recording an
+    /// [`AbiV0RuntimeRequirement::Allocator`] requirement for lists specifically (list construction always
+    /// allocates; tuples do not).
     fn lower_aggregate(
         &mut self,
         kind: bir::AggregateKind,
@@ -1062,6 +1124,10 @@ impl<'a> BodyBuilder<'a> {
         self.push_assign_temp(bir::Rvalue::Aggregate(kind, operands), ty, scope, hir_span_value, out)
     }
 
+    /// Lower a nominal constructor call `Name(args)` to a [`bir::Rvalue::Aggregate`] with
+    /// [`bir::AggregateKind::Constructor`]. Both positional and named arguments lower by value in call-site order
+    /// (v0 does not yet reorder named arguments to match field declaration order); an unpack argument
+    /// (`*args`/`**kwargs`) lowers to an explicit unsupported placeholder instead.
     fn lower_constructor(
         &mut self,
         name: &str,
@@ -1225,6 +1291,10 @@ fn count_reads_in_stmts(name: &str, stmts: &[ast::Spanned<ast::Statement>]) -> u
     stmts.iter().map(|stmt| count_reads_in_stmt(name, &stmt.node)).sum()
 }
 
+/// Count `name` occurrences reachable from one statement, recursing into every branch of a conditional/loop rather
+/// than only the branch that will execute — part of [`count_reads_in_stmts`]'s documented over-approximation.
+/// Statement kinds outside v0's lowered subset are not walked and contribute zero (they cannot themselves bind or
+/// read `name` in a way v0's lowering will ever observe).
 fn count_reads_in_stmt(name: &str, stmt: &ast::Statement) -> usize {
     match stmt {
         ast::Statement::Assignment(a) => count_reads_in_expr(name, &a.value.node),
@@ -1262,6 +1332,10 @@ fn count_reads_in_stmt(name: &str, stmt: &ast::Statement) -> usize {
     }
 }
 
+/// Count `name` occurrences in an `if`/`while` condition, including the value expression of a `Condition::Let`
+/// pattern condition (even though v0 lowering does not model `if let`/`while let` themselves — see
+/// [`BodyBuilder::lower_if`]/[`BodyBuilder::lower_while`] — so the read-count approximation stays an
+/// over-approximation rather than silently under-counting).
 fn count_reads_in_condition(name: &str, cond: &ast::Condition) -> usize {
     match cond {
         ast::Condition::Expr(e) => count_reads_in_expr(name, &e.node),
@@ -1269,6 +1343,10 @@ fn count_reads_in_condition(name: &str, cond: &ast::Condition) -> usize {
     }
 }
 
+/// Count `name` occurrences reachable from one expression, recursing into every expression kind v0's lowering
+/// itself walks (see this module's module-level docs for the covered subset). Expression kinds outside that subset
+/// contribute zero, consistent with [`count_reads_in_stmts`]'s "restricted to the same subset `BodyBuilder` actually
+/// lowers" scope.
 fn count_reads_in_expr(name: &str, expr: &ast::Expr) -> usize {
     match expr {
         ast::Expr::Ident(id) => usize::from(id == name),
@@ -1301,6 +1379,9 @@ fn count_reads_in_expr(name: &str, expr: &ast::Expr) -> usize {
     }
 }
 
+/// Count `name` occurrences in one call argument's expression, regardless of whether the argument is positional,
+/// named, or an unpack — the read-count approximation counts the expression either way even though
+/// [`BodyBuilder::lower_positional_args`] itself rejects named/unpack arguments during real lowering.
 fn count_reads_in_call_arg(name: &str, arg: &ast::CallArg) -> usize {
     match arg {
         ast::CallArg::Positional(e)
