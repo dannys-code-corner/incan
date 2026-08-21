@@ -15,6 +15,12 @@
 //! Unsupported source constructs (comprehensions, match, closures, generators, f-strings, tuple unpacking, and so
 //! on) lower to an explicit [`StatementKind::Unsupported`] node rather than panicking or being silently dropped, so
 //! the model stays total over real programs while being honest about v0's coverage.
+//!
+//! "Method body" includes `class`/`model`/`trait` methods, not just top-level `def` functions (#1102): a method's
+//! `self`/`mut self` receiver is modeled as an ordinary [`LocalOrigin::Receiver`] local rather than a distinct
+//! kind of place, so it flows through the same copy/move/clone/borrow/last-use machinery every other local does —
+//! with one carve-out enforced at read sites (see `src/frontend/body_ir.rs`): a receiver is always a Rust-level
+//! reference, so a bare read of it can never select [`OwnershipFact::Move`].
 
 use std::fmt::Write as _;
 
@@ -81,9 +87,15 @@ impl Body {
     /// precise set still live at a specific panic site, because computing the precise per-site set needs full
     /// control-flow dataflow that is out of scope for v0 (see the module-level docs). Callers that need a stable
     /// panic strategy must not treat this as a final drop plan; it only exposes that such locals exist.
+    ///
+    /// [`LocalOrigin::Receiver`] locals are excluded unconditionally, regardless of their type's Copy-ness: `self`/
+    /// `mut self` is always a Rust-level reference at the emission boundary, and references have no destructor of
+    /// their own to run on unwind — only the value a reference points at might, and that value is owned by the
+    /// method's caller, not by this body.
     pub fn locals_requiring_unwind_drop(&self) -> Vec<LocalId> {
         self.locals
             .iter()
+            .filter(|local| !matches!(local.origin, LocalOrigin::Receiver { .. }))
             .filter(|local| !local.ty.abi_v0_facts().ownership.is_trivially_copy())
             .map(|local| local.id)
             .collect()
@@ -189,6 +201,19 @@ pub enum LocalOrigin {
     /// [`OwnershipFact::Unknown`](crate::body_ir::OwnershipFact::Unknown) reads rather than silently treated as a
     /// resolved local, per #653's "explicit unknowns" requirement.
     External,
+    /// Bound to a method's `self`/`mut self` receiver (#1102).
+    ///
+    /// A receiver is always a Rust-level reference (`&self` or `&mut self`) at the emission boundary — Incan's
+    /// `Receiver` AST has no "by value" variant — so it is never itself drop-relevant and a bare read of it can
+    /// never soundly select [`OwnershipFact::Move`]; see the receiver carve-out in
+    /// [`crate::body_ir::OwnershipFact`]'s use sites in `src/frontend/body_ir.rs` for how lowering enforces that.
+    /// `mutable` records `self` (`false`) vs `mut self` (`true`) purely as a descriptive fact for now — v0 does not
+    /// yet use it to pick a different ownership fact at read sites, the same way parameter mutability is not
+    /// tracked as an ownership-fact input either.
+    Receiver {
+        /// Whether the receiver was declared `mut self` (`true`) rather than plain `self` (`false`).
+        mutable: bool,
+    },
 }
 
 impl LocalOrigin {
@@ -199,6 +224,8 @@ impl LocalOrigin {
             Self::UserBinding => "binding",
             Self::Temporary => "temp",
             Self::External => "external",
+            Self::Receiver { mutable: false } => "receiver",
+            Self::Receiver { mutable: true } => "receiver_mut",
         }
     }
 }
@@ -877,6 +904,50 @@ mod tests {
 
         let drop_relevant = body.locals_requiring_unwind_drop();
         assert_eq!(drop_relevant, vec![LocalId(3)]);
+    }
+
+    #[test]
+    fn locals_requiring_unwind_drop_excludes_receiver_locals_even_when_non_copy() {
+        let mut body = sample_body();
+        body.locals.push(LocalDecl {
+            id: LocalId(3),
+            name: Some("self".to_string()),
+            ty: IncanType::Named("Counter".to_string()),
+            origin: LocalOrigin::Receiver { mutable: true },
+            scope: ScopeId(0),
+            span: HirSourceSpan::new(0, 4),
+        });
+
+        let drop_relevant = body.locals_requiring_unwind_drop();
+        assert!(
+            !drop_relevant.contains(&LocalId(3)),
+            "a receiver is a reference, not drop-relevant, even though its type is non-Copy: {drop_relevant:?}"
+        );
+    }
+
+    #[test]
+    fn receiver_origin_renders_mutability_in_the_snapshot() {
+        let mut body = sample_body();
+        body.locals.push(LocalDecl {
+            id: LocalId(3),
+            name: Some("self".to_string()),
+            ty: IncanType::Named("Counter".to_string()),
+            origin: LocalOrigin::Receiver { mutable: false },
+            scope: ScopeId(0),
+            span: HirSourceSpan::new(0, 4),
+        });
+        body.locals.push(LocalDecl {
+            id: LocalId(4),
+            name: Some("self".to_string()),
+            ty: IncanType::Named("Counter".to_string()),
+            origin: LocalOrigin::Receiver { mutable: true },
+            scope: ScopeId(0),
+            span: HirSourceSpan::new(0, 4),
+        });
+
+        let snapshot = body.render_snapshot();
+        assert!(snapshot.contains("local 3 self : Counter [receiver]"));
+        assert!(snapshot.contains("local 4 self : Counter [receiver_mut]"));
     }
 
     #[test]
