@@ -25,6 +25,9 @@ Options:
   --incql PATH        IncQL checkout (default: $INCQL_CHECKOUT, else ../tmp/incql-rc3-test beside this repo)
   --incan-source PATH Incan source checkout IncQL's vocab companion expects (default: this repository)
   --work PATH         Scratch directory holding the isolated Incan home (default: a fresh mktemp -d)
+  --incan-home PATH   Existing Incan home to build against, rather than an empty isolated one. Required when
+                      testing a released archive: its Loafs bind to the exact Rust the installer provisions, so
+                      an empty home has no matching toolchain and every Loaf is rejected as incompatible.
   --keep-work         Leave the scratch directory in place for inspection
   --allow-dirty       Run even though the IncQL checkout has uncommitted changes
   -h, --help          Show this help
@@ -41,6 +44,7 @@ incan=""
 incql="${INCQL_CHECKOUT:-}"
 incan_source="$repo_root"
 work=""
+incan_home_override=""
 keep_work=0
 allow_dirty=0
 
@@ -50,6 +54,7 @@ while [ "$#" -gt 0 ]; do
         --incql) incql="${2:-}"; shift 2 ;;
         --incan-source) incan_source="${2:-}"; shift 2 ;;
         --work) work="${2:-}"; shift 2 ;;
+        --incan-home) incan_home_override="${2:-}"; shift 2 ;;
         --keep-work) keep_work=1; shift ;;
         --allow-dirty) allow_dirty=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -87,7 +92,16 @@ if [ -z "$work" ]; then
 fi
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
-incan_home="$work/home"
+# An empty home is right for a locally built compiler, which resolves its own stdlib source and seals Loafs against
+# whatever Rust is ambient. A released archive is the opposite: its Loafs are sealed against the exact Rust the
+# installer provisions into the toolchain's own home, so building against an empty home rejects every shipped Loaf
+# with "no compatible release-cohort Loaf". Point this at an installed home to test a real release.
+if [ -n "$incan_home_override" ]; then
+    [ -d "$incan_home_override" ] || fail "--incan-home is not a directory: $incan_home_override"
+    incan_home="$(cd "$incan_home_override" && pwd)"
+else
+    incan_home="$work/home"
+fi
 mkdir -p "$incan_home"
 
 cleanup() {
