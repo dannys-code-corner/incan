@@ -1306,6 +1306,18 @@ impl TypeChecker {
             entries.push((supertrait_name, substitute_method_info(info, &subst)));
         }
         let filtered = self.filter_supertrait_dominated_entries(entries);
+        // A compiler-owned trait can resolve to an empty symbol-table stub, which shadows the real contract and leaves
+        // every derive-provided method unresolvable. Recover the signature from cached provider metadata first: that
+        // metadata is seeded from the shipped library manifests and is therefore present in an installed toolchain,
+        // whereas the stdlib source fallback below only exists in a source checkout.
+        if filtered.is_empty()
+            && let Some(info) = self
+                .transitive_stdlib_stub_traits
+                .get(adopted_trait)
+                .and_then(|full_trait| full_trait.methods.get(method))
+        {
+            return Some(info.clone());
+        }
         if filtered.is_empty()
             && let Some(segments) = stdlib::trait_method_module_segments(adopted_trait)
             && let Some(full_trait) = self.stdlib_cache.lookup_trait(&segments, adopted_trait)

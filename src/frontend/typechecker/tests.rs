@@ -51,6 +51,78 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// An empty trait stub must not hide the method contract that cached provider metadata carries.
+///
+/// An installed toolchain resolves a compiler-owned trait such as `Clone` to a symbol-table stub with no methods.
+/// That stub shadows the real trait, so `@derive(Clone)` is left without a callable `clone` and every `.clone()` call
+/// fails to resolve. Provider metadata still carries the signature, and method resolution recovers it from there.
+///
+/// The trait here is deliberately outside [`stdlib::STDLIB_TRAIT_METHOD_MODULES`]. The stdlib-source fallback covers
+/// only registered traits and only inside a source checkout, so exercising `Clone` in-repo would resolve through that
+/// fallback and pass whether or not the recovery works — which is exactly how this defect stayed invisible to a suite
+/// that always runs against stdlib source. Keep this trait unregistered so the assertion has only one way to succeed.
+#[test]
+fn empty_trait_stub_recovers_its_method_contract_from_provider_metadata() {
+    let mut checker = TypeChecker::new();
+    let shadowed_trait = "ProviderOnlyContract".to_string();
+    let span = Span::new(0, shadowed_trait.len());
+    assert!(
+        stdlib::trait_method_module_segments(&shadowed_trait).is_none(),
+        "this trait must stay outside the stdlib-source fallback registry",
+    );
+
+    let empty_stub = TraitInfo {
+        type_params: Vec::new(),
+        supertraits: Vec::new(),
+        methods: HashMap::new(),
+        method_aliases: HashMap::new(),
+        properties: HashMap::new(),
+        requires: Vec::new(),
+    };
+    checker.symbols.define(Symbol {
+        name: shadowed_trait.clone(),
+        kind: SymbolKind::Trait(empty_stub.clone()),
+        span,
+        scope: 0,
+    });
+    assert!(
+        checker
+            .lookup_semantic_trait_info(&shadowed_trait)
+            .is_some_and(|info| info.methods.is_empty()),
+        "the shadowing stub must be what trait lookup sees, or this test proves nothing",
+    );
+
+    let mut provider_methods = HashMap::new();
+    provider_methods.insert(
+        "materialize".to_string(),
+        MethodInfo {
+            type_params: Vec::new(),
+            type_param_bounds: HashMap::new(),
+            type_param_bound_details: HashMap::new(),
+            trait_target: None,
+            receiver: Some(Receiver::Immutable),
+            params: Vec::new(),
+            return_type: ResolvedType::SelfType,
+            is_async: false,
+            has_body: false,
+            alias_of: None,
+        },
+    );
+    checker.transitive_stdlib_stub_traits.insert(
+        shadowed_trait.clone(),
+        TraitInfo {
+            methods: provider_methods,
+            ..empty_stub
+        },
+    );
+
+    let resolved = checker.trait_method_info_resolved(&shadowed_trait, "materialize", span);
+    assert!(
+        resolved.is_some_and(|info| info.return_type == ResolvedType::SelfType),
+        "provider metadata must supply the contract the empty stub lacks",
+    );
+}
+
 fn check_str(source: &str) -> Result<(), Vec<CompileError>> {
     let tokens = lexer::lex(source)?;
     let ast = parser::parse(&tokens)?;
@@ -385,7 +457,7 @@ fn rust_item_metadata_prefers_shipped_library_abi() {
     assert_eq!(actual, manifest_metadata);
 }
 
-fn clone_trait_name() -> String {
+fn shadowed_trait_name() -> String {
     builtin_traits::as_str(TraitId::Clone).to_string()
 }
 
@@ -3159,7 +3231,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                         module_path: None,
                         type_args: Vec::new(),
                     }],
-                    derives: vec![clone_trait_name()],
+                    derives: vec![shadowed_trait_name()],
                     fields: Vec::new(),
                     properties: Vec::new(),
                     methods: Vec::new(),
@@ -3175,7 +3247,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                         module_path: None,
                         type_args: Vec::new(),
                     }],
-                    derives: vec![clone_trait_name()],
+                    derives: vec![shadowed_trait_name()],
                     fields: Vec::new(),
                     properties: Vec::new(),
                     methods: vec![MethodExport {
@@ -8664,7 +8736,7 @@ def clone_mutexes(xs: List[Mutex]) -> List[Mutex]:
         errs.iter().any(|e| {
             e.message.contains("List.clone requires element type")
                 && e.message.contains("Mutex")
-                && e.message.contains(clone_trait_name().as_str())
+                && e.message.contains(shadowed_trait_name().as_str())
         }),
         "expected List.clone / Clone diagnostic for Rust element type; got {errs:?}"
     );
