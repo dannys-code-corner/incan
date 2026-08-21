@@ -1621,7 +1621,22 @@ fn lifecycle_new_version_and_env_commands_work() -> Result<(), Box<dyn std::erro
     assert!(initial_manifest.contains(r#"description = "A generated greeting app""#));
     assert!(initial_manifest.contains(r#"authors = ["Danny <danny@example.com>"]"#));
     assert!(initial_manifest.contains(r#"license = "MIT""#));
-    assert!(initial_manifest.contains(r#"requires-incan = ">=0.5.0-0,<0.6.0""#));
+    // Derived rather than written out: a prerelease compiler emits a `-0` lower bound so rc builds accept rc
+    // projects, and a final release omits it so a released project does not silently accept prereleases. Pinning
+    // one spelling makes this test fail on every transition between the two, which it did on the 0.5.0 bump.
+    let expected_requires_incan = {
+        let version = semver::Version::parse(incan::version::INCAN_VERSION)?;
+        let lower = if version.pre.is_empty() {
+            format!(">={}.{}.0", version.major, version.minor)
+        } else {
+            format!(">={}.{}.0-0", version.major, version.minor)
+        };
+        format!("{lower},<{}.{}.0", version.major, version.minor + 1)
+    };
+    assert!(
+        initial_manifest.contains(&format!(r#"requires-incan = "{expected_requires_incan}""#)),
+        "generated manifest should require {expected_requires_incan}, got:\n{initial_manifest}"
+    );
     assert!(project_dir.join("src/main.incn").exists());
     assert!(project_dir.join("tests/test_main.incn").exists());
 
