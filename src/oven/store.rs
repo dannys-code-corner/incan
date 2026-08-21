@@ -1174,7 +1174,9 @@ impl OvenStore {
             source,
         })?;
         self.reclaim_stale_staging()?;
-        self.prune_to_limits(None, 0, 0, true)
+        let superseded = self.reclaim_superseded_release_entries(&active_release_domain(), true)?;
+        let retained = self.prune_to_limits(None, 0, 0, true)?;
+        Ok(merge_prune_reports(superseded, retained))
     }
 
     /// Preview the inactive entries policy would reclaim without removing any entry or staging data.
@@ -1188,7 +1190,9 @@ impl OvenStore {
             path: self.root.join(MANAGER_LOCK_FILE),
             source,
         })?;
-        self.prune_to_limits(None, 0, 0, false)
+        let superseded = self.reclaim_superseded_release_entries(&active_release_domain(), false)?;
+        let retained = self.prune_to_limits(None, 0, 0, false)?;
+        Ok(merge_prune_reports(superseded, retained))
     }
 
     /// Reserve the remaining aggregate and compatibility-domain allowance for the explicit compatibility baker.
@@ -1215,6 +1219,10 @@ impl OvenStore {
             source,
         })?;
         self.reclaim_stale_staging()?;
+        // Entries sealed by a superseded compiler release can never be reused, so they are removed before the
+        // remaining allowance is measured. Without this a store that merely fits its retention policy can still
+        // starve a large build of transient staging space with bytes nothing will ever read again.
+        self.reclaim_superseded_release_entries(domain, true)?;
         // A reservation is not itself evidence that an existing immutable entry is obsolete. Keep every entry that
         // already fits policy so a debug/release sibling or a second project can reuse it; the measured hand-off
         // below is where the actual pending closure is admitted and any necessary inactive reclamation occurs.
@@ -1507,6 +1515,58 @@ impl OvenStore {
                 false
             };
             if domain_is_over && pending_domain != Some(entry.manifest.domain.as_str()) {
+                continue;
+            }
+            match try_lock_entry(&entry.path)? {
+                Some(_lock) => {
+                    if apply {
+                        fs::remove_dir_all(&entry.path).map_err(|source| OvenStoreError::Io {
+                            path: entry.path.clone(),
+                            source,
+                        })?;
+                    }
+                    removed_logical_bytes = removed_logical_bytes.saturating_add(entry.logical_bytes);
+                    removed_entries.push(entry.manifest.identity);
+                    entries.retain(|candidate| candidate.path != entry.path);
+                    assign_unique_entry_physical_bytes(&mut entries)?;
+                }
+                None => skipped_active_entries.push(entry.manifest.identity),
+            }
+        }
+        let after_physical_bytes = entries.iter().map(|entry| entry.physical_bytes).sum();
+        Ok(OvenStorePruneReport {
+            schema_version: OVEN_STORE_SCHEMA_VERSION,
+            dry_run: !apply,
+            before_physical_bytes,
+            after_physical_bytes,
+            removed_logical_bytes,
+            removed_entries,
+            skipped_active_entries,
+        })
+    }
+
+    /// Remove immutable entries sealed for a compiler release other than the active one.
+    ///
+    /// Store domains carry the compiler release that produced them (`incan-release-<version>`), and a Loaf sealed by
+    /// one release is never reusable by another. Retention alone cannot shed them: [`Self::prune_to_limits`] stops as
+    /// soon as the store fits its policy, so a store below its limit keeps superseded releases forever while their
+    /// bytes still count against the transient allowance a large build needs. Reclaiming them is therefore always
+    /// safe and is the only reclamation that does not compete with reuse.
+    ///
+    /// Entries an active lease holds are left in place and reported as skipped, exactly as ordinary pruning does.
+    pub(crate) fn reclaim_superseded_release_entries(
+        &self,
+        active_domain: &str,
+        apply: bool,
+    ) -> Result<OvenStorePruneReport, OvenStoreError> {
+        let mut entries = self.collect_entries_for_admission()?;
+        let before_physical_bytes = entries.iter().map(|entry| entry.physical_bytes).sum();
+        let mut removed_entries = Vec::new();
+        let mut skipped_active_entries = Vec::new();
+        let mut removed_logical_bytes = 0_u64;
+
+        for entry in entries.clone() {
+            if !is_superseded_release_domain(&entry.manifest.domain, active_domain) {
                 continue;
             }
             match try_lock_entry(&entry.path)? {
@@ -2534,6 +2594,49 @@ fn related_policy_offending_domains(
 }
 
 /// Sum logical and physical accounting for one compatibility domain.
+/// Return the store domain owned by the running compiler release.
+fn active_release_domain() -> String {
+    format!("{RELEASE_DOMAIN_PREFIX}{}", crate::version::INCAN_VERSION)
+}
+
+/// Fold a superseded-release reclamation report into the retention-prune report that followed it.
+///
+/// The two passes run back to back under one manager lock, so the user-visible result must read as a single
+/// reclamation: the earliest `before`, the latest `after`, and the union of what each pass touched.
+fn merge_prune_reports(first: OvenStorePruneReport, second: OvenStorePruneReport) -> OvenStorePruneReport {
+    let mut removed_entries = first.removed_entries;
+    removed_entries.extend(second.removed_entries);
+    let mut skipped_active_entries = first.skipped_active_entries;
+    for identity in second.skipped_active_entries {
+        if !skipped_active_entries.contains(&identity) {
+            skipped_active_entries.push(identity);
+        }
+    }
+    OvenStorePruneReport {
+        schema_version: second.schema_version,
+        dry_run: second.dry_run,
+        before_physical_bytes: first.before_physical_bytes,
+        // A preview leaves both passes' entries on disk, so the retention pass re-measures the full store and its
+        // `after` ignores what the superseded pass projected removing. Take the smaller reading so a dry run reports
+        // the allocation the user would actually be left with, and an applied run keeps reporting the measured one.
+        after_physical_bytes: first.after_physical_bytes.min(second.after_physical_bytes),
+        removed_logical_bytes: first.removed_logical_bytes.saturating_add(second.removed_logical_bytes),
+        removed_entries,
+        skipped_active_entries,
+    }
+}
+
+/// Compiler-release store domains are spelled `incan-release-<version>`.
+const RELEASE_DOMAIN_PREFIX: &str = "incan-release-";
+
+/// Return whether `candidate` names a compiler release superseded by `active`.
+///
+/// Only release domains are comparable this way. Any other domain (compiler-suite, fixtures, interop) is left alone,
+/// because its reuse rules are not keyed to the compiler version.
+fn is_superseded_release_domain(candidate: &str, active: &str) -> bool {
+    candidate.starts_with(RELEASE_DOMAIN_PREFIX) && active.starts_with(RELEASE_DOMAIN_PREFIX) && candidate != active
+}
+
 fn domain_totals(entries: &[OvenStoreEntry], domain: &str) -> (u64, u64) {
     entries
         .iter()
@@ -3730,6 +3833,50 @@ mod tests {
                 ..
             })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn prune_reclaims_superseded_release_entries_while_the_store_fits_its_policy()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        // Limits far above what these fixtures occupy: retention alone has no reason to evict anything, which is the
+        // condition under which superseded releases used to accumulate forever.
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let active = super::active_release_domain();
+        let superseded = format!("{}0.0.1-superseded", super::RELEASE_DOMAIN_PREFIX);
+
+        store.publish(&request(project.path(), &superseded, b"stale release artifact")?)?;
+        store.publish(&request(project.path(), &active, b"current release artifact")?)?;
+        store.publish(&request(project.path(), "compiler-suite", b"unrelated domain")?)?;
+        assert_eq!(store.inspect()?.entries.len(), 3);
+
+        let preview = store.preview_prune()?;
+        assert_eq!(
+            preview.removed_entries.len(),
+            1,
+            "a dry run must report exactly the superseded release entry",
+        );
+        assert_eq!(store.inspect()?.entries.len(), 3, "a dry run must not remove anything",);
+
+        let report = store.prune()?;
+        assert_eq!(report.removed_entries.len(), 1);
+        let remaining: Vec<String> = store
+            .inspect()?
+            .entries
+            .into_iter()
+            .map(|entry| entry.manifest.domain)
+            .collect();
+        assert!(
+            remaining.contains(&active) && remaining.iter().any(|domain| domain == "compiler-suite"),
+            "the active release and non-release domains must survive, got {remaining:?}",
+        );
+        assert!(
+            !remaining.contains(&superseded),
+            "the superseded release must be reclaimed, got {remaining:?}",
+        );
         Ok(())
     }
 
