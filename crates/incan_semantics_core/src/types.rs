@@ -211,6 +211,19 @@ pub enum AbiV0Ownership {
     Unknown,
 }
 
+impl AbiV0Ownership {
+    /// Return whether this category is a trivial bitwise copy.
+    ///
+    /// Body IR v0 uses this to decide whether a place-read gets an
+    /// [`OwnershipFact::Copy`](crate::body_ir::OwnershipFact::Copy) decision outright, or needs a move/clone/borrow
+    /// refinement based on last-use analysis. Borrowed/MutBorrowed and Unknown are never trivially copy: a borrow
+    /// still needs its own explicit reference decision, and an unknown ownership category must not be silently
+    /// treated as copyable.
+    pub const fn is_trivially_copy(self) -> bool {
+        matches!(self, Self::CopyOrTrivial)
+    }
+}
+
 /// Runtime service hooks that a type may require.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbiV0RuntimeRequirement {
