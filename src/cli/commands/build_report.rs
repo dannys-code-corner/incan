@@ -11,6 +11,7 @@ use clap::ValueEnum;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::backend::selection::BackendExecutionReceipt;
 use crate::cli::{CliError, CliResult};
 use crate::dependency_resolver::InlineRustImport;
 use crate::manifest::{DependencySource, DependencySpec, GitReference, LibraryDependencySpec};
@@ -264,6 +265,10 @@ pub struct BuildReport {
     /// Compiler-owned workspace identity when this build was selected as part of an RFC 077 member scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<BuildWorkspaceContext>,
+    /// Backend-selection identity and execution receipt for this build (#986). Absent for reports
+    /// reconstructed from a completed Oven output cache hit that predates this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<BackendExecutionReceipt>,
 }
 
 /// Workspace identity attached to an individual member's build report.
@@ -300,6 +305,8 @@ pub struct BuildReportDraft {
     pub oven: Option<BuildOvenReport>,
     pub interop: BuildInteropReport,
     pub notes: Vec<String>,
+    /// Backend-selection identity and execution receipt for this build (#986).
+    pub backend: Option<BackendExecutionReceipt>,
 }
 
 impl BuildReportDraft {
@@ -325,6 +332,7 @@ impl BuildReportDraft {
             timings_ms,
             notes: self.notes,
             workspace: None,
+            backend: self.backend,
         }
     }
 }

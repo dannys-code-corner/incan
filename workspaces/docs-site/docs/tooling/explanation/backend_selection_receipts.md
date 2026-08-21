@@ -1,0 +1,45 @@
+# Backend selection & execution receipts
+
+The v0.6 replacement-backend cutover ([#652](https://github.com/encero-systems/incan/issues/652)) introduces a second compiler backend: the Body IR replacement backend tracked by [#653](https://github.com/encero-systems/incan/issues/653), alongside the current Rust-source-emission backend (`IrCodegen`, `src/backend/ir/`) that this document calls the legacy backend. Until the replacement backend lands, a build must still be able to declare which backend it intends to use, record which backend it actually ran, and refuse visibly rather than quietly falling back to legacy when the requested backend cannot execute. `src/backend/selection.rs` (#986) is the compiler-owned boundary that makes that possible.
+
+This is a different axis from Oven's own receipt, described in [Oven Alpha](oven_alpha.md): Oven's receipt selects how an already-generated artifact is compiled (its legacy-Cargo-vs-direct-`rustc` build boundary), and never influences which compiler backend produced that artifact in the first place. The two receipts are complementary and travel together: a build first declares and executes a backend selection, then hands the resulting generated source to Oven for compilation.
+
+## The two records
+
+**`BackendSelection`** is a versioned, content-identified record of what was decided *before* execution: the requested backend, its implementation revision, the compatibility profile it declares for this compilation, a content identity of the source being compiled, why that backend was selected (the compiler-owned default, or an explicit `--backend` request), and the declared fallback policy. It is built by `select_backend` before any codegen starts.
+
+**`BackendExecutionReceipt`** is a versioned, content-identified record of what actually happened *after* execution: the backend that actually ran, whether a declared fallback occurred, the shadow-comparison outcome (always present and explicit, even when the comparison could not run), the diagnostic-contract version in force, and a content identity of the produced output. It embeds the `BackendSelection` it is bound to.
+
+Both types are plain, I/O-free data — building and executing them does not touch `IrCodegen` or any other execution machinery directly. Both carry a content-derived `sha256:` identity, verified with `verify_identity()`, the same pattern Oven's own receipt uses: a later stage that only holds a serialized copy does not need to re-derive trust from the fields themselves.
+
+## No silent fallback
+
+Every real `incan build` records a selection and a receipt, including the default path: selecting the legacy backend with no flags still produces an explicit `selection_reason: "default"` record rather than an implicit, unrecorded choice.
+
+Requesting the replacement backend today always produces a visible outcome, never a silent legacy execution:
+
+- With the default fallback policy (`refuse`), the build stops immediately — before any codegen or Oven work — with a typed refusal naming the unavailable backend. No receipt is written for a refused build: there is no code path in `src/backend/selection.rs` that can turn a refusal into a receipt, so a refused build cannot be mistaken for a green replacement-backend result.
+- With an explicit fallback policy (`--backend-fallback legacy`), the build proceeds through the fallback backend, prints `⚠ backend fallback: ...` to stderr, and records `fallback_outcome: {"declared": {"from": "replacement", "to": "legacy"}}` in the receipt. The substitution is always visible in both the terminal and the machine-readable record.
+
+A `--shadow` comparison request is recorded the same way: since the replacement backend is not implemented yet, the receipt's `shadow_comparison` is `{"unavailable": {"reason": "..."}}` rather than silently reporting `"not_requested"`.
+
+## CLI surface
+
+`incan build` accepts three flags:
+
+- `--backend <legacy|replacement>` — declare the backend for this build. Defaults to `legacy`.
+- `--backend-fallback <legacy|replacement>` — declare what to do if `--backend` cannot execute. Omitting this flag means refuse.
+- `--shadow` — request a comparison against the replacement backend alongside normal execution.
+
+A successful build publishes its receipt to `.incan/backend/receipt.json` in the project root (parallel to Oven's own `.incan/oven/receipt.json`), and embeds it as the `backend` field of `incan build --report json` output. Inspect a persisted receipt directly with:
+
+```bash
+incan inspect backend-selection --receipt .incan/backend/receipt.json
+incan inspect backend-selection --receipt .incan/backend/receipt.json --format json
+```
+
+`inspect backend-selection` reads the receipt, calls `verify_identity()` on it (and, transitively, on the selection it embeds), and refuses to render a receipt whose recorded identity does not match its own content — the same tamper/staleness detection Oven's `inspect oven` performs on its receipt.
+
+## Provenance for Oven and other clients
+
+Oven and other clients can key provenance on the pre-execution `BackendSelection.identity` and attach the post-execution `BackendExecutionReceipt` to their own outputs, without reading private HIR or Body IR structures: the receipt is a public, versioned projection of "what backend produced this," independent of how either backend represents a program internally. `diagnostic_contract_version` on the receipt ties it to the diagnostics schema (`crates/incan_syntax/src/diagnostics/stable.rs::DIAGNOSTIC_SCHEMA_VERSION`) in force when it was produced, so a consumer can tell whether a receipt's diagnostics are still interpretable under its own contract version.

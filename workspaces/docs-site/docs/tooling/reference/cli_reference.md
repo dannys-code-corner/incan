@@ -34,7 +34,7 @@ Commands:
 
 ## Semantic inspection surfaces
 
-Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use `incan check --format json` for the stable diagnostic plane, `incan build --report json` for successful build and artifact metadata, `incan inspect rust --format json` for current generated Rust output, `incan inspect codegraph --format jsonl` for source-structure graph facts, `incan inspect providers --format json` for SDK component and provider participation, `incan inspect features --format json` for the additive package-feature graph, `incan inspect bindings --format json` for checked C declaration facts, `incan inspect bindings --format receipt` for redacted checked binding use, and `incan inspect interop-plan --format json` for one locked Oven interop platform handoff.
+Incan 0.5 extends the machine-readable inspection surfaces introduced in 0.4. Use `incan check --format json` for the stable diagnostic plane, `incan build --report json` for successful build and artifact metadata (including the `backend` field described below), `incan inspect backend-selection --format json` for a persisted backend-selection execution receipt, `incan inspect rust --format json` for current generated Rust output, `incan inspect codegraph --format jsonl` for source-structure graph facts, `incan inspect providers --format json` for SDK component and provider participation, `incan inspect features --format json` for the additive package-feature graph, `incan inspect bindings --format json` for checked C declaration facts, `incan inspect bindings --format receipt` for redacted checked binding use, and `incan inspect interop-plan --format json` for one locked Oven interop platform handoff.
 
 These commands are intentionally not a single full semantic database. They are stable public surfaces that tools can join without scraping terminal prose, generated Rust, or source text independently. When a fact appears in more than one surface, consumers should prefer compiler-owned identity fields, source paths, schema versions, and explicit degraded-state or diagnostic records over human output.
 
@@ -173,6 +173,9 @@ Dependency flags:
 - `--features`, `--no-default-features`, `--all-features`: Select public Incan package features for this build.
 - `--sdk-profile <PROFILE>`: Select a non-persistent SDK profile for this build.
 - `--release`: Explicitly request the release profile. This is the default for `incan build`.
+- `--backend <legacy|replacement>`: Declare the compiler backend for this build (#986). Defaults to `legacy`, declared explicitly even when the flag is omitted. `replacement` is the Body IR backend tracked by [#653](https://github.com/encero-systems/incan/issues/653) and is not implemented yet; requesting it fails visibly unless `--backend-fallback` is also given. See [Backend selection & execution receipts](../explanation/backend_selection_receipts.md).
+- `--backend-fallback <legacy|replacement>`: Allow the build to fall back to this backend if `--backend` cannot execute, recording the substitution explicitly instead of refusing.
+- `--shadow`: Request a shadow comparison against the replacement backend alongside normal execution. Recorded explicitly as unavailable until the replacement backend exists.
 - `--report json`: Emit a versioned machine-readable build report.
 - `--report-output <PATH>`: Write the build report to a file instead of stdout.
 - `--workspace`: Build every selected workspace member.
@@ -180,7 +183,9 @@ Dependency flags:
 
 Normal build, run, and test first select a compatible immutable full-stdlib Loaf from the active toolchain. A project outside that envelope selects its receipt-bound extension from `$INCAN_HOME/oven/store/v2`, or `~/.incan/oven/store/v2` when `INCAN_HOME` is unset, together with the exact base Loaf recorded by the extension. The plan selection key includes target, toolchain, profile, Incan runtime, dependency, feature, and provider inputs. The receipt remains source-strict, so a source change regenerates caller-owned source and receipt while a compatible project can reuse the same immutable base plus extension. `incan inspect oven --receipt PATH --format json` reports the receipt/build-unit identities, selection hit or miss with reason, and physical/logical/reclaimable/lease-protected storage.
 
-Build reports use `schema_version: 1` and describe the successful Oven build rather than restating terminal prose. They include source and generated paths, emitted artifacts, dependency and provider summaries, `oven.receipt_identity`, `oven.build_unit_identity`, `oven.plan_identity`, prepare/build/total elapsed time, and a note that no normal Cargo consumer ran.
+Build reports use `schema_version: 1` and describe the successful Oven build rather than restating terminal prose. They include source and generated paths, emitted artifacts, dependency and provider summaries, `oven.receipt_identity`, `oven.build_unit_identity`, `oven.plan_identity`, prepare/build/total elapsed time, a note that no normal Cargo consumer ran, and an optional `backend` field carrying the build's backend-selection execution receipt (#986) — present whenever the build actually executed a backend, absent when a report is reconstructed from a sealed cache hit that predates this field.
+
+A successful build also publishes that same receipt to `.incan/backend/receipt.json` in the project root, independent of `--report`. Inspect it with `incan inspect backend-selection --receipt .incan/backend/receipt.json`. See [Backend selection & execution receipts](../explanation/backend_selection_receipts.md).
 
 Environment defaults:
 
@@ -195,6 +200,7 @@ incan build src/main.incn --report json
 incan build src/main.incn --features json,http --sdk-profile minimal
 incan build --release
 incan build src/main.incn --report json --report-output target/build-report.json
+incan build src/main.incn --backend replacement --backend-fallback legacy
 ```
 
 ### `incan cache`
@@ -255,6 +261,23 @@ The internal release publisher is the sole Cargo-backed producer for supported O
 `interop bake` and `interop stage` are the separate v0.5 C-ABI publisher and handoff commands. They consume a current package lock, explicit compiler/SDK evidence, a sealed base plan, and declared package files to bake native archives or stage digest-verified bundled runtime files. They never invoke Cargo, Gradle, Xcode, signing, or physical devices.
 
 The default Oven store is `$INCAN_HOME/oven/store/v2`, or `~/.incan/oven/store/v2` when `INCAN_HOME` is unset. Its everyday-developer policy retains at most 8 GiB of aggregate physical allocation, with a 6 GiB physical and 3 GiB logical allowance per compatibility domain. The compiler-suite policy explicitly raises those limits to 16 GiB aggregate physical, 6 GiB domain physical, and 4 GiB domain logical. The aggregate allowance includes the previous committed Loaf generation while a replacement is staged, so an interrupted update does not require deleting the last valid generation. Physical allocation and logical artifact bytes—plan bytes plus copied manifest-declared files—are distinct report fields. `incan oven store inspect` also reports reclaimable and lease-protected physical allocation; `incan inspect oven --receipt PATH` adds the receipt/build-unit identity plus a `hit`, `miss`, or `ambiguous` selection reason. Environment overrides use whole-byte values: `INCAN_OVEN_MAX_PHYSICAL_BYTES`, `INCAN_OVEN_MAX_DOMAIN_PHYSICAL_BYTES`, and `INCAN_OVEN_MAX_DOMAIN_LOGICAL_BYTES`. Publication is fail-closed when a single domain exceeds its allowance or active leases prevent safe reclamation. See [Oven Alpha](../explanation/oven_alpha.md) for the compatibility envelope, artifact-plan schema boundary, and exclusions.
+
+### `incan inspect backend-selection`
+
+Usage:
+
+```text
+incan inspect backend-selection --receipt PATH [--format text|json]
+```
+
+Reads, verifies, and renders one persisted backend-selection execution receipt (#986), normally `.incan/backend/receipt.json` written by a successful `incan build`. Verification calls `BackendExecutionReceipt::verify_identity`, which recomputes the receipt's content identity and the selection identity it embeds; a receipt whose recorded identity does not match its own content — tampered, hand-edited, or stale — is refused rather than rendered. `--format text` prints the selected/executed backend, selection reason, fallback policy and outcome, shadow-comparison state, compiler version, and both content identities; `--format json` prints the full receipt. See [Backend selection & execution receipts](../explanation/backend_selection_receipts.md).
+
+Examples:
+
+```bash
+incan inspect backend-selection --receipt .incan/backend/receipt.json
+incan inspect backend-selection --receipt .incan/backend/receipt.json --format json
+```
 
 ### `incan inspect rust`
 
