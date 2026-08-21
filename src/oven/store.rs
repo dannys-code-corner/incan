@@ -1174,9 +1174,7 @@ impl OvenStore {
             source,
         })?;
         self.reclaim_stale_staging()?;
-        let superseded = self.reclaim_superseded_release_entries(&active_release_domain(), true)?;
-        let retained = self.prune_to_limits(None, 0, 0, true)?;
-        Ok(merge_prune_reports(superseded, retained))
+        self.prune_with_superseded_release_reclamation(true)
     }
 
     /// Preview the inactive entries policy would reclaim without removing any entry or staging data.
@@ -1190,9 +1188,7 @@ impl OvenStore {
             path: self.root.join(MANAGER_LOCK_FILE),
             source,
         })?;
-        let superseded = self.reclaim_superseded_release_entries(&active_release_domain(), false)?;
-        let retained = self.prune_to_limits(None, 0, 0, false)?;
-        Ok(merge_prune_reports(superseded, retained))
+        self.prune_with_superseded_release_reclamation(false)
     }
 
     /// Reserve the remaining aggregate and compatibility-domain allowance for the explicit compatibility baker.
@@ -1222,7 +1218,9 @@ impl OvenStore {
         // Entries sealed by a superseded compiler release can never be reused, so they are removed before the
         // remaining allowance is measured. Without this a store that merely fits its retention policy can still
         // starve a large build of transient staging space with bytes nothing will ever read again.
-        self.reclaim_superseded_release_entries(domain, true)?;
+        if self.holds_superseded_release_entry(domain)? {
+            self.reclaim_superseded_release_entries(domain, true)?;
+        }
         // A reservation is not itself evidence that an existing immutable entry is obsolete. Keep every entry that
         // already fits policy so a debug/release sibling or a second project can reuse it; the measured hand-off
         // below is where the actual pending closure is admitted and any necessary inactive reclamation occurs.
@@ -1543,6 +1541,55 @@ impl OvenStore {
             removed_entries,
             skipped_active_entries,
         })
+    }
+
+    /// Reclaim superseded releases, then prune what retention policy still requires.
+    ///
+    /// Both passes run under one manager lock and are reported as a single reclamation. The superseded pass is skipped
+    /// entirely when nothing qualifies, so an ordinary store pays for one measurement pass rather than two.
+    fn prune_with_superseded_release_reclamation(&self, apply: bool) -> Result<OvenStorePruneReport, OvenStoreError> {
+        let active = active_release_domain();
+        if !self.holds_superseded_release_entry(&active)? {
+            return self.prune_to_limits(None, 0, 0, apply);
+        }
+        let superseded = self.reclaim_superseded_release_entries(&active, apply)?;
+        let retained = self.prune_to_limits(None, 0, 0, apply)?;
+        Ok(merge_prune_reports(superseded, retained))
+    }
+
+    /// Return whether any immutable entry belongs to a compiler release other than the active one.
+    ///
+    /// Reading manifests is far cheaper than admission measurement, which walks every file in every entry to compute
+    /// physical allocation. A store holding only the active release — the common case on every bake — would otherwise
+    /// pay for a second full measurement pass just to discover there is nothing to reclaim.
+    fn holds_superseded_release_entry(&self, active_domain: &str) -> Result<bool, OvenStoreError> {
+        let root = self.entries_root();
+        if !root.exists() {
+            return Ok(false);
+        }
+        for candidate in fs::read_dir(&root).map_err(|source| OvenStoreError::Io {
+            path: root.clone(),
+            source,
+        })? {
+            let path = candidate
+                .map_err(|source| OvenStoreError::Io {
+                    path: root.clone(),
+                    source,
+                })?
+                .path();
+            if !path.is_dir() {
+                continue;
+            }
+            // A malformed or half-written entry is not this probe's problem to report: the reclamation and admission
+            // paths below own that judgement, and failing here would turn an optimization into a new failure mode.
+            let Ok(manifest) = verify_entry_manifest(&path) else {
+                continue;
+            };
+            if is_superseded_release_domain(&manifest.domain, active_domain) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Remove immutable entries sealed for a compiler release other than the active one.
