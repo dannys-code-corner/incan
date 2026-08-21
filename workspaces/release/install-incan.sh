@@ -305,6 +305,32 @@ install_rustup() {
 #
 # `RUSTUP_TOOLCHAIN` (and a directory `rust-toolchain` override) outrank a home's default, so leaving either in
 # place would make rustup look inside Incan's home for a toolchain the user selected globally, which is not there.
+# Make `rust-lld` loadable when its toolchain ships LLVM as a dylib it cannot find.
+#
+# Rust 1.98.0 for aarch64-apple-darwin links `rust-lld` against `libLLVM.dylib` with an `@rpath` that resolves to
+# `lib/rustlib/<target>/lib/`, but ships the dylib only in the toolchain's own `lib/`. Nothing then links for a target
+# that uses `rust-lld` -- on Incan that is the `wasm32-wasip1` vocab companion, which fails with
+# "Library not loaded: @rpath/libLLVM.dylib". Neighbouring releases are unaffected: earlier ones link LLVM statically
+# and nightly ships the dylib in both locations.
+#
+# Linking the shipped dylib into the location its own rpath names is the smallest repair, and it is confined to the
+# Incan-owned toolchain. It is a no-op wherever the file is already present or LLVM is static, so it needs no version
+# test and will simply stop applying once upstream ships the copy.
+repair_rust_lld_llvm_rpath() {
+  channel="$1"
+  toolchain_root="$(incan_rustup which --toolchain "$channel" rustc 2>/dev/null)" || return 0
+  toolchain_root="$(dirname "$(dirname "$toolchain_root")")"
+  [ -d "$toolchain_root" ] || return 0
+  source_lib="${toolchain_root}/lib/libLLVM.dylib"
+  [ -f "$source_lib" ] || return 0
+  for target_lib_dir in "${toolchain_root}"/lib/rustlib/*/lib; do
+    [ -d "$target_lib_dir" ] || continue
+    [ -x "$(dirname "$target_lib_dir")/bin/rust-lld" ] || continue
+    [ -e "${target_lib_dir}/libLLVM.dylib" ] && continue
+    ln -sf "$source_lib" "${target_lib_dir}/libLLVM.dylib" 2>/dev/null || true
+  done
+}
+
 incan_rustup() {
   env -u RUSTUP_TOOLCHAIN RUSTUP_HOME="$incan_rustup_home" rustup "$@"
 }
@@ -362,6 +388,8 @@ ensure_rust_backend() {
   done <<RUST_TARGETS
 $(json_rust_targets "$manifest_file")
 RUST_TARGETS
+
+  repair_rust_lld_llvm_rpath "$channel"
 
   # Incan deliberately leaves the machine without a default toolchain when it installed rustup itself, so nothing
   # is downloaded twice and no default is chosen on the user's behalf. Say so, and how to pick one.
