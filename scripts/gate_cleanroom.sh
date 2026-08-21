@@ -104,7 +104,17 @@ echo "== Verifying the installed toolchain =="
 incan --version
 
 if [ -n "${install_rust}" ]; then
-  echo "   machine default is still: \$(rustc --version)"
+  # Assert, do not merely report. The whole point of this scenario is that installing Incan leaves a machine's
+  # existing Rust alone; printing the version proves nothing, because the gate passes either way.
+  machine_default="\$(rustc --version)"
+  echo "   machine default is still: \$machine_default"
+  case "\$machine_default" in
+    *"${install_rust}"*) ;;
+    *)
+      echo "   FAIL: installing Incan changed the machine default away from ${install_rust}: \$machine_default" >&2
+      exit 1
+      ;;
+  esac
 fi
 if [ -d "\$HOME/.incan/rust/toolchains" ]; then
   echo "   Incan-owned toolchain: \$(ls "\$HOME/.incan/rust/toolchains")"
