@@ -1887,7 +1887,11 @@ fn semantic_type_from_function_binding(binding: &FunctionBindingInfo) -> IncanTy
 }
 
 /// Convert the current typechecker type universe into the backend-neutral Incan semantic type model.
-fn semantic_type_from_resolved(ty: &ResolvedType) -> IncanType {
+///
+/// `pub(crate)` rather than private: `src/frontend/body_ir.rs` (Body IR v0's HIR/AST-to-Body-IR lowering) reuses this
+/// mapping for local/operand types instead of duplicating it, so both HIR's type facts and Body IR's locals stay on
+/// the same `ResolvedType -> IncanType` conversion as the typechecker's type universe evolves.
+pub(crate) fn semantic_type_from_resolved(ty: &ResolvedType) -> IncanType {
     match ty {
         ResolvedType::Never => IncanType::Never,
         ResolvedType::Int => IncanType::Primitive(IncanPrimitiveType::Int),

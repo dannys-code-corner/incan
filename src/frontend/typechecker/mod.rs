@@ -54,7 +54,6 @@ mod type_info;
 mod validate_rust_module;
 
 pub use const_eval::ConstValue;
-pub(crate) use type_info::ClassFieldDefaultInfo;
 pub use type_info::{
     CAbiInteropArtifacts, CAbiOutputSlot, CAbiSpan, CAbiSpanAccess, CAbiSpanAccessKind, CAbiSpanKind, CBindingBuffer,
     CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingFacade, CBindingFunctionCall, CBindingOutcome,
@@ -68,6 +67,7 @@ pub use type_info::{
     ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode, ValidatedNewtypeCoercionStep,
     c_binding_descriptor_identity,
 };
+pub(crate) use type_info::{ClassFieldDefaultInfo, semantic_type_from_resolved};
 #[cfg(test)]
 mod tests;
 
