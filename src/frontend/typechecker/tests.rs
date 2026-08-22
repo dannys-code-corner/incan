@@ -21530,15 +21530,9 @@ fn unreachable_warnings(source: &str, context: &str) -> Vec<CompileError> {
 
 /// Assert `source` produces exactly one unreachable-code warning and return it.
 fn single_unreachable_warning(source: &str, context: &str) -> CompileError {
-    let warnings = unreachable_warnings(source, context);
-    assert_eq!(
-        warnings.len(),
-        1,
-        "{context}: expected exactly one unreachable-code warning, got: {warnings:?}"
-    );
-    match warnings.into_iter().next() {
-        Some(warning) => warning,
-        None => unreachable!("length was asserted above"),
+    match unreachable_warnings(source, context).as_slice() {
+        [warning] => warning.clone(),
+        other => panic!("{context}: expected exactly one unreachable-code warning, got: {other:?}"),
     }
 }
 

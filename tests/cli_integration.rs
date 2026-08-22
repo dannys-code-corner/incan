@@ -3389,14 +3389,16 @@ def main() -> None:
     let check = run_incan(tmp.path(), &["check", main_arg, "--format", "json"])?;
     assert_success(&check, "incan check --format json semantic inspection fixture");
     let check_json = parse_json_stdout(&check)?;
-    assert_eq!(check_json["schema_version"], serde_json::json!(1));
+    assert_eq!(check_json["schema_version"], serde_json::json!(2));
     assert_eq!(check_json["ok"], serde_json::json!(true));
     assert_eq!(check_json["diagnostics"], serde_json::json!([]));
 
     let build = run_incan(tmp.path(), &["build", main_arg, "--offline", "--report", "json"])?;
     assert_success(&build, "incan build --report json semantic inspection fixture");
     let build_json = parse_json_stdout(&build)?;
-    assert_eq!(build_json["schema_version"], check_json["schema_version"]);
+    // Each report is independently versioned; this test asserts shared *project identity*, not a shared schema
+    // number. The check report moved to v2 when it began carrying warnings, while build reports stayed at v1.
+    assert_eq!(build_json["schema_version"], serde_json::json!(1));
     assert_eq!(build_json["project"]["name"], serde_json::json!("semantic_probe"));
     assert_source_files_include(&build_json, &["src/main.incn", "src/helpers.incn"])?;
 
@@ -4119,7 +4121,7 @@ fn check_json_reports_parser_diagnostics() -> Result<(), Box<dyn std::error::Err
     )?;
     assert_failure(&output, "incan check --format json parser diagnostic");
     let json = parse_json_stdout(&output)?;
-    assert_eq!(json["schema_version"], serde_json::json!(1));
+    assert_eq!(json["schema_version"], serde_json::json!(2));
     assert_eq!(json["ok"], serde_json::json!(false));
     assert_eq!(json["diagnostics"][0]["code"], serde_json::json!("INCAN-P0001"));
     assert_eq!(json["diagnostics"][0]["phase"], serde_json::json!("parse"));
@@ -11733,5 +11735,131 @@ fn build_frozen_uses_existing_lockfile_without_network() -> Result<(), Box<dyn s
         stdout.contains("Oven build successful"),
         "frozen build should complete with the existing lockfile, got:\n{stdout}"
     );
+    Ok(())
+}
+
+/// Non-fatal warnings must reach `incan check --format json`, not only stderr (#1117).
+///
+/// Covers both warning classes deliberately: the parser's RFC 005 dot-notation nudge and the typechecker's
+/// unreachable-code warning. A fix that threaded only typechecker warnings would leave the README's "stable
+/// diagnostics" surface half-true, so the parser case is a first-class assertion here rather than an afterthought.
+#[test]
+fn check_json_reports_parser_and_typechecker_warnings_without_failing() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+
+    // ---- Typechecker warning: unreachable code after `return` ----
+    let typecheck_path = tmp.path().join("typecheck_warning.incn");
+    fs::write(
+        &typecheck_path,
+        r#"def f() -> int:
+    return 1
+    println("dead code")
+
+def main() -> None:
+    println(f"{f()}")
+"#,
+    )?;
+    let typecheck_arg = typecheck_path.to_str().ok_or("path was not valid UTF-8")?;
+    let typecheck = run_incan(tmp.path(), &["check", typecheck_arg, "--format", "json"])?;
+    assert_success(&typecheck, "a warning must not fail `incan check`");
+    let typecheck_json = parse_json_stdout(&typecheck)?;
+
+    assert_eq!(typecheck_json["schema_version"], serde_json::json!(2));
+    assert_eq!(
+        typecheck_json["ok"],
+        serde_json::json!(true),
+        "`ok` reports the absence of errors, so warnings must not clear it"
+    );
+    assert_eq!(
+        typecheck_json["diagnostics"][0]["code"],
+        serde_json::json!("INCAN-T0101")
+    );
+    assert_eq!(
+        typecheck_json["diagnostics"][0]["severity"],
+        serde_json::json!("warning")
+    );
+    assert_eq!(
+        typecheck_json["diagnostics"][0]["phase"],
+        serde_json::json!("typecheck")
+    );
+    assert_eq!(
+        typecheck_json["diagnostics"][0]["origin"],
+        serde_json::json!("typechecker")
+    );
+
+    // ---- Parser warning: RFC 005 `import rust.crate` dot-notation ----
+    let parse_path = tmp.path().join("parse_warning.incn");
+    fs::write(
+        &parse_path,
+        r#"import rust.chrono
+
+def main() -> None:
+    println("parser warning")
+"#,
+    )?;
+    let parse_arg = parse_path.to_str().ok_or("path was not valid UTF-8")?;
+    let parse = run_incan(tmp.path(), &["check", parse_arg, "--format", "json"])?;
+    assert_success(&parse, "a parser warning must not fail `incan check`");
+    let parse_json = parse_json_stdout(&parse)?;
+
+    assert_eq!(parse_json["schema_version"], serde_json::json!(2));
+    assert_eq!(parse_json["ok"], serde_json::json!(true));
+    assert_eq!(parse_json["diagnostics"][0]["severity"], serde_json::json!("warning"));
+    assert_eq!(parse_json["diagnostics"][0]["phase"], serde_json::json!("parse"));
+    assert_eq!(parse_json["diagnostics"][0]["origin"], serde_json::json!("parser"));
+
+    Ok(())
+}
+
+/// A file with both a warning and an error must report both in JSON, not just the error (#1117).
+///
+/// Warnings ride a separate field on the failure envelope precisely so this case works: folding them into the
+/// error list would print them to stderr a second time, and dropping them would mean the same warning is visible
+/// when a file compiles and invisible the moment anything else in it fails.
+#[test]
+fn check_json_reports_warnings_alongside_errors_when_typechecking_fails() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("mixed.incn");
+    fs::write(
+        &path,
+        r#"def f() -> int:
+    return 1
+    println("dead code")
+
+def main() -> None:
+    _ = undefined_symbol
+"#,
+    )?;
+
+    let arg = path.to_str().ok_or("path was not valid UTF-8")?;
+    let output = run_incan(tmp.path(), &["check", arg, "--format", "json"])?;
+    assert_failure(&output, "an undefined symbol must still fail `incan check`");
+    let report = parse_json_stdout(&output)?;
+
+    assert_eq!(report["schema_version"], serde_json::json!(2));
+    assert_eq!(report["ok"], serde_json::json!(false), "an error must clear `ok`");
+
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .ok_or("check report had no diagnostics array")?;
+    let severities: Vec<&str> = diagnostics
+        .iter()
+        .filter_map(|diagnostic| diagnostic["severity"].as_str())
+        .collect();
+    assert!(
+        severities.contains(&"error"),
+        "expected the undefined-symbol error to be reported, got: {severities:?}"
+    );
+    assert!(
+        severities.contains(&"warning"),
+        "expected the unreachable-code warning to survive the failure, got: {severities:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == serde_json::json!("INCAN-T0101")),
+        "expected INCAN-T0101 in the failing report, got: {diagnostics:?}"
+    );
+
     Ok(())
 }

@@ -34,7 +34,7 @@ use crate::manifest::ProjectManifest;
 
 use super::common::{
     CompilationSession, collect_modules, collect_modules_detailed_with_session, discover_effective_project_manifest,
-    imported_module_deps_for_with_index, module_key_index, resolve_project_root,
+    imported_module_deps_for_with_index, module_key_index, render_module_warnings, resolve_project_root,
 };
 
 /// Output format for `incan tools doctor`.
@@ -865,12 +865,11 @@ fn collect_api_metadata_package(path: &Path) -> CliResult<CheckedApiMetadataPack
 
         match checker.check_with_imports(&module.ast, &deps_for_module) {
             Ok(()) => {
-                for warn in checker.warnings() {
-                    eprint!(
-                        "{}",
-                        diagnostics::format_error(module.file_path.to_string_lossy().as_ref(), &module.source, warn)
-                    );
-                }
+                render_module_warnings(
+                    module.file_path.to_string_lossy().as_ref(),
+                    &module.source,
+                    checker.warnings(),
+                );
                 metadata_modules.push(collect_checked_api_metadata(
                     &module.ast,
                     &checker,
