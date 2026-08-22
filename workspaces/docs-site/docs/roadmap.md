@@ -121,6 +121,8 @@ Core tracking issues:
 - [RFC 107](RFCs/107_type_directed_library_apis.md): type-directed library APIs and compile-time type tokens.
 - [RFC 095](RFCs/095_span_vocabulary_blocks.md): span vocabulary blocks.
 
+[Read the 0.6 development release note](release_notes/0_6.md)
+
 ### 0.7 Release: feature reopening
 
 The 0.7 milestone is the broader feature reopening lane after the backend replacement is complete. This is where deferred language, package, registry, lifecycle, interop, docs-generation, editor, and product-surface work can resume.
