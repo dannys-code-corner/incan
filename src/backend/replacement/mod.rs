@@ -9,6 +9,10 @@
 
 use std::collections::BTreeMap;
 
+use incan_core::{
+    lang::surface::constructors::{ConstructorId, as_str as constructor_name},
+    python_floor_div_i64, python_mod_i64,
+};
 use incan_semantics_core::body_ir::{
     BinOp, Body, BodyIrModule, Callee, Constant, HelperOp, IterProtocol, LocalId, LocalOrigin, Operand, OwnershipFact,
     Place, Rvalue, Statement, StatementKind, UnOp,
@@ -37,25 +41,19 @@ pub enum ReplacementValue {
     Float(String),
     /// An Incan `None`/unit value.
     Unit,
-    /// A list retained only long enough to make a subsequent projection refusal attributable to that projection.
-    List(Vec<ReplacementValue>),
     /// A normalized builtin range iterator for the selected range-`for` control-flow case.
     Range { next: i64, end: i64, step: i64 },
 }
 
 impl ReplacementValue {
-    /// Render a deterministic source-observable result spelling for receipts and legacy runtime comparison.
+    /// Render a deterministic source-observable result spelling for replacement receipts and CLI output.
     pub fn observable_text(&self) -> String {
         match self {
             Self::Int(value) => value.to_string(),
             Self::Bool(value) => value.to_string(),
             Self::Str(value) => value.clone(),
             Self::Float(value) => value.clone(),
-            Self::Unit => "None".to_string(),
-            Self::List(values) => {
-                let items = values.iter().map(Self::observable_text).collect::<Vec<_>>();
-                format!("[{}]", items.join(", "))
-            }
+            Self::Unit => constructor_name(ConstructorId::None).to_string(),
             Self::Range { next, end, step } => format!("range({next}, {end}, {step})"),
         }
     }
@@ -72,6 +70,31 @@ pub struct OwnershipRead {
     pub last_use: bool,
 }
 
+/// Canonical, machine-readable rendering of one ownership read used in a replacement receipt.
+///
+/// This projection deliberately uses stable source offsets and fact labels rather than Rust `Debug` output, so
+/// receipt identities and CLI reports remain stable when implementation-only derives or field formatting change.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OwnershipReadProjection {
+    /// Original Incan source span start byte offset.
+    pub span_start: usize,
+    /// Original Incan source span end byte offset.
+    pub span_end: usize,
+    /// Stable compiler-owned ownership fact label.
+    pub fact: &'static str,
+    /// Whether lowering marked this source read as its local's last use.
+    pub last_use: bool,
+}
+
+/// Canonical, machine-readable rendering of one Body-IR runtime requirement used in a replacement receipt.
+///
+/// `requirement` is a stable semantic label, not the Rust `Debug` representation of the internal enum.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RuntimeRequirementProjection {
+    /// Stable semantic label for the runtime requirement.
+    pub requirement: String,
+}
+
 /// Successful replacement execution evidence for one free function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplacementExecution {
@@ -85,6 +108,31 @@ pub struct ReplacementExecution {
     pub runtime_requirements: Vec<AbiV0RuntimeRequirement>,
     /// Content identity of the actual Body-IR snapshot, ownership facts, requirements, and observed result.
     pub output_identity: String,
+}
+
+/// A free-function execution that has passed the bounded #988 profile validator.
+///
+/// The capability retains the exact typed Body IR, source-level function name, and concrete arguments that were
+/// validated. It lets selection/receipt code decide whether direct execution may proceed without rerunning profile
+/// validation or allowing an unvalidated Body IR body to reach the executor.
+pub struct ValidatedFreeFunctionExecution<'module, 'args> {
+    module: &'module BodyIrModule,
+    name: String,
+    args: &'args [ReplacementValue],
+}
+
+impl ReplacementExecution {
+    /// Return the stable ownership evidence bound into this execution's output identity and CLI report.
+    #[must_use]
+    pub fn ownership_evidence(&self) -> Vec<OwnershipReadProjection> {
+        ownership_read_projection(&self.ownership_reads)
+    }
+
+    /// Return the stable runtime-requirement evidence bound into this execution's output identity and CLI report.
+    #[must_use]
+    pub fn runtime_requirement_evidence(&self) -> Vec<RuntimeRequirementProjection> {
+        runtime_requirement_projection(&self.runtime_requirements)
+    }
 }
 
 /// A visible refusal or runtime outcome from the replacement executor.
@@ -135,6 +183,21 @@ pub enum ReplacementExecutionError {
 }
 
 impl ReplacementExecutionError {
+    /// Construct a typed, source-span-preserving refusal for an unsupported source-profile boundary.
+    #[must_use]
+    pub fn unsupported_profile(description: impl Into<String>, span: HirSourceSpan) -> Self {
+        unsupported(description, span)
+    }
+
+    /// Return the stable diagnostic code for this replacement outcome.
+    pub const fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::MissingFunction { .. } | Self::ArgumentCount { .. } => "INCAN-R988-ENTRYPOINT",
+            Self::Unsupported { .. } => "INCAN-R988-UNSUPPORTED",
+            Self::RuntimeFailure { .. } => "INCAN-R988-RUNTIME",
+        }
+    }
+
     /// Return the original Incan source location when this outcome arose from Body IR.
     pub const fn primary_span(&self) -> Option<HirSourceSpan> {
         match self {
@@ -142,6 +205,37 @@ impl ReplacementExecutionError {
             Self::MissingFunction { .. } | Self::ArgumentCount { .. } => None,
         }
     }
+}
+
+/// Validate and prepare one Body-IR free function for later direct execution.
+///
+/// This side-effect-free boundary lets callers route availability through #986 selection and receipt logic before
+/// committing to execution. Only [`execute_prevalidated_free_function`] can consume the returned capability.
+pub fn prepare_free_function_execution<'module, 'args>(
+    module: &'module BodyIrModule,
+    name: &str,
+    args: &'args [ReplacementValue],
+) -> Result<ValidatedFreeFunctionExecution<'module, 'args>, ReplacementExecutionError> {
+    let body = named_free_function(module, name)?;
+    validate_single_function_module(module, name)?;
+    if body.is_generator() {
+        return Err(unsupported("generator body", body.span));
+    }
+    if body.param_locals.len() != args.len() {
+        return Err(ReplacementExecutionError::ArgumentCount {
+            name: name.to_string(),
+            expected: body.param_locals.len(),
+            actual: args.len(),
+        });
+    }
+    validate_scalar_arguments(args, body.span)?;
+    validate_binding_identity(body)?;
+    validate_block_profile(&body.block)?;
+    Ok(ValidatedFreeFunctionExecution {
+        module,
+        name: name.to_string(),
+        args,
+    })
 }
 
 /// Execute one named, free-function Body IR body with concrete scalar arguments.
@@ -153,39 +247,35 @@ pub fn execute_free_function(
     name: &str,
     args: &[ReplacementValue],
 ) -> Result<ReplacementExecution, ReplacementExecutionError> {
-    let body = module
-        .bodies
-        .iter()
-        .find(|body| body.name == name)
-        .ok_or_else(|| ReplacementExecutionError::MissingFunction { name: name.to_string() })?;
-    if body.is_generator() {
-        return Err(unsupported("generator body", body.span));
-    }
-    if body.param_locals.len() != args.len() {
-        return Err(ReplacementExecutionError::ArgumentCount {
-            name: name.to_string(),
-            expected: body.param_locals.len(),
-            actual: args.len(),
-        });
-    }
+    let execution = prepare_free_function_execution(module, name, args)?;
+    execute_prevalidated_free_function(execution)
+}
 
-    let mut executor = BodyExecutor::new(body, args);
+/// Execute one free function that has already passed [`prepare_free_function_execution`].
+///
+/// This consumes the validated capability, preserving the rule that callers select the source profile before the
+/// direct Body-IR executor observes a result.
+pub fn execute_prevalidated_free_function(
+    execution: ValidatedFreeFunctionExecution<'_, '_>,
+) -> Result<ReplacementExecution, ReplacementExecutionError> {
+    let body = named_free_function(execution.module, &execution.name)?;
+
+    let mut executor = BodyExecutor::new(body, execution.args);
     let flow = executor.execute_block(&body.block)?;
     let value = match flow {
-        Flow::Return(value) => value.unwrap_or(ReplacementValue::Unit),
+        Flow::Return(value) => match value {
+            Some(value) => value,
+            None => ReplacementValue::Unit,
+        },
         Flow::Next => ReplacementValue::Unit,
         Flow::Break | Flow::Continue => {
             return Err(unsupported("loop control outside a normalized loop", body.span));
         }
     };
+    ensure_scalar_result(&value, body.span)?;
     let body_snapshot = body.render_snapshot();
-    let ownership_summary = executor
-        .ownership_reads
-        .iter()
-        .map(|read| format!("{}:{}:{}", read.span.start, ownership_label(read.fact), read.last_use))
-        .collect::<Vec<_>>()
-        .join("|");
-    let requirements_summary = format!("{:?}", body.runtime_requirements);
+    let ownership_summary = canonical_ownership_summary(&executor.ownership_reads);
+    let requirements_summary = canonical_runtime_requirements_summary(&body.runtime_requirements);
     let output_identity = digest_output(&[
         body_snapshot.as_str(),
         value.observable_text().as_str(),
@@ -201,10 +291,194 @@ pub fn execute_free_function(
     })
 }
 
+/// Locate the requested free-function body without inventing a fallback entrypoint.
+fn named_free_function<'a>(module: &'a BodyIrModule, name: &str) -> Result<&'a Body, ReplacementExecutionError> {
+    module
+        .bodies
+        .iter()
+        .find(|body| body.name == name)
+        .ok_or_else(|| ReplacementExecutionError::MissingFunction { name: name.to_string() })
+}
+
+/// Reject any additional free function because this first CLI profile admits exactly one selected entrypoint body.
+fn validate_single_function_module(module: &BodyIrModule, name: &str) -> Result<(), ReplacementExecutionError> {
+    if let Some(extra) = module.bodies.iter().find(|body| body.name != name) {
+        return Err(unsupported(
+            format!(
+                "additional free function `{}` outside the selected replacement entrypoint",
+                extra.name
+            ),
+            extra.span,
+        ));
+    }
+    Ok(())
+}
+
+/// Reject non-scalar direct API arguments before they can widen the first replacement profile.
+fn validate_scalar_arguments(args: &[ReplacementValue], span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
+    for argument in args {
+        if !matches!(
+            argument,
+            ReplacementValue::Int(_) | ReplacementValue::Bool(_) | ReplacementValue::Str(_) | ReplacementValue::Unit
+        ) {
+            return Err(unsupported(
+                format!("{} argument in the scalar replacement profile", value_kind(argument)),
+                span,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Reject repeated user-binding spellings because Body IR v0 cannot distinguish shadowing from reassignment safely.
+fn validate_binding_identity(body: &Body) -> Result<(), ReplacementExecutionError> {
+    let mut declared = BTreeMap::new();
+    for local in &body.locals {
+        if !matches!(local.origin, LocalOrigin::Parameter | LocalOrigin::UserBinding) {
+            continue;
+        }
+        let Some(name) = local.name.as_deref() else {
+            continue;
+        };
+        if declared.insert(name, local.span).is_some() {
+            return Err(unsupported(
+                format!(
+                    "repeated user binding `{name}` (lexical shadowing or reassignment); Body IR v0 does not yet carry binding-equivalence facts for direct execution"
+                ),
+                local.span,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate every statement in one normalized Body-IR block before the direct executor starts.
+fn validate_block_profile(block: &incan_semantics_core::body_ir::Block) -> Result<(), ReplacementExecutionError> {
+    for statement in &block.stmts {
+        validate_statement_profile(statement)?;
+    }
+    Ok(())
+}
+
+/// Validate one statement against the deliberately narrow #988 direct-execution profile.
+fn validate_statement_profile(statement: &Statement) -> Result<(), ReplacementExecutionError> {
+    match &statement.kind {
+        StatementKind::Assign { place, rvalue } => {
+            validate_bare_local(place, statement.span)?;
+            validate_rvalue_profile(rvalue, statement.span)
+        }
+        StatementKind::Call {
+            destination,
+            callee,
+            args,
+            may_panic: _,
+        } => {
+            let destination = destination
+                .as_ref()
+                .ok_or_else(|| unsupported("discarded call result", statement.span))?;
+            validate_bare_local(destination, statement.span)?;
+            validate_call_profile(callee, args, statement.span)
+        }
+        StatementKind::Drop { .. } => Ok(()),
+        StatementKind::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            validate_operand_profile(cond, statement.span)?;
+            validate_block_profile(then_block)?;
+            if let Some(else_block) = else_block {
+                validate_block_profile(else_block)?;
+            }
+            Ok(())
+        }
+        StatementKind::Loop { body } => validate_block_profile(body),
+        StatementKind::Break { value: Some(_) } => Err(unsupported("value-carrying loop break", statement.span)),
+        StatementKind::Break { value: None } | StatementKind::Continue => Ok(()),
+        StatementKind::Return { value } => value
+            .as_ref()
+            .map_or(Ok(()), |value| validate_operand_profile(value, statement.span)),
+        StatementKind::Assert {
+            cond,
+            message,
+            may_panic: _,
+        } => {
+            validate_operand_profile(cond, statement.span)?;
+            message
+                .as_ref()
+                .map_or(Ok(()), |message| validate_operand_profile(message, statement.span))
+        }
+        StatementKind::Expr { value } => validate_operand_profile(value, statement.span),
+        StatementKind::IterNext {
+            destination,
+            iterator,
+            protocol: IterProtocol::Builtin,
+        } => {
+            validate_bare_local(destination, statement.span)?;
+            validate_operand_profile(iterator, statement.span)
+        }
+        StatementKind::Yield { .. } => Err(unsupported("generator yield", statement.span)),
+        StatementKind::TryPropagate { .. } => Err(unsupported("try propagation", statement.span)),
+        StatementKind::IterNext { .. } => Err(unsupported("non-range iteration", statement.span)),
+        StatementKind::Unsupported { description } => Err(unsupported(description, statement.span)),
+    }
+}
+
+/// Validate one Body-IR call before the executor dispatches it.
+fn validate_call_profile(
+    callee: &Callee,
+    args: &[Operand],
+    span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    let supported = match callee {
+        Callee::Helper(HelperOp::StrConcat) => true,
+        Callee::Function(name) => name == "range",
+        Callee::Helper(_) | Callee::Method(_) => false,
+    };
+    if !supported {
+        return Err(unsupported(format!("call to {}", callee_label(callee)), span));
+    }
+    for arg in args {
+        validate_operand_profile(arg, span)?;
+    }
+    Ok(())
+}
+
+/// Validate one rvalue before it can be evaluated by the bounded executor.
+fn validate_rvalue_profile(rvalue: &Rvalue, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
+    match rvalue {
+        Rvalue::Use(operand) | Rvalue::UnaryOp(_, operand) => validate_operand_profile(operand, span),
+        Rvalue::BinaryOp(_, left, right) => {
+            validate_operand_profile(left, span)?;
+            validate_operand_profile(right, span)
+        }
+        Rvalue::Aggregate(kind, _) => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
+        Rvalue::Format(_) => Err(unsupported("f-string", span)),
+        Rvalue::Closure { .. } => Err(unsupported("callable value", span)),
+        Rvalue::Match { .. } => Err(unsupported("match expression", span)),
+    }
+}
+
+/// Validate a single operand's place shape and compiler-owned ownership decision.
+fn validate_operand_profile(operand: &Operand, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
+    let Operand::Place(place_operand) = operand else {
+        return Ok(());
+    };
+    validate_bare_local(&place_operand.place, span)?;
+    if matches!(place_operand.fact, OwnershipFact::Unknown) {
+        return Err(unsupported("unknown ownership fact", span));
+    }
+    Ok(())
+}
+
+/// Reject projections at the profile boundary while preserving the statement's original source authority.
+fn validate_bare_local(place: &Place, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
+    bare_local(place, span).map(|_| ())
+}
+
 /// Mutable interpreter state for one Body-IR execution.
 struct BodyExecutor {
     locals: BTreeMap<LocalId, ReplacementValue>,
-    local_bindings: BTreeMap<LocalId, (Option<String>, LocalOrigin)>,
     ownership_reads: Vec<OwnershipRead>,
     steps: usize,
 }
@@ -213,14 +487,8 @@ impl BodyExecutor {
     /// Bind the already-typechecked call arguments to their Body-IR parameter locals.
     fn new(body: &Body, args: &[ReplacementValue]) -> Self {
         let locals = body.param_locals.iter().copied().zip(args.iter().cloned()).collect();
-        let local_bindings = body
-            .locals
-            .iter()
-            .map(|local| (local.id, (local.name.clone(), local.origin)))
-            .collect();
         Self {
             locals,
-            local_bindings,
             ownership_reads: Vec::new(),
             steps: 0,
         }
@@ -407,28 +675,13 @@ impl BodyExecutor {
         Ok(Flow::Next)
     }
 
-    /// Assign a Body-IR local while retaining the first profile's source-binding equivalence.
+    /// Assign exactly the authoritative Body-IR `LocalId` selected by lowering.
     ///
-    /// Body IR v0 records source assignment sites as fresh locals even though later condition reads can still point
-    /// at the original local. For the selected free-function profile, equal user-binding names denote the same
-    /// source binding; update those aliases together rather than allowing a generated local id to create stale
-    /// source reads. Shadowing remains unsupported until Body IR carries an explicit binding-equivalence fact.
+    /// The profile preflight rejects repeated user-binding names rather than reconstructing scope equivalence from
+    /// spelling. Reassignment is therefore refused until Body IR carries binding-equivalence facts; no name-based
+    /// aliasing is permitted here.
     fn assign_local(&mut self, local: LocalId, value: ReplacementValue) {
-        let Some((Some(name), LocalOrigin::UserBinding)) = self.local_bindings.get(&local) else {
-            self.locals.insert(local, value);
-            return;
-        };
-        let aliases = self
-            .local_bindings
-            .iter()
-            .filter_map(|(candidate, (candidate_name, origin))| {
-                (matches!(origin, LocalOrigin::UserBinding) && candidate_name.as_deref() == Some(name.as_str()))
-                    .then_some(*candidate)
-            })
-            .collect::<Vec<_>>();
-        for alias in aliases {
-            self.locals.insert(alias, value.clone());
-        }
+        self.locals.insert(local, value);
     }
 
     /// Execute one normalized Body-IR loop and propagate only non-local control flow outward.
@@ -462,11 +715,6 @@ impl BodyExecutor {
             Rvalue::Use(operand) => self.evaluate_operand(operand, span),
             Rvalue::UnaryOp(operator, operand) => self.evaluate_unary(*operator, operand, span),
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
-            Rvalue::Aggregate(incan_semantics_core::body_ir::AggregateKind::List, values) => values
-                .iter()
-                .map(|value| self.evaluate_operand(value, span))
-                .collect::<Result<Vec<_>, _>>()
-                .map(ReplacementValue::List),
             Rvalue::Aggregate(kind, _) => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
             Rvalue::Format(_) => Err(unsupported("f-string", span)),
             Rvalue::Closure { .. } => Err(unsupported("callable value", span)),
@@ -519,10 +767,10 @@ impl BodyExecutor {
                 Err(runtime_failure("division or modulo by zero".to_string(), span))
             }
             (BinOp::FloorDiv, ReplacementValue::Int(left), ReplacementValue::Int(right)) => {
-                Ok(ReplacementValue::Int(left.div_euclid(right)))
+                checked_python_floor_division(left, right, span)
             }
             (BinOp::Mod, ReplacementValue::Int(left), ReplacementValue::Int(right)) => {
-                Ok(ReplacementValue::Int(left.rem_euclid(right)))
+                Ok(ReplacementValue::Int(python_mod_i64(left, right)))
             }
             (BinOp::Eq, left, right) => Ok(ReplacementValue::Bool(left == right)),
             (BinOp::Ne, left, right) => Ok(ReplacementValue::Bool(left != right)),
@@ -676,6 +924,87 @@ fn runtime_failure(detail: String, span: HirSourceSpan) -> ReplacementExecutionE
     }
 }
 
+/// Apply Python integer floor division while keeping an unrepresentable direct-execution quotient visible.
+fn checked_python_floor_division(
+    left: i64,
+    right: i64,
+    span: HirSourceSpan,
+) -> Result<ReplacementValue, ReplacementExecutionError> {
+    if left == i64::MIN && right == -1 {
+        return Err(runtime_failure("integer division overflow".to_string(), span));
+    }
+    Ok(ReplacementValue::Int(python_floor_div_i64(left, right)))
+}
+
+/// Reject a return value that would widen the first replacement profile beyond scalar source observables.
+fn ensure_scalar_result(value: &ReplacementValue, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
+    match value {
+        ReplacementValue::Int(_) | ReplacementValue::Bool(_) | ReplacementValue::Str(_) | ReplacementValue::Unit => {
+            Ok(())
+        }
+        _ => Err(unsupported(
+            format!("returning {} from the scalar replacement profile", value_kind(value)),
+            span,
+        )),
+    }
+}
+
+/// Project ownership reads into the stable evidence shape shared by identities and CLI reports.
+fn ownership_read_projection(reads: &[OwnershipRead]) -> Vec<OwnershipReadProjection> {
+    reads
+        .iter()
+        .map(|read| OwnershipReadProjection {
+            span_start: read.span.start,
+            span_end: read.span.end,
+            fact: ownership_label(read.fact),
+            last_use: read.last_use,
+        })
+        .collect()
+}
+
+/// Project Body-IR runtime requirements into stable semantic labels shared by identities and CLI reports.
+fn runtime_requirement_projection(requirements: &[AbiV0RuntimeRequirement]) -> Vec<RuntimeRequirementProjection> {
+    requirements
+        .iter()
+        .map(|requirement| RuntimeRequirementProjection {
+            requirement: runtime_requirement_label(requirement),
+        })
+        .collect()
+}
+
+/// Render ownership evidence as one deterministic digest component without relying on `Debug` formatting.
+fn canonical_ownership_summary(reads: &[OwnershipRead]) -> String {
+    ownership_read_projection(reads)
+        .into_iter()
+        .map(|read| {
+            format!(
+                "span={}..{};fact={};last_use={}",
+                read.span_start, read.span_end, read.fact, read.last_use
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Render runtime requirements as one deterministic digest component without relying on `Debug` formatting.
+fn canonical_runtime_requirements_summary(requirements: &[AbiV0RuntimeRequirement]) -> String {
+    runtime_requirement_projection(requirements)
+        .into_iter()
+        .map(|requirement| requirement.requirement)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Render one runtime requirement with the semantic labels used in replacement evidence.
+fn runtime_requirement_label(requirement: &AbiV0RuntimeRequirement) -> String {
+    match requirement {
+        AbiV0RuntimeRequirement::RuntimeHelper(name) => format!("runtime_helper({name})"),
+        AbiV0RuntimeRequirement::HostedStd => "hosted_std".to_string(),
+        AbiV0RuntimeRequirement::Allocator => "allocator".to_string(),
+        AbiV0RuntimeRequirement::PanicStrategy => "panic_strategy".to_string(),
+    }
+}
+
 /// Render one ownership fact without relying on generated-Rust implementation details.
 const fn ownership_label(fact: OwnershipFact) -> &'static str {
     match fact {
@@ -759,7 +1088,6 @@ const fn value_kind(value: &ReplacementValue) -> &'static str {
         ReplacementValue::Str(_) => "str",
         ReplacementValue::Float(_) => "float",
         ReplacementValue::Unit => "unit",
-        ReplacementValue::List(_) => "list",
         ReplacementValue::Range { .. } => "range",
     }
 }

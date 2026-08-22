@@ -15,14 +15,17 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use incan_semantics_core::HirSourceSpan;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::project::generator::GENERATED_CARGO_TARGET_DIR_ENV;
 use crate::backend::project::runner::resolved_cargo_executable;
-use crate::backend::replacement::execute_free_function;
+use crate::backend::replacement::{
+    ReplacementExecutionError, execute_prevalidated_free_function, prepare_free_function_execution,
+};
 use crate::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, FallbackOutcome, FallbackPolicy, ShadowComparisonState,
-    digest_output, finalize_receipt, resolve_execution, select_backend,
+    digest_output, finalize_receipt, resolve_execution, select_backend, unavailable_shadow_comparison,
 };
 use crate::backend::{IrCodegen, ProjectGenerator};
 use crate::cli::{CliError, CliResult, ExitCode};
@@ -2325,16 +2328,10 @@ fn multi_file_output_identity(main_code: &str, rust_modules: &HashMap<Vec<String
 
 /// Shadow-comparison state for one build's backend execution receipt.
 ///
-/// The replacement backend is not implemented yet (#653), so a requested shadow comparison is
-/// always explicitly `Unavailable` today rather than silently `NotRequested`.
+/// The direct #988 executor has no source-observable legacy comparator yet, so a requested shadow comparison is
+/// explicitly `Unavailable` rather than silently `NotRequested` or inferred from generated Rust.
 fn backend_shadow_comparison(selection: &BackendSelection) -> ShadowComparisonState {
-    if selection.shadow_requested {
-        ShadowComparisonState::Unavailable {
-            reason: "replacement backend not implemented yet (#653)".to_string(),
-        }
-    } else {
-        ShadowComparisonState::NotRequested
-    }
+    unavailable_shadow_comparison(selection.shadow_requested)
 }
 
 /// Declare and resolve a backend selection for one build, before codegen runs (#986).
@@ -2422,6 +2419,13 @@ fn report_backend_fallback(receipt: &crate::backend::selection::BackendExecution
 /// boundary (#986). Oven and other clients consume this without reading private HIR/Body IR.
 const DEFAULT_BACKEND_RECEIPT_RELATIVE_PATH: &str = ".incan/backend/receipt.json";
 
+/// Stable schema marker for the direct Body-IR replacement execution report.
+///
+/// This is distinct from the Oven build-report schema because this path has no generated Rust, artifacts, or Oven
+/// plan to report. Consumers must inspect its backend receipt and direct-execution evidence rather than treating it
+/// as a partial legacy build report.
+const REPLACEMENT_EXECUTION_REPORT_SCHEMA_VERSION: &str = "incan.replacement_execution.v0";
+
 /// Return the compiler-owned project-relative destination for a backend-selection execution receipt.
 fn default_backend_receipt_path(project_root: &Path) -> PathBuf {
     project_root.join(DEFAULT_BACKEND_RECEIPT_RELATIVE_PATH)
@@ -2452,6 +2456,77 @@ fn write_backend_receipt(receipt: &crate::backend::selection::BackendExecutionRe
             path.display()
         ))
     })
+}
+
+/// Convert a typed replacement refusal into the CLI's stable source-location presentation.
+///
+/// `CliError` predates typed frontend diagnostics and carries display text only, so this adapter retains the
+/// replacement diagnostic code, entrypoint path, and original Body-IR span rather than discarding them at the CLI
+/// boundary.
+fn replacement_profile_cli_error(error: ReplacementExecutionError, entrypoint: &Path) -> CliError {
+    match error.primary_span() {
+        Some(span) => CliError::failure(format!(
+            "{}: {error}\nprimary Incan source location: {}:{}..{}",
+            error.diagnostic_code(),
+            entrypoint.display(),
+            span.start,
+            span.end
+        )),
+        None => CliError::failure(format!("{}: {error}", error.diagnostic_code())),
+    }
+}
+
+/// Return the first unsupported source-module boundary with its original Incan source span.
+fn replacement_module_profile_error(program: &crate::frontend::ast::Program) -> Option<ReplacementExecutionError> {
+    if let Some(rust_module) = &program.rust_module_path {
+        return Some(ReplacementExecutionError::unsupported_profile(
+            "Rust interop `rust.module` directive",
+            HirSourceSpan::new(rust_module.span.start, rust_module.span.end),
+        ));
+    }
+    program.declarations.iter().find_map(|declaration| {
+        if matches!(declaration.node, Declaration::Function(_) | Declaration::Docstring(_)) {
+            return None;
+        }
+        let description = if matches!(declaration.node, Declaration::Import(_)) {
+            "import declaration"
+        } else {
+            "non-function top-level declaration"
+        };
+        Some(ReplacementExecutionError::unsupported_profile(
+            description,
+            HirSourceSpan::new(declaration.span.start, declaration.span.end),
+        ))
+    })
+}
+
+/// Refuse one unsupported replacement profile through the canonical #986 selection boundary.
+///
+/// The resolver must reject the availability claim before the profile diagnostic reaches the CLI. If a future
+/// fallback policy resolves it anyway, that is a separate, visible failure rather than implicit legacy execution.
+fn refuse_replacement_profile<T>(
+    selection: &BackendSelection,
+    error: ReplacementExecutionError,
+    entrypoint: &Path,
+) -> CliResult<T> {
+    match resolve_execution(selection, false) {
+        Err(_) => Err(replacement_profile_cli_error(error, entrypoint)),
+        Ok(executed) => Err(CliError::failure(format!(
+            "{}: replacement source-profile refusal cannot execute `{executed:?}` because this CLI exposes no receipt-bound fallback path",
+            error.diagnostic_code()
+        ))),
+    }
+}
+
+/// Resolve an available direct replacement selection through the canonical #986 boundary.
+fn resolve_available_replacement_execution(selection: &BackendSelection) -> CliResult<BackendKind> {
+    match resolve_execution(selection, true) {
+        Ok(BackendKind::Replacement) => Ok(BackendKind::Replacement),
+        Ok(executed) => Err(CliError::failure(format!(
+            "replacement profile selection resolved unexpected backend `{executed:?}`"
+        ))),
+        Err(error) => Err(CliError::failure(error.to_string())),
+    }
 }
 
 /// Execute the first #988 replacement-backend profile directly from typed Body IR.
@@ -2492,15 +2567,15 @@ fn build_replacement_file_report(
             entrypoint.display()
         ))
     })?;
-    if program.rust_module_path.is_some()
-        || program
-            .declarations
-            .iter()
-            .any(|declaration| !matches!(declaration.node, Declaration::Function(_) | Declaration::Docstring(_)))
-    {
-        return Err(CliError::failure(
-            "replacement backend #988 supports one source-only free-function module; imports, packages, Rust interop, models, and top-level values are refused",
-        ));
+    let selection = select_backend(
+        options.backend.requested,
+        options.backend.explicit,
+        options.backend.shadow,
+        digest_output(&[source.as_str()]),
+        options.backend.fallback_policy,
+    );
+    if let Some(error) = replacement_module_profile_error(&program) {
+        return refuse_replacement_profile(&selection, error, &entrypoint);
     }
     let module_path = vec![
         entrypoint
@@ -2518,29 +2593,14 @@ fn build_replacement_file_report(
         ))
     })?;
     let body_ir = build_body_ir_module_v0(&program, &module_path, checker.type_info());
-    let selection = select_backend(
-        options.backend.requested,
-        options.backend.explicit,
-        options.backend.shadow,
-        digest_output(&[source.as_str()]),
-        options.backend.fallback_policy,
-    );
-    let executed = resolve_execution(&selection, BackendKind::Replacement.is_implemented())
-        .map_err(|error| CliError::failure(error.to_string()))?;
-    if executed != BackendKind::Replacement {
-        return Err(CliError::failure(
-            "replacement backend #988 refuses declared fallback execution; run `--backend legacy` explicitly for the legacy backend",
-        ));
-    }
-    let execution =
-        execute_free_function(&body_ir, "main", &[]).map_err(|error| CliError::failure(error.to_string()))?;
-    let shadow_comparison = if selection.shadow_requested {
-        ShadowComparisonState::Unavailable {
-            reason: "#988's source-only free-function build profile has no source-observable legacy entrypoint; shadow comparison is unavailable rather than inferred from generated Rust".to_string(),
-        }
-    } else {
-        ShadowComparisonState::NotRequested
+    let execution_plan = match prepare_free_function_execution(&body_ir, "main", &[]) {
+        Ok(plan) => plan,
+        Err(error) => return refuse_replacement_profile(&selection, error, &entrypoint),
     };
+    let executed = resolve_available_replacement_execution(&selection)?;
+    let execution = execute_prevalidated_free_function(execution_plan)
+        .map_err(|error| replacement_profile_cli_error(error, &entrypoint))?;
+    let shadow_comparison = unavailable_shadow_comparison(selection.shadow_requested);
     let backend_receipt = finalize_receipt(
         &selection,
         executed,
@@ -2563,13 +2623,18 @@ fn build_replacement_file_report(
         );
     }
     Ok(serde_json::json!({
+        "schema_version": REPLACEMENT_EXECUTION_REPORT_SCHEMA_VERSION,
+        "compiler_version": crate::version::INCAN_VERSION,
+        "status": "success",
+        "mode": "executable",
+        "entrypoint": entrypoint,
         "backend": backend_receipt,
         "replacement_execution": {
             "result": execution.value.observable_text(),
             "output_identity": execution.output_identity,
             "body_snapshot": execution.body_snapshot,
-            "ownership_read_count": execution.ownership_reads.len(),
-            "runtime_requirements": format!("{:?}", execution.runtime_requirements),
+            "ownership_reads": execution.ownership_evidence(),
+            "runtime_requirements": execution.runtime_requirement_evidence(),
         },
         "timings_ms": { "total": elapsed_ms(start) },
     }))
@@ -13800,7 +13865,10 @@ mod tests {
             fallback_policy: FallbackPolicy::Refuse,
         };
         assert!(!replacement_refusal.allows_completed_output_reuse());
-        assert!(ensure_backend_request_available(&replacement_refusal).is_err());
+        assert!(
+            ensure_backend_request_available(&replacement_refusal).is_ok(),
+            "the capability preflight recognizes the partial executor; source-profile support is resolved later through the source-bound selection"
+        );
 
         let declared_fallback = BackendSelectionOptions {
             requested: BackendKind::Replacement,

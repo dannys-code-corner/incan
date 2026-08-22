@@ -46,6 +46,43 @@ pub enum NumericOp {
     GtEq,
 }
 
+/// Evaluate Python-style integer floor division for non-zero operands.
+///
+/// The result rounds toward negative infinity, unlike Rust's truncation toward zero. Callers must reject a zero
+/// divisor and the unrepresentable `i64::MIN // -1` result before calling this function.
+#[inline]
+pub fn python_floor_div_i64(dividend: i64, divisor: i64) -> i64 {
+    let quotient = dividend / divisor;
+    let remainder = dividend % divisor;
+    if remainder == 0 {
+        return quotient;
+    }
+    if divisor > 0 {
+        if remainder < 0 { quotient - 1 } else { quotient }
+    } else if remainder > 0 {
+        quotient - 1
+    } else {
+        quotient
+    }
+}
+
+/// Evaluate Python-style integer modulo for a non-zero divisor.
+///
+/// The returned remainder has the divisor's sign. Unlike floor division, `i64::MIN % -1` is representable and is
+/// therefore defined here as zero; callers must still reject a zero divisor before calling this function.
+#[inline]
+pub fn python_mod_i64(dividend: i64, divisor: i64) -> i64 {
+    if dividend == i64::MIN && divisor == -1 {
+        return 0;
+    }
+    let remainder = dividend % divisor;
+    if (remainder > 0 && divisor < 0) || (remainder < 0 && divisor > 0) {
+        remainder + divisor
+    } else {
+        remainder
+    }
+}
+
 /// Classify the exponent for `**` so policy can decide `Int` vs `Float` results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowExponentKind {
@@ -192,6 +229,15 @@ pub fn needs_float_promotion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_integer_division_and_modulo_preserve_signed_semantics() {
+        assert_eq!(python_floor_div_i64(7, -3), -3);
+        assert_eq!(python_floor_div_i64(-7, 3), -3);
+        assert_eq!(python_mod_i64(7, -3), -2);
+        assert_eq!(python_mod_i64(-7, 3), 2);
+        assert_eq!(python_mod_i64(i64::MIN, -1), 0);
+    }
 
     #[test]
     fn test_div_always_float() {

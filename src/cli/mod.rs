@@ -203,30 +203,21 @@ impl From<BackendCliKind> for crate::backend::selection::BackendKind {
 
 /// CLI-facing fallback policy for `incan build --backend-fallback`.
 ///
-/// `refuse` is explicit syntax for the safe default: unsupported replacement input must stop visibly rather than
-/// entering the legacy backend. The backend spellings retain #986's separately declared fallback capability for
-/// later profiles, but #988's source-only replacement profile never selects it implicitly.
+/// The #988 source-only profile exposes only `refuse`: it has no receipt-bound legacy execution path for an
+/// unsupported source profile, so accepting a target backend spelling here would promise a fallback the CLI cannot
+/// truthfully perform. #986 retains `FallbackPolicy::AllowTo` for a future profile that implements both dispatch
+/// and its paired execution receipt.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 #[value(rename_all = "lower")]
 pub enum BackendFallbackCliKind {
     /// Refuse an unavailable backend selection instead of substituting another backend.
     Refuse,
-    /// Permit an explicitly recorded fallback to the legacy backend.
-    Legacy,
-    /// Permit an explicitly recorded fallback to the replacement backend.
-    Replacement,
 }
 
 impl From<BackendFallbackCliKind> for crate::backend::selection::FallbackPolicy {
     fn from(kind: BackendFallbackCliKind) -> Self {
         match kind {
             BackendFallbackCliKind::Refuse => crate::backend::selection::FallbackPolicy::Refuse,
-            BackendFallbackCliKind::Legacy => {
-                crate::backend::selection::FallbackPolicy::AllowTo(crate::backend::selection::BackendKind::Legacy)
-            }
-            BackendFallbackCliKind::Replacement => {
-                crate::backend::selection::FallbackPolicy::AllowTo(crate::backend::selection::BackendKind::Replacement)
-            }
         }
     }
 }
@@ -378,12 +369,13 @@ pub enum Command {
         /// executes supported free functions from Body IR and refuses unsupported input visibly.
         #[arg(long = "backend", value_enum)]
         backend: Option<BackendCliKind>,
-        /// Request a shadow comparison against the replacement backend alongside normal execution. Recorded
-        /// explicitly as unavailable until the replacement backend exists.
+        /// Request a source-observable shadow comparison against the replacement backend. Recorded explicitly as
+        /// unavailable when the selected profile has no such legacy/replacement comparator; generated Rust is not
+        /// used as semantic proof.
         #[arg(long = "shadow")]
         shadow: bool,
-        /// Allow the build to fall back to this backend if `--backend` cannot execute, recording the substitution
-        /// explicitly in the build report instead of refusing.
+        /// Declare the explicit refusal policy for an unavailable backend. The #988 source-only profile accepts
+        /// only `refuse` until a receipt-bound legacy fallback execution path exists.
         #[arg(long = "backend-fallback", value_enum)]
         backend_fallback: Option<BackendFallbackCliKind>,
         /// Emit a machine-readable build report

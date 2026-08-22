@@ -1,8 +1,8 @@
 # Backend selection & execution receipts
 
-The v0.6 replacement-backend cutover ([#652](https://github.com/encero-systems/incan/issues/652)) introduces a second compiler backend: the Body IR replacement backend tracked by [#653](https://github.com/encero-systems/incan/issues/653), alongside the current Rust-source-emission backend (`IrCodegen`, `src/backend/ir/`) that this document calls the legacy backend. Until the replacement backend lands, a build must still be able to declare which backend it intends to use, record which backend it actually ran, and refuse visibly rather than quietly falling back to legacy when the requested backend cannot execute. `src/backend/selection.rs` (#986) is the compiler-owned boundary that makes that possible.
+The v0.6 replacement-backend cutover ([#652](https://github.com/encero-systems/incan/issues/652)) introduces a second compiler backend: the Body IR replacement backend tracked by [#653](https://github.com/encero-systems/incan/issues/653), alongside the current Rust-source-emission backend (`IrCodegen`, `src/backend/ir/`) that this document calls the legacy backend. #988 provides the first deliberately partial direct-execution profile. Every request still declares the intended backend, records the backend that actually ran, and refuses unsupported source visibly rather than quietly falling back to legacy. `src/backend/selection.rs` (#986) is the compiler-owned boundary that makes that possible.
 
-This is a different axis from Oven's own receipt, described in [Oven Alpha](oven_alpha.md): Oven's receipt selects how an already-generated artifact is compiled (its legacy-Cargo-vs-direct-`rustc` build boundary), and never influences which compiler backend produced that artifact in the first place. The two receipts are complementary and travel together: a build first declares and executes a backend selection, then hands the resulting generated source to Oven for compilation.
+This is a different axis from Oven's own receipt, described in [Oven Alpha](oven_alpha.md): Oven's receipt selects how an already-generated artifact is compiled (its legacy-Cargo-vs-direct-`rustc` build boundary), and never influences which compiler backend produced that artifact in the first place. Legacy builds hand generated source to Oven; the #988 direct replacement profile does not create generated source or an Oven plan.
 
 ## The two records
 
@@ -18,23 +18,23 @@ Every successful `incan build` exposes a selection and a receipt, including the 
 
 The first #988 replacement profile produces a visible outcome, never a silent legacy execution:
 
-- `incan build --backend replacement --backend-fallback refuse` typechecks one source-only free-function module, lowers it to Body IR, and directly executes its zero-argument `main` body. Its receipt records `executed_backend: "replacement"`, `fallback_outcome: "not_needed"`, and an output identity over the actual Body-IR execution result; this path does not construct generated Rust or an Oven plan.
-- The supported profile is deliberately partial: scalar arithmetic, local bindings, returns, compiler-owned string concatenation, normalized range/while branches and loops, and assertions. Packages, imports, Rust interop, callable values, generators, destructuring, projections, and shadowing are refused visibly with the original Incan source span. A refusal writes no success receipt and cannot be mistaken for a replacement pass.
-- `--backend-fallback legacy` remains a separately declared #986 capability, but it is not used as an implicit compatibility path for the #988 profile. Choose `--backend legacy` explicitly when the source is outside the profile.
+- `incan build --backend replacement --backend-fallback refuse` typechecks one source-only module containing exactly the selected zero-argument `main` free function, lowers it to Body IR, and executes that body directly. Its receipt records `executed_backend: "replacement"`, `fallback_outcome: "not_needed"`, and an output identity over the actual Body-IR execution result; this path does not construct generated Rust or an Oven plan.
+- The supported profile is deliberately partial: scalar arithmetic, scalar local bindings with no repeated user-binding name, returns, compiler-owned string concatenation, normalized range/while branches and loops, and assertions. Packages, imports, Rust interop, additional free functions, callable values, generators, destructuring, all aggregates, projections, and any repeated user-binding spelling (lexical shadowing or reassignment) are refused visibly with the original Incan source span. A refusal emits no new receipt; it does not remove a receipt written by an earlier successful build.
+- The #988 CLI surface accepts only `--backend-fallback refuse`. It has no receipt-bound legacy execution path for an unavailable source profile, so users must choose `--backend legacy` explicitly when the source is outside the profile.
 
 A `--shadow` request without a source-observable legacy entrypoint remains `{"unavailable": {"reason": "..."}}`, never `"matched"`. It is deliberately non-green: generated-Rust token shape is not a semantic comparison.
 
-Any explicit backend request, fallback policy, or shadow request bypasses completed-output reuse and takes the normal source-aware preparation path. This prevents a cached default result from being presented as the outcome of a different declared selection.
+Any explicit backend request, fallback policy, or shadow request bypasses completed-output reuse and takes the source-based path appropriate to the declared backend. This prevents a cached default result from being presented as the outcome of a different declared selection.
 
 ## CLI surface
 
 `incan build` accepts three flags:
 
 - `--backend <legacy|replacement>` — declare the backend for this build. Defaults to `legacy`.
-- `--backend-fallback <refuse|legacy|replacement>` — declare what to do if `--backend` cannot execute. Omitting this flag means refuse.
+- `--backend-fallback <refuse>` — declare that an unavailable backend must stop visibly. Omitting this flag means refuse.
 - `--shadow` — request a comparison against the replacement backend alongside normal execution.
 
-A successful build publishes its receipt to `.incan/backend/receipt.json` in the project root (parallel to Oven's own `.incan/oven/receipt.json`), and embeds it as the `backend` field of `incan build --report json` output. An eligible completed-output reuse republishes its verified sealed receipt at the same path. Inspect a persisted receipt directly with:
+A successful build publishes its receipt to `.incan/backend/receipt.json` in the project root (parallel to Oven's own `.incan/oven/receipt.json`), and embeds it as the `backend` field of `incan build --report json` output. The #988 direct path has the explicit `incan.replacement_execution.v0` report schema: alongside `status`, `mode`, and `entrypoint`, its `replacement_execution` payload projects the Body-IR result, receipt-bound output identity, snapshot, canonical ownership reads, and runtime requirements. It intentionally has no generated-artifact or Oven fields. An eligible completed-output reuse republishes its verified sealed receipt at the same path. Inspect a persisted receipt directly with:
 
 ```bash
 incan inspect backend-selection --receipt .incan/backend/receipt.json
